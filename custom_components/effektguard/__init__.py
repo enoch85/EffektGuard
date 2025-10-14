@@ -148,7 +148,254 @@ async def _create_coordinator(
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
-    """Register integration services."""
-    # Services will be implemented in Phase 5
-    # Placeholder for future service registration
-    pass
+    """Register integration services.
+
+    Services implemented in Phase 5:
+    - force_offset: Manual heating curve override
+    - reset_peak_tracking: Reset monthly peak data
+    - boost_heating: Emergency comfort boost
+    - calculate_optimal_schedule: Preview 24h optimization
+    """
+    import voluptuous as vol
+    from homeassistant.helpers import config_validation as cv
+
+    from .const import (
+        ATTR_DURATION,
+        ATTR_OFFSET,
+        MAX_OFFSET,
+        MIN_OFFSET,
+        SERVICE_BOOST_HEATING,
+        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+        SERVICE_FORCE_OFFSET,
+        SERVICE_RESET_PEAK_TRACKING,
+    )
+
+    def get_coordinator(hass: HomeAssistant) -> EffektGuardCoordinator | None:
+        """Get first available coordinator from domain data."""
+        domain_data = hass.data.get(DOMAIN, {})
+        for coordinator in domain_data.values():
+            if isinstance(coordinator, EffektGuardCoordinator):
+                return coordinator
+        return None
+
+    async def force_offset_handler(call) -> None:
+        """Handle force_offset service call.
+
+        Allows manual override of heating curve offset for specified duration.
+        Useful for testing or manual adjustments.
+        """
+        coordinator = get_coordinator(hass)
+        if not coordinator:
+            _LOGGER.error("No EffektGuard coordinator found")
+            return
+
+        offset = call.data[ATTR_OFFSET]
+        duration = call.data.get(ATTR_DURATION, 60)
+
+        _LOGGER.info("Force offset service called: offset=%s, duration=%s", offset, duration)
+
+        # Validate offset range
+        if not MIN_OFFSET <= offset <= MAX_OFFSET:
+            _LOGGER.error("Offset %s outside valid range [%s, %s]", offset, MIN_OFFSET, MAX_OFFSET)
+            return
+
+        # Set override in decision engine
+        coordinator.engine.set_manual_override(offset, duration)
+
+        # Request immediate update
+        await coordinator.async_request_refresh()
+
+        _LOGGER.info("Manual offset override set: %s°C for %s minutes", offset, duration)
+
+    async def reset_peak_tracking_handler(call) -> None:
+        """Handle reset_peak_tracking service call.
+
+        Resets monthly peak tracking. Use at start of new billing period
+        to clear previous month's peak data.
+        """
+        coordinator = get_coordinator(hass)
+        if not coordinator:
+            _LOGGER.error("No EffektGuard coordinator found")
+            return
+
+        _LOGGER.info("Reset peak tracking service called")
+
+        # Reset peaks in effect manager
+        coordinator.effect.reset_monthly_peaks()
+
+        # Save cleared state
+        await coordinator.effect.async_save()
+
+        # Update coordinator data
+        await coordinator.async_request_refresh()
+
+        _LOGGER.info("Monthly peak tracking reset successfully")
+
+    async def boost_heating_handler(call) -> None:
+        """Handle boost_heating service call.
+
+        Emergency boost mode: maximize heating regardless of cost.
+        Useful for quick temperature recovery or unexpected cold periods.
+        """
+        coordinator = get_coordinator(hass)
+        if not coordinator:
+            _LOGGER.error("No EffektGuard coordinator found")
+            return
+
+        duration = call.data.get(ATTR_DURATION, 120)
+
+        _LOGGER.info("Boost heating service called: duration=%s minutes", duration)
+
+        # Set maximum positive offset for boost duration
+        boost_offset = MAX_OFFSET  # +10°C
+        coordinator.engine.set_manual_override(boost_offset, duration)
+
+        # Request immediate update
+        await coordinator.async_request_refresh()
+
+        _LOGGER.info("Heating boost activated: +%s°C for %s minutes", boost_offset, duration)
+
+    async def calculate_optimal_schedule_handler(call):
+        """Handle calculate_optimal_schedule service call.
+
+        Returns 24-hour preview of optimization decisions based on current
+        price forecast, weather, and system state.
+        """
+        coordinator = get_coordinator(hass)
+        if not coordinator:
+            _LOGGER.error("No EffektGuard coordinator found")
+            return {"error": "No coordinator found"}
+
+        _LOGGER.info("Calculate optimal schedule service called")
+
+        try:
+            # Get current data
+            if not coordinator.data:
+                return {"error": "No coordinator data available"}
+
+            nibe_data = coordinator.data.get("nibe")
+            price_data = coordinator.data.get("price")
+            weather_data = coordinator.data.get("weather")
+
+            if not all([nibe_data, price_data]):
+                return {"error": "Missing required data (NIBE or price)"}
+
+            # Calculate hourly schedule for next 24 hours
+            schedule = []
+            from datetime import datetime, timedelta
+
+            current_time = datetime.now()
+
+            for hour_offset in range(24):
+                forecast_time = current_time + timedelta(hours=hour_offset)
+                hour = forecast_time.hour
+                quarter = (hour * 4) + (forecast_time.minute // 15)  # 0-95
+
+                # Get price classification for this quarter
+                if quarter < len(price_data.today):
+                    period = price_data.today[quarter]
+                    classification = coordinator.engine.price.get_current_classification(quarter)
+                else:
+                    # Use tomorrow's data if available
+                    tomorrow_quarter = quarter - 96
+                    if price_data.tomorrow and tomorrow_quarter < len(price_data.tomorrow):
+                        period = price_data.tomorrow[tomorrow_quarter]
+                        classification = coordinator.engine.price.get_current_classification(
+                            tomorrow_quarter
+                        )
+                    else:
+                        period = None
+                        classification = "unknown"
+
+                # Calculate what decision would be made for this time
+                # Simplified preview - doesn't include all layers
+                if period:
+                    base_offset = coordinator.engine.price.get_base_offset(
+                        quarter % 96, classification, period.is_daytime
+                    )
+                    estimated_offset = base_offset
+                else:
+                    estimated_offset = 0.0
+
+                schedule.append(
+                    {
+                        "time": forecast_time.strftime("%Y-%m-%d %H:%M"),
+                        "hour": hour,
+                        "quarter": quarter % 96,
+                        "classification": classification,
+                        "estimated_offset": round(estimated_offset, 2),
+                        "price": round(period.price, 3) if period else None,
+                        "is_daytime": period.is_daytime if period else None,
+                    }
+                )
+
+            _LOGGER.info("Calculated optimal schedule for next 24 hours")
+            return {"schedule": schedule, "generated_at": current_time.isoformat()}
+
+        except Exception as err:
+            _LOGGER.error("Failed to calculate optimal schedule: %s", err)
+            return {"error": str(err)}
+
+    # Define service schemas
+    force_offset_schema = vol.Schema(
+        {
+            vol.Required(ATTR_OFFSET): vol.All(
+                vol.Coerce(float), vol.Range(min=MIN_OFFSET, max=MAX_OFFSET)
+            ),
+            vol.Optional(ATTR_DURATION, default=60): vol.All(
+                vol.Coerce(int), vol.Range(min=0, max=480)
+            ),
+        }
+    )
+
+    reset_peak_tracking_schema = vol.Schema({})
+
+    boost_heating_schema = vol.Schema(
+        {
+            vol.Optional(ATTR_DURATION, default=120): vol.All(
+                vol.Coerce(int), vol.Range(min=30, max=360)
+            ),
+        }
+    )
+
+    calculate_optimal_schedule_schema = vol.Schema({})
+
+    # Register services (only if not already registered)
+    if not hass.services.has_service(DOMAIN, SERVICE_FORCE_OFFSET):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_FORCE_OFFSET,
+            force_offset_handler,
+            schema=force_offset_schema,
+        )
+        _LOGGER.debug("Registered service: %s", SERVICE_FORCE_OFFSET)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_RESET_PEAK_TRACKING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RESET_PEAK_TRACKING,
+            reset_peak_tracking_handler,
+            schema=reset_peak_tracking_schema,
+        )
+        _LOGGER.debug("Registered service: %s", SERVICE_RESET_PEAK_TRACKING)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_BOOST_HEATING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_BOOST_HEATING,
+            boost_heating_handler,
+            schema=boost_heating_schema,
+        )
+        _LOGGER.debug("Registered service: %s", SERVICE_BOOST_HEATING)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_CALCULATE_OPTIMAL_SCHEDULE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+            calculate_optimal_schedule_handler,
+            schema=calculate_optimal_schedule_schema,
+            supports_response=True,
+        )
+        _LOGGER.debug("Registered service: %s", SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
+
+    _LOGGER.info("EffektGuard services registered successfully")

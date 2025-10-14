@@ -91,6 +91,58 @@ class DecisionEngine:
         self.tolerance = config.get("tolerance", DEFAULT_TOLERANCE)
         self.tolerance_range = self.tolerance * 0.4  # Scale: 1-10 -> 0.4-4.0°C
 
+        # Manual override state (Phase 5 service support)
+        self._manual_override_offset: float | None = None
+        self._manual_override_until: Any = None  # datetime or None
+
+    def set_manual_override(self, offset: float, duration_minutes: int = 0) -> None:
+        """Set manual override for heating curve offset.
+
+        Used by force_offset and boost_heating services.
+
+        Args:
+            offset: Manual offset value (-10 to +10°C)
+            duration_minutes: Duration in minutes (0 = until next cycle)
+        """
+        from datetime import timedelta
+
+        self._manual_override_offset = offset
+
+        if duration_minutes > 0:
+            self._manual_override_until = dt_util.now() + timedelta(minutes=duration_minutes)
+            _LOGGER.info(
+                "Manual override set: %s°C until %s",
+                offset,
+                self._manual_override_until.strftime("%Y-%m-%d %H:%M"),
+            )
+        else:
+            self._manual_override_until = None
+            _LOGGER.info("Manual override set: %s°C until next cycle", offset)
+
+    def clear_manual_override(self) -> None:
+        """Clear manual override, return to automatic optimization."""
+        self._manual_override_offset = None
+        self._manual_override_until = None
+        _LOGGER.info("Manual override cleared")
+
+    def _check_manual_override(self) -> float | None:
+        """Check if manual override is active and still valid.
+
+        Returns:
+            Override offset if active, None if expired or not set
+        """
+        if self._manual_override_offset is None:
+            return None
+
+        # Check if time-based override expired
+        if self._manual_override_until:
+            if dt_util.now() >= self._manual_override_until:
+                _LOGGER.info("Manual override expired, returning to automatic")
+                self.clear_manual_override()
+                return None
+
+        return self._manual_override_offset
+
     def calculate_decision(
         self,
         nibe_state,
@@ -101,12 +153,13 @@ class DecisionEngine:
         """Calculate optimal heating offset using multi-layer approach.
 
         Decision layers (ordered by priority):
-        1. Safety layer: Prevent extreme temperatures
-        2. Emergency layer: Respond to critical degree minutes
-        3. Effect tariff layer: Peak protection
-        4. Weather prediction layer: Pre-heat before cold
-        5. Spot price layer: Base optimization
-        6. Comfort layer: Stay within tolerance
+        1. Manual override (if active, Phase 5 services)
+        2. Safety layer: Prevent extreme temperatures
+        3. Emergency layer: Respond to critical degree minutes
+        4. Effect tariff layer: Peak protection
+        5. Weather prediction layer: Pre-heat before cold
+        6. Spot price layer: Base optimization
+        7. Comfort layer: Stay within tolerance
 
         Args:
             nibe_state: Current NIBE heat pump state
@@ -118,6 +171,22 @@ class DecisionEngine:
             OptimizationDecision with offset, reasoning, and layer votes
         """
         _LOGGER.debug("Calculating optimization decision")
+
+        # Check for manual override first (Phase 5 service support)
+        manual_override = self._check_manual_override()
+        if manual_override is not None:
+            _LOGGER.info("Using manual override: %.2f°C", manual_override)
+            return OptimizationDecision(
+                offset=manual_override,
+                layers=[
+                    LayerDecision(
+                        offset=manual_override,
+                        weight=1.0,
+                        reason=f"Manual override: {manual_override:.1f}°C",
+                    )
+                ],
+                reasoning=f"Manual override active: {manual_override:.1f}°C",
+            )
 
         # Update price analyzer with latest data
         if price_data:

@@ -272,6 +272,16 @@ class EffectManager:
             if (peak.timestamp.year, peak.timestamp.month) == current_month
         ]
 
+    def reset_monthly_peaks(self) -> None:
+        """Reset all monthly peak tracking.
+
+        Used by reset_peak_tracking service (Phase 5).
+        Call this at the start of a new billing period.
+        """
+        _LOGGER.info("Resetting monthly peak tracking")
+        self._monthly_peaks = []
+        self._current_peak = 0.0
+
     def get_monthly_peak_summary(self) -> dict[str, Any]:
         """Get summary of monthly peaks for display.
 

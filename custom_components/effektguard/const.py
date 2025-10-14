@@ -97,6 +97,14 @@ STORAGE_KEY: Final = f"{DOMAIN}_state"
 SERVICE_SET_OPTIMIZATION_MODE: Final = "set_optimization_mode"
 SERVICE_FORCE_UPDATE: Final = "force_update"
 SERVICE_RESET_PEAKS: Final = "reset_peaks"
+SERVICE_FORCE_OFFSET: Final = "force_offset"
+SERVICE_RESET_PEAK_TRACKING: Final = "reset_peak_tracking"
+SERVICE_BOOST_HEATING: Final = "boost_heating"
+SERVICE_CALCULATE_OPTIMAL_SCHEDULE: Final = "calculate_optimal_schedule"
+
+# Service parameters
+ATTR_OFFSET: Final = "offset"
+ATTR_DURATION: Final = "duration"
 
 # Attributes
 ATTR_CURRENT_OFFSET: Final = "current_offset"
