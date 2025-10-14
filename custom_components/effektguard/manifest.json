@@ -1,0 +1,12 @@
+{
+  "domain": "effektguard",
+  "name": "EffektGuard",
+  "codeowners": ["@enoch85"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/enoch85/EffektGuard",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/enoch85/EffektGuard/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
