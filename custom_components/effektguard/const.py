@@ -19,11 +19,19 @@ CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
 
 # Defaults
-DEFAULT_TOLERANCE: Final = 5
+DEFAULT_TOLERANCE: Final = 0.5
 DEFAULT_TARGET_TEMP: Final = 21.0
 DEFAULT_THERMAL_MASS: Final = 1.0
 DEFAULT_INSULATION_QUALITY: Final = 1.0
-DEFAULT_OPTIMIZATION_MODE: Final = "advanced"
+DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
+
+# Optimization modes for climate entity presets
+OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
+OPTIMIZATION_MODE_BALANCED: Final = "balanced"  # Balance comfort and savings
+OPTIMIZATION_MODE_SAVINGS: Final = "savings"  # Maximize savings, wider tolerance
+
+# Config keys for internal use
+CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
 
 # Limits
 MIN_OFFSET: Final = -10.0

@@ -41,9 +41,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize config flow."""
         self._data: dict[str, Any] = {}
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Handle the initial step - NIBE integration selection."""
         errors = {}
 
@@ -79,9 +77,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"nibe_count": str(len(nibe_entities))},
         )
 
-    async def async_step_gespot(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_gespot(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Configure GE-Spot integration."""
         errors = {}
 
@@ -123,9 +119,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"gespot_count": str(len(gespot_entities))},
         )
 
-    async def async_step_optional(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_optional(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Configure optional features."""
         if user_input is not None:
             # Store optional settings
@@ -201,9 +195,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """Initialize options flow."""
         self.config_entry = config_entry
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
@@ -228,9 +220,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     ),
                     vol.Optional(
                         CONF_TOLERANCE,
-                        default=self.config_entry.options.get(
-                            CONF_TOLERANCE, DEFAULT_TOLERANCE
-                        ),
+                        default=self.config_entry.options.get(CONF_TOLERANCE, DEFAULT_TOLERANCE),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1,

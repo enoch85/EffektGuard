@@ -275,3 +275,30 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.error("Failed to apply offset: %s", err)
             raise
+
+    async def set_optimization_enabled(self, enabled: bool) -> None:
+        """Enable or disable optimization.
+
+        Args:
+            enabled: True to enable optimization, False to disable
+        """
+        if enabled:
+            _LOGGER.info("Optimization enabled")
+            # Resume normal optimization
+            await self.async_request_refresh()
+        else:
+            _LOGGER.info("Optimization disabled - resetting offset to neutral")
+            # Reset offset to neutral (0.0)
+            try:
+                await self.async_set_offset(0.0)
+            except Exception as err:
+                _LOGGER.error("Failed to reset offset: %s", err)
+
+    @property
+    def current_peak(self) -> float:
+        """Return current monthly peak power consumption.
+
+        Returns:
+            Monthly peak power in kW
+        """
+        return self.peak_this_month
