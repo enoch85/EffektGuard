@@ -14,7 +14,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_CONTROL_PRIORITY,
     CONF_OPTIMIZATION_MODE,
+    CONTROL_PRIORITY_BALANCED,
+    CONTROL_PRIORITY_COMFORT,
+    CONTROL_PRIORITY_SAVINGS,
+    DEFAULT_CONTROL_PRIORITY,
     DEFAULT_OPTIMIZATION_MODE,
     DOMAIN,
     OPTIMIZATION_MODE_BALANCED,
@@ -44,6 +49,17 @@ SELECTS: tuple[EffektGuardSelectEntityDescription, ...] = (
             OPTIMIZATION_MODE_SAVINGS,
         ],
         config_key=CONF_OPTIMIZATION_MODE,
+    ),
+    EffektGuardSelectEntityDescription(
+        key="control_priority",
+        name="Control Priority",
+        icon="mdi:priority-high",
+        options=[
+            CONTROL_PRIORITY_COMFORT,
+            CONTROL_PRIORITY_BALANCED,
+            CONTROL_PRIORITY_SAVINGS,
+        ],
+        config_key=CONF_CONTROL_PRIORITY,
     ),
 )
 
@@ -92,7 +108,13 @@ class EffektGuardSelect(CoordinatorEntity, SelectEntity):
         if not config_key:
             return self.entity_description.options[0] if self.entity_description.options else ""
 
-        return self._entry.data.get(config_key, DEFAULT_OPTIMIZATION_MODE)
+        # Get default value based on config key
+        defaults = {
+            CONF_OPTIMIZATION_MODE: DEFAULT_OPTIMIZATION_MODE,
+            CONF_CONTROL_PRIORITY: DEFAULT_CONTROL_PRIORITY,
+        }
+
+        return self._entry.data.get(config_key, defaults.get(config_key, "balanced"))
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""

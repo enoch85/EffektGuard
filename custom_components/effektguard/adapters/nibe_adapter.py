@@ -24,7 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_NIBE_ENTITY
+from ..const import CONF_DEGREE_MINUTES_ENTITY, CONF_NIBE_ENTITY, CONF_POWER_SENSOR_ENTITY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +59,8 @@ class NibeAdapter:
         """
         self.hass = hass
         self._nibe_base_entity = config.get(CONF_NIBE_ENTITY)
+        self._degree_minutes_entity = config.get(CONF_DEGREE_MINUTES_ENTITY)  # Optional
+        self._power_sensor_entity = config.get(CONF_POWER_SENSOR_ENTITY)  # Optional
         self._last_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
 
@@ -93,9 +95,31 @@ class NibeAdapter:
         )
 
         # Read degree minutes (GM/DM)
-        degree_minutes = await self._read_entity_float(
-            self._entity_cache.get("degree_minutes"), default=0.0
-        )
+        # First try optional configured sensor, then fall back to auto-discovery
+        degree_minutes = None
+        if self._degree_minutes_entity:
+            degree_minutes = await self._read_entity_float(
+                self._degree_minutes_entity, default=None
+            )
+            if degree_minutes is not None:
+                _LOGGER.debug(
+                    "Using configured degree minutes sensor: %s = %.1f",
+                    self._degree_minutes_entity,
+                    degree_minutes,
+                )
+
+        # Fall back to auto-discovered sensor
+        if degree_minutes is None:
+            degree_minutes = await self._read_entity_float(
+                self._entity_cache.get("degree_minutes"), default=None
+            )
+            if degree_minutes is not None:
+                _LOGGER.debug("Using auto-discovered degree minutes sensor: %.1f", degree_minutes)
+
+        # If still None, estimate from thermal model (will be implemented in thermal_model.py)
+        if degree_minutes is None:
+            degree_minutes = self._estimate_degree_minutes(indoor_temp, supply_temp, outdoor_temp)
+            _LOGGER.debug("Estimating degree minutes from thermal model: %.1f", degree_minutes)
 
         # Read current offset
         current_offset = await self._read_entity_float(
@@ -262,3 +286,135 @@ class NibeAdapter:
             return default
 
         return state.state in ["on", "true", "True", "ON", "1"]
+
+    def _estimate_degree_minutes(
+        self, indoor_temp: float, supply_temp: float, outdoor_temp: float
+    ) -> float:
+        """Estimate degree minutes from temperatures when sensor unavailable.
+
+        Uses simplified thermal balance model:
+        DM ≈ (actual_flow - target_flow) × time_factor
+
+        This is a rough estimation. Real DM tracking from NIBE is much more accurate.
+
+        Args:
+            indoor_temp: Current indoor temperature (°C)
+            supply_temp: Current supply/flow temperature (°C)
+            outdoor_temp: Current outdoor temperature (°C)
+
+        Returns:
+            Estimated degree minutes (typically -500 to +500)
+
+        Note:
+            Negative DM = compressor needs to run (heat deficit)
+            Positive DM = recent heating surplus
+        """
+        # Calculate target flow temp using simplified heating curve
+        # Typical NIBE curve: Flow ≈ 20 + 1.5 × (20 - Outdoor)
+        target_flow = 20.0 + 1.5 * (20.0 - outdoor_temp)
+
+        # Calculate thermal imbalance
+        flow_error = supply_temp - target_flow
+
+        # Estimate DM based on flow error and indoor temp error
+        target_indoor = 21.0  # Assumed target
+        indoor_error = indoor_temp - target_indoor
+
+        # Simplified estimation
+        # If too cold inside and flow too low → negative DM (needs heating)
+        # If warm enough and flow adequate → near zero DM
+        estimated_dm = flow_error * 10.0 + indoor_error * 50.0
+
+        # Clamp to reasonable range
+        estimated_dm = max(-800.0, min(estimated_dm, 500.0))
+
+        return estimated_dm
+
+    async def get_power_consumption(self) -> float | None:
+        """Get current power consumption of heat pump.
+
+        Tries in order:
+        1. Configured power sensor (most accurate)
+        2. Auto-discovered heat pump power sensor
+        3. Estimation from supply temperature (least accurate)
+
+        Returns:
+            Power consumption in kW, or None if unavailable
+        """
+        # Try configured power sensor
+        if self._power_sensor_entity:
+            power = await self._read_entity_float(self._power_sensor_entity, default=None)
+            if power is not None:
+                # Convert W to kW if needed
+                state = self.hass.states.get(self._power_sensor_entity)
+                if state:
+                    unit = state.attributes.get("unit_of_measurement", "").lower()
+                    if unit == "w":
+                        power = power / 1000.0
+                _LOGGER.debug(
+                    "Using configured power sensor: %s = %.2f kW",
+                    self._power_sensor_entity,
+                    power,
+                )
+                return power
+
+        # Try auto-discovered power sensor
+        power_entity = self._entity_cache.get("power")
+        if power_entity:
+            power = await self._read_entity_float(power_entity, default=None)
+            if power is not None:
+                state = self.hass.states.get(power_entity)
+                if state:
+                    unit = state.attributes.get("unit_of_measurement", "").lower()
+                    if unit == "w":
+                        power = power / 1000.0
+                _LOGGER.debug("Using auto-discovered power sensor: %.2f kW", power)
+                return power
+
+        # Fall back to estimation from supply temperature
+        supply_temp = await self._read_entity_float(
+            self._entity_cache.get("supply_temp"), default=None
+        )
+        outdoor_temp = await self._read_entity_float(
+            self._entity_cache.get("outdoor_temp"), default=None
+        )
+
+        if supply_temp is not None and outdoor_temp is not None:
+            estimated_power = self._estimate_power_from_temps(supply_temp, outdoor_temp)
+            _LOGGER.debug("Estimating power from temperatures: %.2f kW", estimated_power)
+            return estimated_power
+
+        return None
+
+    def _estimate_power_from_temps(self, supply_temp: float, outdoor_temp: float) -> float:
+        """Estimate heat pump power consumption from temperatures.
+
+        Uses typical NIBE ASHP characteristics:
+        - Higher flow temp = higher power
+        - Lower outdoor temp = higher power
+        - Typical residential heat pump: 2-8 kW range
+
+        Args:
+            supply_temp: Supply/flow temperature (°C)
+            outdoor_temp: Outdoor temperature (°C)
+
+        Returns:
+            Estimated power consumption (kW)
+        """
+        # Base power from flow temperature (30-60°C typical range)
+        # Higher flow = more power
+        flow_factor = (supply_temp - 25.0) / 20.0  # 0.25 at 30°C, 1.75 at 60°C
+        flow_factor = max(0.2, min(flow_factor, 2.0))
+
+        # Outdoor temperature factor (more power needed when cold)
+        # At +7°C: factor 1.0, At -20°C: factor ~2.5
+        temp_factor = 1.0 + (7.0 - outdoor_temp) / 18.0
+        temp_factor = max(0.5, min(temp_factor, 3.0))
+
+        # Base power for typical residential heat pump
+        base_power = 3.0  # kW (typical average)
+
+        estimated = base_power * flow_factor * temp_factor
+
+        # Clamp to reasonable range for residential heat pumps
+        return max(1.0, min(estimated, 12.0))

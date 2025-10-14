@@ -101,10 +101,25 @@ class WeatherAdapter:
                     )
                 )
             except (ValueError, TypeError, KeyError) as err:
-                _LOGGER.debug("Skipping forecast item: %s", err)
+                _LOGGER.debug("Skipping invalid forecast entry: %s", err)
                 continue
 
-        _LOGGER.debug("Loaded weather forecast: %d hours", len(forecast_hours))
+        if not forecast_hours:
+            _LOGGER.warning("No valid forecast hours parsed")
+            return None
+
+        # Validate forecast length
+        forecast_count = len(forecast_hours)
+        if forecast_count < 12:
+            _LOGGER.warning(
+                "Weather forecast only %d hours (minimum 12h recommended for optimal pre-heating)",
+                forecast_count,
+            )
+        else:
+            _LOGGER.info(
+                "Weather forecast available: %d hours (sufficient for optimization)",
+                forecast_count,
+            )
 
         return WeatherData(
             current_temp=float(current_temp),

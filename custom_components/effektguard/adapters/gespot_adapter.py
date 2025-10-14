@@ -98,11 +98,18 @@ class GESpotAdapter:
         today_periods = self._parse_periods(today_raw)
         tomorrow_periods = self._parse_periods(tomorrow_raw) if tomorrow_raw else []
 
-        _LOGGER.debug(
-            "Loaded GE-Spot prices: %d today, %d tomorrow",
-            len(today_periods),
-            len(tomorrow_periods),
-        )
+        # Log availability
+        if tomorrow_periods:
+            _LOGGER.info(
+                "GE-Spot prices loaded: %d today, %d tomorrow (extended optimization available)",
+                len(today_periods),
+                len(tomorrow_periods),
+            )
+        else:
+            _LOGGER.info(
+                "GE-Spot prices loaded: %d today only (tomorrow not yet available)",
+                len(today_periods),
+            )
 
         return PriceData(
             today=today_periods,

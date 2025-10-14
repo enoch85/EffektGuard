@@ -10,13 +10,20 @@ DOMAIN: Final = "effektguard"
 CONF_NIBE_ENTITY: Final = "nibe_entity"
 CONF_GESPOT_ENTITY: Final = "gespot_entity"
 CONF_WEATHER_ENTITY: Final = "weather_entity"
+CONF_DEGREE_MINUTES_ENTITY: Final = "degree_minutes_entity"  # Optional: NIBE degree minutes
+CONF_POWER_SENSOR_ENTITY: Final = "power_sensor_entity"  # Optional: Power meter
 CONF_ENABLE_PRICE_OPTIMIZATION: Final = "enable_price_optimization"
 CONF_ENABLE_PEAK_PROTECTION: Final = "enable_peak_protection"
+CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
+CONF_ENABLE_HOT_WATER_OPTIMIZATION: Final = "enable_hot_water_optimization"
+CONF_ENABLE_OPTIMIZATION: Final = "enable_optimization"  # Master enable switch
 CONF_TARGET_TEMPERATURE: Final = "target_temperature"
 CONF_TOLERANCE: Final = "tolerance"
 CONF_OPTIMIZATION_MODE: Final = "optimization_mode"
+CONF_CONTROL_PRIORITY: Final = "control_priority"
 CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
+CONF_PEAK_PROTECTION_MARGIN: Final = "peak_protection_margin"
 
 # Defaults
 DEFAULT_TOLERANCE: Final = 0.5
@@ -24,11 +31,18 @@ DEFAULT_TARGET_TEMP: Final = 21.0
 DEFAULT_THERMAL_MASS: Final = 1.0
 DEFAULT_INSULATION_QUALITY: Final = 1.0
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
+DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
 
 # Optimization modes for climate entity presets
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
 OPTIMIZATION_MODE_BALANCED: Final = "balanced"  # Balance comfort and savings
 OPTIMIZATION_MODE_SAVINGS: Final = "savings"  # Maximize savings, wider tolerance
+
+# Control priority options (same values as optimization modes for consistency)
+CONTROL_PRIORITY_COMFORT: Final = "comfort"
+CONTROL_PRIORITY_BALANCED: Final = "balanced"
+CONTROL_PRIORITY_SAVINGS: Final = "savings"
+DEFAULT_CONTROL_PRIORITY: Final = "balanced"
 
 # Config keys for internal use
 CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
@@ -92,6 +106,7 @@ ATTR_PEAK_TODAY: Final = "peak_today"
 ATTR_PEAK_THIS_MONTH: Final = "peak_this_month"
 ATTR_THERMAL_DEBT: Final = "thermal_debt"
 ATTR_QUARTER_OF_DAY: Final = "quarter_of_day"
+ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 
 
 class OptimizationMode(StrEnum):

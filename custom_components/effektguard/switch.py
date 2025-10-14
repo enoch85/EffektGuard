@@ -14,8 +14,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_ENABLE_HOT_WATER_OPTIMIZATION,
+    CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
     CONF_ENABLE_PRICE_OPTIMIZATION,
+    CONF_ENABLE_WEATHER_PREDICTION,
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
@@ -32,6 +35,12 @@ class EffektGuardSwitchEntityDescription(SwitchEntityDescription):
 
 SWITCHES: tuple[EffektGuardSwitchEntityDescription, ...] = (
     EffektGuardSwitchEntityDescription(
+        key="enable_optimization",
+        name="Enable Optimization",
+        icon="mdi:power",
+        config_key=CONF_ENABLE_OPTIMIZATION,
+    ),
+    EffektGuardSwitchEntityDescription(
         key="price_optimization",
         name="Price Optimization",
         icon="mdi:cash",
@@ -42,6 +51,18 @@ SWITCHES: tuple[EffektGuardSwitchEntityDescription, ...] = (
         name="Peak Protection",
         icon="mdi:shield-alert",
         config_key=CONF_ENABLE_PEAK_PROTECTION,
+    ),
+    EffektGuardSwitchEntityDescription(
+        key="weather_prediction",
+        name="Weather Prediction",
+        icon="mdi:weather-partly-cloudy",
+        config_key=CONF_ENABLE_WEATHER_PREDICTION,
+    ),
+    EffektGuardSwitchEntityDescription(
+        key="hot_water_optimization",
+        name="Hot Water Optimization",
+        icon="mdi:water-boiler",
+        config_key=CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     ),
 )
 
@@ -90,7 +111,16 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
         if not config_key:
             return False
 
-        return self._entry.data.get(config_key, False)
+        # Default values based on config key
+        defaults = {
+            CONF_ENABLE_OPTIMIZATION: True,  # Master switch on by default
+            CONF_ENABLE_PRICE_OPTIMIZATION: True,
+            CONF_ENABLE_PEAK_PROTECTION: True,
+            CONF_ENABLE_WEATHER_PREDICTION: True,
+            CONF_ENABLE_HOT_WATER_OPTIMIZATION: False,  # Experimental, off by default
+        }
+
+        return self._entry.data.get(config_key, defaults.get(config_key, False))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""

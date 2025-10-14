@@ -11,12 +11,14 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_DEGREE_MINUTES_ENTITY,
     CONF_ENABLE_PEAK_PROTECTION,
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_GESPOT_ENTITY,
     CONF_INSULATION_QUALITY,
     CONF_NIBE_ENTITY,
     CONF_OPTIMIZATION_MODE,
+    CONF_POWER_SENSOR_ENTITY,
     CONF_TARGET_TEMPERATURE,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
@@ -128,11 +130,8 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ENABLE_PEAK_PROTECTION, True
             )
 
-            # Create entry
-            return self.async_create_entry(
-                title="EffektGuard",
-                data=self._data,
-            )
+            # Move to optional sensors step
+            return await self.async_step_optional_sensors()
 
         # Discover weather entities
         weather_entities = self._discover_weather_entities()
@@ -152,6 +151,76 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             description_placeholders={"weather_count": str(len(weather_entities))},
+        )
+
+    async def async_step_optional_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure optional sensors (degree minutes, power meter)."""
+        if user_input is not None:
+            # Store optional sensor settings
+            self._data[CONF_DEGREE_MINUTES_ENTITY] = user_input.get(CONF_DEGREE_MINUTES_ENTITY)
+            self._data[CONF_POWER_SENSOR_ENTITY] = user_input.get(CONF_POWER_SENSOR_ENTITY)
+
+            # Create entry
+            return self.async_create_entry(
+                title="EffektGuard",
+                data=self._data,
+            )
+
+        # Auto-detect degree minutes sensor
+        dm_entities = self._discover_degree_minutes_entities()
+        auto_detected_dm = dm_entities[0] if dm_entities else None
+
+        # Auto-detect power sensor
+        power_entities = self._discover_power_entities()
+        auto_detected_power = power_entities[0] if power_entities else None
+
+        schema_dict: dict[Any, Any] = {}
+
+        # Degree minutes sensor (optional)
+        if auto_detected_dm:
+            schema_dict[vol.Optional(CONF_DEGREE_MINUTES_ENTITY, default=auto_detected_dm)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor",
+                    )
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_DEGREE_MINUTES_ENTITY)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                )
+            )
+
+        # Power meter sensor (optional)
+        if auto_detected_power:
+            schema_dict[vol.Optional(CONF_POWER_SENSOR_ENTITY, default=auto_detected_power)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor",
+                        device_class="power",
+                    )
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_POWER_SENSOR_ENTITY)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="power",
+                )
+            )
+
+        return self.async_show_form(
+            step_id="optional_sensors",
+            data_schema=vol.Schema(schema_dict),
+            description_placeholders={
+                "dm_detected": "✓ Auto-detected" if auto_detected_dm else "❌ Not found",
+                "power_detected": "✓ Auto-detected" if auto_detected_power else "❌ Not found",
+                "dm_note": "Degree minutes sensor improves thermal debt tracking (estimated if not provided)",
+                "power_note": "Power meter enables accurate peak tracking (estimated from heat pump data if not provided)",
+            },
         )
 
     def _discover_nibe_entities(self) -> list[str]:
@@ -177,6 +246,90 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for entity_id, state in self.hass.states.async_all():
             if entity_id.startswith("weather."):
                 entities.append(entity_id)
+        return entities
+
+    def _discover_degree_minutes_entities(self) -> list[str]:
+        """Discover NIBE degree minutes sensors.
+
+        Auto-detect common patterns:
+        - sensor.*gradminuter* (Swedish)
+        - sensor.*degree_minutes*
+        - sensor.*gm_* (abbreviation)
+        - NIBE specific entity patterns
+        """
+        entities = []
+        search_terms = [
+            "gradminuter",
+            "degree_minutes",
+            "degree_minute",
+            "_gm_",
+            "_dm_",
+        ]
+
+        for entity_id, state in self.hass.states.async_all():
+            if not entity_id.startswith("sensor."):
+                continue
+
+            entity_lower = entity_id.lower()
+
+            # Check for any search term in entity ID
+            for term in search_terms:
+                if term in entity_lower:
+                    # Additional validation: check if NIBE-related
+                    if "nibe" in entity_lower or "myuplink" in entity_lower:
+                        entities.append(entity_id)
+                        break
+                    # Or if it's explicitly a degree minutes sensor
+                    elif "gradminuter" in entity_lower or "degree_minute" in entity_lower:
+                        entities.append(entity_id)
+                        break
+
+        return entities
+
+    def _discover_power_entities(self) -> list[str]:
+        """Discover power meter sensors.
+
+        Priority order:
+        1. House/home power meters
+        2. Heat pump power sensors
+        3. Generic power sensors
+        """
+        entities = []
+        house_power = []
+        heatpump_power = []
+        generic_power = []
+
+        for entity_id, state in self.hass.states.async_all():
+            if not entity_id.startswith("sensor."):
+                continue
+
+            # Check device class
+            if state.attributes.get("device_class") != "power":
+                continue
+
+            # Check unit of measurement (should be W or kW)
+            unit = state.attributes.get("unit_of_measurement", "")
+            if unit.lower() not in ["w", "kw"]:
+                continue
+
+            entity_lower = entity_id.lower()
+
+            # Categorize by priority
+            if any(
+                term in entity_lower
+                for term in ["house", "home", "total", "grid", "main", "hus", "hem"]
+            ):
+                house_power.append(entity_id)
+            elif any(
+                term in entity_lower
+                for term in ["nibe", "heat_pump", "heatpump", "myuplink", "värmepump"]
+            ):
+                heatpump_power.append(entity_id)
+            else:
+                generic_power.append(entity_id)
+
+        # Return in priority order
+        entities = house_power + heatpump_power + generic_power
         return entities
 
     @staticmethod
@@ -264,6 +417,23 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             max=2.0,
                             step=0.1,
                             mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DEGREE_MINUTES_ENTITY,
+                        default=self.config_entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_POWER_SENSOR_ENTITY,
+                        default=self.config_entry.data.get(CONF_POWER_SENSOR_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class="power",
                         )
                     ),
                 }

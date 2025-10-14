@@ -11,17 +11,19 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_INSULATION_QUALITY,
+    CONF_PEAK_PROTECTION_MARGIN,
     CONF_TARGET_INDOOR_TEMP,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
     DEFAULT_INSULATION_QUALITY,
+    DEFAULT_PEAK_PROTECTION_MARGIN,
     DEFAULT_TARGET_TEMP,
     DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
@@ -74,12 +76,22 @@ NUMBERS: tuple[EffektGuardNumberEntityDescription, ...] = (
     ),
     EffektGuardNumberEntityDescription(
         key="insulation_quality",
-        name="Insulation Quality",
-        icon="mdi:home-variant",
+        name="Building Insulation Quality",
+        icon="mdi:home-thermometer-outline",
         native_min_value=0.5,
         native_max_value=2.0,
         native_step=0.1,
         config_key=CONF_INSULATION_QUALITY,
+    ),
+    EffektGuardNumberEntityDescription(
+        key="peak_protection_margin",
+        name="Peak Protection Margin",
+        icon="mdi:shield-alert-outline",
+        native_min_value=0.0,
+        native_max_value=2.0,
+        native_step=0.1,
+        native_unit_of_measurement="kW",
+        config_key=CONF_PEAK_PROTECTION_MARGIN,
     ),
 )
 
@@ -134,6 +146,7 @@ class EffektGuardNumber(CoordinatorEntity, NumberEntity):
             CONF_TOLERANCE: DEFAULT_TOLERANCE,
             CONF_THERMAL_MASS: DEFAULT_THERMAL_MASS,
             CONF_INSULATION_QUALITY: DEFAULT_INSULATION_QUALITY,
+            CONF_PEAK_PROTECTION_MARGIN: DEFAULT_PEAK_PROTECTION_MARGIN,
         }
 
         return self._entry.data.get(config_key, defaults.get(config_key, 1.0))
