@@ -128,7 +128,14 @@ async def test_force_offset_sets_override(mock_hass, mock_coordinator):
 
 async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
     """Test force_offset with duration=0 (until next cycle)."""
-    from custom_components.effektguard import _async_register_services
+    from custom_components.effektguard import _async_register_services, _service_last_called
+
+    # Clear service cooldown tracking
+    _service_last_called.clear()
+
+    # Add engine mock
+    mock_coordinator.engine = MagicMock()
+    mock_coordinator.engine.set_manual_override = MagicMock()
 
     await _async_register_services(mock_hass)
 
@@ -239,7 +246,14 @@ async def test_boost_heating_sets_max_offset(mock_hass, mock_coordinator):
 
 async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
     """Test boost_heating uses default duration if not specified."""
-    from custom_components.effektguard import _async_register_services
+    from custom_components.effektguard import _async_register_services, _service_last_called
+
+    # Clear service cooldown tracking
+    _service_last_called.clear()
+
+    # Add engine mock
+    mock_coordinator.engine = MagicMock()
+    mock_coordinator.engine.set_manual_override = MagicMock()
 
     await _async_register_services(mock_hass)
 

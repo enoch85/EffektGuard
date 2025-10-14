@@ -112,8 +112,8 @@ class TestEffectLayerIntegration:
             current_peak=0.0,
         )
 
-        # Should have 6 layers (safety, emergency, effect, weather, price, comfort)
-        assert len(decision.layers) == 6
+        # Should have 8 layers (safety, emergency, effect, prediction, weather, weather_comp, price, comfort)
+        assert len(decision.layers) == 8
 
         # Find effect layer (layer 2, 0-indexed)
         effect_layer = decision.layers[2]
@@ -195,8 +195,9 @@ class TestLayerPriority:
         self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
     ):
         """Test emergency layer overrides peak protection."""
-        # Set critical degree minutes
-        mock_nibe_state.degree_minutes = -500.0  # DM_THRESHOLD_CRITICAL
+        # Set critical degree minutes close to absolute max
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_ABSOLUTE_MAX (-1500)
+        mock_nibe_state.outdoor_temp = 5.0
 
         # Set up peak to trigger protection
         timestamp = datetime(2025, 10, 14, 12, 0)
@@ -211,7 +212,7 @@ class TestLayerPriority:
 
         # Emergency should force heating despite peak risk
         assert decision.offset > 0.0
-        assert "EMERGENCY" in decision.reasoning
+        assert "CRITICAL" in decision.reasoning or "ABSOLUTE" in decision.reasoning
 
 
 class TestPeakProtectionScenarios:
@@ -293,8 +294,9 @@ class TestOffsetAggregation:
         self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
     ):
         """Test critical layer (weight=1.0) dominates aggregation."""
-        # Set critical degree minutes
-        mock_nibe_state.degree_minutes = -500.0
+        # Set critical degree minutes close to absolute max
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_ABSOLUTE_MAX (-1500)
+        mock_nibe_state.outdoor_temp = 5.0
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,

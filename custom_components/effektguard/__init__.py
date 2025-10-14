@@ -11,17 +11,63 @@ effect tariff system.
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    BOOST_COOLDOWN_MINUTES,
+    DHW_BOOST_COOLDOWN_MINUTES,
+    SERVICE_RATE_LIMIT_MINUTES,
+)
 from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# Service call cooldown tracking (per hass instance)
+_service_last_called: dict[str, datetime] = {}
+
+
+def _check_service_cooldown(service_name: str, cooldown_minutes: int) -> tuple[bool, int]:
+    """Check if service is in cooldown period.
+
+    Args:
+        service_name: Name of the service to check
+        cooldown_minutes: Cooldown duration in minutes
+
+    Returns:
+        Tuple of (is_allowed, remaining_time_seconds)
+        - is_allowed: True if service can be called, False if in cooldown
+        - remaining_time_seconds: Seconds remaining in cooldown (0 if allowed)
+    """
+    service_key = f"{DOMAIN}_{service_name}"
+    now = dt_util.now()
+
+    if service_key not in _service_last_called:
+        return True, 0
+
+    last_call = _service_last_called[service_key]
+    cooldown = timedelta(minutes=cooldown_minutes)
+    time_since_last = now - last_call
+
+    if time_since_last >= cooldown:
+        return True, 0
+
+    remaining = cooldown - time_since_last
+    remaining_seconds = int(remaining.total_seconds())
+    return False, remaining_seconds
+
+
+def _update_service_timestamp(service_name: str) -> None:
+    """Update the last called timestamp for a service."""
+    service_key = f"{DOMAIN}_{service_name}"
+    _service_last_called[service_key] = dt_util.now()
+
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -123,11 +169,17 @@ async def _create_coordinator(
     )
 
     # Create decision engine with all dependencies
+    # Add latitude from Home Assistant config for climate zone detection
+    config_with_latitude = dict(entry.options)
+    config_with_latitude["latitude"] = hass.config.latitude
+
     decision_engine = DecisionEngine(
         price_analyzer=price_analyzer,
         effect_manager=effect_manager,
         thermal_model=thermal_model,
-        config=entry.options,
+        config=config_with_latitude,
+        thermal_predictor=None,  # Will be set after coordinator is created (Phase 6)
+        weather_learner=None,  # Will be set after coordinator is created (Phase 6)
     )
 
     # Load persistent state for effect manager
@@ -143,6 +195,13 @@ async def _create_coordinator(
         effect_manager=effect_manager,
         entry=entry,
     )
+
+    # Initialize learning modules (Phase 6)
+    await coordinator.async_initialize_learning()
+
+    # Connect thermal predictor and weather learner to decision engine (Phase 6)
+    decision_engine.predictor = coordinator.thermal_predictor
+    decision_engine.weather_learner = coordinator.weather_learner
 
     return coordinator
 
@@ -183,7 +242,17 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         Allows manual override of heating curve offset for specified duration.
         Useful for testing or manual adjustments.
+
+        Rate limited to prevent excessive calls.
         """
+        # Check cooldown
+        is_allowed, remaining = _check_service_cooldown("force_offset", SERVICE_RATE_LIMIT_MINUTES)
+        if not is_allowed:
+            _LOGGER.warning(
+                "force_offset called too soon. Cooldown: %d seconds remaining", remaining
+            )
+            return
+
         coordinator = get_coordinator(hass)
         if not coordinator:
             _LOGGER.error("No EffektGuard coordinator found")
@@ -204,6 +273,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         # Request immediate update
         await coordinator.async_request_refresh()
+
+        # Update last called timestamp
+        _update_service_timestamp("force_offset")
 
         _LOGGER.info("Manual offset override set: %s°C for %s minutes", offset, duration)
 
@@ -236,7 +308,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         Emergency boost mode: maximize heating regardless of cost.
         Useful for quick temperature recovery or unexpected cold periods.
+
+        Rate limited to prevent excessive calls.
         """
+        # Check cooldown
+        is_allowed, remaining = _check_service_cooldown("boost_heating", BOOST_COOLDOWN_MINUTES)
+        if not is_allowed:
+            remaining_minutes = int(remaining / 60)
+            _LOGGER.warning(
+                "boost_heating called too soon. Cooldown: %d minutes remaining", remaining_minutes
+            )
+            return
+
         coordinator = get_coordinator(hass)
         if not coordinator:
             _LOGGER.error("No EffektGuard coordinator found")
@@ -252,6 +335,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         # Request immediate update
         await coordinator.async_request_refresh()
+
+        # Update last called timestamp
+        _update_service_timestamp("boost_heating")
 
         _LOGGER.info("Heating boost activated: +%s°C for %s minutes", boost_offset, duration)
 

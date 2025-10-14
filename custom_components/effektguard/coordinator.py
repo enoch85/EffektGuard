@@ -6,10 +6,24 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, UPDATE_INTERVAL_MINUTES
+from .const import (
+    CLIMATE_CENTRAL_SWEDEN,
+    CLIMATE_MID_NORTHERN_SWEDEN,
+    CLIMATE_NORTHERN_LAPLAND,
+    CLIMATE_NORTHERN_SWEDEN,
+    CLIMATE_SOUTHERN_SWEDEN,
+    DOMAIN,
+    STORAGE_KEY_LEARNING,
+    STORAGE_VERSION,
+    UPDATE_INTERVAL_MINUTES,
+)
+from .optimization.adaptive_learning import AdaptiveThermalModel
+from .optimization.thermal_predictor import ThermalStatePredictor
+from .optimization.weather_learning import WeatherPatternLearner
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,11 +65,116 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.effect = effect_manager
         self.entry = entry
 
+        # Learning modules (Phase 6)
+        self.adaptive_learning = AdaptiveThermalModel()
+        self.thermal_predictor = ThermalStatePredictor()
+        self.weather_learner = WeatherPatternLearner()
+        self.climate_region = self._detect_climate_region(hass)
+
+        # Learning storage
+        self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
+
         # State tracking
         self.current_offset: float = 0.0
         self.peak_today: float = 0.0
         self.peak_this_month: float = 0.0
         self.last_decision_time = None
+        self._learned_data_changed = False  # Track if learning data needs saving
+
+    def _detect_climate_region(self, hass: HomeAssistant) -> str:
+        """Detect Swedish climate region based on Home Assistant location.
+
+        Uses latitude to determine climate region for adaptive learning thresholds.
+
+        Swedish climate regions (based on SMHI climate data):
+        - Southern Sweden (55-58°N): Malmö, Gothenburg - Jan avg 0.1°C
+        - Central Sweden (58-62°N): Stockholm, Gävle - Jan avg -3.7°C
+        - Mid-Northern Sweden (62-65°N): Östersund, Umeå - Jan avg -7.9°C
+        - Northern Sweden (65-67°N): Luleå, Boden - Jan avg -11.0°C
+        - Northern Lapland (67-70°N): Kiruna, Gällivare - Jan avg -12.5°C
+
+        Args:
+            hass: HomeAssistant instance
+
+        Returns:
+            Climate region constant (southern_sweden, central_sweden, etc.)
+        """
+        try:
+            # Get Home Assistant latitude
+            latitude = hass.config.latitude
+
+            if latitude is None:
+                _LOGGER.warning("Latitude not configured, defaulting to central Sweden")
+                return CLIMATE_CENTRAL_SWEDEN
+
+            # Detect region based on latitude bands
+            if latitude < 58.0:
+                region = CLIMATE_SOUTHERN_SWEDEN
+                region_name = "Southern Sweden (Malmö/Gothenburg)"
+            elif latitude < 62.0:
+                region = CLIMATE_CENTRAL_SWEDEN
+                region_name = "Central Sweden (Stockholm/Gävle)"
+            elif latitude < 65.0:
+                region = CLIMATE_MID_NORTHERN_SWEDEN
+                region_name = "Mid-Northern Sweden (Östersund/Umeå)"
+            elif latitude < 67.0:
+                region = CLIMATE_NORTHERN_SWEDEN
+                region_name = "Northern Sweden (Luleå/Boden)"
+            else:
+                region = CLIMATE_NORTHERN_LAPLAND
+                region_name = "Northern Lapland (Kiruna)"
+
+            _LOGGER.info(
+                "Detected climate region: %s (latitude: %.2f°N)",
+                region_name,
+                latitude,
+            )
+
+            return region
+
+        except Exception as err:
+            _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
+            return CLIMATE_CENTRAL_SWEDEN
+
+    async def async_initialize_learning(self) -> None:
+        """Initialize learning modules by loading persisted data.
+
+        Called once during coordinator setup to restore learned parameters
+        from previous sessions.
+        """
+        _LOGGER.debug("Initializing learning modules...")
+
+        try:
+            learned_data = await self._load_learned_data()
+
+            if learned_data:
+                # Restore adaptive thermal model
+                if "thermal_model" in learned_data:
+                    thermal_data = learned_data["thermal_model"]
+                    self.adaptive_learning.thermal_mass = thermal_data.get("thermal_mass", 1.0)
+                    self.adaptive_learning.ufh_type = thermal_data.get("ufh_type", "unknown")
+                    _LOGGER.info(
+                        "Restored thermal model: mass=%.2f, UFH=%s",
+                        self.adaptive_learning.thermal_mass,
+                        self.adaptive_learning.ufh_type,
+                    )
+
+                # Restore weather patterns
+                if "weather_patterns" in learned_data:
+                    self.weather_learner.from_dict(learned_data["weather_patterns"])
+                    summary = self.weather_learner.get_pattern_database_summary()
+                    _LOGGER.info(
+                        "Restored weather patterns: %d weeks of data",
+                        summary.get("total_weeks", 0),
+                    )
+
+                _LOGGER.info("Learning modules initialized successfully")
+            else:
+                _LOGGER.info("No learned data found - starting fresh learning")
+
+        except Exception as err:
+            _LOGGER.warning("Failed to initialize learning modules: %s", err)
+            # Continue with fresh learning
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data and calculate optimal offset.
@@ -128,8 +247,26 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Update peak tracking
         await self._update_peak_tracking(nibe_data)
 
+        # Record observations for learning (Phase 6)
+        await self._record_learning_observations(nibe_data, weather_data, decision.offset)
+
         # Save state periodically
         await self.effect.async_save()
+
+        # Save learned data if changed (every hour to avoid excessive writes)
+        if self._learned_data_changed:
+            now = dt_util.now()
+            if (
+                not hasattr(self, "_last_learning_save")
+                or (now - self._last_learning_save).total_seconds() > 3600
+            ):
+                await self._save_learned_data(
+                    self.adaptive_learning,
+                    self.thermal_predictor,
+                    self.weather_learner,
+                )
+                self._last_learning_save = now
+                self._learned_data_changed = False
 
         return {
             "nibe": nibe_data,
@@ -302,3 +439,136 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             Monthly peak power in kW
         """
         return self.peak_this_month
+
+    async def _record_learning_observations(
+        self,
+        nibe_data,
+        weather_data,
+        current_offset: float,
+    ) -> None:
+        """Record observations for all learning modules.
+
+        Args:
+            nibe_data: Current NIBE state
+            weather_data: Weather forecast data
+            current_offset: Current heating curve offset
+        """
+        try:
+            now = dt_util.utcnow()
+
+            # Record adaptive thermal observation
+            self.adaptive_learning.record_observation(
+                timestamp=now,
+                indoor_temp=nibe_data.indoor_temp,
+                outdoor_temp=nibe_data.outdoor_temp,
+                heating_offset=current_offset,
+            )
+
+            # Record thermal state for predictor
+            self.thermal_predictor.record_state(
+                timestamp=now,
+                indoor_temp=nibe_data.indoor_temp,
+                outdoor_temp=nibe_data.outdoor_temp,
+                heating_offset=current_offset,
+                flow_temp=nibe_data.flow_temp,
+                degree_minutes=nibe_data.degree_minutes,
+            )
+
+            # Record weather pattern once per day (at midnight or first update of day)
+            if weather_data and weather_data.forecast_hours:
+                current_date = now.date()
+
+                if not hasattr(self, "_last_weather_record_date") or (
+                    self._last_weather_record_date != current_date
+                ):
+                    # Extract daily temperature pattern from forecast
+                    daily_temps = [hour.temperature for hour in weather_data.forecast_hours[:24]]
+
+                    if daily_temps:
+                        self.weather_learner.record_weather_pattern(
+                            date=now,
+                            daily_temps=daily_temps,
+                        )
+                        self._last_weather_record_date = current_date
+                        _LOGGER.debug("Recorded weather pattern for %s", current_date)
+
+            # Mark that learning data has changed
+            self._learned_data_changed = True
+
+            _LOGGER.debug("Recorded learning observations successfully")
+
+        except Exception as err:
+            _LOGGER.warning("Failed to record learning observations: %s", err)
+            # Don't raise - learning is optional, don't break optimization
+
+    async def _save_learned_data(
+        self,
+        adaptive_learning=None,
+        thermal_predictor=None,
+        weather_learner=None,
+    ) -> None:
+        """Persist learned parameters to storage.
+
+        Args:
+            adaptive_learning: AdaptiveThermalModel instance
+            thermal_predictor: ThermalStatePredictor instance
+            weather_learner: WeatherPatternLearner instance
+        """
+        try:
+            learned_data = {
+                "version": STORAGE_VERSION,
+                "last_updated": dt_util.utcnow().isoformat(),
+            }
+
+            # Save thermal model parameters
+            if adaptive_learning:
+                learned_params = adaptive_learning.learned_parameters
+                learned_data["thermal_model"] = {
+                    "thermal_mass": adaptive_learning.thermal_mass,
+                    "ufh_type": adaptive_learning.ufh_type,
+                    "learned_parameters": learned_params,
+                    "observation_count": len(adaptive_learning.observations),
+                }
+
+            # Save thermal predictor state
+            if thermal_predictor:
+                learned_data["thermal_predictor"] = {
+                    "responsiveness": thermal_predictor._thermal_responsiveness,
+                    "state_count": len(thermal_predictor.state_history),
+                }
+
+            # Save weather patterns
+            if weather_learner:
+                learned_data["weather_patterns"] = weather_learner.to_dict()
+                summary = weather_learner.get_pattern_database_summary()
+                learned_data["weather_summary"] = summary
+
+            await self.learning_store.async_save(learned_data)
+            _LOGGER.debug("Saved learned data to storage")
+
+        except Exception as err:
+            _LOGGER.error("Failed to save learned data: %s", err, exc_info=True)
+
+    async def _load_learned_data(self) -> dict[str, Any] | None:
+        """Load persisted learning data from storage.
+
+        Returns:
+            Dictionary with learned data, or None if not available
+        """
+        try:
+            data = await self.learning_store.async_load()
+
+            if data:
+                _LOGGER.info(
+                    "Loaded learned data from storage (version %s, updated %s)",
+                    data.get("version"),
+                    data.get("last_updated"),
+                )
+                return data
+            else:
+                _LOGGER.debug("No learned data in storage yet")
+                return None
+
+        except Exception as err:
+            _LOGGER.warning("Failed to load learned data: %s", err)
+            return None

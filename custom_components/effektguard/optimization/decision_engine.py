@@ -4,28 +4,38 @@ Implements layered decision-making architecture that integrates:
 - Safety constraints (temperature limits, thermal debt prevention)
 - Effect tariff protection (15-minute peak avoidance)
 - Weather prediction (pre-heating before cold)
+- Mathematical weather compensation (André Kühne, Timbones) with adaptive climate zones
 - Spot price optimization (cost reduction)
 - Comfort maintenance (temperature tolerance)
 - Emergency recovery (degree minutes critical threshold)
 
 Each layer votes on offset, final decision is weighted aggregation.
+Globally applicable with latitude-based climate zone detection.
+Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without configuration.
 """
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_TOLERANCE,
-    DM_THRESHOLD_CRITICAL,
-    DM_THRESHOLD_WARNING,
+    DEFAULT_WEATHER_COMPENSATION_WEIGHT,
+    DM_SAFETY_MARGIN_COLD,
+    DM_SAFETY_MARGIN_EXTREME,
+    DM_SAFETY_MARGIN_MILD,
+    DM_THRESHOLD_ABSOLUTE_MAX,
+    DM_THRESHOLD_EXTENDED,
+    DM_THRESHOLD_START,
     MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     QuarterClassification,
 )
+from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,9 +71,11 @@ class DecisionEngine:
     1. Safety layer (always enforced)
     2. Emergency layer (degree minutes critical)
     3. Effect tariff protection
-    4. Weather prediction
-    5. Spot price optimization
-    6. Comfort maintenance
+    4. Prediction layer (Phase 6 - learned pre-heating)
+    5. Weather compensation layer (NEW - mathematical flow temp optimization)
+    6. Weather prediction
+    7. Spot price optimization
+    8. Comfort maintenance
     """
 
     def __init__(
@@ -72,6 +84,8 @@ class DecisionEngine:
         effect_manager,
         thermal_model,
         config: dict[str, Any],
+        thermal_predictor=None,  # Phase 6 - Optional predictor
+        weather_learner=None,  # Phase 6 - Optional weather pattern learner
     ):
         """Initialize decision engine with dependencies.
 
@@ -80,16 +94,52 @@ class DecisionEngine:
             effect_manager: EffectManager for peak tracking
             thermal_model: ThermalModel for predictions
             config: Configuration options
+            thermal_predictor: Optional ThermalStatePredictor for learned pre-heating (Phase 6)
+            weather_learner: Optional WeatherPatternLearner for unusual weather detection (Phase 6)
         """
         self.price = price_analyzer
         self.effect = effect_manager
         self.thermal = thermal_model
         self.config = config
+        self.predictor = thermal_predictor  # Phase 6
+        self.weather_learner = weather_learner  # Phase 6
 
         # Configuration with defaults
         self.target_temp = config.get("target_temperature", DEFAULT_TARGET_TEMP)
         self.tolerance = config.get("tolerance", DEFAULT_TOLERANCE)
         self.tolerance_range = self.tolerance * 0.4  # Scale: 1-10 -> 0.4-4.0°C
+
+        # Weather compensation enabled/disabled
+        self.enable_weather_compensation = config.get("enable_weather_compensation", True)
+        self.weather_comp_weight = config.get(
+            "weather_compensation_weight", DEFAULT_WEATHER_COMPENSATION_WEIGHT
+        )
+
+        # Adaptive climate system - combines universal zones with learning
+        # Automatically detects climate zone from latitude (no country-specific code needed!)
+        latitude = config.get("latitude", 59.33)  # Default to Stockholm
+        self.climate_system = AdaptiveClimateSystem(
+            latitude=latitude, weather_learner=weather_learner
+        )
+
+        # Weather compensation calculator
+        # Heat loss coefficient from learned values or config, fallback to default
+        heat_loss_coeff = config.get("heat_loss_coefficient", DEFAULT_HEAT_LOSS_COEFFICIENT)
+        radiator_output = config.get("radiator_rated_output", None)
+        heating_type = config.get("heating_type", "radiator")  # radiator, concrete_ufh, timber
+
+        self.weather_comp = WeatherCompensationCalculator(
+            heat_loss_coefficient=heat_loss_coeff,
+            radiator_rated_output=radiator_output,
+            heating_type=heating_type,
+        )
+
+        _LOGGER.info(
+            "Weather compensation initialized: HC=%.1f W/°C, radiator=%s W, type=%s",
+            heat_loss_coeff,
+            radiator_output if radiator_output else "not configured",
+            heating_type,
+        )
 
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
@@ -192,12 +242,16 @@ class DecisionEngine:
         if price_data:
             self.price.update_prices(price_data)
 
-        # Calculate all layer decisions
+        # Calculate all layer decisions (ordered by priority)
         layers = [
             self._safety_layer(nibe_state),
             self._emergency_layer(nibe_state),
             self._effect_layer(nibe_state, current_peak),
-            self._weather_layer(nibe_state, weather_data),
+            self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
+            self._weather_compensation_layer(
+                nibe_state, weather_data
+            ),  # Mathematical WC with Swedish adaptations
+            self._weather_layer(nibe_state, weather_data),  # Simple pre-heating logic
             self._price_layer(price_data),
             self._comfort_layer(nibe_state),
         ]
@@ -255,44 +309,156 @@ class DecisionEngine:
             )
 
     def _emergency_layer(self, nibe_state) -> LayerDecision:
-        """Emergency layer: Respond to critical degree minutes (thermal debt).
+        """Emergency layer: Smart context-aware thermal debt response.
 
-        Based on research:
-        - DM -400: Warning threshold, stop cost optimization
-        - DM -500: Critical threshold, emergency recovery
-        - Source: Forum_Summary.md (stevedvo case: DM -500 = 15kW spikes)
+        DESIGN PHILOSOPHY:
+        Instead of fixed thresholds, this layer understands what's "normal" for
+        current outdoor temperature. At -30°C in Kiruna, DM -1000 might be normal.
+        At 0°C in Malmö, DM -1000 indicates a problem.
+
+        The algorithm calculates expected DM range based on:
+        - Outdoor temperature (colder = deeper normal DM)
+        - Heat demand intensity
+        - Distance from absolute safety limit (-1500)
+
+        This automatically adapts to ANY climate without configuration:
+        - Malmö (0°C): Tight tolerances, early warnings
+        - Stockholm (-5°C): Moderate tolerances
+        - Luleå/Kiruna (-30°C): Wide tolerances, expect deep DM
+
+        Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
+        This is the hard safety limit validated by Swedish NIBE forums.
 
         Args:
             nibe_state: Current NIBE state
 
         Returns:
-            LayerDecision with emergency response
+            LayerDecision with context-aware emergency response
         """
         degree_minutes = nibe_state.degree_minutes
+        outdoor_temp = nibe_state.outdoor_temp
 
-        if degree_minutes <= DM_THRESHOLD_CRITICAL:
-            # Critical thermal debt - emergency recovery
+        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
+        if degree_minutes <= DM_THRESHOLD_ABSOLUTE_MAX:
+            # At absolute safety limit - maximum emergency response
+            # This applies regardless of outdoor temperature or conditions
+            offset = 5.0
+            return LayerDecision(
+                offset=offset,
+                weight=1.0,
+                reason=f"ABSOLUTE MAX: DM {degree_minutes:.0f} at safety limit -1500 - EMERGENCY",
+            )
+
+        # Calculate context-aware thresholds based on outdoor temperature
+        # Colder weather = expect deeper normal DM, so thresholds adapt
+        expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
+
+        # Distance from absolute maximum (how much safety margin remains)
+        margin_to_limit = degree_minutes - DM_THRESHOLD_ABSOLUTE_MAX  # Positive value
+
+        # CRITICAL: Within 300 DM of absolute maximum
+        # This means we're at -1200 or deeper - very dangerous territory
+        if margin_to_limit < 300:
+            # Close to absolute limit - strong emergency recovery
             offset = 3.0
             return LayerDecision(
                 offset=offset,
                 weight=1.0,
-                reason=f"EMERGENCY: Critical DM {degree_minutes:.0f} (≤{DM_THRESHOLD_CRITICAL})",
+                reason=f"CRITICAL: DM {degree_minutes:.0f} near absolute max (margin: {margin_to_limit:.0f})",
             )
-        elif degree_minutes <= DM_THRESHOLD_WARNING:
-            # Warning - gentle recovery, stop further reductions
-            offset = 1.5
+
+        # WARNING: DM is significantly beyond expected range for this temperature
+        # Check if we're deeper than expected + safety margin
+        if degree_minutes < expected_dm["warning"]:
+            # Beyond expected range - recovery needed
+            # Severity scales with how far beyond expected we are
+            deviation = expected_dm["warning"] - degree_minutes
+            offset = min(2.0, 1.0 + (deviation / 400))  # 1.0-2.0 based on deviation
+
             return LayerDecision(
                 offset=offset,
-                weight=0.9,
-                reason=f"WARNING: DM {degree_minutes:.0f} approaching danger (≤{DM_THRESHOLD_WARNING})",
+                weight=0.8,
+                reason=(
+                    f"WARNING: DM {degree_minutes:.0f} beyond expected for "
+                    f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f})"
+                ),
             )
+
+        # CAUTION: DM is approaching expected limits
+        elif degree_minutes < expected_dm["normal"]:
+            # Slightly beyond normal - gentle correction
+            offset = 0.5
+            return LayerDecision(
+                offset=offset,
+                weight=0.5,
+                reason=f"CAUTION: DM {degree_minutes:.0f} at {outdoor_temp:.1f}°C - monitoring",
+            )
+
         else:
-            # Thermal debt OK
+            # DM within normal expected range for this temperature
             return LayerDecision(
                 offset=0.0,
                 weight=0.0,
-                reason=f"Thermal debt OK (DM: {degree_minutes:.0f})",
+                reason=f"Thermal debt OK (DM: {degree_minutes:.0f} at {outdoor_temp:.1f}°C)",
             )
+
+    def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
+        """Calculate expected DM range for given outdoor temperature.
+
+        SMART ADAPTATION:
+        In colder weather, heat pump works harder and DM naturally goes deeper.
+        This is NORMAL and expected. We calculate what's reasonable for the
+        current temperature and only alert if DM goes beyond that.
+
+        Temperature-based expectations:
+        - Above 0°C (Malmö mild): Light load, DM should stay shallow
+        - 0 to -10°C (Stockholm): Moderate load, moderate DM expected
+        - -10 to -20°C (Northern): Heavy load, deep DM expected
+        - Below -20°C (Extreme): Very heavy load, very deep DM expected
+
+        Returns:
+            Dictionary with:
+            - normal: Expected normal operating DM
+            - warning: Start warning at this DM (normal - margin)
+        """
+        # Base expectation: Start threshold (-60) + extended runs (-240)
+        base_dm = DM_THRESHOLD_START + DM_THRESHOLD_EXTENDED  # -300
+
+        # Add temperature-dependent safety margin
+        # Colder = more margin allowed before warnings
+        if outdoor_temp > 0:
+            # Mild weather: Tight tolerances (Malmö, spring/autumn)
+            margin = DM_SAFETY_MARGIN_MILD  # 300
+            normal_dm = base_dm - margin  # -600
+        elif outdoor_temp > -10:
+            # Moderate cold: Standard tolerances (Stockholm winter)
+            margin = DM_SAFETY_MARGIN_MILD + 200  # 500
+            normal_dm = base_dm - margin  # -800
+        elif outdoor_temp > -20:
+            # Cold: Wide tolerances (Northern Sweden average)
+            margin = DM_SAFETY_MARGIN_COLD  # 500
+            normal_dm = base_dm - margin  # -800
+            # But allow deeper for very cold in this range
+            normal_dm -= (abs(outdoor_temp) - 10) * 20  # Up to -1000 at -20°C
+        else:
+            # Extreme cold: Very wide tolerances (Kiruna winter)
+            margin = DM_SAFETY_MARGIN_EXTREME  # 700
+            normal_dm = base_dm - margin  # -1000
+            # Allow even deeper for extreme cold
+            normal_dm -= (abs(outdoor_temp) - 20) * 15  # Up to -1150 at -30°C
+
+        # Warning threshold: Normal - additional buffer before critical
+        # This creates graduated response: normal → caution → warning → critical
+        warning_dm = normal_dm - 200  # Additional 200 DM buffer
+
+        # Ensure we never expect DM beyond -1300 (stay 200 away from absolute max)
+        normal_dm = max(normal_dm, -1300)
+        warning_dm = max(warning_dm, -1400)
+
+        return {
+            "normal": normal_dm,  # Expected normal operating range
+            "warning": warning_dm,  # Start warning/recovery
+        }
 
     def _effect_layer(self, nibe_state, current_peak: float) -> LayerDecision:
         """Effect tariff protection layer: Avoid creating new 15-minute peak.
@@ -333,6 +499,77 @@ class DecisionEngine:
                 offset=0.0,
                 weight=0.0,
                 reason=f"Peak OK (Q{current_quarter})",
+            )
+
+    def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
+        """Prediction layer: Learned pre-heating using thermal state predictor.
+
+        Uses learned building thermal characteristics to make intelligent
+        pre-heating decisions based on predicted temperature evolution.
+
+        This layer uses actual learned thermal response rather than generic
+        thermal mass assumptions, providing more accurate pre-heating.
+
+        Phase 6 - Self-learning capability
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+
+        Returns:
+            LayerDecision with learned pre-heating recommendation
+        """
+        # Skip if predictor not available or not enough data
+        if not self.predictor:
+            return LayerDecision(offset=0.0, weight=0.0, reason="Predictor not initialized")
+
+        if len(self.predictor.state_history) < 96:  # Less than 24 hours of data
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason=f"Learning: {len(self.predictor.state_history)}/96 observations",
+            )
+
+        # Skip if no weather forecast available
+        if not weather_data or not weather_data.forecast_hours:
+            return LayerDecision(offset=0.0, weight=0.0, reason="No weather forecast")
+
+        try:
+            # Extract forecast temperatures (next 12 hours)
+            forecast_temps = [hour.temperature for hour in weather_data.forecast_hours[:12]]
+
+            if not forecast_temps:
+                return LayerDecision(offset=0.0, weight=0.0, reason="Empty weather forecast")
+
+            # Check if pre-heating is recommended
+            preheat_decision = self.predictor.should_pre_heat(
+                target_temp=self.target_temp,
+                hours_until_event=6,  # 6-hour lookahead for balance
+                outdoor_forecast_temps=forecast_temps,
+            )
+
+            if preheat_decision.should_preheat:
+                # Use learned pre-heating offset
+                # Weight 0.65 - slightly higher than base price layer (0.6)
+                # but lower than effect/weather layers (0.7-0.8)
+                return LayerDecision(
+                    offset=preheat_decision.recommended_offset,
+                    weight=0.65,
+                    reason=f"Learned pre-heat: {preheat_decision.reasoning}",
+                )
+            else:
+                return LayerDecision(
+                    offset=0.0,
+                    weight=0.0,
+                    reason="Learned: No pre-heat needed",
+                )
+
+        except Exception as err:
+            _LOGGER.warning("Prediction layer failed: %s", err)
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason=f"Prediction error: {err}",
             )
 
     def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
@@ -389,6 +626,130 @@ class DecisionEngine:
                 reason=f"Weather OK: {temp_drop:.1f}°C drop < {threshold:.1f}°C threshold",
             )
 
+    def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
+        """Mathematical weather compensation layer with adaptive climate system.
+
+        Calculates optimal flow temperature using:
+        - André Kühne's universal formula (validated across manufacturers)
+        - Timbones' heat transfer method (if radiator specs available)
+        - UFH-specific adjustments (concrete/timber)
+        - Adaptive climate zones (latitude-based, globally applicable)
+        - Weather learning (unusual pattern detection)
+
+        Automatically adapts to global climates:
+        - Kiruna, Sweden (-30°C) → Arctic zone → 2.5°C base margin
+        - Stockholm, Sweden (-10°C) → Cold zone → 1.0°C base margin
+        - London, UK (0°C) → Temperate zone → 0.5°C base margin
+        - Paris, France (5°C) → Mild zone → 0.0°C base margin
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+
+        Returns:
+            LayerDecision with mathematically calculated offset
+        """
+        # Check if feature is enabled
+        if not self.enable_weather_compensation:
+            return LayerDecision(offset=0.0, weight=0.0, reason="Weather compensation disabled")
+
+        if not weather_data or not weather_data.forecast_hours:
+            return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
+
+        current_outdoor = nibe_state.outdoor_temp
+        current_flow = nibe_state.flow_temp
+
+        # Calculate optimal flow temperature using physics-based formulas
+        flow_calc = self.weather_comp.calculate_optimal_flow_temp(
+            indoor_setpoint=self.target_temp,
+            outdoor_temp=current_outdoor,
+            prefer_method="auto",  # Combines Kühne + Timbones if available
+        )
+
+        # Adaptive climate system safety adjustments
+        # Replaces hardcoded Swedish thresholds with universal climate zones + learning
+        unusual_weather = False
+        unusual_severity = 0.0
+
+        # Check for unusual weather patterns if weather learner available
+        if self.weather_learner and weather_data.forecast_hours:
+            try:
+                # Extract forecast for unusual weather detection
+                forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
+                unusual = self.weather_learner.detect_unusual_weather(
+                    current_date=dt_util.now(),
+                    forecast=forecast_temps,
+                )
+
+                if unusual.is_unusual:
+                    unusual_weather = True
+                    # Map severity string to 0.0-1.0 scale
+                    unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
+
+                    _LOGGER.info(
+                        "Unusual weather detected: %s (deviation: %.1f°C)",
+                        unusual.recommendation,
+                        unusual.deviation_from_typical,
+                    )
+            except Exception as e:
+                _LOGGER.warning("Weather learning check failed: %s", e)
+
+        # Get adaptive safety margin from climate system
+        safety_margin = self.climate_system.get_safety_margin(
+            outdoor_temp=current_outdoor,
+            unusual_weather_detected=unusual_weather,
+            unusual_severity=unusual_severity,
+        )
+
+        # Apply safety margin to calculated flow temp
+        adjusted_flow_temp = flow_calc.flow_temp + safety_margin
+
+        # Calculate required offset from current flow temperature
+        # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
+        curve_sensitivity = 1.5
+        required_offset = self.weather_comp.calculate_required_offset(
+            optimal_flow_temp=adjusted_flow_temp,
+            current_flow_temp=current_flow,
+            curve_sensitivity=curve_sensitivity,
+        )
+
+        # Get dynamic weight from climate system
+        dynamic_weight = self.climate_system.get_dynamic_weight(
+            outdoor_temp=current_outdoor,
+            unusual_weather_detected=unusual_weather,
+        )
+
+        # Apply user-configured weight adjustment
+        final_weight = dynamic_weight * self.weather_comp_weight
+
+        # Build comprehensive reasoning
+        zone_info = self.climate_system.get_climate_info()
+        reasoning_parts = [
+            f"Math WC: {flow_calc.method}",
+            f"Zone: {zone_info['name']}",
+            f"Optimal: {flow_calc.flow_temp:.1f}°C",
+        ]
+
+        if safety_margin > 0:
+            reasoning_parts.append(f"Safety: +{safety_margin:.1f}°C")
+            reasoning_parts.append(f"Adjusted: {adjusted_flow_temp:.1f}°C")
+
+        if unusual_weather:
+            reasoning_parts.append(f"Unusual weather (severity={unusual_severity:.1f})")
+
+        reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
+        reasoning_parts.append(f"Weight: {final_weight:.2f}")
+
+        reasoning = "; ".join(reasoning_parts)
+
+        _LOGGER.debug("Weather compensation layer: %s", reasoning)
+
+        return LayerDecision(
+            offset=required_offset,
+            weight=final_weight,
+            reason=reasoning,
+        )
+
     def _price_layer(self, price_data) -> LayerDecision:
         """Spot price layer: Base optimization from native 15-minute GE-Spot data.
 
@@ -429,6 +790,9 @@ class DecisionEngine:
     def _comfort_layer(self, nibe_state) -> LayerDecision:
         """Comfort layer: Reactive adjustment to maintain comfort.
 
+        Provides gentle steering toward target even within tolerance zone.
+        This ensures temperature doesn't drift unnecessarily during cheap periods.
+
         Args:
             nibe_state: Current NIBE state
 
@@ -440,11 +804,31 @@ class DecisionEngine:
         # Temperature tolerance based on user setting
         tolerance = self.tolerance_range  # ±0.4-4.0°C
 
-        if abs(temp_error) < tolerance:
-            # Within comfort zone
-            return LayerDecision(offset=0.0, weight=0.0, reason="Temp OK")
+        # Fixed dead zone: ±0.2°C (very close to target, no action needed)
+        dead_zone = 0.2
+
+        if abs(temp_error) < dead_zone:
+            # Very close to target (±0.2°C) - we're right on target
+            return LayerDecision(offset=0.0, weight=0.0, reason="Temp at target")
+        elif abs(temp_error) < tolerance:
+            # Within comfort zone but drifting from target
+            # Gentle correction to maintain target during favorable conditions
+            # Lower weight (0.2) so it doesn't override cost optimization,
+            # but provides gentle steering when prices are similar
+            correction = -temp_error * 0.3  # Gentle correction
+
+            if temp_error > 0:
+                reason = f"Slightly warm (+{temp_error:.1f}°C), gentle reduce"
+            else:
+                reason = f"Slightly cool ({temp_error:.1f}°C), gentle boost"
+
+            return LayerDecision(
+                offset=correction,
+                weight=0.2,  # Low weight - advisory only
+                reason=reason,
+            )
         elif temp_error > tolerance:
-            # Too warm, reduce heating
+            # Too warm, reduce heating strongly
             correction = -(temp_error - tolerance) * 0.5
             return LayerDecision(
                 offset=correction,
@@ -452,7 +836,7 @@ class DecisionEngine:
                 reason=f"Too warm: {temp_error:.1f}°C over",
             )
         else:
-            # Too cold, increase heating
+            # Too cold, increase heating strongly
             correction = -(temp_error + tolerance) * 0.5
             return LayerDecision(
                 offset=correction,
@@ -464,6 +848,11 @@ class DecisionEngine:
         """Aggregate layer decisions into final offset.
 
         Uses weighted average with special handling for high-priority layers.
+        Layer priority order (highest to lowest):
+        1. Safety layer (absolute limits)
+        2. Emergency layer (thermal debt) - ALWAYS overrides peak protection
+        3. Effect layer (peak protection)
+        4. Other layers
 
         Args:
             layers: List of layer decisions
@@ -475,8 +864,16 @@ class DecisionEngine:
         critical_layers = [layer for layer in layers if layer.weight >= 1.0]
 
         if critical_layers:
-            # If any critical layer votes, take the strongest vote
-            # (safety and emergency layers)
+            # If emergency layer (index 1) is critical, it ALWAYS wins
+            # This ensures thermal safety overrides peak cost protection
+            if len(layers) > 1 and layers[1].weight >= 1.0:
+                return layers[1].offset  # Emergency layer has absolute priority
+
+            # Otherwise, if safety layer (index 0) is critical, it wins
+            if len(layers) > 0 and layers[0].weight >= 1.0:
+                return layers[0].offset
+
+            # For other critical layers, take the strongest vote
             max_offset = max(layer.offset for layer in critical_layers)
             min_offset = min(layer.offset for layer in critical_layers)
 

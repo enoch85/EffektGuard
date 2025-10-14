@@ -5,3 +5,4 @@ pytest-cov>=4.1.0
 pytest-homeassistant-custom-component>=0.13.0
 homeassistant>=2025.10.1
 voluptuous>=0.13.0
+freezegun>=1.2.0
