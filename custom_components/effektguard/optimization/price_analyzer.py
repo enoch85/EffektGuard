@@ -43,9 +43,7 @@ class PriceAnalyzer:
         self._quarterly_periods_tomorrow = price_data.tomorrow
 
         # Classify periods
-        self._classifications_today = self.classify_quarterly_periods(
-            self._quarterly_periods_today
-        )
+        self._classifications_today = self.classify_quarterly_periods(self._quarterly_periods_today)
 
         if price_data.has_tomorrow:
             self._classifications_tomorrow = self.classify_quarterly_periods(
@@ -188,10 +186,7 @@ class PriceAnalyzer:
 
         # Search tomorrow's periods if available
         for quarter in range(96):
-            if (
-                self._classifications_tomorrow.get(quarter)
-                == QuarterClassification.CHEAP
-            ):
+            if self._classifications_tomorrow.get(quarter) == QuarterClassification.CHEAP:
                 return 96 + quarter  # Offset by 96 for tomorrow
 
         return None

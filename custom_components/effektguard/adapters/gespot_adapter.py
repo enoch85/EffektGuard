@@ -181,9 +181,7 @@ class GESpotAdapter:
             Complete list of 96 periods (missing filled with average price)
         """
         # Calculate average price from available periods
-        avg_price = (
-            sum(p.price for p in periods) / len(periods) if periods else 1.0
-        )
+        avg_price = sum(p.price for p in periods) / len(periods) if periods else 1.0
 
         # Create lookup dict
         period_dict = {p.quarter_of_day: p for p in periods}
