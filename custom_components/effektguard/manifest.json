@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/enoch85/EffektGuard/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "v0.0.1-alpha.1"
 }
