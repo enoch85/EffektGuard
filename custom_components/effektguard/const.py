@@ -130,6 +130,12 @@ ESTIMATED_POWER_BASELINE: Final = 4.0  # kW baseline for coordinator estimates
 TEMP_FACTOR_MIN: Final = 0.5  # Minimum temperature scaling factor
 TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 
+# Effect tariff peak tracking thresholds (kW)
+# Source: Real-world NIBE heat pump consumption patterns
+# Prevents recording standby/startup noise as legitimate peaks
+PEAK_RECORDING_MINIMUM: Final = 1.0  # kW - minimum power to record as peak
+# Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
+
 # Pump configuration - open-loop UFH requirements
 # Source: Forum_Summary.md - glyn.hudson case study (8-hour off periods)
 PUMP_MIN_SPEED_ASHP: Final = 10  # % for ASHP open-loop systems

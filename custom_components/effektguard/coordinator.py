@@ -299,6 +299,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Get current quarter classification from price analyzer
         from datetime import datetime
+
         now_time = datetime.now()
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
@@ -371,15 +372,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Update peak power tracking for effect tariff optimization.
 
         Tracks 15-minute power consumption windows for Swedish Effektavgift.
+
+        Note: Only records peaks when actual power sensor is available.
+        Estimated power values are not stored to avoid recording standby/startup
+        noise as legitimate peaks.
         """
         try:
-            # Estimate current power consumption
+            # Check if we have actual power sensor (not just estimation)
+            has_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
+                self.nibe._power_sensor_entity
+            )
+
+            # Estimate current power consumption for decision-making
             current_power = self._estimate_power_consumption(nibe_data)
 
-            # Update daily peak
+            # Update daily peak (always track for display)
             if current_power > self.peak_today:
                 self.peak_today = current_power
                 _LOGGER.debug("New daily peak: %.2f kW", current_power)
+
+            # Only record monthly peaks if we have actual power sensor
+            # Prevents storing estimated standby power as legitimate peaks
+            if not has_power_sensor:
+                _LOGGER.debug(
+                    "Skipping monthly peak recording: using estimated power (%.2f kW)",
+                    current_power,
+                )
+                return
 
             # Update monthly peak through effect manager
             now = dt_util.now()

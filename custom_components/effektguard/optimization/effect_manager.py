@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from ..const import STORAGE_KEY, STORAGE_VERSION
+from ..const import PEAK_RECORDING_MINIMUM, STORAGE_KEY, STORAGE_VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,6 +94,22 @@ class EffectManager:
             # Clean old peaks (from previous months)
             self._clean_old_peaks()
 
+            # Validate peaks - remove unrealistic values (standby/startup noise)
+            # Based on NIBE heat pump typical consumption patterns
+            invalid_peaks = [
+                p for p in self._monthly_peaks if p.actual_power < PEAK_RECORDING_MINIMUM
+            ]
+
+            if invalid_peaks:
+                _LOGGER.warning(
+                    "Removing %d invalid peaks below %.1f kW threshold (standby/startup noise)",
+                    len(invalid_peaks),
+                    PEAK_RECORDING_MINIMUM,
+                )
+                self._monthly_peaks = [
+                    p for p in self._monthly_peaks if p.actual_power >= PEAK_RECORDING_MINIMUM
+                ]
+
             _LOGGER.info("Loaded %d monthly peaks", len(self._monthly_peaks))
 
     async def async_save(self) -> None:
@@ -112,6 +128,9 @@ class EffectManager:
     ) -> PeakEvent | None:
         """Record a 15-minute power measurement.
 
+        Only records measurements above minimum threshold to avoid storing
+        standby power or startup transients as legitimate peaks.
+
         Args:
             power_kw: Power consumption in kW
             quarter: Quarter of day (0-95)
@@ -120,6 +139,16 @@ class EffectManager:
         Returns:
             PeakEvent if this creates a new monthly peak, None otherwise
         """
+        # Don't record peaks below minimum threshold (standby/startup noise)
+        # Typical NIBE: standby 0.05-0.1 kW, heating 2.5-6.0 kW
+        if power_kw < PEAK_RECORDING_MINIMUM:
+            _LOGGER.debug(
+                "Skipping peak recording: %.2f kW below %.1f kW threshold",
+                power_kw,
+                PEAK_RECORDING_MINIMUM,
+            )
+            return None
+
         # Determine if daytime (06:00-22:00)
         is_daytime = 24 <= quarter <= 87  # Quarters 24-87 = 06:00-22:00
 

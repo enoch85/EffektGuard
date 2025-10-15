@@ -68,6 +68,9 @@ class PriceAnalyzer:
         3. Apply effect tariff day/night awareness
         4. Identify consecutive expensive periods for peak risk
 
+        Special case: If all prices are uniform (e.g., fallback mode), classify
+        all periods as NORMAL to avoid misleading optimization signals.
+
         Args:
             periods: List of 96 QuarterPeriod objects (native 15-min intervals)
 
@@ -94,6 +97,16 @@ class PriceAnalyzer:
             p75,
             p90,
         )
+
+        # Special case: Uniform prices (all equal) - happens with fallback mode
+        # When GE-Spot unavailable, fallback creates 96 periods with price=1.0
+        # Without variance, classification is meaningless - mark all as NORMAL
+        if p25 == p90:  # No price variance
+            _LOGGER.info(
+                "Uniform prices detected (%.3f), classifying all periods as NORMAL (no optimization)",
+                p25,
+            )
+            return {period.quarter_of_day: QuarterClassification.NORMAL for period in periods}
 
         # Classify each period
         classifications = {}

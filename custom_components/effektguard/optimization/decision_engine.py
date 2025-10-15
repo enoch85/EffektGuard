@@ -906,21 +906,40 @@ class DecisionEngine:
     ) -> str:
         """Generate human-readable reasoning from layer decisions.
 
+        Prioritizes critical layers (weight >= 1.0) in the output to make it clear
+        which layer is driving the decision. Advisory layers shown separately.
+
         Args:
             layers: List of layer decisions
             final_offset: Final aggregated offset
 
         Returns:
-            Reasoning string
+            Reasoning string with critical layers highlighted
         """
-        # Find active layers (non-zero weight)
-        active_layers = [layer for layer in layers if layer.weight > 0]
+        # Separate critical from advisory layers
+        critical_layers = [layer for layer in layers if layer.weight >= 1.0]
+        advisory_layers = [layer for layer in layers if 0 < layer.weight < 1.0]
 
-        if not active_layers:
+        if not critical_layers and not advisory_layers:
             return "No optimization active"
 
         # Build reasoning string
-        reasons = [layer.reason for layer in active_layers]
+        reasons = []
+
+        if critical_layers:
+            # Critical layers drive the decision - show them prominently
+            critical_reasons = [layer.reason for layer in critical_layers]
+            reasons.extend(critical_reasons)
+
+            # Show advisory layers as supplementary info (if any)
+            if advisory_layers and len(advisory_layers) <= 2:
+                # Only show a few advisory layers to avoid clutter
+                advisory_summary = ", ".join(f"{layer.reason}" for layer in advisory_layers[:2])
+                reasons.append(f"[Advisory: {advisory_summary}]")
+        else:
+            # No critical layers - all are advisory, show normally
+            reasons = [layer.reason for layer in advisory_layers]
+
         return " | ".join(reasons)
 
     def _estimate_heat_pump_power(self, nibe_state) -> float:
