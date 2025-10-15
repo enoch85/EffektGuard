@@ -479,16 +479,20 @@ class DecisionEngine:
 
         CLIMATE-AWARE DESIGN:
         Unlike hardcoded DM thresholds, this layer adapts to climate and outdoor temperature:
-        - Arctic winter (-30°C): Zone 1 at DM -120, Zone 2 at -320, Zone 3 at -640
-        - Cold winter (-10°C): Zone 1 at DM -67, Zone 2 at -180, Zone 3 at -360
-        - Mild climate (0°C): Zone 1 at DM -45, Zone 2 at -120, Zone 3 at -240
+        - Arctic winter (-30°C): Zone 1 at DM -120, Zone 2 at DM -320, Zone 3 at DM -640
+        - Cold winter (-10°C): Zone 1 at DM -68, Zone 2 at DM -180, Zone 3 at DM -360
+        - Mild climate (0°C): Zone 1 at DM -45, Zone 2 at DM -120, Zone 3 at DM -240
 
-        Thresholds calculated as percentages of climate-aware expected DM:
-        - Zone 1 (15% of normal): Gentle nudge before compressor starts
-        - Zone 2 (40% of normal): Boost recovery when compressor running
-        - Zone 3 (80% of normal): Strong action when approaching warning threshold
+        Thresholds calculated as percentages of climate-aware expected DM (normal_max):
+        - Zone 1 (15% of normal_max): Early warning, gentle nudge before compressor starts
+        - Zone 2 (40% of normal_max): Moderate action when compressor running
+        - Zone 3 (80% of normal_max): Strong action when approaching warning threshold
 
-        THERMAL LAG CONSIDERATION:
+        NOTE: Degree Minutes (DM) are negative values! Percentages make them LESS negative:
+        - expected_dm["normal"] = -800 (Arctic example)
+        - zone1_threshold = -800 * 0.15 = -120 (less negative = earlier intervention)
+        - zone2_threshold = -800 * 0.40 = -320 (moderate)
+        - zone3_threshold = -800 * 0.80 = -640 (more negative = closer to limit)        THERMAL LAG CONSIDERATION:
         UFH systems have significant thermal lag - changes take hours to manifest:
         - Concrete slab UFH: 6+ hours lag (UFH_CONCRETE_PREDICTION_HORIZON = 12h)
         - Timber UFH: 2-3 hours lag (UFH_TIMBER_PREDICTION_HORIZON = 6h)
