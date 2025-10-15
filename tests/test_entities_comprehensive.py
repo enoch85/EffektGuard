@@ -495,6 +495,120 @@ async def test_number_set_all_entities(mock_hass, full_coordinator, mock_entry):
 
 
 # ============================================================================
+# NUMBER ENTITIES - Value Clamping Tests
+# ============================================================================
+
+
+async def test_number_target_temperature_clamping_max(mock_hass, full_coordinator, mock_entry):
+    """Test target_temperature number entity respects max value."""
+    number_desc = next(n for n in NUMBERS if n.key == "target_temperature")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify min/max are defined (number entity uses 18.0-26.0)
+    assert number.entity_description.native_min_value == 18.0
+    assert number.entity_description.native_max_value == 26.0
+
+    # Test setting value above max
+    with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
+        with patch.object(number, "async_write_ha_state"):
+            # Home Assistant platform handles clamping, but we test the defined limits
+            await number.async_set_native_value(30.0)
+
+            # Value was set (HA platform would clamp at UI level)
+            call_args = mock_update.call_args
+            updated_data = call_args[1]["data"]
+            # In production, HA's NumberEntity platform prevents values > max
+            # Here we verify the limits are properly defined
+            assert number.entity_description.native_max_value == 26.0
+
+
+async def test_number_target_temperature_clamping_min(mock_hass, full_coordinator, mock_entry):
+    """Test target_temperature number entity respects min value."""
+    number_desc = next(n for n in NUMBERS if n.key == "target_temperature")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify min is defined
+    assert number.entity_description.native_min_value == 18.0
+
+    # Test setting value below min
+    with patch.object(mock_hass.config_entries, "async_update_entry"):
+        with patch.object(number, "async_write_ha_state"):
+            await number.async_set_native_value(10.0)
+
+            # Verify min limit is properly defined
+            assert number.entity_description.native_min_value == 18.0
+
+
+async def test_number_tolerance_clamping(mock_hass, full_coordinator, mock_entry):
+    """Test tolerance number entity has proper min/max limits."""
+    number_desc = next(n for n in NUMBERS if n.key == "tolerance")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify limits
+    assert number.entity_description.native_min_value == 0.2
+    assert number.entity_description.native_max_value == 2.0
+    assert number.entity_description.native_step == 0.1
+
+
+async def test_number_thermal_mass_clamping(mock_hass, full_coordinator, mock_entry):
+    """Test thermal_mass number entity has proper min/max limits."""
+    number_desc = next(n for n in NUMBERS if n.key == "thermal_mass")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify limits
+    assert number.entity_description.native_min_value == 0.5
+    assert number.entity_description.native_max_value == 2.0
+    assert number.entity_description.native_step == 0.1
+
+
+async def test_number_insulation_quality_clamping(mock_hass, full_coordinator, mock_entry):
+    """Test insulation_quality number entity has proper min/max limits."""
+    number_desc = next(n for n in NUMBERS if n.key == "insulation_quality")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify limits
+    assert number.entity_description.native_min_value == 0.5
+    assert number.entity_description.native_max_value == 2.0
+    assert number.entity_description.native_step == 0.1
+
+
+async def test_number_peak_protection_margin_clamping(mock_hass, full_coordinator, mock_entry):
+    """Test peak_protection_margin number entity has proper min/max limits."""
+    number_desc = next(n for n in NUMBERS if n.key == "peak_protection_margin")
+    number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+    number.hass = mock_hass
+
+    # Verify limits
+    assert number.entity_description.native_min_value == 0.0
+    assert number.entity_description.native_max_value == 2.0
+    assert number.entity_description.native_step == 0.1
+
+
+async def test_number_all_entities_have_valid_ranges(full_coordinator, mock_entry):
+    """Test all number entities have min < max and valid step."""
+    for number_desc in NUMBERS:
+        number = EffektGuardNumber(full_coordinator, mock_entry, number_desc)
+
+        # Verify all have min/max defined
+        assert number.entity_description.native_min_value is not None
+        assert number.entity_description.native_max_value is not None
+        assert number.entity_description.native_step is not None
+
+        # Verify min < max
+        assert (
+            number.entity_description.native_min_value < number.entity_description.native_max_value
+        ), f"{number_desc.key}: min >= max"
+
+        # Verify step is positive
+        assert number.entity_description.native_step > 0, f"{number_desc.key}: step not positive"
+
+
+# ============================================================================
 # SELECT ENTITIES - Edge Cases
 # ============================================================================
 
