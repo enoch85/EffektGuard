@@ -31,18 +31,18 @@ jobs:
 
       - name: Create release directory
         run: |
-          mkdir -p release/custom_components
+          mkdir -p release
 
       - name: Copy integration files
         run: |
-          cp -r custom_components/effektguard release/custom_components/
+          cp -r custom_components/effektguard release/
           cp README.md release/
           cp LICENSE release/
 
       - name: Create ZIP file
         run: |
           cd release
-          zip -r ../effektguard.zip .
+          zip -r ../effektguard.zip effektguard README.md LICENSE
           cd ..
 
       - name: Generate release notes
