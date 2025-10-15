@@ -38,10 +38,11 @@ jobs:
         run: |
           pytest tests/ -v --tb=short
 
-      - name: HACS validation
-        uses: hacs/action@main
-        with:
-          category: integration
+      # Commented out until ready for HACS publication
+      # - name: HACS validation
+      #   uses: hacs/action@main
+      #   with:
+      #     category: integration
 
       - name: Hassfest validation
         uses: home-assistant/actions/hassfest@master
