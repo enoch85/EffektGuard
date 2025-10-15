@@ -55,6 +55,3 @@ calculate_optimal_schedule:
   name: Calculate optimal schedule
   description: Preview optimization schedule for next 24 hours based on current conditions
   fields: {}
-  response:
-    type: object
-    description: Hourly optimization schedule with offsets and reasoning
