@@ -29,21 +29,11 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create release directory
-        run: |
-          mkdir -p release/custom_components
-
-      - name: Copy integration files
-        run: |
-          cp -r custom_components/effektguard release/custom_components/
-          cp README.md release/
-          cp LICENSE release/
-
       - name: Create ZIP file
         run: |
-          cd release
-          zip -r ../effektguard.zip .
-          cd ..
+          cd custom_components/effektguard
+          zip -r ../../effektguard.zip .
+          cd ../..
 
       - name: Generate release notes
         id: release_notes
