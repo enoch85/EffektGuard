@@ -142,6 +142,8 @@ function check_manifest {
 # Update version in manifest.json
 function update_manifest {
     local version_tag="$1"
+    # Strip 'v' prefix for manifest.json (manifest uses "0.0.1", not "v0.0.1")
+    local version_no_v="${version_tag#v}"
     local manifest_changed=false
     
     # Check if manifest exists and is valid JSON
@@ -152,17 +154,17 @@ function update_manifest {
     
     # Update Manifest Version
     local current_manifest_version=$(grep -o '"version": *"[^"]*"' "$MANIFEST_PATH" | cut -d'"' -f4)
-    if [[ "$current_manifest_version" == "$version_tag" ]]; then
-        info_log "Version is already set to ${version_tag} in manifest.json"
+    if [[ "$current_manifest_version" == "$version_no_v" ]]; then
+        info_log "Version is already set to ${version_no_v} in manifest.json"
     else
         debug_log "Updating version in: $MANIFEST_PATH"
         if [[ "$(uname)" == "Darwin" ]]; then
-            sed -i '' "s/\\\"version\\\": *\\\"[^\\\"]*\\\"/\\\"version\\\": \\\"${version_tag}\\\"/g" "$MANIFEST_PATH"
+            sed -i '' "s/\\\"version\\\": *\\\"[^\\\"]*\\\"/\\\"version\\\": \\\"${version_no_v}\\\"/g" "$MANIFEST_PATH"
         else
-            sed -i "s/\\\"version\\\": *\\\"[^\\\"]*\\\"/\\\"version\\\": \\\"${version_tag}\\\"/g" "$MANIFEST_PATH"
+            sed -i "s/\\\"version\\\": *\\\"[^\\\"]*\\\"/\\\"version\\\": \\\"${version_no_v}\\\"/g" "$MANIFEST_PATH"
         fi
         if [[ $? -eq 0 ]]; then
-            success_log "Version updated to ${version_tag} in manifest.json"
+            success_log "Version updated to ${version_no_v} in manifest.json"
             manifest_changed=true
         else
             error_log "Failed to update version in manifest.json"
