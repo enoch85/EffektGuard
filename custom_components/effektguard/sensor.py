@@ -91,7 +91,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         icon="mdi:currency-eur",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="SEK/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
+        # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
             coordinator.data.get("price").current_price
             if coordinator.data

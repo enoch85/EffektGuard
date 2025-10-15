@@ -38,13 +38,18 @@ class NibeState:
 
     outdoor_temp: float
     indoor_temp: float
-    supply_temp: float
+    supply_temp: float  # BT25 - Flow/supply temperature
     return_temp: float | None
     degree_minutes: float
     current_offset: float
     is_heating: bool
     is_hot_water: bool
     timestamp: datetime
+
+    @property
+    def flow_temp(self) -> float:
+        """Alias for supply_temp (flow temperature = supply temperature)."""
+        return self.supply_temp
 
 
 class NibeAdapter:
