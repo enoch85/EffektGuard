@@ -37,15 +37,35 @@ EffektGuard adjusts your heat pump's heating curve offset based on:
 2. **Effect tariff**: Avoid creating new monthly peaks
 3. **Weather forecast**: Predict heating needs in advance
 4. **Indoor temperature**: Maintain comfort within your set limits
-5. **Thermal debt**: Monitor heat pump strain to prevent damage
+5. **Thermal debt (Degree Minutes)**: Monitor heat pump strain to prevent damage
+6. **Climate zone**: Automatically adapts to your location (Arctic to Mediterranean)
 
 All optimization respects safety thresholds derived from real-world NIBE case studies.
+
+### Climate-Aware Optimization
+
+EffektGuard automatically detects your climate zone based on latitude and adjusts thermal debt (degree minutes) thresholds accordingly:
+
+- **Extreme Cold** (Arctic Circle+, 66.5°N+): Kiruna, Tromsø - expects DM -800 to -1200 in winter
+- **Very Cold** (60.5-66.5°N): Luleå, Umeå - expects DM -600 to -1000 in winter
+- **Cold** (56-60.5°N): Stockholm, Oslo, Helsinki - expects DM -450 to -700 in winter
+- **Moderate Cold** (54.5-56°N): Copenhagen, Malmö - expects DM -300 to -500 in winter
+- **Standard** (<54.5°N): Everything else - minimal heating demands
+
+**What this means:** In Kiruna at -30°C, DM -1000 is perfectly normal! The system understands that Arctic heat pumps work much harder than those in Paris. No configuration needed - just works globally.
+
+**[Read more about Climate Zones →](docs/CLIMATE_ZONES.md)**
 
 ## Development Status
 
 Currently implementing core functionality. See commit history for progress.
 
 For detailed technical documentation, see the `IMPLEMENTATION_PLAN/` directory.
+
+**Key documentation:**
+- [Climate Zone System](docs/CLIMATE_ZONES.md) - Automatic climate adaptation
+- Architecture documents in `architecture/` directory
+- Implementation plan in `IMPLEMENTATION_PLAN/` directory
 
 ## License
 

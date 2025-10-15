@@ -73,21 +73,13 @@ SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 # More conservative than UK-based -500 threshold, but appropriate for Nordic climate.
 # Validated in real-world Swedish conditions: -30°C to +5°C temperature range.
 #
-# DESIGN PHILOSOPHY:
-# Rather than fixed thresholds, the decision engine uses context-aware logic that
-# understands what's "normal" for current outdoor temperature and heat demand.
-# This automatically adapts to Malmö (0°C), Stockholm (-5°C), or Kiruna (-30°C)
-# without complex configuration or lookup tables.
+# CLIMATE-AWARE DESIGN:
+# Climate zone module (climate_zones.py) provides context-aware DM thresholds that
+# automatically adapt from Arctic (-30°C) to Mild (5°C) climates without configuration.
+# No hardcoded temperature bands - uses latitude-based climate zones with outdoor temp adjustment.
 #
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
-DM_THRESHOLD_EXTENDED: Final = -240  # Extended runs acceptable (mild conditions)
 DM_THRESHOLD_ABSOLUTE_MAX: Final = -1500  # NEVER EXCEED - hard safety limit
-
-# Context-aware safety margins (used by decision engine for smart adaptation)
-# These aren't fixed thresholds, but parameters for calculating expected DM range
-DM_SAFETY_MARGIN_MILD: Final = 300  # Additional headroom in mild weather (>0°C)
-DM_SAFETY_MARGIN_COLD: Final = 500  # Additional headroom in cold weather (<-10°C)
-DM_SAFETY_MARGIN_EXTREME: Final = 700  # Additional headroom in extreme cold (<-20°C)
 
 # UFH prediction horizons based on thermal lag research
 # Source: Enhancement_Proposals.md, Floor_Heating_Enhancements.md
@@ -149,57 +141,19 @@ CLIMATE_MID_NORTHERN_SWEDEN: Final = "mid_northern_sweden"  # Umeå/Östersund (
 CLIMATE_NORTHERN_SWEDEN: Final = "northern_sweden"  # Luleå (-11°C Jan avg)
 CLIMATE_NORTHERN_LAPLAND: Final = "northern_lapland"  # Kiruna (-13°C Jan avg)
 
-# Universal climate zones - latitude-based classification with proven science
-# Combines mathematical formulas (André Kühne, Timbones) with adaptive learning
-# Source: Mathematical_Enhancement_Summary.md + POST_PHASE_5_ROADMAP.md Phase 6
+# Climate zones - Import from dedicated module
+# Source: optimization/climate_zones.py
+# See IMPLEMENTATION_PLAN/FUTURE/CLIMATE_ZONE_DM_INTEGRATION.md
 #
 # DESIGN PHILOSOPHY:
-# - Core math is universal (Kühne formula, heat transfer physics)
-# - Climate zones provide baseline safety margins
-# - Weather learning adapts to local patterns
-# - No country-specific hardcoding needed
+# - Heating-focused zones (extreme_cold → standard)
+# - Latitude-based automatic detection
+# - Context-aware DM thresholds per zone
+# - Used by decision engine for emergency layer
+# - Used by weather compensation for safety margins
 #
-# Temperature ranges based on climate science (Köppen-Geiger + building codes):
-CLIMATE_ZONES: Final = {
-    "arctic": {
-        "name": "Arctic",
-        "latitude_range": (66.5, 90.0),  # Arctic Circle and above
-        "winter_avg_low": -30.0,  # °C (Kiruna, Tromsø, Fairbanks)
-        "safety_margin_base": 2.5,  # °C extra for extreme cold
-        "examples": ["Kiruna (SWE)", "Tromsø (NOR)", "Fairbanks (USA)"],
-    },
-    "subarctic": {
-        "name": "Subarctic",
-        "latitude_range": (60.5, 66.5),  # Northern Scandinavia, Canada, Russia
-        "winter_avg_low": -15.0,  # °C (Luleå, Umeå, Yellowknife)
-        "safety_margin_base": 1.5,  # °C extra for very cold
-        "examples": ["Luleå (SWE)", "Umeå (SWE)", "Yellowknife (CAN)"],
-    },
-    "cold": {
-        "name": "Cold Continental",
-        "latitude_range": (55.0, 60.5),  # Southern Scandinavia, Baltic
-        "winter_avg_low": -10.0,  # °C (Stockholm, Oslo, Helsinki)
-        "safety_margin_base": 1.0,  # °C extra for cold
-        "examples": ["Stockholm (SWE)", "Oslo (NOR)", "Helsinki (FIN)"],
-    },
-    "temperate": {
-        "name": "Temperate Oceanic",
-        "latitude_range": (49.0, 55.0),  # UK, Northern Germany, Denmark
-        "winter_avg_low": 0.0,  # °C (London, Copenhagen, Hamburg)
-        "safety_margin_base": 0.5,  # °C extra for mild
-        "examples": ["London (UK)", "Copenhagen (DEN)", "Hamburg (GER)"],
-    },
-    "mild": {
-        "name": "Mild Oceanic",
-        "latitude_range": (35.0, 48.999),  # Southern Europe, Mediterranean (exclusive of 49.0)
-        "winter_avg_low": 5.0,  # °C (Paris, Brussels, Prague)
-        "safety_margin_base": 0.0,  # No extra margin needed
-        "examples": ["Paris (FRA)", "Brussels (BEL)", "Prague (CZE)"],
-    },
-}
-
-# Climate zone classification order (coldest to mildest)
-CLIMATE_ZONE_ORDER: Final = ["arctic", "subarctic", "cold", "temperate", "mild"]
+# Note: This replaces old "arctic", "subarctic", etc. names with heating-focused names.
+# Import is done at runtime to avoid circular dependencies - use the climate_zones module directly.
 
 # Storage
 STORAGE_VERSION: Final = 1

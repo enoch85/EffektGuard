@@ -1,7 +1,14 @@
 """Test adaptive climate zone system.
 
 Tests for latitude-based climate detection and adaptive safety margins.
-Verifies global applicability from Arctic to Mild climates.
+Verifies global applicability from Extreme Cold to Standard climates.
+
+Note: Updated to use new heating-focused zone names from climate_zones.py module:
+- "extreme_cold" (was "arctic")
+- "very_cold" (was "subarctic")
+- "cold" (unchanged)
+- "moderate_cold" (was "temperate")
+- "standard" (was "mild")
 """
 
 import pytest
@@ -15,69 +22,69 @@ class TestClimateZoneDetection:
     """Test automatic climate zone detection based on latitude."""
 
     def test_arctic_zone_kiruna(self):
-        """Test Arctic zone detection for Kiruna, Sweden (67.85°N)."""
+        """Test Extreme Cold zone detection for Kiruna, Sweden (67.85°N)."""
         climate = AdaptiveClimateSystem(latitude=67.85)
 
-        assert climate.climate_zone == "arctic"
+        assert climate.climate_zone == "extreme_cold"
         info = climate.get_climate_info()
-        assert info["name"] == "Arctic"
+        assert info["name"] == "Extreme Cold"
         assert info["winter_avg_low"] == -30.0
         assert info["safety_margin_base"] == 2.5
 
     def test_subarctic_zone_lulea(self):
-        """Test Subarctic zone detection for Luleå, Sweden (65.58°N)."""
+        """Test Very Cold zone detection for Luleå, Sweden (65.58°N)."""
         climate = AdaptiveClimateSystem(latitude=65.58)
 
-        assert climate.climate_zone == "subarctic"
+        assert climate.climate_zone == "very_cold"
         info = climate.get_climate_info()
-        assert info["name"] == "Subarctic"
+        assert info["name"] == "Very Cold"
         assert info["winter_avg_low"] == -15.0
         assert info["safety_margin_base"] == 1.5
 
     def test_cold_zone_stockholm(self):
-        """Test Cold Continental zone for Stockholm, Sweden (59.33°N)."""
+        """Test Cold zone for Stockholm, Sweden (59.33°N)."""
         climate = AdaptiveClimateSystem(latitude=59.33)
 
         assert climate.climate_zone == "cold"
         info = climate.get_climate_info()
-        assert info["name"] == "Cold Continental"
+        assert info["name"] == "Cold"
         assert info["winter_avg_low"] == -10.0
         assert info["safety_margin_base"] == 1.0
 
     def test_cold_zone_oslo(self):
-        """Test Cold Continental zone for Oslo, Norway (59.91°N)."""
+        """Test Cold zone for Oslo, Norway (59.91°N)."""
         climate = AdaptiveClimateSystem(latitude=59.91)
 
         assert climate.climate_zone == "cold"
         info = climate.get_climate_info()
-        assert info["name"] == "Cold Continental"
+        assert info["name"] == "Cold"
 
     def test_temperate_zone_london(self):
-        """Test Temperate Oceanic zone for London, UK (51.51°N)."""
+        """Test Standard zone for London, UK (51.51°N)."""
         climate = AdaptiveClimateSystem(latitude=51.51)
 
-        assert climate.climate_zone == "temperate"
+        assert climate.climate_zone == "standard"
         info = climate.get_climate_info()
-        assert info["name"] == "Temperate Oceanic"
-        assert info["winter_avg_low"] == 0.0
-        assert info["safety_margin_base"] == 0.5
+        assert info["name"] == "Standard"
+        assert info["winter_avg_low"] == 5.0
+        assert info["safety_margin_base"] == 0.0
 
     def test_mild_zone_paris(self):
-        """Test Mild Oceanic zone for Paris, France (48.86°N)."""
+        """Test Standard zone for Paris, France (48.86°N)."""
         climate = AdaptiveClimateSystem(latitude=48.86)
 
-        assert climate.climate_zone == "mild"
+        assert climate.climate_zone == "standard"
         info = climate.get_climate_info()
-        assert info["name"] == "Mild Oceanic"
+        assert info["name"] == "Standard"
         assert info["winter_avg_low"] == 5.0
         assert info["safety_margin_base"] == 0.0
 
     def test_southern_hemisphere_absolute_value(self):
         """Test that southern hemisphere works (absolute latitude)."""
-        # Melbourne, Australia (-37.81°S) → should be same as 37.81°N (mild zone)
+        # Melbourne, Australia (-37.81°S) → should be same as 37.81°N (standard zone)
         climate = AdaptiveClimateSystem(latitude=-37.81)
 
-        assert climate.climate_zone == "mild"
+        assert climate.climate_zone == "standard"
         assert climate.latitude == 37.81  # Should use absolute value
 
 
@@ -220,16 +227,16 @@ class TestDynamicWeights:
         assert weight == pytest.approx(0.75, abs=0.05)
 
     def test_temperate_mild_cold_weight(self):
-        """Test Temperate zone in mild cold."""
-        climate = AdaptiveClimateSystem(latitude=51.51)  # London
+        """Test Standard zone in mild cold."""
+        climate = AdaptiveClimateSystem(latitude=51.51)  # London (Standard zone, winter_avg 5°C)
 
         weight = climate.get_dynamic_weight(
-            outdoor_temp=2.0,  # Slightly above winter avg (0°C)
+            outdoor_temp=2.0,  # Below winter avg (5°C)
             unusual_weather_detected=False,
         )
 
-        # Between winter_avg_low (0°C) and winter_avg_low+5 (5°C) → 0.75
-        assert weight == pytest.approx(0.75, abs=0.05)
+        # Below winter_avg_low (5°C) → very cold category → 0.85
+        assert weight == pytest.approx(0.85, abs=0.05)
 
     def test_warm_weather_low_weight(self):
         """Test warm weather reduces weight."""
@@ -270,89 +277,69 @@ class TestDynamicWeights:
 
 
 class TestEdgeCases:
-    """Test edge cases and fallback behavior."""
+    """Test edge cases and boundary conditions."""
 
-    def test_equatorial_location_defaults_to_temperate(self):
-        """Test equatorial location (Singapore 1.35°N) falls back to temperate."""
-        climate = AdaptiveClimateSystem(latitude=1.35)
+    def test_equatorial_location_defaults_to_standard(self):
+        """Test equatorial location defaults to Standard zone."""
+        climate = AdaptiveClimateSystem(latitude=0.0)  # Equator
 
-        # Outside defined zones (< 35°), should default to temperate
-        assert climate.climate_zone == "temperate"
-        info = climate.get_climate_info()
-        assert info["name"] == "Temperate Oceanic"
+        assert climate.climate_zone == "standard"  # Default to standard for low latitudes
 
-    def test_extreme_south_defaults_to_temperate(self):
-        """Test extreme southern latitude (Antarctica -75°S) becomes Arctic."""
-        climate = AdaptiveClimateSystem(latitude=-75.0)
+    def test_extreme_south_defaults_to_standard(self):
+        """Test extreme southern hemisphere defaults to Standard."""
+        climate = AdaptiveClimateSystem(latitude=-75.0)  # Antarctic
 
-        # abs(75°) = 75° fits Arctic zone (66.5°-90°)
-        # This is CORRECT: Antarctic bases need same heating as Arctic!
-        assert climate.climate_zone == "arctic"
-        assert climate.latitude == 75.0  # Absolute value used
+        # Uses absolute value (75°), which is > 66.5° → Extreme Cold
+        assert climate.climate_zone == "extreme_cold"
 
     def test_zero_latitude_equator(self):
-        """Test exactly at equator (0°N) defaults to temperate."""
+        """Test zero latitude handling."""
         climate = AdaptiveClimateSystem(latitude=0.0)
 
-        # Should default to temperate with warning
-        assert climate.climate_zone == "temperate"
+        assert climate.climate_zone == "standard"
+        assert climate.latitude == 0.0
 
     def test_latitude_95_invalid_over_pole(self):
-        """Test invalid latitude over 90° (should never happen but handle gracefully)."""
+        """Test latitude over pole (>90°) still works."""
+        # Invalid but system should handle gracefully
         climate = AdaptiveClimateSystem(latitude=95.0)
 
-        # Should default to temperate
-        assert climate.climate_zone == "temperate"
+        # Uses absolute value → 95° is outside all ranges → defaults to Standard
+        assert climate.climate_zone == "standard"
 
     def test_boundary_arctic_circle_exactly(self):
         """Test exactly at Arctic Circle boundary (66.5°N)."""
         climate = AdaptiveClimateSystem(latitude=66.5)
 
-        # Should be Arctic (>= in range check)
-        assert climate.climate_zone == "arctic"
+        assert climate.climate_zone == "extreme_cold"  # At boundary, inclusive
 
     def test_boundary_between_zones_60_5(self):
-        """Test exactly at subarctic/cold boundary (60.5°N)."""
-        climate = AdaptiveClimateSystem(latitude=60.5)
+        """Test boundary between Very Cold and Cold zones (60.5°N)."""
+        just_below = AdaptiveClimateSystem(latitude=60.4)
+        at_boundary = AdaptiveClimateSystem(latitude=60.5)
 
-        # Should be subarctic (>= in upper bound)
-        assert climate.climate_zone == "subarctic"
+        assert just_below.climate_zone == "cold"
+        assert at_boundary.climate_zone == "very_cold"
 
     def test_boundary_temperate_mild_49_0(self):
-        """Test exactly at temperate/mild boundary (49.0°N)."""
-        climate = AdaptiveClimateSystem(latitude=49.0)
+        """Test boundary between Moderate Cold and Standard zones (54.5°N)."""
+        just_below = AdaptiveClimateSystem(latitude=54.4)
+        at_boundary = AdaptiveClimateSystem(latitude=54.5)
 
-        # 49.0 is in temperate range (49.0-55.0), mild is (35.0-48.999)
-        assert climate.climate_zone == "temperate"
+        assert just_below.climate_zone == "standard"
+        assert at_boundary.climate_zone == "moderate_cold"
 
     def test_just_below_mild_zone_34_9(self):
-        """Test just below mild zone (34.9°N)."""
+        """Test just below minimum latitude (34.9°N → Standard)."""
         climate = AdaptiveClimateSystem(latitude=34.9)
 
-        # Outside zones (< 35°), should default to temperate
-        assert climate.climate_zone == "temperate"
+        assert climate.climate_zone == "standard"
 
     def test_between_zones_non_boundary(self):
-        """Test locations that clearly fall within zones (not at boundaries)."""
-        # Middle of Arctic zone
-        climate1 = AdaptiveClimateSystem(latitude=75.0)
-        assert climate1.climate_zone == "arctic"
+        """Test latitude between zones (not at exact boundary)."""
+        climate = AdaptiveClimateSystem(latitude=63.0)  # Between Very Cold boundaries
 
-        # Middle of Subarctic zone
-        climate2 = AdaptiveClimateSystem(latitude=63.0)
-        assert climate2.climate_zone == "subarctic"
-
-        # Middle of Cold zone
-        climate3 = AdaptiveClimateSystem(latitude=58.0)
-        assert climate3.climate_zone == "cold"
-
-        # Middle of Temperate zone
-        climate4 = AdaptiveClimateSystem(latitude=52.0)
-        assert climate4.climate_zone == "temperate"
-
-        # Middle of Mild zone
-        climate5 = AdaptiveClimateSystem(latitude=45.0)
-        assert climate5.climate_zone == "mild"
+        assert climate.climate_zone == "very_cold"
 
 
 class TestGlobalApplicability:
@@ -362,12 +349,12 @@ class TestGlobalApplicability:
         """Test Canadian Arctic location (Yellowknife 62.45°N)."""
         climate = AdaptiveClimateSystem(latitude=62.45)
 
-        # Should be Subarctic zone
-        assert climate.climate_zone == "subarctic"
+        # Should be Very Cold zone
+        assert climate.climate_zone == "very_cold"
 
         # Should provide appropriate safety margins
         margin = climate.get_safety_margin(outdoor_temp=-25.0)
-        assert margin > 1.0  # Subarctic base + cold adjustment
+        assert margin > 1.0  # Very Cold base + cold adjustment
 
     def test_norwegian_coast(self):
         """Test Norwegian coastal location (Bergen 60.39°N)."""
@@ -380,24 +367,24 @@ class TestGlobalApplicability:
         """Test German location (Berlin 52.52°N)."""
         climate = AdaptiveClimateSystem(latitude=52.52)
 
-        # Should be Temperate zone
-        assert climate.climate_zone == "temperate"
+        # Should be Standard zone
+        assert climate.climate_zone == "standard"
 
     def test_finnish_lapland(self):
         """Test Finnish Lapland (Rovaniemi 66.50°N)."""
         climate = AdaptiveClimateSystem(latitude=66.50)
 
         # Right at Arctic Circle boundary
-        assert climate.climate_zone in ("subarctic", "arctic")
+        assert climate.climate_zone == "extreme_cold"
 
     def test_multiple_locations_same_code(self):
         """Test that different locations work with same code (no country checks)."""
         locations = [
-            (67.85, "arctic"),  # Kiruna, Sweden
-            (64.75, "subarctic"),  # Fairbanks, USA (latitude equivalent)
+            (67.85, "extreme_cold"),  # Kiruna, Sweden
+            (64.75, "very_cold"),  # Fairbanks, USA (latitude equivalent)
             (59.33, "cold"),  # Stockholm, Sweden
-            (51.51, "temperate"),  # London, UK
-            (48.86, "mild"),  # Paris, France
+            (51.51, "standard"),  # London, UK
+            (48.86, "standard"),  # Paris, France
         ]
 
         for lat, expected_zone in locations:

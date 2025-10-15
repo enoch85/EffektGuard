@@ -25,16 +25,12 @@ from ..const import (
     DEFAULT_TARGET_TEMP,
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
-    DM_SAFETY_MARGIN_COLD,
-    DM_SAFETY_MARGIN_EXTREME,
-    DM_SAFETY_MARGIN_MILD,
     DM_THRESHOLD_ABSOLUTE_MAX,
-    DM_THRESHOLD_EXTENDED,
-    DM_THRESHOLD_START,
     MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     QuarterClassification,
 )
+from .climate_zones import ClimateZoneDetector
 from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
 
 _LOGGER = logging.getLogger(__name__)
@@ -123,6 +119,17 @@ class DecisionEngine:
         latitude = config.get("latitude", 59.33)  # Default to Stockholm
         self.climate_system = AdaptiveClimateSystem(
             latitude=latitude, weather_learner=weather_learner
+        )
+
+        # Climate zone detector for DM threshold adaptation
+        # Uses same latitude, provides context-aware degree minutes thresholds
+        self.climate_detector = ClimateZoneDetector(latitude)
+
+        _LOGGER.info(
+            "Climate zone: %s (%s) - DM thresholds adapted for %s",
+            self.climate_detector.zone_info.name,
+            self.climate_detector.zone_key,
+            self.climate_detector.zone_info.description,
         )
 
         # Weather compensation calculator
@@ -419,59 +426,46 @@ class DecisionEngine:
     def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
         """Calculate expected DM range for given outdoor temperature.
 
-        SMART ADAPTATION:
-        In colder weather, heat pump works harder and DM naturally goes deeper.
-        This is NORMAL and expected. We calculate what's reasonable for the
-        current temperature and only alert if DM goes beyond that.
+        CLIMATE-AWARE ADAPTATION:
+        Uses ClimateZoneDetector to get context-aware DM thresholds based on:
+        1. Climate zone (Extreme Cold → Standard) provides base expectations
+        2. Current outdoor temperature adjusts thresholds dynamically
+        3. Automatically adapts from Arctic (-30°C) to mild climates (5°C)
 
-        Temperature-based expectations:
-        - Above 0°C (Malmö mild): Light load, DM should stay shallow
-        - 0 to -10°C (Stockholm): Moderate load, moderate DM expected
-        - -10 to -20°C (Northern): Heavy load, deep DM expected
-        - Below -20°C (Extreme): Very heavy load, very deep DM expected
+        Examples:
+        - Kiruna (Extreme Cold, -30°C): DM -800 to -1200 is normal
+        - Stockholm (Cold, -10°C): DM -450 to -700 is normal
+        - Copenhagen (Moderate Cold, 0°C): DM -300 to -500 is normal
+
+        This replaces hardcoded temperature bands with universal climate-aware logic.
+
+        Args:
+            outdoor_temp: Current outdoor temperature (°C)
 
         Returns:
             Dictionary with:
             - normal: Expected normal operating DM
-            - warning: Start warning at this DM (normal - margin)
+            - warning: Start warning/recovery at this DM
+
+        References:
+            - climate_zones.py: ClimateZoneDetector implementation
+            - IMPLEMENTATION_PLAN/FUTURE/CLIMATE_ZONE_DM_INTEGRATION.md
         """
-        # Base expectation: Start threshold (-60) + extended runs (-240)
-        base_dm = DM_THRESHOLD_START + DM_THRESHOLD_EXTENDED  # -300
+        # Use climate zone detector to get context-aware DM range
+        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
 
-        # Add temperature-dependent safety margin
-        # Colder = more margin allowed before warnings
-        if outdoor_temp > 0:
-            # Mild weather: Tight tolerances (Malmö, spring/autumn)
-            margin = DM_SAFETY_MARGIN_MILD  # 300
-            normal_dm = base_dm - margin  # -600
-        elif outdoor_temp > -10:
-            # Moderate cold: Standard tolerances (Stockholm winter)
-            margin = DM_SAFETY_MARGIN_MILD + 200  # 500
-            normal_dm = base_dm - margin  # -800
-        elif outdoor_temp > -20:
-            # Cold: Wide tolerances (Northern Sweden average)
-            margin = DM_SAFETY_MARGIN_COLD  # 500
-            normal_dm = base_dm - margin  # -800
-            # But allow deeper for very cold in this range
-            normal_dm -= (abs(outdoor_temp) - 10) * 20  # Up to -1000 at -20°C
-        else:
-            # Extreme cold: Very wide tolerances (Kiruna winter)
-            margin = DM_SAFETY_MARGIN_EXTREME  # 700
-            normal_dm = base_dm - margin  # -1000
-            # Allow even deeper for extreme cold
-            normal_dm -= (abs(outdoor_temp) - 20) * 15  # Up to -1150 at -30°C
-
-        # Warning threshold: Normal - additional buffer before critical
-        # This creates graduated response: normal → caution → warning → critical
-        warning_dm = normal_dm - 200  # Additional 200 DM buffer
-
-        # Ensure we never expect DM beyond -1300 (stay 200 away from absolute max)
-        normal_dm = max(normal_dm, -1300)
-        warning_dm = max(warning_dm, -1400)
+        _LOGGER.debug(
+            "Expected DM for %s zone at %.1f°C: normal %.0f to %.0f, warning %.0f",
+            self.climate_detector.zone_info.name,
+            outdoor_temp,
+            dm_range["normal_min"],
+            dm_range["normal_max"],
+            dm_range["warning"],
+        )
 
         return {
-            "normal": normal_dm,  # Expected normal operating range
-            "warning": warning_dm,  # Start warning/recovery
+            "normal": dm_range["normal_max"],  # Use deep end of normal range
+            "warning": dm_range["warning"],  # Warning threshold
         }
 
     def _effect_layer(self, nibe_state, current_peak: float) -> LayerDecision:

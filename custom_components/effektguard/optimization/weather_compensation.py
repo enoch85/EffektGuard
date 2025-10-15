@@ -18,7 +18,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from ..const import CLIMATE_ZONES, CLIMATE_ZONE_ORDER
+from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -386,12 +386,14 @@ class AdaptiveClimateSystem:
     - No country-specific hardcoding needed
 
     This system automatically adapts to:
-    - Kiruna, Sweden (-30°C winters) → Arctic zone
+    - Kiruna, Sweden (-30°C winters) → Extreme Cold zone
     - Stockholm, Sweden (-10°C winters) → Cold zone
-    - London, UK (0°C winters) → Temperate zone
-    - Paris, France (5°C winters) → Mild zone
+    - Copenhagen, Denmark (0°C winters) → Moderate Cold zone
+    - Paris, France (5°C winters) → Standard zone
 
     All without configuration changes or country-specific code!
+
+    Note: Now uses dedicated ClimateZoneDetector from climate_zones.py module.
     """
 
     def __init__(self, latitude: float, weather_learner: Optional = None):
@@ -403,47 +405,19 @@ class AdaptiveClimateSystem:
         """
         self.latitude = abs(latitude)  # Use absolute value for hemisphere independence
         self.weather_learner = weather_learner
-        self.climate_zone = self._detect_climate_zone()
 
-        zone_info = CLIMATE_ZONES[self.climate_zone]
+        # Use dedicated ClimateZoneDetector module
+        self.detector = ClimateZoneDetector(latitude)
+        self.climate_zone = self.detector.zone_key  # Compatibility property
+
         _LOGGER.info(
             "AdaptiveClimateSystem initialized: latitude=%.2f° -> %s zone "
             "(winter avg low: %.1f°C, base safety margin: %.1f°C)",
             latitude,
-            zone_info["name"],
-            zone_info["winter_avg_low"],
-            zone_info["safety_margin_base"],
+            self.detector.zone_info.name,
+            self.detector.zone_info.winter_avg_low,
+            self.detector.zone_info.safety_margin_base,
         )
-
-    def _detect_climate_zone(self) -> str:
-        """Detect climate zone based on latitude.
-
-        Uses Köppen-Geiger classification principles adapted for heat pump control.
-        Latitude ranges based on historical climate data and building codes.
-
-        Returns:
-            Climate zone key: "arctic", "subarctic", "cold", "temperate", or "mild"
-        """
-        # Check zones from coldest to mildest
-        for zone_key in CLIMATE_ZONE_ORDER:
-            zone_data = CLIMATE_ZONES[zone_key]
-            lat_min, lat_max = zone_data["latitude_range"]
-
-            if lat_min <= self.latitude <= lat_max:
-                _LOGGER.debug(
-                    "Latitude %.2f° matches %s zone (%.1f°-%.1f°)",
-                    self.latitude,
-                    zone_data["name"],
-                    lat_min,
-                    lat_max,
-                )
-                return zone_key
-
-        # Default to temperate if outside defined ranges (southern hemisphere edge cases)
-        _LOGGER.warning(
-            "Latitude %.2f° outside defined zones, defaulting to temperate", self.latitude
-        )
-        return "temperate"
 
     def get_safety_margin(
         self,
@@ -468,12 +442,11 @@ class AdaptiveClimateSystem:
         Returns:
             Safety margin in °C to add to calculated flow temperature
         """
-        zone_info = CLIMATE_ZONES[self.climate_zone]
-        base_margin = zone_info["safety_margin_base"]
+        base_margin = self.detector.zone_info.safety_margin_base
 
         # Temperature-based adjustment (colder = more margin)
         # Scale linearly from zone's winter avg low
-        winter_avg_low = zone_info["winter_avg_low"]
+        winter_avg_low = self.detector.zone_info.winter_avg_low
         temp_margin = 0.0
 
         if outdoor_temp < winter_avg_low:
@@ -526,8 +499,7 @@ class AdaptiveClimateSystem:
         Returns:
             Weight for decision engine layer (0.0-1.0)
         """
-        zone_info = CLIMATE_ZONES[self.climate_zone]
-        winter_avg_low = zone_info["winter_avg_low"]
+        winter_avg_low = self.detector.zone_info.winter_avg_low
 
         # Base weight varies by temperature severity
         if outdoor_temp < winter_avg_low:
@@ -563,7 +535,12 @@ class AdaptiveClimateSystem:
         Returns:
             Dictionary with zone name, latitude range, winter avg, examples, etc.
         """
-        zone_info = CLIMATE_ZONES[self.climate_zone].copy()
-        zone_info["detected_zone"] = self.climate_zone
-        zone_info["user_latitude"] = self.latitude
-        return zone_info
+        return {
+            "detected_zone": self.detector.zone_key,
+            "name": self.detector.zone_info.name,
+            "description": self.detector.zone_info.description,
+            "winter_avg_low": self.detector.zone_info.winter_avg_low,
+            "safety_margin_base": self.detector.zone_info.safety_margin_base,
+            "examples": self.detector.zone_info.examples,
+            "user_latitude": self.latitude,
+        }
