@@ -273,6 +273,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.current_offset = decision.offset
         self.last_decision_time = dt_util.utcnow()
 
+        # Apply offset to NIBE heat pump via MyUplink integration
+        # This sends the calculated offset to the MyUplink number entity (parameter 47011)
+        # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
+        try:
+            await self.nibe.set_curve_offset(decision.offset)
+            _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
+        except Exception as err:
+            _LOGGER.error("Failed to apply offset to NIBE: %s", err)
+            # Continue anyway - next cycle will retry
+
         # Update peak tracking
         await self._update_peak_tracking(nibe_data)
 

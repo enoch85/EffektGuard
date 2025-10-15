@@ -266,7 +266,12 @@ class NibeAdapter:
                             _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
                             break
 
-        _LOGGER.info("Discovered %d NIBE entities", len(self._entity_cache))
+        # Log all discovered entities for debugging
+        _LOGGER.info("Discovered %d NIBE entities:", len(self._entity_cache))
+        for key, entity_id in self._entity_cache.items():
+            state = self.hass.states.get(entity_id)
+            state_value = state.state if state else "unavailable"
+            _LOGGER.debug("  - %s: %s = %s", key, entity_id, state_value)
 
     async def _read_entity_float(
         self,

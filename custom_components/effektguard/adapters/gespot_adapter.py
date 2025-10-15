@@ -121,6 +121,14 @@ class GESpotAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             raise ValueError(f"GE-Spot entity {self._gespot_entity} unavailable")
 
+        # Debug: Log all available GE-Spot attributes
+        _LOGGER.debug("GE-Spot entity %s attributes:", self._gespot_entity)
+        for attr_name, attr_value in state.attributes.items():
+            if isinstance(attr_value, list):
+                _LOGGER.debug("  - %s: list with %d items", attr_name, len(attr_value))
+            else:
+                _LOGGER.debug("  - %s: %s", attr_name, attr_value)
+
         # Parse today's prices from attributes
         # GE-Spot stores prices in attributes as list of dicts with:
         # - time: datetime string (ISO format with timezone)
