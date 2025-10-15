@@ -3,6 +3,6 @@ pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
 pytest-homeassistant-custom-component>=0.13.0
-homeassistant>=2025.10.1
+# Note: pytest-homeassistant-custom-component will install compatible homeassistant version
 voluptuous>=0.13.0
 freezegun>=1.2.0
