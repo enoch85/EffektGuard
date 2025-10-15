@@ -259,26 +259,26 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _discover_nibe_entities(self) -> list[str]:
         """Discover NIBE entities."""
         entities = []
-        for entity_id, state in self.hass.states.async_all():
+        for state in self.hass.states.async_all():
             # Look for NIBE-related entities
-            if "nibe" in entity_id.lower() or "myuplink" in entity_id.lower():
-                entities.append(entity_id)
+            if "nibe" in state.entity_id.lower() or "myuplink" in state.entity_id.lower():
+                entities.append(state.entity_id)
         return entities
 
     def _discover_gespot_entities(self) -> list[str]:
         """Discover GE-Spot price entities."""
         entities = []
-        for entity_id, state in self.hass.states.async_all():
-            if entity_id.startswith("sensor.ge") or "gespot" in entity_id.lower():
-                entities.append(entity_id)
+        for state in self.hass.states.async_all():
+            if state.entity_id.startswith("sensor.ge") or "gespot" in state.entity_id.lower():
+                entities.append(state.entity_id)
         return entities
 
     def _discover_weather_entities(self) -> list[str]:
         """Discover weather entities."""
         entities = []
-        for entity_id, state in self.hass.states.async_all():
-            if entity_id.startswith("weather."):
-                entities.append(entity_id)
+        for state in self.hass.states.async_all():
+            if state.entity_id.startswith("weather."):
+                entities.append(state.entity_id)
         return entities
 
     def _discover_degree_minutes_entities(self) -> list[str]:
@@ -299,7 +299,8 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "_dm_",
         ]
 
-        for entity_id, state in self.hass.states.async_all():
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
             if not entity_id.startswith("sensor."):
                 continue
 
@@ -332,7 +333,8 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         heatpump_power = []
         generic_power = []
 
-        for entity_id, state in self.hass.states.async_all():
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
             if not entity_id.startswith("sensor."):
                 continue
 
