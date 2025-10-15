@@ -273,6 +273,8 @@ def test_all_sensors_with_no_data(empty_coordinator, mock_entry):
             assert value == "No decision yet", f"{sensor_desc.key}: expected 'No decision yet'"
         elif sensor_desc.key in ["hour_classification", "peak_status"]:
             assert value == "unknown", f"{sensor_desc.key}: expected 'unknown'"
+        elif sensor_desc.key == "heat_pump_model":
+            assert value == "Unknown", f"{sensor_desc.key}: expected 'Unknown'"
         else:
             # All other sensors should return None
             assert value is None, f"Sensor {sensor_desc.key} returned {value!r}, expected None"
@@ -554,7 +556,7 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
 
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
-    assert len(entities) == 14
+    assert len(entities) == 15
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

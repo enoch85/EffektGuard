@@ -24,6 +24,7 @@ CONF_OPTIMIZATION_MODE: Final = "optimization_mode"
 CONF_CONTROL_PRIORITY: Final = "control_priority"
 CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
+CONF_HEAT_PUMP_MODEL: Final = "heat_pump_model"
 CONF_PEAK_PROTECTION_MARGIN: Final = "peak_protection_margin"
 CONF_WEATHER_COMPENSATION_WEIGHT: Final = "weather_compensation_weight"  # 0.0-1.0
 
@@ -32,6 +33,7 @@ DEFAULT_TOLERANCE: Final = 0.5
 DEFAULT_TARGET_TEMP: Final = 21.0
 DEFAULT_THERMAL_MASS: Final = 1.0
 DEFAULT_INSULATION_QUALITY: Final = 1.0
+DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.75  # Moderate influence

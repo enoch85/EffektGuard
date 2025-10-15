@@ -162,7 +162,7 @@ def test_sensor_count():
     """Test that all expected sensors are defined."""
     from custom_components.effektguard.sensor import SENSORS
 
-    assert len(SENSORS) == 14  # Updated count with optional_features_status sensor
+    assert len(SENSORS) == 15  # Updated count with optional_features_status + heat_pump_model sensors
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -177,7 +177,7 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
 
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
-    assert len(sensors) == 14
+    assert len(sensors) == 15
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):

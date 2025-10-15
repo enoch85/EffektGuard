@@ -86,6 +86,7 @@ class DecisionEngine:
         config: dict[str, Any],
         thermal_predictor=None,  # Phase 6 - Optional predictor
         weather_learner=None,  # Phase 6 - Optional weather pattern learner
+        heat_pump_model=None,  # Heat pump model profile
     ):
         """Initialize decision engine with dependencies.
 
@@ -96,6 +97,7 @@ class DecisionEngine:
             config: Configuration options
             thermal_predictor: Optional ThermalStatePredictor for learned pre-heating (Phase 6)
             weather_learner: Optional WeatherPatternLearner for unusual weather detection (Phase 6)
+            heat_pump_model: Optional heat pump model profile for validation and limits
         """
         self.price = price_analyzer
         self.effect = effect_manager
@@ -103,6 +105,7 @@ class DecisionEngine:
         self.config = config
         self.predictor = thermal_predictor  # Phase 6
         self.weather_learner = weather_learner  # Phase 6
+        self.heat_pump_model = heat_pump_model  # Model profile
 
         # Configuration with defaults
         self.target_temp = config.get("target_temperature", DEFAULT_TARGET_TEMP)
@@ -241,6 +244,17 @@ class DecisionEngine:
         # Update price analyzer with latest data
         if price_data:
             self.price.update_prices(price_data)
+
+        # Validate power consumption if model available
+        if self.heat_pump_model and hasattr(nibe_state, "power_kw"):
+            validation = self._validate_power_consumption(
+                nibe_state.power_kw, nibe_state.outdoor_temp
+            )
+            if validation["warning"]:
+                _LOGGER.log(
+                    logging.WARNING if validation["severity"] == "warning" else logging.INFO,
+                    validation["warning"],
+                )
 
         # Calculate all layer decisions (ordered by priority)
         layers = [
@@ -939,3 +953,42 @@ class DecisionEngine:
             return base_power * 1.1
         else:
             return base_power
+
+    def _validate_power_consumption(
+        self,
+        current_power_kw: float,
+        outdoor_temp: float,
+    ) -> dict[str, Any]:
+        """Validate current power against model expectations.
+
+        Args:
+            current_power_kw: Current electrical consumption (kW)
+            outdoor_temp: Outdoor temperature (°C)
+
+        Returns:
+            Dict with validation status and warnings
+        """
+        if not self.heat_pump_model:
+            return {"valid": True, "warning": None}
+
+        min_power, max_power = self.heat_pump_model.typical_electrical_range_kw
+
+        # Allow 20% margin for startup/defrost
+        max_with_margin = max_power * 1.2
+
+        if current_power_kw > max_with_margin:
+            return {
+                "valid": False,
+                "warning": f"Power {current_power_kw:.1f}kW exceeds {self.heat_pump_model.model_name} max {max_power:.1f}kW (auxiliary heating active?)",
+                "severity": "warning",
+            }
+
+        # Check if unusually low (possible sensor issue)
+        if current_power_kw < min_power * 0.5 and outdoor_temp < 0:
+            return {
+                "valid": True,
+                "warning": f"Power {current_power_kw:.1f}kW below expected for {outdoor_temp:.1f}°C",
+                "severity": "info",
+            }
+
+        return {"valid": True, "warning": None}

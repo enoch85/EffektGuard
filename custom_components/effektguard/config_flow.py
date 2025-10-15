@@ -15,6 +15,7 @@ from .const import (
     CONF_ENABLE_PEAK_PROTECTION,
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_GESPOT_ENTITY,
+    CONF_HEAT_PUMP_MODEL,
     CONF_INSULATION_QUALITY,
     CONF_NIBE_ENTITY,
     CONF_OPTIMIZATION_MODE,
@@ -23,6 +24,7 @@ from .const import (
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
     CONF_WEATHER_ENTITY,
+    DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INSULATION_QUALITY,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_TARGET_TEMP,
@@ -96,9 +98,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not self.hass.states.get(gespot_entity):
                     errors["base"] = "gespot_entity_not_found"
                 else:
-                    return await self.async_step_optional()
+                    return await self.async_step_model()
             else:
-                return await self.async_step_optional()
+                return await self.async_step_model()
 
         # Discover GE-Spot entities
         gespot_entities = self._discover_gespot_entities()
@@ -119,6 +121,37 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
             description_placeholders={"gespot_count": str(len(gespot_entities))},
+        )
+
+    async def async_step_model(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle heat pump model selection."""
+        errors = {}
+
+        if user_input is not None:
+            self._data[CONF_HEAT_PUMP_MODEL] = user_input[CONF_HEAT_PUMP_MODEL]
+            return await self.async_step_optional()  # Continue to existing optional step
+
+        return self.async_show_form(
+            step_id="model",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_HEAT_PUMP_MODEL,
+                        default=DEFAULT_HEAT_PUMP_MODEL,
+                    ): vol.In(
+                        {
+                            "nibe_f730": "NIBE F730 (6kW ASHP)",
+                            "nibe_f750": "NIBE F750 (8kW ASHP - Most Common)",
+                            "nibe_f2040": "NIBE F2040 (12-16kW ASHP)",
+                            "nibe_s1155": "NIBE S1155 (GSHP)",
+                        }
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "model_info": "Select your heat pump model for optimized control"
+            },
         )
 
     async def async_step_optional(self, user_input: dict[str, Any] | None = None) -> FlowResult:

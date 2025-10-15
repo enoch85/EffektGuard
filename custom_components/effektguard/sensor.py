@@ -206,6 +206,16 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         icon="mdi:feature-search-outline",
         value_fn=lambda coordinator: ("active" if coordinator.data else "initializing"),
     ),
+    EffektGuardSensorEntityDescription(
+        key="heat_pump_model",
+        name="Heat Pump Model",
+        icon="mdi:heat-pump",
+        value_fn=lambda coordinator: (
+            coordinator.heat_pump_model.model_name
+            if hasattr(coordinator, "heat_pump_model") and coordinator.heat_pump_model
+            else "Unknown"
+        ),
+    ),
 )
 
 
@@ -437,5 +447,24 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                     "entity": None,
                     "note": "Weather prediction layer disabled",
                 }
+
+        elif key == "heat_pump_model":
+            # Show detailed model specifications
+            if hasattr(self.coordinator, "heat_pump_model") and self.coordinator.heat_pump_model:
+                model = self.coordinator.heat_pump_model
+                attrs["manufacturer"] = model.manufacturer
+                attrs["model_type"] = model.model_type
+                attrs["electrical_range_kw"] = (
+                    f"{model.typical_electrical_range_kw[0]}-{model.typical_electrical_range_kw[1]}"
+                )
+                attrs["heat_output_range_kw"] = (
+                    f"{model.typical_heat_output_range_kw[0]}-{model.typical_heat_output_range_kw[1]}"
+                )
+                attrs["cop_range"] = f"{model.cop_range[0]}-{model.cop_range[1]}"
+                attrs["optimal_flow_delta"] = model.optimal_flow_delta
+                if hasattr(model, "compressor_type"):
+                    attrs["compressor_type"] = model.compressor_type
+                if hasattr(model, "refrigerant"):
+                    attrs["refrigerant"] = model.refrigerant
 
         return attrs

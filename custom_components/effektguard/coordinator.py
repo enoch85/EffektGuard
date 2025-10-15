@@ -16,16 +16,33 @@ from .const import (
     CLIMATE_NORTHERN_LAPLAND,
     CLIMATE_NORTHERN_SWEDEN,
     CLIMATE_SOUTHERN_SWEDEN,
+    CONF_HEAT_PUMP_MODEL,
+    DEFAULT_HEAT_PUMP_MODEL,
     DOMAIN,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
+)
+from .models.nibe import (
+    NibeF2040Profile,
+    NibeF730Profile,
+    NibeF750Profile,
+    NibeS1155Profile,
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.thermal_predictor import ThermalStatePredictor
 from .optimization.weather_learning import WeatherPatternLearner
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Model registry for quick lookup
+HEAT_PUMP_MODELS = {
+    "nibe_f730": NibeF730Profile,
+    "nibe_f750": NibeF750Profile,
+    "nibe_f2040": NibeF2040Profile,
+    "nibe_s1155": NibeS1155Profile,
+}
 
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
@@ -64,6 +81,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.engine = decision_engine
         self.effect = effect_manager
         self.entry = entry
+
+        # Load heat pump model profile
+        model_key = entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
+        model_class = HEAT_PUMP_MODELS.get(model_key, NibeF750Profile)
+        self.heat_pump_model = model_class()
+
+        _LOGGER.info(
+            "Loaded heat pump model: %s (%s)",
+            self.heat_pump_model.model_name,
+            self.heat_pump_model.model_type,
+        )
 
         # Learning modules (Phase 6)
         self.adaptive_learning = AdaptiveThermalModel()
@@ -439,6 +467,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             Monthly peak power in kW
         """
         return self.peak_this_month
+
+    @property
+    def model_profile(self):
+        """Get heat pump model profile.
+
+        Returns:
+            Heat pump model profile instance
+        """
+        return self.heat_pump_model
 
     async def _record_learning_observations(
         self,
