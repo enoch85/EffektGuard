@@ -3,5 +3,6 @@
   "render_readme": true,
   "homeassistant": "2024.1.0",
   "zip_release": true,
-  "filename": "effektguard.zip"
+  "filename": "effektguard.zip",
+  "branch": "initial-implementation"
 }
