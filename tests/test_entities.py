@@ -150,6 +150,14 @@ def mock_entry():
         CONF_ENABLE_WEATHER_PREDICTION: True,
         CONF_ENABLE_HOT_WATER_OPTIMIZATION: False,
     }
+    # Add options dict for entry.options (user-configurable settings)
+    # Phase 1 fix: TARGET_INDOOR_TEMP and OPTIMIZATION_MODE moved to options
+    entry.options = {
+        CONF_TARGET_INDOOR_TEMP: 21.0,
+        CONF_OPTIMIZATION_MODE: OPTIMIZATION_MODE_BALANCED,
+        CONF_THERMAL_MASS: 1.0,
+        CONF_INSULATION_QUALITY: 1.0,
+    }
     return entry
 
 
@@ -162,7 +170,9 @@ def test_sensor_count():
     """Test that all expected sensors are defined."""
     from custom_components.effektguard.sensor import SENSORS
 
-    assert len(SENSORS) == 15  # Updated count with optional_features_status + heat_pump_model sensors
+    assert (
+        len(SENSORS) == 15
+    )  # Updated count with optional_features_status + heat_pump_model sensors
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -243,8 +253,11 @@ def test_sensor_extra_attributes_current_offset(mock_coordinator, mock_entry):
     attrs = sensor.extra_state_attributes
     assert "layer_votes" in attrs
     assert len(attrs["layer_votes"]) == 2
-    assert attrs["layer_votes"][0]["name"] == "Safety"
-    assert attrs["layer_votes"][1]["name"] == "Price"
+    # Check actual fields in layer_votes (offset, weight, reason - not name)
+    assert attrs["layer_votes"][0]["offset"] == 0.0
+    assert attrs["layer_votes"][0]["reason"] == "Temp OK"
+    assert attrs["layer_votes"][1]["offset"] == 2.0
+    assert attrs["layer_votes"][1]["reason"] == "Cheap period"
 
 
 # ============================================================================
@@ -474,17 +487,17 @@ def test_climate_target_temperature(mock_coordinator, mock_entry):
 def test_climate_preset_to_optimization_mode_mapping(mock_coordinator, mock_entry):
     """Test preset mode to optimization mode mapping."""
     # Test COMFORT preset
-    mock_entry.data[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_COMFORT
+    mock_entry.options[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_COMFORT
     climate = EffektGuardClimate(mock_coordinator, mock_entry)
     assert climate.preset_mode == PRESET_COMFORT
 
     # Test BALANCED preset
-    mock_entry.data[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_BALANCED
+    mock_entry.options[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_BALANCED
     climate = EffektGuardClimate(mock_coordinator, mock_entry)
     assert climate.preset_mode == PRESET_NONE
 
     # Test SAVINGS preset
-    mock_entry.data[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_SAVINGS
+    mock_entry.options[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_SAVINGS
     climate = EffektGuardClimate(mock_coordinator, mock_entry)
     assert climate.preset_mode == PRESET_ECO
 
@@ -509,10 +522,10 @@ async def test_climate_set_preset_mode(mock_hass, mock_coordinator, mock_entry):
         await climate.async_set_preset_mode(PRESET_COMFORT)
         mock_update.assert_called_once()
 
-        # Verify it set the correct optimization mode
+        # Verify it set the correct optimization mode in options (not data)
         call_args = mock_update.call_args
-        updated_data = call_args[1]["data"]
-        assert updated_data[CONF_OPTIMIZATION_MODE] == OPTIMIZATION_MODE_COMFORT
+        updated_options = call_args[1]["options"]
+        assert updated_options[CONF_OPTIMIZATION_MODE] == OPTIMIZATION_MODE_COMFORT
 
 
 async def test_climate_set_hvac_mode_heat(mock_hass, mock_coordinator, mock_entry):

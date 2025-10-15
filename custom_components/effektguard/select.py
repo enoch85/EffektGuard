@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -94,12 +95,12 @@ class EffektGuardSelect(CoordinatorEntity, SelectEntity):
         self.entity_description = description
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "EffektGuard",
-            "manufacturer": "EffektGuard",
-            "model": "Heat Pump Optimizer",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="EffektGuard",
+            manufacturer="EffektGuard",
+            model="Heat Pump Optimizer",
+        )
 
     @property
     def current_option(self) -> str:

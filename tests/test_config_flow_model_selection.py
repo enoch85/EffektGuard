@@ -77,7 +77,8 @@ def mock_hass():
     }
 
     def mock_async_all():
-        return [(entity_id, state) for entity_id, state in mock_states.items()]
+        # Return list of state objects, not tuples
+        return list(mock_states.values())
 
     def mock_get_state(entity_id):
         return mock_states.get(entity_id)

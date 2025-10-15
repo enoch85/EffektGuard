@@ -9,7 +9,6 @@ to implement original optimization algorithms designed specifically for Sweden's
 effect tariff system.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -91,14 +90,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # Wait for Home Assistant to be ready
-    await hass.async_block_till_done()
-
-    # Give other integrations time to initialize (10 second startup delay)
-    _LOGGER.debug("Waiting for dependencies to initialize...")
-    await asyncio.sleep(10)
-
-    # Perform first refresh
+    # Perform first refresh (non-blocking, allows graceful startup)
+    # First refresh handles missing entities gracefully via UpdateFailed
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception as err:
@@ -129,7 +122,35 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
 
+        # Unregister services if this is the last config entry
+        if not hass.data[DOMAIN]:
+            _async_unregister_services(hass)
+
     return unload_ok
+
+
+def _async_unregister_services(hass: HomeAssistant) -> None:
+    """Unregister integration services when last config entry is removed."""
+    from .const import (
+        SERVICE_BOOST_HEATING,
+        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+        SERVICE_FORCE_OFFSET,
+        SERVICE_RESET_PEAK_TRACKING,
+    )
+
+    services = [
+        SERVICE_FORCE_OFFSET,
+        SERVICE_RESET_PEAK_TRACKING,
+        SERVICE_BOOST_HEATING,
+        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+    ]
+
+    for service in services:
+        if hass.services.has_service(DOMAIN, service):
+            hass.services.async_remove(DOMAIN, service)
+            _LOGGER.debug("Unregistered service: %s", service)
+
+    _LOGGER.info("EffektGuard services unregistered successfully")
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -219,6 +240,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     - calculate_optimal_schedule: Preview 24h optimization
     """
     import voluptuous as vol
+    from homeassistant.exceptions import ServiceValidationError
     from homeassistant.helpers import config_validation as cv
 
     from .const import (
@@ -251,25 +273,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Check cooldown
         is_allowed, remaining = _check_service_cooldown("force_offset", SERVICE_RATE_LIMIT_MINUTES)
         if not is_allowed:
-            _LOGGER.warning(
-                "force_offset called too soon. Cooldown: %d seconds remaining", remaining
+            raise ServiceValidationError(
+                f"Service called too soon. Cooldown: {remaining} seconds remaining"
             )
-            return
 
         coordinator = get_coordinator(hass)
         if not coordinator:
-            _LOGGER.error("No EffektGuard coordinator found")
-            return
+            raise ServiceValidationError("No EffektGuard coordinator found")
 
         offset = call.data[ATTR_OFFSET]
         duration = call.data.get(ATTR_DURATION, 60)
 
         _LOGGER.info("Force offset service called: offset=%s, duration=%s", offset, duration)
 
-        # Validate offset range
+        # Validate offset range (should be caught by schema, but double-check)
         if not MIN_OFFSET <= offset <= MAX_OFFSET:
-            _LOGGER.error("Offset %s outside valid range [%s, %s]", offset, MIN_OFFSET, MAX_OFFSET)
-            return
+            raise ServiceValidationError(
+                f"Offset {offset} outside valid range [{MIN_OFFSET}, {MAX_OFFSET}]"
+            )
 
         # Set override in decision engine
         coordinator.engine.set_manual_override(offset, duration)
@@ -290,8 +311,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         """
         coordinator = get_coordinator(hass)
         if not coordinator:
-            _LOGGER.error("No EffektGuard coordinator found")
-            return
+            raise ServiceValidationError("No EffektGuard coordinator found")
 
         _LOGGER.info("Reset peak tracking service called")
 
@@ -318,15 +338,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         is_allowed, remaining = _check_service_cooldown("boost_heating", BOOST_COOLDOWN_MINUTES)
         if not is_allowed:
             remaining_minutes = int(remaining / 60)
-            _LOGGER.warning(
-                "boost_heating called too soon. Cooldown: %d minutes remaining", remaining_minutes
+            raise ServiceValidationError(
+                f"Service called too soon. Cooldown: {remaining_minutes} minutes remaining"
             )
-            return
 
         coordinator = get_coordinator(hass)
         if not coordinator:
-            _LOGGER.error("No EffektGuard coordinator found")
-            return
+            raise ServiceValidationError("No EffektGuard coordinator found")
 
         duration = call.data.get(ATTR_DURATION, 120)
 

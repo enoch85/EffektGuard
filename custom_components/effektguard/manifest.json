@@ -5,7 +5,8 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/enoch85/EffektGuard",
-  "iot_class": "cloud_polling",
+  "icon": "mdi:heat-pump",
+  "iot_class": "calculated",
   "issue_tracker": "https://github.com/enoch85/EffektGuard/issues",
   "requirements": [],
   "version": "0.0.1-alpha5"

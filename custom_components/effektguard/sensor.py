@@ -18,6 +18,8 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -43,8 +45,8 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
-            coordinator.data.get("decision").offset
-            if coordinator.data and "decision" in coordinator.data
+            coordinator.data["decision"].offset
+            if coordinator.data and coordinator.data.get("decision")
             else 0.0
         ),
     ),
@@ -53,9 +55,10 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Degree Minutes",
         icon="mdi:timer-outline",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("nibe").degree_minutes
-            if coordinator.data and "nibe" in coordinator.data and coordinator.data["nibe"]
+            coordinator.data["nibe"].degree_minutes
+            if coordinator.data and coordinator.data.get("nibe")
             else None
         ),
     ),
@@ -66,9 +69,10 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("nibe").supply_temp
-            if coordinator.data and "nibe" in coordinator.data and coordinator.data["nibe"]
+            coordinator.data["nibe"].supply_temp
+            if coordinator.data and coordinator.data.get("nibe")
             else None
         ),
     ),
@@ -79,9 +83,10 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("nibe").outdoor_temp
-            if coordinator.data and "nibe" in coordinator.data and coordinator.data["nibe"]
+            coordinator.data["nibe"].outdoor_temp
+            if coordinator.data and coordinator.data.get("nibe")
             else None
         ),
     ),
@@ -93,10 +98,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement="SEK/kWh",
         # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
-            coordinator.data.get("price").current_price
+            coordinator.data["price"].current_price
             if coordinator.data
-            and "price" in coordinator.data
-            and coordinator.data["price"]
+            and coordinator.data.get("price")
             and hasattr(coordinator.data["price"], "current_price")
             else None
         ),
@@ -124,8 +128,8 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Optimization Reasoning",
         icon="mdi:brain",
         value_fn=lambda coordinator: (
-            coordinator.data.get("decision").reasoning
-            if coordinator.data and "decision" in coordinator.data
+            coordinator.data["decision"].reasoning
+            if coordinator.data and coordinator.data.get("decision")
             else "No decision yet"
         ),
     ),
@@ -133,11 +137,11 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="quarter_of_day",
         name="Quarter of Day",
         icon="mdi:clock-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("price").current_quarter
+            coordinator.data["price"].current_quarter
             if coordinator.data
-            and "price" in coordinator.data
-            and coordinator.data["price"]
+            and coordinator.data.get("price")
             and hasattr(coordinator.data["price"], "current_quarter")
             else None
         ),
@@ -147,10 +151,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Hour Classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
-            coordinator.data.get("price").current_classification
+            coordinator.data["price"].current_classification
             if coordinator.data
-            and "price" in coordinator.data
-            and coordinator.data["price"]
+            and coordinator.data.get("price")
             and hasattr(coordinator.data["price"], "current_classification")
             else "unknown"
         ),
@@ -160,10 +163,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Peak Status",
         icon="mdi:alert-circle-outline",
         value_fn=lambda coordinator: (
-            coordinator.data.get("decision").peak_status
+            coordinator.data["decision"].peak_status
             if coordinator.data
-            and "decision" in coordinator.data
-            and coordinator.data["decision"]
+            and coordinator.data.get("decision")
             and hasattr(coordinator.data["decision"], "peak_status")
             else "unknown"
         ),
@@ -175,11 +177,11 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("thermal").temperature_trend
+            coordinator.data["thermal"].temperature_trend
             if coordinator.data
-            and "thermal" in coordinator.data
-            and coordinator.data["thermal"]
+            and coordinator.data.get("thermal")
             and hasattr(coordinator.data["thermal"], "temperature_trend")
             else None
         ),
@@ -192,10 +194,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement="SEK",
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda coordinator: (
-            coordinator.data.get("savings").monthly_estimate
+            coordinator.data["savings"].monthly_estimate
             if coordinator.data
-            and "savings" in coordinator.data
-            and coordinator.data["savings"]
+            and coordinator.data.get("savings")
             and hasattr(coordinator.data["savings"], "monthly_estimate")
             else None
         ),
@@ -204,12 +205,14 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="optional_features_status",
         name="Optional Features Status",
         icon="mdi:feature-search-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: ("active" if coordinator.data else "initializing"),
     ),
     EffektGuardSensorEntityDescription(
         key="heat_pump_model",
         name="Heat Pump Model",
         icon="mdi:heat-pump",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
             coordinator.heat_pump_model.model_name
             if hasattr(coordinator, "heat_pump_model") and coordinator.heat_pump_model
@@ -248,12 +251,12 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "EffektGuard",
-            "manufacturer": "EffektGuard",
-            "model": "Heat Pump Optimizer",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="EffektGuard",
+            manufacturer="EffektGuard",
+            model="Heat Pump Optimizer",
+        )
 
     @property
     def native_value(self) -> Any:
@@ -284,7 +287,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 if decision and hasattr(decision, "layers"):
                     attrs["layer_votes"] = [
                         {
-                            "name": layer.name,
                             "offset": layer.offset,
                             "weight": layer.weight,
                             "reason": layer.reason,
@@ -458,9 +460,9 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                     f"{model.typical_electrical_range_kw[0]}-{model.typical_electrical_range_kw[1]}"
                 )
                 attrs["heat_output_range_kw"] = (
-                    f"{model.typical_heat_output_range_kw[0]}-{model.typical_heat_output_range_kw[1]}"
+                    f"{model.rated_power_kw[0]}-{model.rated_power_kw[1]}"
                 )
-                attrs["cop_range"] = f"{model.cop_range[0]}-{model.cop_range[1]}"
+                attrs["cop_range"] = f"{model.typical_cop_range[0]}-{model.typical_cop_range[1]}"
                 attrs["optimal_flow_delta"] = model.optimal_flow_delta
                 if hasattr(model, "compressor_type"):
                     attrs["compressor_type"] = model.compressor_type

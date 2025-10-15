@@ -21,16 +21,21 @@ from homeassistant.components.climate.const import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_OPTIMIZATION_MODE,
     CONF_TARGET_INDOOR_TEMP,
+    DEFAULT_INDOOR_TEMP,
     DOMAIN,
+    MAX_INDOOR_TEMP,
+    MIN_INDOOR_TEMP,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
+    TEMP_STEP,
 )
 from .coordinator import EffektGuardCoordinator
 
@@ -63,9 +68,9 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    _attr_min_temp = 15.0
-    _attr_max_temp = 25.0
-    _attr_target_temperature_step = 0.5
+    _attr_min_temp = MIN_INDOOR_TEMP
+    _attr_max_temp = MAX_INDOOR_TEMP
+    _attr_target_temperature_step = TEMP_STEP
 
     def __init__(
         self,
@@ -75,12 +80,12 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
         """Initialize climate entity."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_climate"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "EffektGuard",
-            "manufacturer": "EffektGuard",
-            "model": "Heat Pump Optimizer",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name="EffektGuard",
+            manufacturer="EffektGuard",
+            model="Heat Pump Optimizer",
+        )
         self._entry = entry
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_preset_mode = PRESET_NONE
@@ -96,8 +101,12 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
-        """Return target temperature from config."""
-        return self._entry.data.get(CONF_TARGET_INDOOR_TEMP, 21.0)
+        """Return target temperature from config options."""
+        # Check options first (preferred), fall back to data for migration
+        return self._entry.options.get(
+            CONF_TARGET_INDOOR_TEMP,
+            self._entry.data.get(CONF_TARGET_INDOOR_TEMP, DEFAULT_INDOOR_TEMP),
+        )
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -107,7 +116,11 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
     @property
     def preset_mode(self) -> str:
         """Return current preset mode."""
-        optimization_mode = self._entry.data.get(CONF_OPTIMIZATION_MODE, OPTIMIZATION_MODE_BALANCED)
+        # Check options first (preferred), fall back to data for migration
+        optimization_mode = self._entry.options.get(
+            CONF_OPTIMIZATION_MODE,
+            self._entry.data.get(CONF_OPTIMIZATION_MODE, OPTIMIZATION_MODE_BALANCED),
+        )
         # Map optimization mode to preset
         preset_map = {
             OPTIMIZATION_MODE_COMFORT: PRESET_COMFORT,
@@ -119,7 +132,7 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set target temperature.
 
-        Updates the target temperature in config entry data.
+        Updates the target temperature in config entry options.
         Optimization engine will use new target in next update cycle.
         """
         if (temperature := kwargs.get(ATTR_TEMPERATURE)) is None:
@@ -129,11 +142,11 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
 
         _LOGGER.info("Setting target temperature to %.1f°C", temperature)
 
-        # Update config entry data
-        new_data = dict(self._entry.data)
-        new_data[CONF_TARGET_INDOOR_TEMP] = temperature
+        # Update config entry options (not data)
+        new_options = dict(self._entry.options)
+        new_options[CONF_TARGET_INDOOR_TEMP] = temperature
 
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         # Request coordinator refresh to recalculate with new target
         await self.coordinator.async_request_refresh()
@@ -177,11 +190,11 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
 
         optimization_mode = mode_map.get(preset_mode, OPTIMIZATION_MODE_BALANCED)
 
-        # Update config entry data
-        new_data = dict(self._entry.data)
-        new_data[CONF_OPTIMIZATION_MODE] = optimization_mode
+        # Update config entry options (not data)
+        new_options = dict(self._entry.options)
+        new_options[CONF_OPTIMIZATION_MODE] = optimization_mode
 
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         # Request coordinator refresh to apply new mode
         await self.coordinator.async_request_refresh()

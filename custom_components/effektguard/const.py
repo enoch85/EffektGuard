@@ -31,12 +31,18 @@ CONF_WEATHER_COMPENSATION_WEIGHT: Final = "weather_compensation_weight"  # 0.0-1
 # Defaults
 DEFAULT_TOLERANCE: Final = 0.5
 DEFAULT_TARGET_TEMP: Final = 21.0
+DEFAULT_INDOOR_TEMP: Final = 21.0  # Fallback when sensor unavailable
 DEFAULT_THERMAL_MASS: Final = 1.0
 DEFAULT_INSULATION_QUALITY: Final = 1.0
 DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.75  # Moderate influence
+
+# Climate entity temperature limits (displayed in UI)
+MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature
+MAX_INDOOR_TEMP: Final = 25.0  # °C - maximum settable temperature
+TEMP_STEP: Final = 0.5  # °C - temperature adjustment step
 
 # Optimization modes for climate entity presets
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
@@ -116,6 +122,13 @@ UFH_MIN_FLOW_TEMP_TIMBER: Final = 22.0  # Minimum effective timber UFH temp
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
 HEAT_LOSS_COEFFICIENT_MIN: Final = 100.0  # W/°C well-insulated house
 HEAT_LOSS_COEFFICIENT_MAX: Final = 300.0  # W/°C poorly-insulated house
+
+# Power estimation defaults (kW)
+# Used when actual power sensor unavailable - fallback values
+DEFAULT_BASE_POWER: Final = 3.0  # kW typical NIBE heat pump average
+ESTIMATED_POWER_BASELINE: Final = 4.0  # kW baseline for coordinator estimates
+TEMP_FACTOR_MIN: Final = 0.5  # Minimum temperature scaling factor
+TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 
 # Pump configuration - open-loop UFH requirements
 # Source: Forum_Summary.md - glyn.hudson case study (8-hour off periods)

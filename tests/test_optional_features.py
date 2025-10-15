@@ -80,7 +80,8 @@ def mock_hass():
     )
     
     def mock_async_all():
-        return [(entity_id, state) for entity_id, state in mock_states.items()]
+        # Return list of state objects, not tuples
+        return list(mock_states.values())
     
     def mock_get_state(entity_id):
         return mock_states.get(entity_id)
@@ -129,8 +130,9 @@ class TestOptionalFeaturesDiscovery:
         hass = MagicMock(spec=HomeAssistant)
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
+        # Return list of state objects, not tuples
         mock_states_obj.async_all = lambda: [
-            ("sensor.temperature", MagicMock(entity_id="sensor.temperature"))
+            MagicMock(entity_id="sensor.temperature")
         ]
         
         config_flow = EffektGuardConfigFlow()
@@ -151,7 +153,8 @@ class TestOptionalFeaturesDiscovery:
         )
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
-        mock_states_obj.async_all = lambda: [("sensor.temperature", mock_state)]
+        # Return list of state objects, not tuples
+        mock_states_obj.async_all = lambda: [mock_state]
         
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = hass

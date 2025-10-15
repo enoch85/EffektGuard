@@ -24,7 +24,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_DEGREE_MINUTES_ENTITY, CONF_NIBE_ENTITY, CONF_POWER_SENSOR_ENTITY
+from ..const import (
+    CONF_DEGREE_MINUTES_ENTITY,
+    CONF_NIBE_ENTITY,
+    CONF_POWER_SENSOR_ENTITY,
+    DEFAULT_BASE_POWER,
+    DEFAULT_INDOOR_TEMP,
+    TEMP_FACTOR_MAX,
+    TEMP_FACTOR_MIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,7 +98,7 @@ class NibeAdapter:
             self._entity_cache.get("outdoor_temp"), default=0.0
         )
         indoor_temp = await self._read_entity_float(
-            self._entity_cache.get("indoor_temp"), default=21.0
+            self._entity_cache.get("indoor_temp"), default=DEFAULT_INDOOR_TEMP
         )
         supply_temp = await self._read_entity_float(
             self._entity_cache.get("supply_temp"), default=35.0
@@ -177,7 +185,7 @@ class NibeAdapter:
             _LOGGER.error("No offset entity found")
             return
 
-        # Set value via number entity service
+        # Set value via number entity service (non-blocking)
         try:
             await self.hass.services.async_call(
                 "number",
@@ -186,7 +194,7 @@ class NibeAdapter:
                     "entity_id": offset_entity,
                     "value": offset,
                 },
-                blocking=True,
+                blocking=False,  # Non-blocking to avoid UI delays
             )
             self._last_write = now
             _LOGGER.info("Set NIBE offset to %.2f°C", offset)
@@ -322,7 +330,7 @@ class NibeAdapter:
         flow_error = supply_temp - target_flow
 
         # Estimate DM based on flow error and indoor temp error
-        target_indoor = 21.0  # Assumed target
+        target_indoor = DEFAULT_INDOOR_TEMP  # Assumed target when not configured
         indoor_error = indoor_temp - target_indoor
 
         # Simplified estimation
@@ -414,10 +422,10 @@ class NibeAdapter:
         # Outdoor temperature factor (more power needed when cold)
         # At +7°C: factor 1.0, At -20°C: factor ~2.5
         temp_factor = 1.0 + (7.0 - outdoor_temp) / 18.0
-        temp_factor = max(0.5, min(temp_factor, 3.0))
+        temp_factor = max(TEMP_FACTOR_MIN, min(temp_factor, TEMP_FACTOR_MAX))
 
         # Base power for typical residential heat pump
-        base_power = 3.0  # kW (typical average)
+        base_power = DEFAULT_BASE_POWER  # kW (typical average)
 
         estimated = base_power * flow_factor * temp_factor
 

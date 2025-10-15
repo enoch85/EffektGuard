@@ -135,6 +135,14 @@ def mock_entry():
         CONF_OPTIMIZATION_MODE: OPTIMIZATION_MODE_BALANCED,
         CONF_ENABLE_OPTIMIZATION: True,
     }
+    # Add options dict for entry.options (user-configurable settings)
+    # Phase 1 fix: TARGET_INDOOR_TEMP and OPTIMIZATION_MODE moved to options
+    entry.options = {
+        CONF_TARGET_INDOOR_TEMP: 21.0,
+        CONF_OPTIMIZATION_MODE: OPTIMIZATION_MODE_BALANCED,
+        CONF_THERMAL_MASS: 1.0,
+        CONF_INSULATION_QUALITY: 1.0,
+    }
     return entry
 
 
@@ -181,10 +189,10 @@ async def test_climate_set_temperature_clamping_max(mock_hass, full_coordinator,
     with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
         await climate.async_set_temperature(**{ATTR_TEMPERATURE: 30.0})
 
-        # Should clamp to max (25.0)
+        # Should clamp to max (25.0) in options (not data)
         call_args = mock_update.call_args
-        updated_data = call_args[1]["data"]
-        assert updated_data[CONF_TARGET_INDOOR_TEMP] == 25.0
+        updated_options = call_args[1]["options"]
+        assert updated_options[CONF_TARGET_INDOOR_TEMP] == 25.0
 
 
 async def test_climate_set_temperature_clamping_min(mock_hass, full_coordinator, mock_entry):
@@ -195,10 +203,10 @@ async def test_climate_set_temperature_clamping_min(mock_hass, full_coordinator,
     with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
         await climate.async_set_temperature(**{ATTR_TEMPERATURE: 10.0})
 
-        # Should clamp to min (15.0)
+        # Should clamp to min (15.0) in options (not data)
         call_args = mock_update.call_args
-        updated_data = call_args[1]["data"]
-        assert updated_data[CONF_TARGET_INDOOR_TEMP] == 15.0
+        updated_options = call_args[1]["options"]
+        assert updated_options[CONF_TARGET_INDOOR_TEMP] == 15.0
 
 
 def test_climate_current_temperature_no_data(empty_coordinator, mock_entry):

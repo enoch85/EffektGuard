@@ -19,6 +19,7 @@ from .const import (
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
     DOMAIN,
+    ESTIMATED_POWER_BASELINE,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -414,7 +415,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if is_heating:
             # Rough estimation: colder outdoor = higher power
             outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
-            base_power = 4.0  # kW baseline
+            base_power = ESTIMATED_POWER_BASELINE  # kW baseline from const.py
 
             # Adjust for outdoor temperature
             # Colder = more power needed

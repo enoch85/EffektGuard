@@ -154,21 +154,26 @@ async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
 async def test_force_offset_validates_range(mock_hass, mock_coordinator):
     """Test force_offset validates offset is within valid range."""
     from custom_components.effektguard import _async_register_services
+    from homeassistant.exceptions import ServiceValidationError
 
-    await _async_register_services(mock_hass)
+    # Patch cooldown tracker to allow the call
+    with patch("custom_components.effektguard._service_last_called", {}):
+        await _async_register_services(mock_hass)
 
-    calls = mock_hass.services.async_register.call_args_list
-    force_offset_call = next(call for call in calls if call[0][1] == SERVICE_FORCE_OFFSET)
-    handler = force_offset_call[0][2]
+        calls = mock_hass.services.async_register.call_args_list
+        force_offset_call = next(call for call in calls if call[0][1] == SERVICE_FORCE_OFFSET)
+        handler = force_offset_call[0][2]
 
-    # Test with out-of-range offset
-    call = MagicMock()
-    call.data = {ATTR_OFFSET: 15.0, ATTR_DURATION: 60}  # > MAX_OFFSET
+        # Test with out-of-range offset
+        call = MagicMock()
+        call.data = {ATTR_OFFSET: 15.0, ATTR_DURATION: 60}  # > MAX_OFFSET
 
-    await handler(call)
+        # Should raise ServiceValidationError for invalid offset
+        with pytest.raises(ServiceValidationError, match="outside valid range"):
+            await handler(call)
 
-    # Should not set override for invalid offset
-    mock_coordinator.engine.set_manual_override.assert_not_called()
+        # Should not set override for invalid offset
+        mock_coordinator.engine.set_manual_override.assert_not_called()
 
 
 # ============================================================================
@@ -540,31 +545,36 @@ def test_effect_manager_reset_monthly_peaks():
 async def test_service_handles_no_coordinator_gracefully(mock_hass):
     """Test services handle missing coordinator gracefully."""
     from custom_components.effektguard import _async_register_services
+    from homeassistant.exceptions import ServiceValidationError
 
     # Empty domain data
     mock_hass.data[DOMAIN] = {}
 
-    await _async_register_services(mock_hass)
+    # Patch cooldown tracker to allow the calls
+    with patch("custom_components.effektguard._service_last_called", {}):
+        await _async_register_services(mock_hass)
 
-    # Get handlers
-    calls = mock_hass.services.async_register.call_args_list
+        # Get handlers
+        calls = mock_hass.services.async_register.call_args_list
 
-    force_offset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_FORCE_OFFSET)
-    reset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_RESET_PEAK_TRACKING)
-    boost_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_BOOST_HEATING)
+        force_offset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_FORCE_OFFSET)
+        reset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_RESET_PEAK_TRACKING)
+        boost_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_BOOST_HEATING)
 
-    # Test each handler with no coordinator
-    call = MagicMock()
-    call.data = {ATTR_OFFSET: 2.5, ATTR_DURATION: 60}
+        # Test each handler with no coordinator - should raise ServiceValidationError
+        call = MagicMock()
+        call.data = {ATTR_OFFSET: 2.5, ATTR_DURATION: 60}
 
-    # Should not raise exceptions
-    await force_offset_handler(call)
+        with pytest.raises(ServiceValidationError, match="No EffektGuard coordinator found"):
+            await force_offset_handler(call)
 
-    call.data = {}
-    await reset_handler(call)
+        call.data = {}
+        with pytest.raises(ServiceValidationError, match="No EffektGuard coordinator found"):
+            await reset_handler(call)
 
-    call.data = {ATTR_DURATION: 120}
-    await boost_handler(call)
+        call.data = {ATTR_DURATION: 120}
+        with pytest.raises(ServiceValidationError, match="No EffektGuard coordinator found"):
+            await boost_handler(call)
 
 
 # ============================================================================
