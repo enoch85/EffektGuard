@@ -150,7 +150,11 @@ class EffektGuardNumber(CoordinatorEntity, NumberEntity):
             CONF_PEAK_PROTECTION_MARGIN: DEFAULT_PEAK_PROTECTION_MARGIN,
         }
 
-        return self._entry.data.get(config_key, defaults.get(config_key, 1.0))
+        # FIX: Read from options first (preferred), fall back to data for migration
+        # This matches climate entity behavior to keep them in sync
+        return self._entry.options.get(
+            config_key, self._entry.data.get(config_key, defaults.get(config_key, 1.0))
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the value."""
@@ -160,11 +164,12 @@ class EffektGuardNumber(CoordinatorEntity, NumberEntity):
 
         _LOGGER.info("Setting %s to %.2f", config_key, value)
 
-        # Update config entry data
-        new_data = dict(self._entry.data)
-        new_data[config_key] = value
+        # FIX: Update config entry options (not data) to match climate entity behavior
+        # This ensures number entities and climate entity stay in sync
+        new_options = dict(self._entry.options)
+        new_options[config_key] = value
 
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         # Request coordinator refresh to apply new value
         await self.coordinator.async_request_refresh()
