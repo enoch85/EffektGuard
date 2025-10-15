@@ -219,14 +219,15 @@ class NibeAdapter:
 
         # Search for NIBE entities
         # Patterns based on NIBE Myuplink integration entity naming
+        # Use specific entity names from parameter IDs when possible
         patterns = {
-            "outdoor_temp": ["bt1", "outdoor"],
-            "indoor_temp": ["bt50", "room_temp", "indoor"],
-            "supply_temp": ["bt25", "supply"],
-            "return_temp": ["bt3", "return"],
-            "degree_minutes": ["degree_minutes", "gm", "dm"],
-            "offset": ["offset", "s1", "47011"],
-            "compressor_status": ["compressor", "eb100"],
+            "outdoor_temp": ["bt1", "_outdoor", "40004"],  # BT1 / param 40004
+            "indoor_temp": ["40033", "bt50"],  # param 40033 "Temperature" (BT50) / BT50 direct
+            "supply_temp": ["bt25", "_supply", "40008"],  # BT25/BT63 / param 40008
+            "return_temp": ["bt3", "_return", "40012"],  # BT3 / param 40012
+            "degree_minutes": ["degree_minutes", "40941"],  # param 40941
+            "offset": ["offset", "47011"],  # param 47011
+            "compressor_status": ["compressor", "43427"],  # param 43427
             "hot_water_status": ["hot_water", "dhw"],
         }
 
@@ -239,11 +240,28 @@ class NibeAdapter:
 
             entity_id_lower = entity.entity_id.lower()
 
+            # Skip known non-temperature configuration parameters
+            # 47394 = "control room sensor syst" (configuration, not temperature)
+            if "47394" in entity_id_lower or "control_room_sensor" in entity_id_lower:
+                continue
+
             # Match against patterns
             for key, patterns_list in patterns.items():
                 if key not in self._entity_cache:
                     for pattern in patterns_list:
                         if pattern in entity_id_lower:
+                            # Additional validation for temperature sensors
+                            if key in ["outdoor_temp", "indoor_temp", "supply_temp", "return_temp"]:
+                                # Check if it's actually a temperature sensor
+                                state = self.hass.states.get(entity.entity_id)
+                                if state and state.attributes.get("device_class") != "temperature":
+                                    _LOGGER.debug(
+                                        "Skipping %s (not a temperature sensor): %s",
+                                        key,
+                                        entity.entity_id,
+                                    )
+                                    continue
+                            
                             self._entity_cache[key] = entity.entity_id
                             _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
                             break

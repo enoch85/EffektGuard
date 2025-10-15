@@ -297,6 +297,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._last_learning_save = now
                 self._learned_data_changed = False
 
+        # Get current quarter classification from price analyzer
+        from datetime import datetime
+        now_time = datetime.now()
+        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        current_classification = self.engine.price.get_current_classification(current_quarter)
+
         return {
             "nibe": nibe_data,
             "price": price_data,
@@ -305,6 +311,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "offset": decision.offset,
             "peak_today": self.peak_today,
             "peak_this_month": self.peak_this_month,
+            "current_quarter": current_quarter,
+            "current_classification": current_classification,
         }
 
     def _get_fallback_prices(self):

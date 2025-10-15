@@ -95,7 +95,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Current Electricity Price",
         icon="mdi:currency-eur",
         device_class=SensorDeviceClass.MONETARY,
-        native_unit_of_measurement="SEK/kWh",
+        native_unit_of_measurement="öre/kWh",  # GE-Spot provides this, matches unit_of_measurement
         # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
@@ -139,10 +139,8 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         icon="mdi:clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data["price"].current_quarter
+            coordinator.data.get("current_quarter")
             if coordinator.data
-            and coordinator.data.get("price")
-            and hasattr(coordinator.data["price"], "current_quarter")
             else None
         ),
     ),
@@ -151,10 +149,8 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Hour Classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
-            coordinator.data["price"].current_classification
+            coordinator.data.get("current_classification")
             if coordinator.data
-            and coordinator.data.get("price")
-            and hasattr(coordinator.data["price"], "current_classification")
             else "unknown"
         ),
     ),

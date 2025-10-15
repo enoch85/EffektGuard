@@ -53,6 +53,40 @@ class PriceData:
     tomorrow: list[QuarterPeriod]  # 96 quarters for tomorrow (if available)
     has_tomorrow: bool
 
+    @property
+    def current_price(self) -> float | None:
+        """Get current quarter's price.
+        
+        Returns:
+            Current price in SEK/kWh, or None if not available
+        """
+        if not self.today:
+            return None
+        
+        # Find current quarter (0-95)
+        from datetime import datetime
+        now = datetime.now()
+        current_quarter = (now.hour * 4) + (now.minute // 15)
+        
+        # Find matching quarter period
+        for period in self.today:
+            period_quarter = (period.hour * 4) + (period.minute // 15)
+            if period_quarter == current_quarter:
+                return period.price
+        
+        return None
+
+    @property
+    def current_quarter(self) -> int | None:
+        """Get current quarter of day (0-95).
+        
+        Returns:
+            Quarter number 0-95, or None if not available
+        """
+        from datetime import datetime
+        now = datetime.now()
+        return (now.hour * 4) + (now.minute // 15)
+
 
 class GESpotAdapter:
     """Adapter for reading GE-Spot price entities."""
@@ -89,10 +123,11 @@ class GESpotAdapter:
 
         # Parse today's prices from attributes
         # GE-Spot stores prices in attributes as list of dicts with:
-        # - start: datetime
-        # - price: float (SEK/kWh)
-        today_raw = state.attributes.get("prices_today", [])
-        tomorrow_raw = state.attributes.get("prices_tomorrow", [])
+        # - time: datetime string (ISO format with timezone)
+        # - value: float (in configured unit, e.g., öre/kWh, cents/kWh)
+        # Note: GE-Spot handles currency conversion, we use values as-is
+        today_raw = state.attributes.get("today_interval_prices", [])
+        tomorrow_raw = state.attributes.get("tomorrow_interval_prices", [])
 
         # Convert to QuarterPeriod objects
         today_periods = self._parse_periods(today_raw)
@@ -121,7 +156,8 @@ class GESpotAdapter:
         """Parse raw price data into QuarterPeriod objects.
 
         Args:
-            raw_prices: List of dicts with 'start' (datetime) and 'price' (float)
+            raw_prices: List of dicts with 'time' (datetime string) and 'value' (float)
+                       GE-Spot handles currency conversion automatically
 
         Returns:
             List of 96 QuarterPeriod objects for the day
@@ -130,11 +166,13 @@ class GESpotAdapter:
 
         for item in raw_prices:
             try:
-                # Parse timestamp
-                start = item.get("start")
-                if isinstance(start, str):
-                    start = dt_util.parse_datetime(start)
-                elif not isinstance(start, datetime):
+                # Parse timestamp (GE-Spot uses 'time' key)
+                time_str = item.get("time")
+                if isinstance(time_str, str):
+                    start = dt_util.parse_datetime(time_str)
+                elif isinstance(time_str, datetime):
+                    start = time_str
+                else:
                     continue
 
                 # Calculate quarter of day (0-95)
@@ -142,8 +180,8 @@ class GESpotAdapter:
                 minute = start.minute
                 quarter_of_day = (hour * 4) + (minute // 15)
 
-                # Parse price
-                price = float(item.get("price", 0.0))
+                # Parse price (GE-Spot uses 'value' key, already in correct unit)
+                price = float(item.get("value", 0.0))
 
                 # Determine if daytime (06:00-22:00 = full effect tariff weight)
                 is_daytime = 6 <= hour < 22
