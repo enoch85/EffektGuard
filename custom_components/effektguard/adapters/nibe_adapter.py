@@ -25,11 +25,15 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    CONF_ADDITIONAL_INDOOR_SENSORS,
     CONF_DEGREE_MINUTES_ENTITY,
+    CONF_INDOOR_TEMP_METHOD,
     CONF_NIBE_ENTITY,
     CONF_POWER_SENSOR_ENTITY,
+    DEBUG_FORCE_OUTDOOR_TEMP,
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
+    DEFAULT_INDOOR_TEMP_METHOD,
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
@@ -74,6 +78,8 @@ class NibeAdapter:
         self._nibe_base_entity = config.get(CONF_NIBE_ENTITY)
         self._degree_minutes_entity = config.get(CONF_DEGREE_MINUTES_ENTITY)  # Optional
         self._power_sensor_entity = config.get(CONF_POWER_SENSOR_ENTITY)  # Optional
+        self._additional_indoor_sensors = config.get(CONF_ADDITIONAL_INDOOR_SENSORS, [])  # Optional
+        self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
         self._last_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
 
@@ -97,9 +103,24 @@ class NibeAdapter:
         outdoor_temp = await self._read_entity_float(
             self._entity_cache.get("outdoor_temp"), default=0.0
         )
+
+        # DEBUG: Override outdoor temperature if configured
+        if DEBUG_FORCE_OUTDOOR_TEMP is not None:
+            _LOGGER.warning(
+                "🔧 DEBUG MODE: Forcing outdoor temp %.1f°C → %.1f°C (DEBUG_FORCE_OUTDOOR_TEMP)",
+                outdoor_temp,
+                DEBUG_FORCE_OUTDOOR_TEMP,
+            )
+            outdoor_temp = DEBUG_FORCE_OUTDOOR_TEMP
+
         indoor_temp = await self._read_entity_float(
             self._entity_cache.get("indoor_temp"), default=DEFAULT_INDOOR_TEMP
         )
+
+        # Multi-sensor indoor temperature calculation
+        if self._additional_indoor_sensors:
+            indoor_temp = await self._calculate_multi_sensor_temperature(indoor_temp)
+
         supply_temp = await self._read_entity_float(
             self._entity_cache.get("supply_temp"), default=35.0
         )
@@ -261,7 +282,7 @@ class NibeAdapter:
                                         entity.entity_id,
                                     )
                                     continue
-                            
+
                             self._entity_cache[key] = entity.entity_id
                             _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
                             break
@@ -421,6 +442,68 @@ class NibeAdapter:
             return estimated_power
 
         return None
+
+    async def _calculate_multi_sensor_temperature(self, nibe_temp: float) -> float:
+        """Calculate indoor temperature from NIBE sensor + additional sensors.
+
+        Combines NIBE BT50 with additional room sensors for more accurate
+        whole-house temperature reading.
+
+        Args:
+            nibe_temp: Temperature from NIBE BT50 sensor
+
+        Returns:
+            Combined temperature using configured method (median/average)
+        """
+        # Start with NIBE sensor
+        temps = [nibe_temp]
+
+        # Read additional sensors
+        for entity_id in self._additional_indoor_sensors:
+            state = self.hass.states.get(entity_id)
+            if state and state.state not in ["unknown", "unavailable"]:
+                try:
+                    temp = float(state.state)
+                    # Sanity check (15-30°C range)
+                    if 15.0 <= temp <= 30.0:
+                        temps.append(temp)
+                    else:
+                        _LOGGER.warning(
+                            "Ignoring out-of-range temperature from %s: %.1f°C",
+                            entity_id,
+                            temp,
+                        )
+                except (ValueError, TypeError) as err:
+                    _LOGGER.debug("Failed to read sensor %s: %s", entity_id, err)
+
+        # Calculate combined temperature
+        if len(temps) == 1:
+            # Only NIBE sensor available
+            return nibe_temp
+
+        if self._indoor_temp_method == "median":
+            # Median is more robust to outliers (recommended)
+            temps_sorted = sorted(temps)
+            n = len(temps_sorted)
+            if n % 2 == 0:
+                result = (temps_sorted[n // 2 - 1] + temps_sorted[n // 2]) / 2
+            else:
+                result = temps_sorted[n // 2]
+            method_name = "median"
+        else:
+            # Average (mean)
+            result = sum(temps) / len(temps)
+            method_name = "average"
+
+        _LOGGER.info(
+            "Multi-sensor indoor temp: %.1f°C (%s of %d sensors: %s)",
+            result,
+            method_name,
+            len(temps),
+            ", ".join(f"{t:.1f}°C" for t in temps),
+        )
+
+        return result
 
     def _estimate_power_from_temps(self, supply_temp: float, outdoor_temp: float) -> float:
         """Estimate heat pump power consumption from temperatures.

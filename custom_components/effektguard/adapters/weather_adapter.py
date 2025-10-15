@@ -58,13 +58,19 @@ class WeatherAdapter:
             WeatherData with forecast, or None if unavailable
         """
         if not self._weather_entity:
-            _LOGGER.debug("No weather entity configured")
+            _LOGGER.info("Weather forecast disabled - no entity configured in setup")
             return None
+
+        _LOGGER.debug("Reading weather forecast from entity: %s", self._weather_entity)
 
         # Read weather entity state
         state = self.hass.states.get(self._weather_entity)
         if not state or state.state in ["unknown", "unavailable"]:
-            _LOGGER.warning("Weather entity %s unavailable", self._weather_entity)
+            _LOGGER.warning(
+                "Weather entity %s unavailable (state: %s)",
+                self._weather_entity,
+                state.state if state else "missing",
+            )
             return None
 
         # Get current temperature
@@ -112,12 +118,14 @@ class WeatherAdapter:
         forecast_count = len(forecast_hours)
         if forecast_count < 12:
             _LOGGER.warning(
-                "Weather forecast only %d hours (minimum 12h recommended for optimal pre-heating)",
+                "Weather forecast from %s: only %d hours (minimum 12h recommended for optimal pre-heating)",
+                self._weather_entity,
                 forecast_count,
             )
         else:
             _LOGGER.info(
-                "Weather forecast available: %d hours (sufficient for optimization)",
+                "Weather forecast from %s: %d hours available (sufficient for optimization)",
+                self._weather_entity,
                 forecast_count,
             )
 

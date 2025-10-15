@@ -6,12 +6,22 @@ from typing import Final
 # Domain
 DOMAIN: Final = "effektguard"
 
+# DEBUG MODE - Force outdoor temperature for testing
+# Set to None to disable, or a float value to override outdoor temp
+# Example: DEBUG_FORCE_OUTDOOR_TEMP = -5.0 to test cold weather behavior
+# WARNING: Only for development/testing! Remove for production.
+DEBUG_FORCE_OUTDOOR_TEMP: Final = None  # Set to -5.0 to test
+
 # Configuration keys
 CONF_NIBE_ENTITY: Final = "nibe_entity"
 CONF_GESPOT_ENTITY: Final = "gespot_entity"
 CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_DEGREE_MINUTES_ENTITY: Final = "degree_minutes_entity"  # Optional: NIBE degree minutes
 CONF_POWER_SENSOR_ENTITY: Final = "power_sensor_entity"  # Optional: Power meter
+CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
+    "additional_indoor_sensors"  # Optional: List of extra temp sensors
+)
+CONF_INDOOR_TEMP_METHOD: Final = "indoor_temp_method"  # average, median, weighted
 CONF_ENABLE_PRICE_OPTIMIZATION: Final = "enable_price_optimization"
 CONF_ENABLE_PEAK_PROTECTION: Final = "enable_peak_protection"
 CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
@@ -38,6 +48,7 @@ DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.75  # Moderate influence
+DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
 
 # Climate entity temperature limits (displayed in UI)
 MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature

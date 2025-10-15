@@ -228,7 +228,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Gather core data (NIBE - must succeed)
         try:
             nibe_data = await self.nibe.get_current_state()
-            _LOGGER.debug("NIBE data retrieved successfully")
+            _LOGGER.debug(
+                "NIBE data retrieved: indoor %.1f°C, outdoor %.1f°C, flow %.1f°C, DM %.0f",
+                nibe_data.indoor_temp,
+                nibe_data.outdoor_temp,
+                nibe_data.flow_temp,
+                nibe_data.degree_minutes,
+            )
         except Exception as err:
             _LOGGER.error("Failed to read NIBE data: %s", err)
             raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
@@ -237,7 +243,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # GE-Spot price data (native 15-minute intervals)
         try:
             price_data = await self.gespot.get_prices()
-            _LOGGER.debug("GE-Spot data retrieved successfully")
+            if price_data and price_data.today:
+                current_q = (dt_util.now().hour * 4) + (dt_util.now().minute // 15)
+                current_price = (
+                    price_data.today[current_q].price_ore
+                    if current_q < len(price_data.today)
+                    else 0
+                )
+                _LOGGER.debug(
+                    "GE-Spot data retrieved: %d quarters today, current Q%d = %.1f öre/kWh",
+                    len(price_data.today),
+                    current_q,
+                    current_price,
+                )
+            else:
+                _LOGGER.debug("GE-Spot data empty, using fallback prices")
+                price_data = self._get_fallback_prices()
         except Exception as err:
             _LOGGER.warning("Price data unavailable, using fallback: %s", err)
             price_data = self._get_fallback_prices()
@@ -245,7 +266,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Weather forecast
         try:
             weather_data = await self.weather.get_forecast()
-            _LOGGER.debug("Weather data retrieved successfully")
+            if weather_data:
+                _LOGGER.debug(
+                    "Weather data retrieved: current %.1f°C, %d hours forecast",
+                    weather_data.current_temp,
+                    len(weather_data.forecast_hours),
+                )
+            else:
+                _LOGGER.debug("Weather forecast not available (optional feature disabled)")
         except Exception as err:
             _LOGGER.info("Weather forecast unavailable: %s", err)
             weather_data = None

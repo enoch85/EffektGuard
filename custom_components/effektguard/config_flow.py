@@ -11,11 +11,13 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_ADDITIONAL_INDOOR_SENSORS,
     CONF_DEGREE_MINUTES_ENTITY,
     CONF_ENABLE_PEAK_PROTECTION,
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_GESPOT_ENTITY,
     CONF_HEAT_PUMP_MODEL,
+    CONF_INDOOR_TEMP_METHOD,
     CONF_INSULATION_QUALITY,
     CONF_NIBE_ENTITY,
     CONF_OPTIMIZATION_MODE,
@@ -25,6 +27,7 @@ from .const import (
     CONF_TOLERANCE,
     CONF_WEATHER_ENTITY,
     DEFAULT_HEAT_PUMP_MODEL,
+    DEFAULT_INDOOR_TEMP_METHOD,
     DEFAULT_INSULATION_QUALITY,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_TARGET_TEMP,
@@ -189,11 +192,17 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_optional_sensors(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Configure optional sensors (degree minutes, power meter)."""
+        """Configure optional sensors (degree minutes, power meter, extra temp sensors)."""
         if user_input is not None:
             # Store optional sensor settings
             self._data[CONF_DEGREE_MINUTES_ENTITY] = user_input.get(CONF_DEGREE_MINUTES_ENTITY)
             self._data[CONF_POWER_SENSOR_ENTITY] = user_input.get(CONF_POWER_SENSOR_ENTITY)
+            self._data[CONF_ADDITIONAL_INDOOR_SENSORS] = user_input.get(
+                CONF_ADDITIONAL_INDOOR_SENSORS, []
+            )
+            self._data[CONF_INDOOR_TEMP_METHOD] = user_input.get(
+                CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
+            )
 
             # Create entry
             return self.async_create_entry(
@@ -245,6 +254,25 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             )
 
+        # Additional indoor temperature sensors (optional, multi-select)
+        schema_dict[vol.Optional(CONF_ADDITIONAL_INDOOR_SENSORS)] = selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain="sensor",
+                device_class="temperature",
+                multiple=True,
+            )
+        )
+
+        # Indoor temperature calculation method
+        schema_dict[vol.Optional(CONF_INDOOR_TEMP_METHOD, default=DEFAULT_INDOOR_TEMP_METHOD)] = (
+            selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["median", "average"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        )
+
         return self.async_show_form(
             step_id="optional_sensors",
             data_schema=vol.Schema(schema_dict),
@@ -253,6 +281,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "power_detected": "✓ Auto-detected" if auto_detected_power else "❌ Not found",
                 "dm_note": "Degree minutes sensor improves thermal debt tracking (estimated if not provided)",
                 "power_note": "Power meter enables accurate peak tracking (estimated from heat pump data if not provided)",
+                "temp_sensors_note": "Add extra temperature sensors (living room, bedroom, etc.) for whole-house averaging. Median recommended (more robust to outliers).",
             },
         )
 
