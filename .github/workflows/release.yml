@@ -42,7 +42,7 @@ jobs:
       - name: Create ZIP file
         run: |
           cd release
-          zip -r ../effektguard-${{ steps.get_version.outputs.version }}.zip .
+          zip -r ../effektguard.zip .
           cd ..
 
       - name: Generate release notes
@@ -71,7 +71,7 @@ jobs:
           echo "3. Restart Home Assistant" >> release_notes.md
           echo "" >> release_notes.md
           echo "### Manual" >> release_notes.md
-          echo "1. Download \`effektguard-${{ steps.get_version.outputs.version }}.zip\`" >> release_notes.md
+          echo "1. Download \`effektguard.zip\`" >> release_notes.md
           echo "2. Extract to \`config/custom_components/\`" >> release_notes.md
           echo "3. Restart Home Assistant" >> release_notes.md
 
@@ -81,7 +81,7 @@ jobs:
           name: EffektGuard ${{ steps.get_version.outputs.tag }}
           body_path: release_notes.md
           files: |
-            effektguard-${{ steps.get_version.outputs.version }}.zip
+            effektguard.zip
           prerelease: ${{ steps.get_version.outputs.prerelease }}
           draft: false
         env:
