@@ -18,6 +18,10 @@ CONF_GESPOT_ENTITY: Final = "gespot_entity"
 CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_DEGREE_MINUTES_ENTITY: Final = "degree_minutes_entity"  # Optional: NIBE degree minutes
 CONF_POWER_SENSOR_ENTITY: Final = "power_sensor_entity"  # Optional: Power meter
+CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"  # Optional: DHW temperature sensor (BT7)
+CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.temporary_lux_50004
+CONF_ENABLE_DHW_OPTIMIZATION: Final = "enable_dhw_optimization"  # Enable intelligent DHW scheduling
+CONF_DHW_DEMAND_PERIODS: Final = "dhw_demand_periods"  # High DHW demand periods (JSON list)
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
@@ -182,7 +186,6 @@ CLIMATE_NORTHERN_LAPLAND: Final = "northern_lapland"  # Kiruna (-13°C Jan avg)
 # - Used by decision engine for emergency layer
 # - Used by weather compensation for safety margins
 #
-# Note: This replaces old "arctic", "subarctic", etc. names with heating-focused names.
 # Import is done at runtime to avoid circular dependencies - use the climate_zones module directly.
 
 # Storage
@@ -197,11 +200,13 @@ SERVICE_RESET_PEAKS: Final = "reset_peaks"
 SERVICE_FORCE_OFFSET: Final = "force_offset"
 SERVICE_RESET_PEAK_TRACKING: Final = "reset_peak_tracking"
 SERVICE_BOOST_HEATING: Final = "boost_heating"
+SERVICE_BOOST_DHW: Final = "boost_dhw"
 SERVICE_CALCULATE_OPTIMAL_SCHEDULE: Final = "calculate_optimal_schedule"
 
 # Service parameters
 ATTR_OFFSET: Final = "offset"
 ATTR_DURATION: Final = "duration"
+ATTR_TARGET_TEMP: Final = "target_temp"
 
 # Attributes
 ATTR_CURRENT_OFFSET: Final = "current_offset"
@@ -212,6 +217,21 @@ ATTR_PEAK_THIS_MONTH: Final = "peak_this_month"
 ATTR_THERMAL_DEBT: Final = "thermal_debt"
 ATTR_QUARTER_OF_DAY: Final = "quarter_of_day"
 ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
+
+# DHW (Domestic Hot Water) Optimization Constants
+# Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
+DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature
+DHW_MAX_TEMP: Final = 55.0  # °C - Maximum normal DHW temperature (comfort)
+DHW_COMFORT_TEMP: Final = 50.0  # °C - Optimal comfort temperature
+DHW_ECO_TEMP: Final = 45.0  # °C - Economy mode temperature
+DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
+DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
+DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
+DHW_SCHEDULING_WINDOW_MIN: Final = 1  # Min hours ahead for DHW scheduling
+
+# MyUplink DHW control entities (NIBE parameter IDs)
+NIBE_TEMP_LUX_ENTITY_ID: Final = "switch.temporary_lux_50004"  # Temporary lux boost
+NIBE_BT7_SENSOR_ID: Final = "sensor.bt7_hw_top_40013"  # Hot water top temperature
 
 
 class OptimizationMode(StrEnum):

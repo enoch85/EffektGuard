@@ -267,6 +267,7 @@ class DecisionEngine:
         layers = [
             self._safety_layer(nibe_state),
             self._emergency_layer(nibe_state),
+            self._proactive_debt_prevention_layer(nibe_state),  # Prevent debt before it gets bad
             self._effect_layer(nibe_state, current_peak),
             self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
             self._weather_compensation_layer(
@@ -468,6 +469,102 @@ class DecisionEngine:
             "warning": dm_range["warning"],  # Warning threshold
         }
 
+    def _proactive_debt_prevention_layer(self, nibe_state) -> LayerDecision:
+        """Proactive thermal debt prevention with climate-aware thresholds.
+
+        PHILOSOPHY (from Forum_Summary.md):
+        - "Continuous modulation beats forced cycling" (stevedvo research)
+        - Thermal debt from forced stops worse than running low power
+        - Prevent peaks by maintaining gentle background heating
+
+        CLIMATE-AWARE DESIGN:
+        Unlike hardcoded DM thresholds, this layer adapts to climate and outdoor temperature:
+        - Arctic winter (-30°C): Zone 1 at DM -120, Zone 2 at -320, Zone 3 at -640
+        - Cold winter (-10°C): Zone 1 at DM -67, Zone 2 at -180, Zone 3 at -360
+        - Mild climate (0°C): Zone 1 at DM -45, Zone 2 at -120, Zone 3 at -240
+
+        Thresholds calculated as percentages of climate-aware expected DM:
+        - Zone 1 (15% of normal): Gentle nudge before compressor starts
+        - Zone 2 (40% of normal): Boost recovery when compressor running
+        - Zone 3 (80% of normal): Strong action when approaching warning threshold
+
+        THERMAL LAG CONSIDERATION:
+        UFH systems have significant thermal lag - changes take hours to manifest:
+        - Concrete slab UFH: 6+ hours lag (UFH_CONCRETE_PREDICTION_HORIZON = 12h)
+        - Timber UFH: 2-3 hours lag (UFH_TIMBER_PREDICTION_HORIZON = 6h)
+        - Radiators: <1 hour lag (UFH_RADIATOR_PREDICTION_HORIZON = 2h)
+
+        This layer provides GENTLE nudges that work with thermal inertia rather than
+        fighting it. Small offsets (+0.5-1.5°C) accumulate effect over hours, preventing
+        deep debt without causing overshoots.
+
+        Think of it as "steering a ship" - small rudder adjustments early prevent
+        large course corrections later.
+
+        Args:
+            nibe_state: Current NIBE state
+
+        Returns:
+            LayerDecision with climate-aware proactive gentle heating
+        """
+        degree_minutes = nibe_state.degree_minutes
+        outdoor_temp = nibe_state.outdoor_temp
+
+        # Get climate-aware expected DM range for current conditions
+        expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
+
+        # Climate-aware thresholds (adapt to outdoor temp and climate zone)
+        # In Arctic winter (-30°C), these thresholds will be much deeper than mild climate (5°C)
+        zone1_threshold = expected_dm["normal"] * 0.15  # ~15% of normal max (early warning)
+        zone2_threshold = expected_dm["normal"] * 0.40  # ~40% of normal max (compressor start)
+        zone3_threshold = expected_dm["normal"] * 0.80  # ~80% of normal max (significant deficit)
+
+        # PROACTIVE ZONE 1: Early warning (gentle nudge before compressor starts)
+        # Example: Arctic -30°C → -120, Cold -10°C → -67, Mild 0°C → -45
+        if zone2_threshold < degree_minutes <= zone1_threshold:
+            # Gentle nudge to prevent deeper deficit
+            offset = 0.5
+            return LayerDecision(
+                offset=offset,
+                weight=0.3,
+                reason=f"Proactive Z1: DM {degree_minutes:.0f} (threshold: {zone1_threshold:.0f}), gentle heating prevents debt",
+            )
+
+        # PROACTIVE ZONE 2: Compressor running, monitor trend
+        # Example: Arctic -30°C → -320, Cold -10°C → -180, Mild 0°C → -120
+        elif zone3_threshold < degree_minutes <= zone2_threshold:
+            # Compressor running, check if deficit still growing
+            # Slight boost to help it catch up faster
+            offset = 0.7
+            return LayerDecision(
+                offset=offset,
+                weight=0.4,
+                reason=f"Proactive Z2: DM {degree_minutes:.0f} (threshold: {zone2_threshold:.0f}), boost recovery speed",
+            )
+
+        # PROACTIVE ZONE 3: Significant deficit (beyond typical)
+        # Uses expected_dm["normal"] directly (already climate-aware)
+        elif expected_dm["normal"] < degree_minutes <= zone3_threshold:
+            # Deficit growing beyond typical - stronger action
+            # Scale offset based on how far into warning zone
+            deficit_severity = (zone3_threshold - degree_minutes) / (
+                zone3_threshold - expected_dm["normal"]
+            )  # 0-1 scale
+            offset = 1.0 + (deficit_severity * 0.5)  # 1.0-1.5°C
+
+            return LayerDecision(
+                offset=offset,
+                weight=0.6,
+                reason=f"Proactive Z3: DM {degree_minutes:.0f} (threshold: {zone3_threshold:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
+            )
+
+        # Outside proactive zones - let other layers handle it
+        return LayerDecision(
+            offset=0.0,
+            weight=0.0,
+            reason="Proactive prevention not needed",
+        )
+
     def _effect_layer(self, nibe_state, current_peak: float) -> LayerDecision:
         """Effect tariff protection layer: Avoid creating new 15-minute peak.
 
@@ -605,14 +702,16 @@ class DecisionEngine:
         hourly_rate = temp_drop / len(forecast_6h) if forecast_6h else 0.0
 
         # Dynamic threshold based on building thermal mass
-        # Higher thermal mass = can handle bigger drops without pre-heat
-        # Range: -1.0°C to -4.0°C depending on thermal mass (0.5-2.0)
-        threshold = -2.0 * self.thermal.thermal_mass
+        # MORE AGGRESSIVE (enoch95 feedback): Act sooner to prevent thermal debt
+        # Lower threshold = more sensitive = earlier pre-heating
+        # Old: -2.0°C * thermal_mass (required 2-4°C drop)
+        # New: -1.0°C * thermal_mass (activates at 1-2°C drop)
+        threshold = -1.0 * self.thermal.thermal_mass
 
-        # Pre-heat if both conditions met:
-        # 1. Temperature drop exceeds dynamic threshold
-        # 2. Rate of cooling is significant (> 0.5°C/hour)
-        if temp_drop < threshold and hourly_rate < -0.5:
+        # Pre-heat if either condition met (OR not AND - more aggressive):
+        # 1. Temperature drop exceeds dynamic threshold, OR
+        # 2. Rate of cooling is significant (> 0.3°C/hour, reduced from 0.5°C)
+        if temp_drop < threshold or hourly_rate < -0.3:
             # Calculate pre-heat target accounting for thermal decay
             preheat_target = self.thermal.calculate_preheating_target(
                 current_temp=nibe_state.indoor_temp,

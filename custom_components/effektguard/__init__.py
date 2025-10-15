@@ -23,6 +23,9 @@ from .const import (
     BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_COOLDOWN_MINUTES,
     SERVICE_RATE_LIMIT_MINUTES,
+    CONF_NIBE_TEMP_LUX_ENTITY,
+    DHW_MIN_TEMP,
+    DHW_MAX_TEMP,
 )
 from .coordinator import EffektGuardCoordinator
 
@@ -237,6 +240,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     - force_offset: Manual heating curve override
     - reset_peak_tracking: Reset monthly peak data
     - boost_heating: Emergency comfort boost
+    - boost_dhw: Manual DHW heating boost
     - calculate_optimal_schedule: Preview 24h optimization
     """
     import voluptuous as vol
@@ -246,8 +250,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     from .const import (
         ATTR_DURATION,
         ATTR_OFFSET,
+        ATTR_TARGET_TEMP,
         MAX_OFFSET,
         MIN_OFFSET,
+        SERVICE_BOOST_DHW,
         SERVICE_BOOST_HEATING,
         SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
         SERVICE_FORCE_OFFSET,
@@ -362,6 +368,81 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         _LOGGER.info("Heating boost activated: +%s°C for %s minutes", boost_offset, duration)
 
+    async def boost_dhw_handler(call) -> None:
+        """Handle boost_dhw service call.
+
+        Manual DHW heating boost via NIBE temporary lux switch.
+        Uses MyUplink switch.temporary_lux_50004 for 3-hour DHW priority.
+
+        Rate limited to prevent excessive calls.
+        """
+        # Check cooldown
+        is_allowed, remaining = _check_service_cooldown("boost_dhw", DHW_BOOST_COOLDOWN_MINUTES)
+        if not is_allowed:
+            remaining_minutes = int(remaining / 60)
+            raise ServiceValidationError(
+                f"Service called too soon. Cooldown: {remaining_minutes} minutes remaining"
+            )
+
+        coordinator = get_coordinator(hass)
+        if not coordinator:
+            raise ServiceValidationError("No EffektGuard coordinator found")
+
+        target_temp = call.data.get(ATTR_TARGET_TEMP, DHW_MAX_TEMP)
+        duration = call.data.get(ATTR_DURATION, 180)  # 3 hours default (NIBE temporary lux)
+
+        _LOGGER.info(
+            "Boost DHW service called: target_temp=%s°C, duration=%s minutes",
+            target_temp,
+            duration,
+        )
+
+        # Validate target temperature
+        if not DHW_MIN_TEMP <= target_temp <= 70.0:
+            raise ServiceValidationError(
+                f"Target temperature {target_temp} outside safe range [{DHW_MIN_TEMP}, 70.0]°C"
+            )
+
+        # Get temporary lux entity from config
+        temp_lux_entity = coordinator.config_entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
+
+        if not temp_lux_entity:
+            _LOGGER.warning(
+                "No temporary lux entity configured. DHW boost requires MyUplink switch."
+            )
+            raise ServiceValidationError(
+                "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
+            )
+
+        # Turn on temporary lux switch (NIBE will handle 3-hour DHW priority)
+        _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
+        await hass.services.async_call(
+            "switch",
+            "turn_on",
+            {"entity_id": temp_lux_entity},
+            blocking=True,
+        )
+
+        # Store DHW boost request in coordinator for tracking
+        coordinator.data["dhw_boost"] = {
+            "target_temp": target_temp,
+            "duration_minutes": duration,
+            "requested_at": dt_util.now(),
+            "method": "temporary_lux",
+        }
+
+        # Request immediate update to track status
+        await coordinator.async_request_refresh()
+
+        # Update last called timestamp
+        _update_service_timestamp("boost_dhw")
+
+        _LOGGER.info(
+            "DHW boost activated via temporary lux: %s°C target for %s minutes",
+            target_temp,
+            duration,
+        )
+
     async def calculate_optimal_schedule_handler(call):
         """Handle calculate_optimal_schedule service call.
 
@@ -465,6 +546,17 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         }
     )
 
+    boost_dhw_schema = vol.Schema(
+        {
+            vol.Optional(ATTR_TARGET_TEMP, default=55.0): vol.All(
+                vol.Coerce(float), vol.Range(min=40.0, max=70.0)
+            ),
+            vol.Optional(ATTR_DURATION, default=90): vol.All(
+                vol.Coerce(int), vol.Range(min=30, max=180)
+            ),
+        }
+    )
+
     calculate_optimal_schedule_schema = vol.Schema({})
 
     # Register services (only if not already registered)
@@ -494,6 +586,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             schema=boost_heating_schema,
         )
         _LOGGER.debug("Registered service: %s", SERVICE_BOOST_HEATING)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_BOOST_DHW):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_BOOST_DHW,
+            boost_dhw_handler,
+            schema=boost_dhw_schema,
+        )
+        _LOGGER.debug("Registered service: %s", SERVICE_BOOST_DHW)
 
     if not hass.services.has_service(DOMAIN, SERVICE_CALCULATE_OPTIMAL_SCHEDULE):
         hass.services.async_register(
