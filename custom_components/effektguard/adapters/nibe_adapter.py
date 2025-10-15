@@ -206,6 +206,18 @@ class NibeAdapter:
             _LOGGER.error("No offset entity found")
             return
 
+        # CHECK: Verify entity is available before service call
+        # Prevents "Action number.set_value not found" errors during startup
+        # when MyUplink entities are still initializing
+        state = self.hass.states.get(offset_entity)
+        if not state or state.state in ["unavailable", "unknown"]:
+            _LOGGER.warning(
+                "Offset entity %s not ready (state: %s), skipping write",
+                offset_entity,
+                state.state if state else "None",
+            )
+            return
+
         # Set value via number entity service (non-blocking)
         try:
             await self.hass.services.async_call(
@@ -221,7 +233,8 @@ class NibeAdapter:
             _LOGGER.info("Set NIBE offset to %.2f°C", offset)
         except Exception as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
-            raise
+            # Don't raise - allow system to continue gracefully
+            # Error logged for debugging, but not fatal
 
     async def _discover_nibe_entities(self) -> None:
         """Discover NIBE entities from entity registry.

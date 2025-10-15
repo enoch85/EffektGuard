@@ -876,9 +876,28 @@ class DecisionEngine:
         now = dt_util.now()
         current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
 
+        # Bound check quarter index (safety)
+        if current_quarter >= len(price_data.today):
+            _LOGGER.warning(
+                "Current quarter %d exceeds available periods (%d)",
+                current_quarter,
+                len(price_data.today),
+            )
+            current_quarter = min(current_quarter, len(price_data.today) - 1)
+
         # Get current period classification
         classification = self.price.get_current_classification(current_quarter)
         current_period = price_data.today[current_quarter]
+
+        # DEBUG: Log actual price vs classification for verification
+        _LOGGER.debug(
+            "Price classification Q%d (%02d:%02d): %.2f öre/kWh → %s",
+            current_quarter,
+            now.hour,
+            now.minute,
+            current_period.price,
+            classification.name,
+        )
 
         # Get base offset for classification
         base_offset = self.price.get_base_offset(
