@@ -51,6 +51,35 @@ boost_heating:
           step: 30
           unit_of_measurement: "minutes"
 
+boost_dhw:
+  name: Boost DHW
+  description: Force DHW heating to target temperature (for immediate hot water needs)
+  fields:
+    target_temp:
+      name: Target temperature
+      description: Target DHW temperature (40-70°C)
+      required: false
+      default: 55.0
+      example: 60.0
+      selector:
+        number:
+          min: 40.0
+          max: 70.0
+          step: 1.0
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      description: Maximum heating duration (minutes)
+      required: false
+      default: 90
+      example: 120
+      selector:
+        number:
+          min: 30
+          max: 180
+          step: 15
+          unit_of_measurement: "minutes"
+
 calculate_optimal_schedule:
   name: Calculate optimal schedule
   description: Preview optimization schedule for next 24 hours based on current conditions

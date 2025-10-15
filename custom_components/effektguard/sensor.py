@@ -139,9 +139,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         icon="mdi:clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data.get("current_quarter")
-            if coordinator.data
-            else None
+            coordinator.data.get("current_quarter") if coordinator.data else None
         ),
     ),
     EffektGuardSensorEntityDescription(
@@ -149,9 +147,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Hour Classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
-            coordinator.data.get("current_classification")
-            if coordinator.data
-            else "unknown"
+            coordinator.data.get("current_classification") if coordinator.data else "unknown"
         ),
     ),
     EffektGuardSensorEntityDescription(
@@ -213,6 +209,37 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
             coordinator.heat_pump_model.model_name
             if hasattr(coordinator, "heat_pump_model") and coordinator.heat_pump_model
             else "Unknown"
+        ),
+    ),
+    # DHW (Domestic Hot Water) sensors
+    EffektGuardSensorEntityDescription(
+        key="dhw_status",
+        name="DHW Status",
+        icon="mdi:water-boiler",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data.get("dhw_status", "unknown") if coordinator.data else "unknown"
+        ),
+    ),
+    EffektGuardSensorEntityDescription(
+        key="dhw_next_boost",
+        name="DHW Next Boost",
+        icon="mdi:water-boiler-alert",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data.get("dhw_next_boost") if coordinator.data else None
+        ),
+    ),
+    EffektGuardSensorEntityDescription(
+        key="dhw_recommendation",
+        name="DHW Recommendation",
+        icon="mdi:water-boiler-auto",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data.get("dhw_recommendation", "No recommendation")
+            if coordinator.data
+            else "No recommendation"
         ),
     ),
 )
