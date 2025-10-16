@@ -263,6 +263,36 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
 
+    async def async_shutdown(self) -> None:
+        """Clean shutdown of coordinator.
+
+        Saves all persistent state before unload:
+        - Learning module data (thermal model, weather patterns)
+        - Effect tracking state (monthly peaks)
+
+        Called during integration unload or reload.
+        """
+        _LOGGER.debug("Shutting down EffektGuard coordinator")
+
+        try:
+            # Save learning state
+            if self.adaptive_learning or self.thermal_predictor or self.weather_learner:
+                await self._save_learned_data(
+                    self.adaptive_learning, self.thermal_predictor, self.weather_learner
+                )
+                _LOGGER.debug("Saved learning data")
+
+            # Save effect tracking state
+            if self.effect:
+                await self.effect.async_save()
+                _LOGGER.debug("Saved effect tracking data")
+
+            _LOGGER.info("Coordinator shutdown complete")
+
+        except Exception as err:
+            _LOGGER.error("Error during coordinator shutdown: %s", err, exc_info=True)
+            # Don't raise - allow shutdown to complete
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data and calculate optimal offset.
 
@@ -664,7 +694,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         space_heating_demand = max(0, indoor_deficit * 2.0)
         thermal_debt = nibe_data.degree_minutes if nibe_data else -60.0
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
-        
+
         # Get current price classification
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         price_classification = self.engine.price.get_current_classification(current_quarter)
@@ -907,6 +937,64 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self.async_set_offset(0.0)
             except Exception as err:
                 _LOGGER.error("Failed to reset offset: %s", err)
+
+    async def async_update_config(self, new_options: dict[str, Any]) -> None:
+        """Update configuration without full reload.
+
+        Allows hot-reload of runtime options like target temperature,
+        thermal mass, and DHW settings without restarting the integration.
+
+        Args:
+            new_options: Dictionary of updated option values
+        """
+        _LOGGER.debug("Updating configuration: %s", new_options)
+
+        # Update thermal model parameters
+        if "thermal_mass" in new_options:
+            self.engine.thermal.thermal_mass = new_options["thermal_mass"]
+            _LOGGER.debug("Updated thermal mass: %.2f", new_options["thermal_mass"])
+
+        if "insulation_quality" in new_options:
+            self.engine.thermal.insulation_quality = new_options["insulation_quality"]
+            _LOGGER.debug("Updated insulation quality: %.2f", new_options["insulation_quality"])
+
+        # Update DHW settings
+        dhw_config_changed = False
+        if "dhw_morning_hour" in new_options or "dhw_morning_enabled" in new_options:
+            dhw_config_changed = True
+        if "dhw_evening_hour" in new_options or "dhw_evening_enabled" in new_options:
+            dhw_config_changed = True
+
+        if dhw_config_changed:
+            # Rebuild DHW demand periods
+            from .optimization.dhw_optimizer import DHWDemandPeriod
+
+            demand_periods = []
+            if new_options.get("dhw_morning_enabled", True):
+                morning_hour = new_options.get("dhw_morning_hour", 7)
+                demand_periods.append(
+                    DHWDemandPeriod(
+                        start_hour=morning_hour,
+                        target_temp=55.0,
+                        duration_hours=2,
+                    )
+                )
+            if new_options.get("dhw_evening_enabled", True):
+                evening_hour = new_options.get("dhw_evening_hour", 18)
+                demand_periods.append(
+                    DHWDemandPeriod(
+                        start_hour=evening_hour,
+                        target_temp=55.0,
+                        duration_hours=3,
+                    )
+                )
+            self.dhw_optimizer.demand_periods = demand_periods
+            _LOGGER.debug("Updated DHW demand periods: %d periods", len(demand_periods))
+
+        # Trigger immediate refresh with new settings
+        await self.async_request_refresh()
+
+        _LOGGER.info("Configuration updated without reload")
 
     @property
     def current_peak(self) -> float:

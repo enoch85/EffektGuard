@@ -64,18 +64,18 @@ class NibeState:
     def flow_temp(self) -> float:
         """Alias for supply_temp (flow temperature = supply temperature)."""
         return self.supply_temp
-    
+
     @property
     def dhw_temp(self) -> float | None:
         """Primary DHW temperature for heating decisions (BT6 charging sensor).
-        
+
         Returns BT6 (charging/bottom) if available, falls back to BT7 (top) if not.
-        
+
         BT6 is preferred because:
         - Drops faster when hot water is used (bottom of tank cools first)
         - Provides early warning that heating is needed
         - BT7 stays hot until tank is nearly empty (too late for proactive heating)
-        
+
         BT7 is useful for Legionella detection (monitors peak temperatures),
         but BT6 is better for triggering DHW heating cycles.
         """

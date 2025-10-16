@@ -396,6 +396,71 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         entities = house_power + heatpump_power + generic_power
         return entities
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle reconfiguration of entity selections.
+
+        Allows users to change entity selections (weather, power sensor, etc.)
+        without recreating the entire integration.
+        """
+        errors = {}
+
+        if user_input is not None:
+            # Update entry.data with new entity selections and reload
+            return self.async_update_reload_and_abort(
+                self._get_reconfigure_entry(),
+                data_updates=user_input,
+            )
+
+        # Get current entity selections from entry.data
+        entry = self._get_reconfigure_entry()
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_WEATHER_ENTITY,
+                        default=entry.data.get(CONF_WEATHER_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="weather",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DEGREE_MINUTES_ENTITY,
+                        default=entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_POWER_SENSOR_ENTITY,
+                        default=entry.data.get(CONF_POWER_SENSOR_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class="power",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ADDITIONAL_INDOOR_SENSORS,
+                        default=entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class="temperature",
+                            multiple=True,
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "info": "Change entity selections. Integration will reload automatically."
+            },
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(
@@ -409,35 +474,13 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for EffektGuard."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Manage the options."""
+        """Manage runtime options.
+
+        Only runtime settings that can be changed without reload.
+        Use 'Reconfigure' for entity selections.
+        """
         if user_input is not None:
-            # Entity configuration fields that should be saved to entry.data (not options)
-            entity_fields = [
-                CONF_WEATHER_ENTITY,
-                CONF_DEGREE_MINUTES_ENTITY,
-                CONF_POWER_SENSOR_ENTITY,
-                CONF_ADDITIONAL_INDOOR_SENSORS,
-            ]
-            
-            # Separate entity configuration from runtime options
-            updated_data = dict(self.config_entry.data)
-            data_changed = False
-            
-            # Extract entity fields and update entry.data
-            for field in entity_fields:
-                if field in user_input:
-                    updated_data[field] = user_input[field]
-                    user_input.pop(field)  # Remove from options dict
-                    data_changed = True
-            
-            # Update config entry data if entity selections changed
-            if data_changed:
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    data=updated_data
-                )
-            
-            # Save runtime options (everything except entity fields)
+            # Save runtime options directly (no reload needed)
             return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
@@ -506,41 +549,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             mode=selector.NumberSelectorMode.SLIDER,
                         )
                     ),
-                    vol.Optional(
-                        CONF_WEATHER_ENTITY,
-                        default=self.config_entry.data.get(CONF_WEATHER_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="weather",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_DEGREE_MINUTES_ENTITY,
-                        default=self.config_entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_POWER_SENSOR_ENTITY,
-                        default=self.config_entry.data.get(CONF_POWER_SENSOR_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class="power",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_ADDITIONAL_INDOOR_SENSORS,
-                        default=self.config_entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class="temperature",
-                            multiple=True,
-                        )
-                    ),
                     # DHW demand periods
                     vol.Optional(
                         "dhw_morning_hour",
@@ -576,4 +584,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     ): selector.BooleanSelector(),
                 }
             ),
+            description_placeholders={
+                "info": "Runtime settings - changes apply without reload. Use 'Reconfigure' to change entity selections."
+            },
         )

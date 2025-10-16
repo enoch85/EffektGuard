@@ -54,6 +54,11 @@ class WeatherAdapter:
     async def get_forecast(self) -> WeatherData | None:
         """Read weather forecast from entity.
 
+        Supports multiple weather integration patterns:
+        - Met.no: forecast attribute in weather entity
+        - OpenWeatherMap: requires weather.get_forecasts service call
+        - AccuWeather: forecast attribute
+
         Returns:
             WeatherData with forecast, or None if unavailable
         """
@@ -79,10 +84,42 @@ class WeatherAdapter:
             _LOGGER.warning("No current temperature in weather entity")
             return None
 
-        # Get forecast from attributes
+        # Try attribute access first (Met.no, AccuWeather, etc.)
         forecast_raw = state.attributes.get("forecast", [])
+
+        # If no forecast attribute, try service call (OpenWeatherMap, etc.)
         if not forecast_raw:
-            _LOGGER.debug("No forecast data available")
+            _LOGGER.debug("No forecast attribute found, trying weather.get_forecasts service call")
+            try:
+                forecast_data = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"type": "hourly", "entity_id": self._weather_entity},
+                    blocking=True,
+                    return_response=True,
+                )
+                # Extract forecast from service response
+                forecast_raw = forecast_data.get(self._weather_entity, {}).get("forecast", [])
+
+                if forecast_raw:
+                    _LOGGER.debug(
+                        "Weather forecast retrieved via service call: %d hours",
+                        len(forecast_raw),
+                    )
+            except Exception as err:
+                _LOGGER.debug(
+                    "Failed to get forecast via service call: %s. "
+                    "Weather-based optimization disabled for this integration.",
+                    err,
+                )
+                return None
+
+        if not forecast_raw:
+            _LOGGER.debug(
+                "No forecast data available from %s. "
+                "Optimization will work without weather forecast, but less predictive.",
+                self._weather_entity,
+            )
             return None
 
         # Parse forecast hours

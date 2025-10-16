@@ -88,7 +88,7 @@ class IntelligentDHWScheduler:
 
         Call this every coordinator update to track DHW temperature and
         automatically detect when NIBE's automatic Legionella boost runs.
-        
+
         Note: Despite the name, this can accept either BT7 (top) or BT6 (charging)
         temperature. BT7 is preferred for Legionella detection (peaks at 65°C),
         but BT6 works as fallback if BT7 not available.

@@ -93,11 +93,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # Don't wait for first refresh - let coordinator handle it gracefully
-    # The coordinator will retry every UPDATE_INTERVAL_MINUTES if entities aren't ready
-    # This allows EffektGuard to load immediately without blocking HA startup
+    # Wait for first successful data fetch
+    # This validates that all dependencies (MyUplink, GE-Spot) are available
+    # If not ready, raises ConfigEntryNotReady and HA will retry automatically
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except Exception as err:
+        # Clean up on failure
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise ConfigEntryNotReady(
+            f"Failed to connect to NIBE heat pump. "
+            f"Ensure MyUplink integration is loaded and entities are available."
+        ) from err
 
-    # Forward setup to platforms
+    # Forward setup to platforms (only if coordinator initialized successfully)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register services
@@ -114,12 +123,23 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading EffektGuard integration")
 
+    # Get coordinator before removing from hass.data
+    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
+
+    # Save persistent state before unloading
+    if coordinator:
+        try:
+            await coordinator.async_shutdown()
+            _LOGGER.debug("Coordinator shutdown complete")
+        except Exception as err:
+            _LOGGER.warning("Failed to shutdown coordinator cleanly: %s", err)
+
     # Unload platforms
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Remove coordinator
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(entry.entry_id, None)
 
         # Unregister services if this is the last config entry
         if not hass.data[DOMAIN]:
@@ -153,8 +173,38 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry when options change."""
-    _LOGGER.debug("Reloading EffektGuard integration")
+    """Reload config entry when options change - only if needed.
+
+    Runtime options (target temp, thermal mass, etc.) can be updated without reload.
+    Entity selections or critical settings require full reload.
+    """
+    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
+    if not coordinator:
+        _LOGGER.warning("No coordinator found for reload")
+        return
+
+    # Runtime options that DON'T require reload (can be hot-reloaded)
+    runtime_options = {
+        "target_temperature",
+        "tolerance",
+        "optimization_mode",
+        "thermal_mass",
+        "insulation_quality",
+        "dhw_morning_hour",
+        "dhw_morning_enabled",
+        "dhw_evening_hour",
+        "dhw_evening_enabled",
+    }
+
+    # Check if only runtime options changed
+    options_keys = set(entry.options.keys())
+    if options_keys and options_keys.issubset(runtime_options):
+        _LOGGER.info("Runtime options changed, updating coordinator without reload")
+        await coordinator.async_update_config(entry.options)
+        return
+
+    # Entity selections or critical settings changed - full reload needed
+    _LOGGER.info("Critical settings changed, reloading integration")
     await hass.config_entries.async_reload(entry.entry_id)
 
 

@@ -196,10 +196,10 @@ class ThermalModel:
 
     def get_prediction_horizon(self) -> float:
         """Get prediction horizon for weather forecasting.
-        
+
         Base implementation returns default 12 hours.
         AdaptiveThermalModel overrides this with UFH-type-specific values.
-        
+
         Returns:
             Prediction horizon in hours (default 12.0)
         """
