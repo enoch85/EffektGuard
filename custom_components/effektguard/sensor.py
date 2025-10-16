@@ -128,9 +128,17 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Optimization Reasoning",
         icon="mdi:brain",
         value_fn=lambda coordinator: (
-            coordinator.data["decision"].reasoning
-            if coordinator.data and coordinator.data.get("decision")
-            else "No decision yet"
+            # Truncate to 255 chars for Home Assistant state limit
+            # Full reasoning available in attributes
+            coordinator.data["decision"].reasoning[:252] + "..."
+            if coordinator.data
+            and coordinator.data.get("decision")
+            and len(coordinator.data["decision"].reasoning) > 255
+            else (
+                coordinator.data["decision"].reasoning
+                if coordinator.data and coordinator.data.get("decision")
+                else "No decision yet"
+            )
         ),
     ),
     EffektGuardSensorEntityDescription(
@@ -276,7 +284,17 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
         """Return the state of the sensor."""
         if self.entity_description.value_fn:
             try:
-                return self.entity_description.value_fn(self.coordinator)
+                value = self.entity_description.value_fn(self.coordinator)
+
+                # Log if reasoning was truncated
+                if (
+                    self.entity_description.key == "optimization_reasoning"
+                    and isinstance(value, str)
+                    and value.endswith("...")
+                ):
+                    _LOGGER.debug("Reasoning truncated to 255 chars, full reasoning in attributes")
+
+                return value
             except (AttributeError, KeyError, TypeError) as err:
                 _LOGGER.debug("Error getting value for %s: %s", self.entity_description.key, err)
                 return None
@@ -379,13 +397,27 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         attrs["optimized_cost"] = savings.optimized_cost
 
         elif key == "optimization_reasoning":
-            # Already has reasoning in value, add decision timestamp
+            # Add full reasoning in attributes (not limited to 255 chars)
             if "decision" in self.coordinator.data:
                 decision = self.coordinator.data["decision"]
-                if decision and hasattr(decision, "timestamp"):
-                    attrs["decision_timestamp"] = decision.timestamp.isoformat()
-                if decision and hasattr(decision, "offset"):
-                    attrs["applied_offset"] = decision.offset
+                if decision:
+                    # Full reasoning in attribute (bypasses 255 char state limit)
+                    if hasattr(decision, "reasoning"):
+                        attrs["full_reasoning"] = decision.reasoning
+                    if hasattr(decision, "timestamp"):
+                        attrs["decision_timestamp"] = decision.timestamp.isoformat()
+                    if hasattr(decision, "offset"):
+                        attrs["applied_offset"] = decision.offset
+                    # Add layer breakdown for detailed analysis
+                    if hasattr(decision, "layers") and decision.layers:
+                        attrs["layers"] = [
+                            {
+                                "reason": layer.reason,
+                                "offset": layer.offset,
+                                "weight": layer.weight,
+                            }
+                            for layer in decision.layers
+                        ]
 
         elif key == "optional_features_status":
             # Show detailed status of all optional features
