@@ -150,7 +150,9 @@ TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 # Effect tariff peak tracking thresholds (kW)
 # Source: Real-world NIBE heat pump consumption patterns
 # Prevents recording standby/startup noise as legitimate peaks
-PEAK_RECORDING_MINIMUM: Final = 1.0  # kW - minimum power to record as peak
+# Start with lower threshold for initial learning phase
+# System learns from actual usage patterns even during idle periods
+PEAK_RECORDING_MINIMUM: Final = 0.5  # kW - lowered from 1.0 for better learning
 # Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
 
 # Pump configuration - open-loop UFH requirements

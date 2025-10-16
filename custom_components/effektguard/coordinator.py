@@ -108,7 +108,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Morning demand period (e.g., shower time)
         if entry.options.get("dhw_morning_enabled", True):
-            morning_hour = entry.options.get("dhw_morning_hour", 7)
+            morning_hour = int(entry.options.get("dhw_morning_hour", 7))
             demand_periods.append(
                 DHWDemandPeriod(
                     start_hour=morning_hour,
@@ -119,7 +119,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Evening demand period (e.g., dishes, evening shower)
         if entry.options.get("dhw_evening_enabled", True):
-            evening_hour = entry.options.get("dhw_evening_hour", 18)
+            evening_hour = int(entry.options.get("dhw_evening_hour", 18))
             demand_periods.append(
                 DHWDemandPeriod(
                     start_hour=evening_hour,
@@ -144,6 +144,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         formatted_periods.append(f"{p.start_hour}:00 ({p.target_temp}°C)")
 
                 _LOGGER.info("DHW demand periods configured: %s", formatted_periods)
+
+                # Debug logging for type validation
+                _LOGGER.debug(
+                    "DHW periods configured: %s (types: %s)",
+                    [f"{p.start_hour}:00" for p in demand_periods],
+                    [f"{type(p.start_hour).__name__}" for p in demand_periods],
+                )
             except Exception as err:
                 _LOGGER.debug("Could not format DHW periods: %s", err)
 
@@ -542,9 +549,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
 
             # Get DHW recommendation from optimizer
-            dhw_recommendation = self._calculate_dhw_recommendation(
-                nibe_data, price_data, weather_data, current_dhw_temp, now_time
-            )
+            try:
+                dhw_recommendation = self._calculate_dhw_recommendation(
+                    nibe_data, price_data, weather_data, current_dhw_temp, now_time
+                )
+            except Exception as e:
+                _LOGGER.error(
+                    "DHW recommendation calculation failed: %s. "
+                    "Optimization continues without DHW recommendations.",
+                    e,
+                    exc_info=True,
+                )
+                dhw_recommendation = f"DHW calculation error: {str(e)[:50]}"
+                # Don't fail entire coordinator update for DHW subsystem issue
+                # Core heating optimization continues to work
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
             if self.entry.data.get("enable_hot_water_optimization", False):

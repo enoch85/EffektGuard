@@ -47,6 +47,31 @@ class DHWDemandPeriod:
     target_temp: float  # Target DHW temp by this time
     duration_hours: int  # How long high demand lasts
 
+    def __post_init__(self):
+        """Validate types and ranges after initialization.
+
+        Catches configuration errors early before they cause runtime failures.
+        """
+        # Type validation
+        if not isinstance(self.start_hour, int):
+            raise TypeError(
+                f"start_hour must be int, got {type(self.start_hour).__name__}. "
+                f"Check config flow conversion."
+            )
+
+        if not isinstance(self.duration_hours, int):
+            raise TypeError(f"duration_hours must be int, got {type(self.duration_hours).__name__}")
+
+        # Range validation
+        if not 0 <= self.start_hour <= 23:
+            raise ValueError(f"start_hour must be 0-23, got {self.start_hour}")
+
+        if not 0 < self.duration_hours <= 24:
+            raise ValueError(f"duration_hours must be 1-24, got {self.duration_hours}")
+
+        if self.target_temp < 35.0 or self.target_temp > 65.0:
+            raise ValueError(f"target_temp must be 35-65°C (safety range), got {self.target_temp}")
+
 
 class IntelligentDHWScheduler:
     """Intelligent DHW scheduling with thermal debt prevention.

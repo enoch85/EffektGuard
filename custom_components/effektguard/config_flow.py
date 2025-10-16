@@ -473,6 +473,35 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for EffektGuard."""
 
+    def _validate_and_convert_dhw_config(self, user_input: dict) -> dict:
+        """Validate and convert DHW configuration types.
+
+        Args:
+            user_input: Raw user input from config flow
+
+        Returns:
+            Validated and type-converted configuration
+
+        Raises:
+            vol.Invalid: If validation fails
+        """
+        validated = user_input.copy()
+
+        # Convert hour values to int (NumberSelector returns float)
+        if "dhw_morning_hour" in validated:
+            try:
+                validated["dhw_morning_hour"] = int(validated["dhw_morning_hour"])
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid morning hour: {e}")
+
+        if "dhw_evening_hour" in validated:
+            try:
+                validated["dhw_evening_hour"] = int(validated["dhw_evening_hour"])
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid evening hour: {e}")
+
+        return validated
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage runtime options.
 
@@ -480,6 +509,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         Use 'Reconfigure' for entity selections.
         """
         if user_input is not None:
+            # Validate and convert types
+            user_input = self._validate_and_convert_dhw_config(user_input)
+
             # Save runtime options directly (no reload needed)
             return self.async_create_entry(title="", data=user_input)
 

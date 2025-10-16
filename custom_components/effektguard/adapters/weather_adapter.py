@@ -89,8 +89,13 @@ class WeatherAdapter:
 
         # If no forecast attribute, try service call (OpenWeatherMap, etc.)
         if not forecast_raw:
-            _LOGGER.debug("No forecast attribute found, trying weather.get_forecasts service call")
+            _LOGGER.debug(
+                "No forecast attribute in %s, trying weather.get_forecasts service call",
+                self._weather_entity,
+            )
             try:
+                # Call weather.get_forecasts service for hourly forecast
+                # Required for OpenWeatherMap and some other integrations
                 forecast_data = await self.hass.services.async_call(
                     "weather",
                     "get_forecasts",
@@ -98,26 +103,47 @@ class WeatherAdapter:
                     blocking=True,
                     return_response=True,
                 )
-                # Extract forecast from service response
-                forecast_raw = forecast_data.get(self._weather_entity, {}).get("forecast", [])
 
-                if forecast_raw:
+                _LOGGER.debug(
+                    "Service call response keys: %s",
+                    list(forecast_data.keys()) if forecast_data else "None",
+                )
+
+                # Extract forecast from service response
+                # Response format: {entity_id: {"forecast": [...]}}
+                if forecast_data and self._weather_entity in forecast_data:
+                    forecast_raw = forecast_data[self._weather_entity].get("forecast", [])
                     _LOGGER.debug(
                         "Weather forecast retrieved via service call: %d hours",
                         len(forecast_raw),
                     )
+                else:
+                    _LOGGER.warning(
+                        "Service call succeeded but returned no forecast data. " "Response: %s",
+                        forecast_data,
+                    )
             except Exception as err:
-                _LOGGER.debug(
-                    "Failed to get forecast via service call: %s. "
-                    "Weather-based optimization disabled for this integration.",
+                _LOGGER.warning(
+                    "Failed to get forecast via service call from %s: %s. "
+                    "Weather-based optimization disabled. "
+                    "This is normal for OpenWeatherMap free tier (no OneCall 3.0 access). "
+                    "Consider switching to Met.no for free forecast access.",
+                    self._weather_entity,
                     err,
+                    exc_info=True,
                 )
                 return None
 
         if not forecast_raw:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "No forecast data available from %s. "
-                "Optimization will work without weather forecast, but less predictive.",
+                "Possible reasons: "
+                "1) OpenWeatherMap free tier (no OneCall 3.0 access), "
+                "2) API key not configured, "
+                "3) Integration not set up correctly. "
+                "Weather-based optimization will be disabled. "
+                "Optimization will work without weather forecast, but less predictive. "
+                "Consider switching to Met.no for free forecast access.",
                 self._weather_entity,
             )
             return None
