@@ -482,6 +482,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             dhw_recommendation = self._calculate_dhw_recommendation(
                 nibe_data, price_data, weather_data, current_dhw_temp, now_time
             )
+
+            # Apply DHW control based on optimizer decision (if hot water optimization enabled)
+            if self.entry.data.get("enable_hot_water_optimization", False):
+                await self._apply_dhw_control(
+                    nibe_data, price_data, weather_data, current_dhw_temp, now_time
+                )
         else:
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
@@ -584,6 +590,119 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
         else:
             return f"Heat recommended - Target: {decision.target_temp:.0f}°C"
+
+    async def _apply_dhw_control(
+        self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
+    ) -> None:
+        """Apply automatic DHW control based on optimizer decision.
+
+        Controls NIBE temporary lux switch to heat or block DHW based on
+        thermal debt, electricity prices, and demand periods.
+
+        Args:
+            nibe_data: Current NIBE state
+            price_data: GE-Spot price data
+            weather_data: Weather forecast
+            current_dhw_temp: Current DHW temperature
+            now_time: Current datetime
+        """
+        from .const import CONF_NIBE_TEMP_LUX_ENTITY
+
+        # Get temporary lux entity from config
+        temp_lux_entity = self.entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
+        if not temp_lux_entity:
+            _LOGGER.debug(
+                "DHW control disabled: No temporary lux entity configured (switch.temporary_lux_50004)"
+            )
+            return
+
+        # Get current state of temporary lux switch
+        temp_lux_state = self.hass.states.get(temp_lux_entity)
+        if not temp_lux_state:
+            _LOGGER.warning("Temporary lux entity %s not found", temp_lux_entity)
+            return
+
+        is_lux_on = temp_lux_state.state == "on"
+
+        # Get decision from optimizer
+        indoor_temp = nibe_data.indoor_temp if nibe_data else 21.0
+        target_indoor = self.entry.data.get("target_indoor_temp", 21.0)
+        indoor_deficit = target_indoor - indoor_temp
+        space_heating_demand = max(0, indoor_deficit * 2.0)
+        thermal_debt = nibe_data.degree_minutes if nibe_data else -60.0
+        outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
+        
+        # Get current price classification
+        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        price_classification = self.engine.price.get_current_classification(current_quarter)
+
+        decision = self.dhw_optimizer.should_start_dhw(
+            current_dhw_temp=current_dhw_temp,
+            space_heating_demand_kw=space_heating_demand,
+            thermal_debt_dm=thermal_debt,
+            indoor_temp=indoor_temp,
+            target_indoor_temp=target_indoor,
+            outdoor_temp=outdoor_temp,
+            price_classification=price_classification,
+            current_time=now_time,
+        )
+
+        # Rate limiting: Don't change lux state too frequently (minimum 10 minutes)
+        if hasattr(self, "_last_dhw_control_time"):
+            time_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
+            if time_since_last < 10:
+                _LOGGER.debug(
+                    "DHW control rate limited: %.1f min since last change (min 10 min)",
+                    time_since_last,
+                )
+                return
+
+        # Apply control decision
+        if decision.should_heat and not is_lux_on:
+            # Turn ON temporary lux to boost DHW
+            _LOGGER.info(
+                "DHW control: Activating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
+                decision.priority_reason,
+                current_dhw_temp,
+                thermal_debt,
+            )
+            try:
+                await self.hass.services.async_call(
+                    "switch",
+                    "turn_on",
+                    {"entity_id": temp_lux_entity},
+                    blocking=False,
+                )
+                self._last_dhw_control_time = now_time
+            except Exception as err:
+                _LOGGER.error("Failed to turn on temporary lux: %s", err)
+
+        elif not decision.should_heat and is_lux_on:
+            # Turn OFF temporary lux to block/stop DHW
+            _LOGGER.info(
+                "DHW control: Deactivating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
+                decision.priority_reason,
+                current_dhw_temp,
+                thermal_debt,
+            )
+            try:
+                await self.hass.services.async_call(
+                    "switch",
+                    "turn_off",
+                    {"entity_id": temp_lux_entity},
+                    blocking=False,
+                )
+                self._last_dhw_control_time = now_time
+            except Exception as err:
+                _LOGGER.error("Failed to turn off temporary lux: %s", err)
+        else:
+            # No change needed
+            _LOGGER.debug(
+                "DHW control: No change needed (should_heat=%s, lux_on=%s, reason=%s)",
+                decision.should_heat,
+                is_lux_on,
+                decision.priority_reason,
+            )
 
     def _get_fallback_prices(self):
         """Get fallback price data when GE-Spot unavailable.
