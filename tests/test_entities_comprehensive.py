@@ -56,6 +56,7 @@ def full_coordinator():
             outdoor_temp=5.0,
             supply_temp=35.0,
             degree_minutes=-60,
+            dhw_top_temp=39.4,  # BT7 DHW temperature
         ),
         "price": MagicMock(
             current_price=1.25,
@@ -442,6 +443,63 @@ def test_sensor_optimization_reasoning_attributes(full_coordinator, mock_entry):
     assert attrs["applied_offset"] == 1.5
 
 
+def test_sensor_dhw_status_attributes_full_data(full_coordinator, mock_entry):
+    """Test dhw_status sensor attributes with complete DHW data."""
+    from datetime import datetime
+    
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
+    sensor = EffektGuardSensor(full_coordinator, mock_entry, sensor_desc)
+
+    # Verify sensor exists and has value
+    assert sensor.native_value == "unknown"  # Default when no dhw_status in data
+
+    attrs = sensor.extra_state_attributes
+
+    # Should have current temperature from NIBE BT7
+    assert "current_temperature" in attrs
+    assert attrs["current_temperature"] == 39.4  # From full_coordinator nibe mock
+    assert attrs["temperature_unit"] == "°C"
+
+    # Should have next_boost_time if available in coordinator data
+    # (This would be set by DHW scheduler in coordinator)
+    if "dhw_next_boost" in full_coordinator.data:
+        assert "next_boost_time" in attrs
+
+    # Should have last_heated if available in coordinator data
+    if "dhw_last_heated" in full_coordinator.data:
+        assert "last_heated" in attrs
+
+
+def test_sensor_dhw_status_attributes_no_bt7(empty_coordinator, mock_entry):
+    """Test dhw_status sensor attributes when BT7 sensor not available."""
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
+    sensor = EffektGuardSensor(empty_coordinator, mock_entry, sensor_desc)
+
+    attrs = sensor.extra_state_attributes
+
+    # Should not have temperature attributes when NIBE data missing
+    assert "current_temperature" not in attrs
+
+
+def test_sensor_dhw_status_state_values(full_coordinator, mock_entry):
+    """Test dhw_status sensor shows correct state values."""
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
+    sensor = EffektGuardSensor(full_coordinator, mock_entry, sensor_desc)
+
+    # Default state when no dhw_status in coordinator data
+    assert sensor.native_value == "unknown"
+
+    # Test with different DHW status values
+    full_coordinator.data["dhw_status"] = "ready"
+    assert sensor.native_value == "ready"
+
+    full_coordinator.data["dhw_status"] = "heating"
+    assert sensor.native_value == "heating"
+
+    full_coordinator.data["dhw_status"] = "scheduled"
+    assert sensor.native_value == "scheduled"
+
+
 # ============================================================================
 # ALL 5 NUMBER ENTITIES - Complete Coverage
 # ============================================================================
@@ -688,7 +746,7 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
 
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
-    assert len(entities) == 18  # Updated: 18 sensors (added DHW + optional features)
+    assert len(entities) == 17  # Updated: 17 sensors (removed dhw_next_boost, consolidated into dhw_status attributes)
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

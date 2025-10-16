@@ -95,7 +95,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Current Electricity Price",
         icon="mdi:currency-eur",
         device_class=SensorDeviceClass.MONETARY,
-        native_unit_of_measurement="öre/kWh",  # GE-Spot provides this, matches unit_of_measurement
+        # Unit dynamically set from GE-Spot entity in native_unit_of_measurement property
         # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
@@ -222,16 +222,6 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         ),
     ),
     EffektGuardSensorEntityDescription(
-        key="dhw_next_boost",
-        name="DHW Next Boost",
-        icon="mdi:water-boiler-alert",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda coordinator: (
-            coordinator.data.get("dhw_next_boost") if coordinator.data else None
-        ),
-    ),
-    EffektGuardSensorEntityDescription(
         key="dhw_recommendation",
         name="DHW Recommendation",
         icon="mdi:water-boiler-auto",
@@ -291,6 +281,25 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 _LOGGER.debug("Error getting value for %s: %s", self.entity_description.key, err)
                 return None
         return None
+
+    @property
+    def native_unit_of_measurement(self) -> str | None:
+        """Return the unit of measurement dynamically for price sensor."""
+        # For current_price sensor, get unit from GE-Spot entity
+        if self.entity_description.key == "current_price":
+            try:
+                gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
+                if gespot_entity_id:
+                    gespot_state = self.coordinator.hass.states.get(gespot_entity_id)
+                    if gespot_state:
+                        return gespot_state.attributes.get("unit_of_measurement", "öre/kWh")
+            except (AttributeError, KeyError):
+                pass
+            # Fallback to öre/kWh if GE-Spot not available
+            return "öre/kWh"
+
+        # For all other sensors, use description's unit
+        return self.entity_description.native_unit_of_measurement
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -494,5 +503,35 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                     attrs["compressor_type"] = model.compressor_type
                 if hasattr(model, "refrigerant"):
                     attrs["refrigerant"] = model.refrigerant
+
+        elif key == "dhw_status":
+            # Add DHW-specific attributes
+            # Current temperature from NIBE BT7 sensor
+            if "nibe" in self.coordinator.data:
+                nibe_data = self.coordinator.data["nibe"]
+                if nibe_data and hasattr(nibe_data, "dhw_top_temp"):
+                    attrs["current_temperature"] = nibe_data.dhw_top_temp
+                    attrs["temperature_unit"] = "°C"
+
+            # Next boost time (when heating is planned)
+            if self.coordinator.data and "dhw_next_boost" in self.coordinator.data:
+                next_boost = self.coordinator.data.get("dhw_next_boost")
+                if next_boost:
+                    attrs["next_boost_time"] = (
+                        next_boost.isoformat()
+                        if hasattr(next_boost, "isoformat")
+                        else str(next_boost)
+                    )
+
+            # Last heated time (would need to be tracked in coordinator)
+            # For now, we'll add placeholder - this can be enhanced later
+            if self.coordinator.data and "dhw_last_heated" in self.coordinator.data:
+                last_heated = self.coordinator.data.get("dhw_last_heated")
+                if last_heated:
+                    attrs["last_heated"] = (
+                        last_heated.isoformat()
+                        if hasattr(last_heated, "isoformat")
+                        else str(last_heated)
+                    )
 
         return attrs

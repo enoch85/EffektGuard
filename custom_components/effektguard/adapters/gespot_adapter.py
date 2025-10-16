@@ -39,7 +39,7 @@ class QuarterPeriod:
     - Quarter 24: 06:00-06:15 (daytime starts)
     - Quarter 87: 21:45-22:00 (daytime ends)
     - Quarter 95: 23:45-00:00
-    
+
     Note: Prices are in whatever unit the user configured in GE-Spot.
     GE-Spot handles all conversions, we use values as-is.
     """
@@ -65,34 +65,36 @@ class PriceData:
     @property
     def current_price(self) -> float | None:
         """Get current quarter's price.
-        
+
         Returns:
             Current price in user's configured GE-Spot unit, or None if not available
         """
         if not self.today:
             return None
-        
+
         # Find current quarter (0-95)
         from datetime import datetime
+
         now = datetime.now()
         current_quarter = (now.hour * 4) + (now.minute // 15)
-        
+
         # Find matching quarter period
         for period in self.today:
             period_quarter = (period.hour * 4) + (period.minute // 15)
             if period_quarter == current_quarter:
                 return period.price
-        
+
         return None
 
     @property
     def current_quarter(self) -> int | None:
         """Get current quarter of day (0-95).
-        
+
         Returns:
             Quarter number 0-95, or None if not available
         """
         from datetime import datetime
+
         now = datetime.now()
         return (now.hour * 4) + (now.minute // 15)
 
@@ -141,7 +143,7 @@ class GESpotAdapter:
         # Get GE-Spot unit configuration for logging
         # We don't convert - just use whatever the user configured
         unit_of_measurement = state.attributes.get("unit_of_measurement", "unknown")
-        
+
         _LOGGER.debug(
             "GE-Spot configured unit: %s (using prices as-is, no conversion)",
             unit_of_measurement,
@@ -159,17 +161,19 @@ class GESpotAdapter:
         today_periods = self._parse_periods(today_raw)
         tomorrow_periods = self._parse_periods(tomorrow_raw) if tomorrow_raw else []
 
-        # Log availability
+        # Log availability with dynamic unit
         if tomorrow_periods:
             _LOGGER.info(
-                "GE-Spot prices loaded: %d today, %d tomorrow (extended optimization available)",
+                "GE-Spot prices loaded: %d today, %d tomorrow (extended optimization available) in %s",
                 len(today_periods),
                 len(tomorrow_periods),
+                unit_of_measurement,
             )
         else:
             _LOGGER.info(
-                "GE-Spot prices loaded: %d today only (tomorrow not yet available)",
+                "GE-Spot prices loaded: %d today only (tomorrow not yet available) in %s",
                 len(today_periods),
+                unit_of_measurement,
             )
 
         return PriceData(
@@ -178,9 +182,7 @@ class GESpotAdapter:
             has_tomorrow=len(tomorrow_periods) > 0,
         )
 
-    def _parse_periods(
-        self, raw_prices: list[dict[str, Any]]
-    ) -> list[QuarterPeriod]:
+    def _parse_periods(self, raw_prices: list[dict[str, Any]]) -> list[QuarterPeriod]:
         """Parse raw price data into QuarterPeriod objects.
 
         Args:
@@ -188,7 +190,7 @@ class GESpotAdapter:
 
         Returns:
             List of 96 QuarterPeriod objects for the day
-            
+
         Note:
             Prices are used exactly as GE-Spot provides them.
             No unit conversion is performed - we respect user's configured unit.

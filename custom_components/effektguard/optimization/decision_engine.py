@@ -907,7 +907,7 @@ class DecisionEngine:
 
         # DEBUG: Log actual price vs classification for verification
         _LOGGER.debug(
-            "Price classification Q%d (%02d:%02d): %.2f öre/kWh → %s",
+            "Price classification Q%d (%02d:%02d): %.2f → %s",
             current_quarter,
             now.hour,
             now.minute,
