@@ -20,6 +20,7 @@ from .const import (
     CONF_INDOOR_TEMP_METHOD,
     CONF_INSULATION_QUALITY,
     CONF_NIBE_ENTITY,
+    CONF_NIBE_TEMP_LUX_ENTITY,
     CONF_OPTIMIZATION_MODE,
     CONF_POWER_SENSOR_ENTITY,
     CONF_TARGET_TEMPERATURE,
@@ -116,25 +117,50 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return await self.async_step_model()
 
-        # Discover GE-Spot entities
+        # Auto-detect GE-Spot entities (prioritizes current_price sensors)
         gespot_entities = self._discover_gespot_entities()
+        auto_detected_gespot = gespot_entities[0] if gespot_entities else None
+
+        # Build schema with auto-detected default
+        schema_dict: dict[Any, Any] = {}
+
+        if auto_detected_gespot:
+            schema_dict[vol.Optional(CONF_GESPOT_ENTITY, default=auto_detected_gespot)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor",
+                    )
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_GESPOT_ENTITY)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                )
+            )
+
+        schema_dict[vol.Optional(CONF_ENABLE_PRICE_OPTIMIZATION, default=True)] = (
+            selector.BooleanSelector()
+        )
+
+        # Create description message
+        if gespot_entities:
+            detection_msg = f"Auto-detected {len(gespot_entities)} GE-Spot sensor(s)"
+            if auto_detected_gespot:
+                detection_msg += f". Selected: {auto_detected_gespot.split('.')[-1]}"
+        else:
+            detection_msg = (
+                "No GE-Spot sensors detected. Please configure GE-Spot integration first."
+            )
 
         return self.async_show_form(
             step_id="gespot",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_GESPOT_ENTITY): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_ENABLE_PRICE_OPTIMIZATION, default=True
-                    ): selector.BooleanSelector(),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
             errors=errors,
-            description_placeholders={"gespot_count": str(len(gespot_entities))},
+            description_placeholders={
+                "gespot_count": str(len(gespot_entities)),
+                "detection_info": detection_msg,
+            },
         )
 
     async def async_step_model(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -229,6 +255,10 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         power_entities = self._discover_power_entities()
         auto_detected_power = power_entities[0] if power_entities else None
 
+        # Auto-detect temporary lux switch (DHW control)
+        temp_lux_entities = self._discover_temp_lux_entities()
+        auto_detected_temp_lux = temp_lux_entities[0] if temp_lux_entities else None
+
         schema_dict: dict[Any, Any] = {}
 
         # Degree minutes sensor (optional)
@@ -265,6 +295,22 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
             )
 
+        # Temporary lux switch (DHW control, optional)
+        if auto_detected_temp_lux:
+            schema_dict[vol.Optional(CONF_NIBE_TEMP_LUX_ENTITY, default=auto_detected_temp_lux)] = (
+                selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="switch",
+                    )
+                )
+            )
+        else:
+            schema_dict[vol.Optional(CONF_NIBE_TEMP_LUX_ENTITY)] = selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="switch",
+                )
+            )
+
         # Additional indoor temperature sensors (optional, multi-select)
         schema_dict[vol.Optional(CONF_ADDITIONAL_INDOOR_SENSORS)] = selector.EntitySelector(
             selector.EntitySelectorConfig(
@@ -290,8 +336,12 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "dm_detected": "✓ Auto-detected" if auto_detected_dm else "❌ Not found",
                 "power_detected": "✓ Auto-detected" if auto_detected_power else "❌ Not found",
+                "temp_lux_detected": (
+                    "✓ Auto-detected" if auto_detected_temp_lux else "❌ Not found"
+                ),
                 "dm_note": "Degree minutes sensor improves thermal debt tracking (estimated if not provided)",
                 "power_note": "Power meter enables accurate peak tracking (estimated from heat pump data if not provided)",
+                "temp_lux_note": "Temporary lux switch enables intelligent DHW scheduling and thermal debt protection (DHW optimization disabled if not provided)",
                 "temp_sensors_note": "Add extra temperature sensors (living room, bedroom, etc.) for whole-house averaging. Median recommended (more robust to outliers).",
             },
         )
@@ -342,12 +392,46 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return entities
 
     def _discover_gespot_entities(self) -> list[str]:
-        """Discover GE-Spot price entities."""
+        """Discover GE-Spot price entities.
+
+        Auto-detect GE-Spot integration sensors:
+        - sensor.gespot_current_price_* (preferred - real-time 15-min prices)
+        - sensor.gespot_average_price_*
+        - sensor.gespot_peak_price_*
+        - sensor.gespot_off_peak_price_*
+        - sensor.gespot_next_interval_price_*
+
+        Prioritizes current_price sensor as it's most relevant for optimization.
+        """
         entities = []
+        current_price_entities = []
+
         for state in self.hass.states.async_all():
-            if state.entity_id.startswith("sensor.ge") or "gespot" in state.entity_id.lower():
-                entities.append(state.entity_id)
-        return entities
+            entity_id = state.entity_id
+            entity_lower = entity_id.lower()
+
+            # Match GE-Spot sensors
+            if not entity_id.startswith("sensor."):
+                continue
+
+            # Check for GE-Spot patterns
+            is_gespot = (
+                "gespot" in entity_lower
+                or entity_id.startswith("sensor.ge_spot")
+                or entity_id.startswith("sensor.ge-spot")
+            )
+
+            if not is_gespot:
+                continue
+
+            # Prioritize current_price sensors (real-time 15-min interval data)
+            if "current_price" in entity_lower or "current-price" in entity_lower:
+                current_price_entities.append(entity_id)
+            else:
+                entities.append(entity_id)
+
+        # Return current_price sensors first, then others
+        return current_price_entities + entities
 
     def _discover_weather_entities(self) -> list[str]:
         """Discover weather entities."""
@@ -441,6 +525,53 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Return in priority order
         entities = house_power + heatpump_power + generic_power
+        return entities
+
+    def _discover_temp_lux_entities(self) -> list[str]:
+        """Discover NIBE temporary lux switch for DHW control.
+
+        Searches for switch entities with patterns:
+        - switch.*temporary*lux*
+        - switch.*temp*lux*
+        - switch.*50004* (NIBE parameter ID)
+        - Related to NIBE/MyUplink integration
+        """
+        from homeassistant.helpers import entity_registry as er
+
+        entities = []
+        ent_reg = er.async_get(self.hass)
+
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
+
+            # Must be a switch entity
+            if not entity_id.startswith("switch."):
+                continue
+
+            entity_lower = entity_id.lower()
+
+            # Check for temporary lux patterns
+            is_temp_lux = (
+                ("temporary" in entity_lower and "lux" in entity_lower)
+                or ("temp" in entity_lower and "lux" in entity_lower)
+                or "50004" in entity_lower  # NIBE parameter ID
+            )
+
+            if not is_temp_lux:
+                continue
+
+            # Verify it's from MyUplink integration or NIBE-related
+            entity_entry = ent_reg.async_get(entity_id)
+            if entity_entry and entity_entry.platform == "myuplink":
+                # Confirmed MyUplink entity
+                entities.append(entity_id)
+            elif any(
+                term in entity_lower
+                for term in ["nibe", "myuplink", "f750", "f470", "f1145", "f1245", "f1255", "s1155"]
+            ):
+                # Entity ID contains NIBE model numbers or myuplink
+                entities.append(entity_id)
+
         return entities
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:

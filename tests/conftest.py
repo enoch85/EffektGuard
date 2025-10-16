@@ -1,8 +1,10 @@
 """Pytest configuration for EffektGuard tests."""
 
 import sys
+import tempfile
 import warnings
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 # Add custom_components to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -14,3 +16,37 @@ pytest_plugins = ("pytest_asyncio",)
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="josepy")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="acme")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="homeassistant")
+
+
+# Common mock helper functions
+def create_mock_hass(latitude: float = 59.3):
+    """Create a properly configured mock Home Assistant instance.
+
+    Args:
+        latitude: Latitude for climate region detection
+
+    Returns:
+        Mock hass with required attributes for Store initialization
+    """
+    mock_hass = Mock()
+    mock_hass.data = {}
+    mock_hass.config.latitude = latitude
+    mock_hass.config.config_dir = tempfile.mkdtemp()
+    mock_hass.async_add_executor_job = AsyncMock()
+    return mock_hass
+
+
+def create_mock_entry():
+    """Create a properly configured mock config entry.
+
+    Returns:
+        Mock entry with proper options.get() side_effect
+    """
+    mock_entry = Mock()
+    mock_entry.options = Mock()
+    mock_entry.options.get.side_effect = lambda key, default=None: {
+        "dhw_morning_hour": 7,
+        "dhw_evening_hour": 18,
+        "enable_dhw_optimization": False,
+    }.get(key, default)
+    return mock_entry

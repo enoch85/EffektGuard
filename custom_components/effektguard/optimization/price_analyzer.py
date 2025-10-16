@@ -141,7 +141,7 @@ class PriceAnalyzer:
             is_daytime: True if 06:00-22:00 (full effect tariff weight)
 
         Returns offset in °C:
-            CHEAP: +2.0 (pre-heat opportunity)
+            CHEAP: +3.0 (pre-heat opportunity, charge thermal battery!)
             NORMAL: 0.0 (maintain)
             EXPENSIVE: -1.0 (conserve)
             PEAK: -2.0 (minimize)
@@ -149,10 +149,12 @@ class PriceAnalyzer:
         Effect tariff weighting:
             - Daytime (06:00-22:00): Full weight, more aggressive reductions
             - Nighttime (22:00-06:00): 50% weight, gentler reductions
+
+        Note: CHEAP includes negative prices (you get paid to heat!)
         """
         # Base offsets for each classification
         base_offsets = {
-            QuarterClassification.CHEAP: +2.0,
+            QuarterClassification.CHEAP: +3.0,  # Increased from +2.0 for better thermal storage
             QuarterClassification.NORMAL: 0.0,
             QuarterClassification.EXPENSIVE: -1.0,
             QuarterClassification.PEAK: -2.0,

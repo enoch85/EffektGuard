@@ -51,7 +51,7 @@ DEFAULT_INSULATION_QUALITY: Final = 1.0
 DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
-DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.75  # Moderate influence
+DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.49  # User-configurable weight (matches layer weight)
 DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
 
 # Climate entity temperature limits (displayed in UI)
@@ -85,6 +85,18 @@ MAX_TEMP_LIMIT: Final = 24.0
 BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
+
+# Decision engine layer weights
+# Source: User feedback and optimization tuning (Oct 2025)
+# Philosophy: "Charge heat when cheap, without peaking the peak"
+LAYER_WEIGHT_SAFETY: Final = 1.0  # Absolute priority (temp limits)
+LAYER_WEIGHT_EMERGENCY: Final = 0.8  # High priority (DM beyond expected)
+LAYER_WEIGHT_PRICE: Final = 0.75  # Strong influence (increased from 0.6)
+LAYER_WEIGHT_WEATHER_COMP: Final = 0.49  # Moderate influence
+LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
+LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
+LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
+LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight
 
 # Safety thresholds - Degree Minutes (DM) / Gradminuter (GM)
 # Based on Swedish NIBE forum research and real-world validation

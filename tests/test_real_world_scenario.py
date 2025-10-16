@@ -22,7 +22,7 @@ from custom_components.effektguard.optimization.decision_engine import DecisionE
 from custom_components.effektguard.optimization.effect_manager import EffectManager
 from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_model import ThermalModel
-from custom_components.effektguard.const import QuarterClassification
+from custom_components.effektguard.const import LAYER_WEIGHT_PRICE, QuarterClassification
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def expensive_price_data():
         # Night (Q0-Q23): VERY CHEAP 0.50-0.80 SEK
         if i < 24:
             quarter.price = 0.50 + (i * 0.0125)  # 0.50 -> 0.80
-        # Morning (Q24-Q35): EXPENSIVE 2.20-2.50 SEK  
+        # Morning (Q24-Q35): EXPENSIVE 2.20-2.50 SEK
         elif i < 36:
             quarter.price = 2.20 + ((i - 24) * 0.025)  # 2.20 -> 2.50
         # Mid-day (Q36-Q55): CHEAP 0.90-1.20 SEK
@@ -105,6 +105,7 @@ def winter_weather_data():
         forecast.temperature = temp
         # Use timedelta to handle day overflow
         from datetime import timedelta
+
         forecast.datetime = datetime(2025, 1, 16, 8, 0) + timedelta(hours=hour)
         weather.forecast_hours.append(forecast)
 
@@ -175,8 +176,11 @@ class TestRealWorldScenario:
         """
         # Mock dt_util.now() to return our test timestamp (08:00)
         test_time = datetime(2025, 1, 16, 8, 0)
-        
-        with patch('custom_components.effektguard.optimization.decision_engine.dt_util.now', return_value=test_time):
+
+        with patch(
+            "custom_components.effektguard.optimization.decision_engine.dt_util.now",
+            return_value=test_time,
+        ):
             decision = decision_engine.calculate_decision(
                 nibe_state=real_world_nibe_state,
                 price_data=expensive_price_data,
@@ -189,7 +193,9 @@ class TestRealWorldScenario:
             print(f"\n=== Debug Info ===")
             print(f"Test timestamp: {test_time}")
             print(f"Calculated quarter: Q{calc_quarter}")
-            print(f"Price at Q{calc_quarter}: {expensive_price_data.today[calc_quarter].price:.2f} SEK")
+            print(
+                f"Price at Q{calc_quarter}: {expensive_price_data.today[calc_quarter].price:.2f} SEK"
+            )
             print(f"Price layer reason: {decision.layers[6].reason}")
             print(f"==================\n")
 
@@ -211,12 +217,16 @@ class TestRealWorldScenario:
         emergency_layer = decision.layers[1]
         assert emergency_layer.offset == 0.0
         assert emergency_layer.weight == 0.0
-        assert "Emergency" in emergency_layer.reason or "OK" in emergency_layer.reason or "-180" in emergency_layer.reason
+        assert (
+            "Emergency" in emergency_layer.reason
+            or "OK" in emergency_layer.reason
+            or "-180" in emergency_layer.reason
+        )
 
         # Layer 3: Proactive Debt Prevention (NEW - may be active at DM -180)
         proactive_layer = decision.layers[2]
         # May vote for gentle heating to prevent debt progression
-        
+
         # Layer 4: Effect Tariff (should be inactive, safe margin)
         effect_layer = decision.layers[3]
         assert effect_layer.offset == 0.0
@@ -240,8 +250,14 @@ class TestRealWorldScenario:
         # Layer 8: Spot Price (SHOULD BE ACTIVE - KEY TEST)
         price_layer = decision.layers[7]
         assert price_layer.offset < 0.0, "Price layer should reduce during EXPENSIVE period"
-        assert price_layer.weight == 0.6, "Price layer should have weight 0.6"
-        assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason or "Q32" in price_layer.reason
+        assert (
+            price_layer.weight == LAYER_WEIGHT_PRICE
+        ), f"Price layer should have weight {LAYER_WEIGHT_PRICE}"
+        assert (
+            "EXPENSIVE" in price_layer.reason
+            or "PEAK" in price_layer.reason
+            or "Q32" in price_layer.reason
+        )
 
         # Calculate expected price offset
         # With the new price data:
@@ -273,9 +289,9 @@ class TestRealWorldScenario:
         # Weather: +3.0 (weight 0.7) ≈ +2.1 contribution
         # Price: -1.5 (weight 0.6) ≈ -0.9 contribution
         # Net positive for thermal safety
-        assert 0.1 <= decision.offset <= 3.0, (
-            f"Final offset {decision.offset}°C outside expected range 0.1 to 3.0°C"
-        )
+        assert (
+            0.1 <= decision.offset <= 3.0
+        ), f"Final offset {decision.offset}°C outside expected range 0.1 to 3.0°C"
 
         # Verify reasoning includes active layers
         assert decision.reasoning != ""
@@ -296,7 +312,9 @@ class TestRealWorldScenario:
         print(f"\nLayer Votes:")
         for i, layer in enumerate(decision.layers, 1):
             if layer.weight > 0:
-                print(f"  Layer {i}: {layer.offset:+.1f}°C (weight {layer.weight:.1f}) - {layer.reason}")
+                print(
+                    f"  Layer {i}: {layer.offset:+.1f}°C (weight {layer.weight:.1f}) - {layer.reason}"
+                )
         print(f"\nFinal Offset: {decision.offset:.1f}°C")
         print(f"Reasoning: {decision.reasoning}")
         print(f"========================================\n")
@@ -311,8 +329,11 @@ class TestRealWorldScenario:
     ):
         """Test that daytime multiplier amplifies expensive/peak reductions."""
         test_time = datetime(2025, 1, 16, 8, 0)  # Q32
-        
-        with patch('custom_components.effektguard.optimization.decision_engine.dt_util.now', return_value=test_time):
+
+        with patch(
+            "custom_components.effektguard.optimization.decision_engine.dt_util.now",
+            return_value=test_time,
+        ):
             decision = decision_engine.calculate_decision(
                 nibe_state=real_world_nibe_state,
                 price_data=expensive_price_data,
@@ -329,7 +350,7 @@ class TestRealWorldScenario:
             # Expected: -1.0 × 1.5 × 1.0 = -1.5°C
 
             assert price_layer.offset == pytest.approx(-1.5, abs=0.2)
-            assert price_layer.weight == 0.6
+            assert price_layer.weight == LAYER_WEIGHT_PRICE
             assert "EXPENSIVE" in price_layer.reason or "day" in price_layer.reason.lower()
 
     @pytest.mark.asyncio
@@ -345,7 +366,10 @@ class TestRealWorldScenario:
         test_time = datetime(2025, 1, 16, 2, 30)
         real_world_nibe_state.indoor_temp = 21.2  # Slightly above target
 
-        with patch('custom_components.effektguard.optimization.decision_engine.dt_util.now', return_value=test_time):
+        with patch(
+            "custom_components.effektguard.optimization.decision_engine.dt_util.now",
+            return_value=test_time,
+        ):
             decision = decision_engine.calculate_decision(
                 nibe_state=real_world_nibe_state,
                 price_data=expensive_price_data,
@@ -361,7 +385,7 @@ class TestRealWorldScenario:
             # Expected: +2.0°C × 1.0 = +2.0°C
 
             assert price_layer.offset > 0.0, "Should pre-heat during CHEAP period"
-            assert price_layer.weight == 0.6
+            assert price_layer.weight == LAYER_WEIGHT_PRICE
 
     @pytest.mark.asyncio
     async def test_evening_peak_aggressive_reduction(
@@ -376,7 +400,10 @@ class TestRealWorldScenario:
         test_time = datetime(2025, 1, 16, 18, 0)
         real_world_nibe_state.indoor_temp = 20.9
 
-        with patch('custom_components.effektguard.optimization.decision_engine.dt_util.now', return_value=test_time):
+        with patch(
+            "custom_components.effektguard.optimization.decision_engine.dt_util.now",
+            return_value=test_time,
+        ):
             decision = decision_engine.calculate_decision(
                 nibe_state=real_world_nibe_state,
                 price_data=expensive_price_data,
@@ -391,8 +418,10 @@ class TestRealWorldScenario:
             # Could be EXPENSIVE (-1.5°C with daytime) or PEAK (-3.0°C with daytime)
             # Either way, should be significantly reducing
 
-            assert price_layer.offset <= -1.0, f"Should reduce during high-price period, got {price_layer.offset}°C"
-            assert price_layer.weight == 0.6
+            assert (
+                price_layer.offset <= -1.0
+            ), f"Should reduce during high-price period, got {price_layer.offset}°C"
+            assert price_layer.weight == LAYER_WEIGHT_PRICE
             # Check it's recognized as high-price period
             assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
 
@@ -406,7 +435,7 @@ class TestRealWorldScenario:
     ):
         """Test that user tolerance setting scales spot price optimization."""
         test_time = datetime(2025, 1, 16, 8, 0)  # Q32
-        
+
         # Create two engines with different tolerance settings
         for tolerance_setting, expected_factor in [(1, 0.2), (10, 2.0)]:
             price_analyzer = PriceAnalyzer()
@@ -428,7 +457,10 @@ class TestRealWorldScenario:
 
             price_analyzer.update_prices(expensive_price_data)
 
-            with patch('custom_components.effektguard.optimization.decision_engine.dt_util.now', return_value=test_time):
+            with patch(
+                "custom_components.effektguard.optimization.decision_engine.dt_util.now",
+                return_value=test_time,
+            ):
                 decision = engine.calculate_decision(
                     nibe_state=real_world_nibe_state,
                     price_data=expensive_price_data,

@@ -471,6 +471,70 @@ class AdaptiveThermalModel:
         """
         return self.update_learned_parameters()
 
+    def calculate_preheating_target(
+        self,
+        current_temp: float,
+        desired_temp: float,
+        hours_until_peak: int,
+        outdoor_temp: float,
+        forecast_min_temp: float,
+    ) -> float:
+        """Calculate target temperature for pre-heating before expensive/cold period.
+
+        Uses learned thermal characteristics if available, falls back to conservative
+        defaults. Accounts for thermal decay during no-heating period.
+
+        Args:
+            current_temp: Current indoor temperature (°C)
+            desired_temp: Target indoor temperature during expensive hours (°C)
+            hours_until_peak: Hours until expensive period begins
+            outdoor_temp: Current outdoor temperature (°C)
+            forecast_min_temp: Minimum outdoor temperature in forecast period (°C)
+
+        Returns:
+            Target indoor temperature for pre-heating phase (°C)
+
+        References:
+            - Forum_Summary.md: stevedvo's thermal debt case study
+            - Enhancement_Proposals.md: Thermal model mathematics
+        """
+        # Get learned parameters or use defaults
+        params = self.update_learned_parameters()
+        if params and self.should_use_learned_parameters():
+            heat_loss_coef = params.heat_loss_coefficient
+            decay_rate = params.thermal_decay_rate
+        else:
+            # Conservative defaults
+            heat_loss_coef = 180.0  # W/°C typical house
+            decay_rate = 0.15  # °C per hour per °C difference
+
+        # Account for thermal decay during forecast period
+        temp_diff = current_temp - forecast_min_temp
+        heat_loss_rate = (heat_loss_coef / 1000.0) * decay_rate * temp_diff / 10
+
+        # Calculate expected temperature at end of forecast if no heating
+        expected_temp_end = current_temp - (heat_loss_rate * hours_until_peak)
+
+        # Calculate deficit that needs to be compensated
+        temp_deficit = max(0, desired_temp - expected_temp_end)
+
+        # Pre-heating target: add conservative margin
+        # Use UFH-specific factor if available
+        if self.ufh_type == UFHType.SLOW_RESPONSE:
+            preheat_factor = 1.5  # More thermal mass (6+ hours lag), more pre-heating
+        elif self.ufh_type == UFHType.MEDIUM_RESPONSE:
+            preheat_factor = 1.2  # Medium thermal mass (2-3 hours lag)
+        elif self.ufh_type == UFHType.FAST_RESPONSE:
+            preheat_factor = 1.1  # Fast response (<1 hour lag)
+        else:
+            preheat_factor = 1.3  # Conservative default for unknown
+
+        preheat_target = desired_temp + (temp_deficit * preheat_factor * 0.5)
+
+        # Safety limits: never suggest extreme pre-heating
+        max_preheat = desired_temp + 2.0
+        return min(preheat_target, max_preheat)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize model state to dictionary for storage.
 

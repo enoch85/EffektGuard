@@ -13,9 +13,9 @@
       },
       "gespot": {
         "title": "Configure GE-Spot Integration",
-        "description": "Optionally configure GE-Spot for price optimization. Found {gespot_count} GE-Spot entities.",
+        "description": "Optionally configure GE-Spot for 15-minute spot price optimization.\n\n{detection_info}\n\n**Recommended:** Use `current_price` sensor for real-time quarter-hour pricing.",
         "data": {
-          "gespot_entity": "GE-Spot Entity",
+          "gespot_entity": "GE-Spot Price Sensor (Current Price Recommended)",
           "enable_price_optimization": "Enable price optimization"
         }
       },

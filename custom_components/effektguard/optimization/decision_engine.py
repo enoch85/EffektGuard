@@ -26,6 +26,14 @@ from ..const import (
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DM_THRESHOLD_ABSOLUTE_MAX,
+    LAYER_WEIGHT_COMFORT_MAX,
+    LAYER_WEIGHT_COMFORT_MIN,
+    LAYER_WEIGHT_EMERGENCY,
+    LAYER_WEIGHT_PRICE,
+    LAYER_WEIGHT_PROACTIVE_MAX,
+    LAYER_WEIGHT_PROACTIVE_MIN,
+    LAYER_WEIGHT_SAFETY,
+    LAYER_WEIGHT_WEATHER_COMP,
     MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     QuarterClassification,
@@ -311,7 +319,7 @@ class DecisionEngine:
             offset = 5.0
             return LayerDecision(
                 offset=offset,
-                weight=1.0,
+                weight=LAYER_WEIGHT_SAFETY,
                 reason=f"SAFETY: Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
             )
         elif indoor_temp > MAX_TEMP_LIMIT:
@@ -319,7 +327,7 @@ class DecisionEngine:
             offset = -5.0
             return LayerDecision(
                 offset=offset,
-                weight=1.0,
+                weight=LAYER_WEIGHT_SAFETY,
                 reason=f"SAFETY: Too hot ({indoor_temp:.1f}°C > {MAX_TEMP_LIMIT}°C)",
             )
         else:
@@ -397,12 +405,21 @@ class DecisionEngine:
             deviation = expected_dm["warning"] - degree_minutes
             offset = min(2.0, 1.0 + (deviation / 400))  # 1.0-2.0 based on deviation
 
+            # WARNING: Beyond expected range - moderate recovery
+            # Philosophy: "If we don't need to heat, we shouldn't"
+            # Let weather compensation and price optimization have their say
+            # DHW blocking will fix root cause of thermal debt from DHW interference
+            percent_beyond = (
+                abs(deviation / expected_dm["warning"]) if expected_dm["warning"] else 0
+            )
+
             return LayerDecision(
                 offset=offset,
-                weight=0.8,
+                weight=LAYER_WEIGHT_EMERGENCY,  # Strong suggestion, but not absolute override
                 reason=(
                     f"WARNING: DM {degree_minutes:.0f} beyond expected for "
-                    f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f})"
+                    f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
+                    f"{percent_beyond:.0%} over)"
                 ),
             )
 
@@ -530,7 +547,7 @@ class DecisionEngine:
             offset = 0.5
             return LayerDecision(
                 offset=offset,
-                weight=0.3,
+                weight=LAYER_WEIGHT_PROACTIVE_MIN,
                 reason=f"Proactive Z1: DM {degree_minutes:.0f} (threshold: {zone1_threshold:.0f}), gentle heating prevents debt",
             )
 
@@ -542,7 +559,7 @@ class DecisionEngine:
             offset = 0.7
             return LayerDecision(
                 offset=offset,
-                weight=0.4,
+                weight=0.4,  # Mid-range proactive weight
                 reason=f"Proactive Z2: DM {degree_minutes:.0f} (threshold: {zone2_threshold:.0f}), boost recovery speed",
             )
 
@@ -558,7 +575,7 @@ class DecisionEngine:
 
             return LayerDecision(
                 offset=offset,
-                weight=0.6,
+                weight=LAYER_WEIGHT_PROACTIVE_MAX,
                 reason=f"Proactive Z3: DM {degree_minutes:.0f} (threshold: {zone3_threshold:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
             )
 
@@ -927,9 +944,12 @@ class DecisionEngine:
         tolerance_factor = self.tolerance / 5.0  # 0.2-2.0
         adjusted_offset = base_offset * tolerance_factor
 
+        # Price layer gets higher priority to encourage heating during cheap periods
+        # BUT effect layer (peak protection) still overrides with weight 0.8+ during peak risk
+        # Philosophy: "Charge heat when cheap, without peaking the peak"
         return LayerDecision(
             offset=adjusted_offset,
-            weight=0.6,
+            weight=LAYER_WEIGHT_PRICE,  # Prioritize cheap electricity
             reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'})",
         )
 
@@ -970,7 +990,7 @@ class DecisionEngine:
 
             return LayerDecision(
                 offset=correction,
-                weight=0.2,  # Low weight - advisory only
+                weight=LAYER_WEIGHT_COMFORT_MIN,  # Low weight - advisory only
                 reason=reason,
             )
         elif temp_error > tolerance:
@@ -978,7 +998,7 @@ class DecisionEngine:
             correction = -(temp_error - tolerance) * 0.5
             return LayerDecision(
                 offset=correction,
-                weight=0.5,
+                weight=LAYER_WEIGHT_COMFORT_MAX,
                 reason=f"Too warm: {temp_error:.1f}°C over",
             )
         else:
@@ -986,7 +1006,7 @@ class DecisionEngine:
             correction = -(temp_error + tolerance) * 0.5
             return LayerDecision(
                 offset=correction,
-                weight=0.5,
+                weight=LAYER_WEIGHT_COMFORT_MAX,
                 reason=f"Too cold: {-temp_error:.1f}°C under",
             )
 

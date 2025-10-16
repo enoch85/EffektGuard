@@ -1,8 +1,22 @@
 """Test learning module initialization in coordinator.
 
-Verifies that AdaptiveThermalModel, ThermalStatePredictor, and WeatherPatternLearner
-are properly created and initialized when the coordinator is set up.
+Verifies that the coordinator properly creates:
+- AdaptiveThermalModel
+- ThermalStatePredictor  
+- WeatherPatternLearner
 """
+
+import pytest
+from unittest.mock import Mock
+from conftest import create_mock_hass, create_mock_entry
+from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
+from custom_components.effektguard.optimization.thermal_predictor import (
+    ThermalStatePredictor,
+)
+from custom_components.effektguard.optimization.weather_learning import (
+    WeatherPatternLearner,
+)
 
 import pytest
 import tempfile
@@ -30,6 +44,24 @@ def create_mock_hass(latitude: float = 59.3):
     return mock_hass
 
 
+def create_mock_entry():
+    """Create a properly configured mock config entry.
+
+    Returns:
+        Mock entry with options that return actual values, not Mocks
+    """
+    mock_entry = Mock()
+    # Configure options.get() to return actual values with defaults
+    mock_entry.options.get.side_effect = lambda key, default=None: {
+        "dhw_morning_enabled": True,
+        "dhw_morning_hour": 7,
+        "dhw_evening_enabled": True,
+        "dhw_evening_hour": 18,
+        "enable_dhw_optimization": False,
+    }.get(key, default)
+    return mock_entry
+
+
 class TestLearningModuleCreation:
     """Test that coordinator creates all required learning modules."""
 
@@ -37,6 +69,7 @@ class TestLearningModuleCreation:
     async def test_creates_adaptive_thermal_model(self):
         """Test coordinator creates AdaptiveThermalModel."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -45,7 +78,7 @@ class TestLearningModuleCreation:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert isinstance(coordinator.adaptive_learning, AdaptiveThermalModel)
@@ -54,6 +87,7 @@ class TestLearningModuleCreation:
     async def test_creates_thermal_state_predictor(self):
         """Test coordinator creates ThermalStatePredictor."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -62,7 +96,7 @@ class TestLearningModuleCreation:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert isinstance(coordinator.thermal_predictor, ThermalStatePredictor)
@@ -71,6 +105,7 @@ class TestLearningModuleCreation:
     async def test_creates_weather_pattern_learner(self):
         """Test coordinator creates WeatherPatternLearner."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -79,7 +114,7 @@ class TestLearningModuleCreation:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert isinstance(coordinator.weather_learner, WeatherPatternLearner)
@@ -88,6 +123,7 @@ class TestLearningModuleCreation:
     async def test_creates_all_three_learning_modules(self):
         """Test coordinator creates all three learning modules together."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -96,7 +132,7 @@ class TestLearningModuleCreation:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         # Verify all three modules exist and are correct types
@@ -112,6 +148,7 @@ class TestCoordinatorLearningMethods:
     async def test_has_learning_initialization_method(self):
         """Test coordinator has async_initialize_learning method."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -120,7 +157,7 @@ class TestCoordinatorLearningMethods:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert hasattr(coordinator, "async_initialize_learning")
@@ -130,6 +167,7 @@ class TestCoordinatorLearningMethods:
     async def test_has_observation_recording_method(self):
         """Test coordinator has _record_learning_observations method."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -138,7 +176,7 @@ class TestCoordinatorLearningMethods:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert hasattr(coordinator, "_record_learning_observations")
@@ -148,6 +186,7 @@ class TestCoordinatorLearningMethods:
     async def test_has_save_learned_data_method(self):
         """Test coordinator has _save_learned_data method."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -156,7 +195,7 @@ class TestCoordinatorLearningMethods:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert hasattr(coordinator, "_save_learned_data")
@@ -166,6 +205,7 @@ class TestCoordinatorLearningMethods:
     async def test_has_load_learned_data_method(self):
         """Test coordinator has _load_learned_data method."""
         mock_hass = create_mock_hass(latitude=59.3)
+        mock_entry = create_mock_entry()
 
         coordinator = EffektGuardCoordinator(
             hass=mock_hass,
@@ -174,7 +214,7 @@ class TestCoordinatorLearningMethods:
             weather_adapter=Mock(),
             decision_engine=Mock(),
             effect_manager=Mock(),
-            entry=Mock(),
+            entry=mock_entry,
         )
 
         assert hasattr(coordinator, "_load_learned_data")

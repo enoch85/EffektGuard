@@ -18,6 +18,16 @@ def mock_hass():
     """Create mock Home Assistant instance."""
     hass = MagicMock(spec=HomeAssistant)
     
+    # Initialize hass.data for entity registry
+    hass.data = {}
+    
+    # Initialize hass.config for storage manager
+    hass.config = MagicMock()
+    hass.config.config_dir = "/tmp/test_config"
+    
+    # Initialize hass.bus for event system
+    hass.bus = MagicMock()
+    
     # Create mock states object
     mock_states_obj = MagicMock()
     hass.states = mock_states_obj
