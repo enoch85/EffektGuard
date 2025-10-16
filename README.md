@@ -1,5 +1,7 @@
 # EffektGuard
 
+<img src="EffektGuard-logo.png" alt="drawing" width="200"/>
+
 # ⚠️ WORK IN PROGRESS ⚠️
 
 **This integration is currently under active development and is NOT ready for production use.**
