@@ -19,8 +19,8 @@ jobs:
 
       - name: Prepare Release Assets
         run: |
-          mkdir release
-          cp -r custom_components/effektguard release/
+          mkdir -p release/effektguard
+          cp -r custom_components/effektguard/* release/effektguard/
           cp README.md release/
           cp LICENSE release/
 
