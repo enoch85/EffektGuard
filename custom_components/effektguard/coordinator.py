@@ -110,6 +110,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
 
+        # DHW tracking
+        self.last_dhw_heated = None  # Last time DHW was in heating mode
+        self.last_dhw_temp = None  # Last BT7 temperature for trend analysis
+        self.dhw_heating_start = None  # When current/last DHW cycle started
+        self.dhw_heating_end = None  # When last DHW cycle ended
+        self.dhw_was_heating = False  # Track state changes
+
     def _detect_climate_region(self, hass: HomeAssistant) -> str:
         """Detect Swedish climate region based on Home Assistant location.
 
@@ -350,19 +357,67 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
-        # Calculate DHW status based on temperature
+        # Calculate DHW status and tracking
         dhw_status = "not_configured"
+        dhw_next_boost = None
+        dhw_last_heated = self.last_dhw_heated
+
         if nibe_data and hasattr(nibe_data, "dhw_top_temp") and nibe_data.dhw_top_temp is not None:
-            # Simple status based on temperature thresholds
-            # Based on research: 35°C minimum safety, 50°C normal target, 55°C high demand
-            if nibe_data.dhw_top_temp < 35.0:
-                dhw_status = "low"  # Below safety minimum
-            elif nibe_data.dhw_top_temp < 45.0:
-                dhw_status = "heating"  # Below comfort, likely heating
-            elif nibe_data.dhw_top_temp < 52.0:
+            current_dhw_temp = nibe_data.dhw_top_temp
+
+            # Check if DHW is actively heating (from NIBE MyUplink sensor)
+            # This is more accurate than temperature thresholds alone
+            is_actively_heating = (
+                nibe_data.is_hot_water if hasattr(nibe_data, "is_hot_water") else False
+            )
+
+            # Track DHW heating cycle transitions (start/stop)
+            if is_actively_heating and not self.dhw_was_heating:
+                # DHW heating just started
+                self.dhw_heating_start = now_time
+                _LOGGER.info("DHW heating started at %s", now_time.strftime("%H:%M:%S"))
+            elif not is_actively_heating and self.dhw_was_heating:
+                # DHW heating just stopped
+                self.dhw_heating_end = now_time
+                if self.dhw_heating_start:
+                    duration = (now_time - self.dhw_heating_start).total_seconds() / 60
+                    _LOGGER.info(
+                        "DHW heating stopped at %s (duration: %.1f minutes)",
+                        now_time.strftime("%H:%M:%S"),
+                        duration,
+                    )
+
+            self.dhw_was_heating = is_actively_heating
+
+            # Determine status using actual heating status + temperature
+            if is_actively_heating:
+                dhw_status = "heating"  # Compressor actively heating DHW
+                # Track when we're in heating mode
+                self.last_dhw_heated = now_time
+                dhw_last_heated = self.last_dhw_heated
+            elif current_dhw_temp < 35.0:
+                dhw_status = "low"  # Below safety minimum, waiting to heat
+            elif current_dhw_temp < 45.0:
+                dhw_status = "pending"  # Below target, will heat soon
+            elif current_dhw_temp < 52.0:
                 dhw_status = "ready"  # At normal target
             else:
                 dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
+
+            # Predict next boost time based on temperature drop
+            # Simple prediction: Assume 0.5°C/hour cooling rate (conservative)
+            # NIBE typically starts DHW at ~45°C setpoint
+            if current_dhw_temp >= 45.0:
+                dhw_setpoint = 45.0  # Typical NIBE DHW start threshold
+                cooling_rate = 0.5  # °C per hour (conservative estimate)
+                temp_margin = current_dhw_temp - dhw_setpoint
+                hours_until_boost = temp_margin / cooling_rate
+
+                if hours_until_boost > 0:
+                    dhw_next_boost = now_time + timedelta(hours=hours_until_boost)
+
+            # Track temperature for trend analysis
+            self.last_dhw_temp = current_dhw_temp
 
         return {
             "nibe": nibe_data,
@@ -375,6 +430,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "current_quarter": current_quarter,
             "current_classification": current_classification,
             "dhw_status": dhw_status,
+            "dhw_next_boost": dhw_next_boost,
+            "dhw_last_heated": dhw_last_heated,
+            "dhw_heating_start": self.dhw_heating_start,
+            "dhw_heating_end": self.dhw_heating_end,
         }
 
     def _get_fallback_prices(self):

@@ -486,11 +486,11 @@ def test_sensor_dhw_status_state_values(full_coordinator, mock_entry):
     sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
     sensor = EffektGuardSensor(full_coordinator, mock_entry, sensor_desc)
 
-    # With dhw_top_temp = 39.4°C in full_coordinator, status should be "heating"
-    # (between 35-45°C range)
+    # With dhw_top_temp = 39.4°C in full_coordinator, status should be "pending" or "heating"
+    # (between 35-45°C range) - depends on is_hot_water sensor
     # Note: The coordinator calculates this automatically now
     if "dhw_status" in full_coordinator.data:
-        assert sensor.native_value in ["heating", "ready", "hot", "low", "not_configured"]
+        assert sensor.native_value in ["heating", "pending", "ready", "hot", "low", "not_configured"]
 
     # Test with different DHW status values (manual override)
     full_coordinator.data["dhw_status"] = "ready"
@@ -498,6 +498,9 @@ def test_sensor_dhw_status_state_values(full_coordinator, mock_entry):
 
     full_coordinator.data["dhw_status"] = "heating"
     assert sensor.native_value == "heating"
+
+    full_coordinator.data["dhw_status"] = "pending"
+    assert sensor.native_value == "pending"
 
     full_coordinator.data["dhw_status"] = "hot"
     assert sensor.native_value == "hot"
@@ -527,6 +530,26 @@ def test_coordinator_dhw_status_calculation():
     nibe_data_hot = MagicMock(dhw_top_temp=55.0)
     if nibe_data_hot.dhw_top_temp >= 52.0:
         assert True  # Should be "hot"
+
+
+def test_sensor_dhw_tracking_attributes(full_coordinator, mock_entry):
+    """Test DHW sensor includes next_boost and last_heated attributes."""
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
+    sensor = EffektGuardSensor(full_coordinator, mock_entry, sensor_desc)
+
+    attrs = sensor.extra_state_attributes
+
+    # Should have current_temperature from BT7
+    assert "current_temperature" in attrs
+    assert attrs["current_temperature"] == 39.4
+
+    # Check if coordinator provides next_boost (optional, depends on temp)
+    if "dhw_next_boost" in full_coordinator.data and full_coordinator.data["dhw_next_boost"]:
+        assert "next_boost_time" in attrs
+
+    # Check if coordinator provides last_heated (optional, set when heating)
+    if "dhw_last_heated" in full_coordinator.data and full_coordinator.data["dhw_last_heated"]:
+        assert "last_heated" in attrs
 
 
 # ============================================================================

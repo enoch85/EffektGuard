@@ -523,8 +523,32 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         else str(next_boost)
                     )
 
-            # Last heated time (would need to be tracked in coordinator)
-            # For now, we'll add placeholder - this can be enhanced later
+            # Last heating cycle times (start and end)
+            if self.coordinator.data and "dhw_heating_start" in self.coordinator.data:
+                heating_start = self.coordinator.data.get("dhw_heating_start")
+                if heating_start:
+                    attrs["heating_start"] = (
+                        heating_start.strftime("%H:%M:%S")
+                        if hasattr(heating_start, "strftime")
+                        else str(heating_start)
+                    )
+
+            if self.coordinator.data and "dhw_heating_end" in self.coordinator.data:
+                heating_end = self.coordinator.data.get("dhw_heating_end")
+                if heating_end:
+                    attrs["heating_end"] = (
+                        heating_end.strftime("%H:%M:%S")
+                        if hasattr(heating_end, "strftime")
+                        else str(heating_end)
+                    )
+
+                    # Calculate duration if we have both start and end
+                    heating_start = self.coordinator.data.get("dhw_heating_start")
+                    if heating_start and heating_end:
+                        duration_minutes = (heating_end - heating_start).total_seconds() / 60
+                        attrs["last_cycle_duration"] = f"{duration_minutes:.1f} min"
+
+            # Last heated time (legacy - when any heating was detected)
             if self.coordinator.data and "dhw_last_heated" in self.coordinator.data:
                 last_heated = self.coordinator.data.get("dhw_last_heated")
                 if last_heated:
