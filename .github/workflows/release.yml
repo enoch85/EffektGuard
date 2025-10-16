@@ -3,76 +3,49 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*"
+      - 'v*'
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   release:
-    runs-on: ubuntu-latest
     name: Create Release
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Get version from tag
-        id: get_version
+      - name: Prepare Release Assets
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          # Check if this is a pre-release (beta, alpha, rc, etc.)
-          if [[ $VERSION =~ -(alpha|beta|rc) ]]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "prerelease=false" >> $GITHUB_OUTPUT
-          fi
+          mkdir release
+          cp -r custom_components/effektguard release/
+          cp README.md release/
+          cp LICENSE release/
 
-      - name: Create ZIP file
+      - name: Create ZIP
         run: |
-          cd custom_components/effektguard
-          zip -r ../../effektguard.zip .
-          cd ../..
+          cd release
+          zip -r ../effektguard.zip .
 
-      - name: Generate release notes
-        id: release_notes
-        run: |
-          # Get previous tag
-          PREV_TAG=$(git describe --abbrev=0 --tags HEAD^ 2>/dev/null || echo "")
-          
-          # Create release notes
-          if [ -n "$PREV_TAG" ]; then
-            echo "## Changes since $PREV_TAG" > release_notes.md
-            echo "" >> release_notes.md
-            git log --no-merges --pretty=format:"* %s (%h)" $PREV_TAG..HEAD | grep -v "Release.*of.*EffektGuard" | grep -v "Bump version" >> release_notes.md || echo "* Minor updates and improvements" >> release_notes.md
-          else
-            echo "## Initial Release" > release_notes.md
-            echo "" >> release_notes.md
-            echo "First alpha release of EffektGuard - intelligent NIBE heat pump control for Swedish electricity costs." >> release_notes.md
-          fi
-          
-          echo "" >> release_notes.md
-          echo "## Installation" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "### Via HACS" >> release_notes.md
-          echo "1. Add this repository as a custom repository in HACS" >> release_notes.md
-          echo "2. Search for 'EffektGuard' and install" >> release_notes.md
-          echo "3. Restart Home Assistant" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "### Manual" >> release_notes.md
-          echo "1. Download \`effektguard.zip\`" >> release_notes.md
-          echo "2. Extract to \`config/custom_components/\`" >> release_notes.md
-          echo "3. Restart Home Assistant" >> release_notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          name: EffektGuard ${{ steps.get_version.outputs.tag }}
-          body_path: release_notes.md
-          files: |
-            effektguard.zip
-          prerelease: ${{ steps.get_version.outputs.prerelease }}
-          draft: false
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          if [[ "$tag" == *-alpha* ]] || [[ "$tag" == *-beta* ]]; then
+            gh release create "$tag" \
+                --repo="$GITHUB_REPOSITORY" \
+                --title="EffektGuard $tag" \
+                --generate-notes \
+                --prerelease \
+                effektguard.zip#"EffektGuard $tag"
+          else
+            gh release create "$tag" \
+                --repo="$GITHUB_REPOSITORY" \
+                --title="EffektGuard $tag" \
+                --generate-notes \
+                --latest \
+                effektguard.zip#"EffektGuard $tag"
+          fi
