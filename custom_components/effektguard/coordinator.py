@@ -164,6 +164,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_heating_end = None  # When last DHW cycle ended
         self.dhw_was_heating = False  # Track state changes
 
+        # Startup tracking - gracefully handle missing entities during HA startup
+        # MyUplink integration can take 45-50 seconds to initialize entities
+        self._first_successful_update = False
+
     def _detect_climate_region(self, hass: HomeAssistant) -> str:
         """Detect Swedish climate region based on Home Assistant location.
 
@@ -279,7 +283,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         _LOGGER.debug("Starting EffektGuard data update")
 
-        # Gather core data (NIBE - must succeed)
+        # Gather core data (NIBE - required, but allow startup grace period)
         try:
             nibe_data = await self.nibe.get_current_state()
             _LOGGER.debug(
@@ -289,9 +293,38 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 nibe_data.flow_temp,
                 nibe_data.degree_minutes,
             )
+
+            # Mark first successful update
+            if not self._first_successful_update:
+                self._first_successful_update = True
+                _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
+
         except Exception as err:
-            _LOGGER.error("Failed to read NIBE data: %s", err)
-            raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
+            # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
+            # Gracefully handle this by returning minimal data until entities are available
+            if not self._first_successful_update:
+                _LOGGER.info(
+                    "Waiting for NIBE MyUplink entities to become available: %s "
+                    "(this is normal during HA startup, will retry in %d minutes)",
+                    err,
+                    UPDATE_INTERVAL_MINUTES,
+                )
+                # Return minimal coordinator data to allow entities to be created
+                # They will show "unavailable" until NIBE data becomes ready
+                return {
+                    "nibe": None,
+                    "price": None,
+                    "weather": None,
+                    "decision": None,
+                    "offset": 0.0,
+                    "peak_today": 0.0,
+                    "peak_this_month": 0.0,
+                    "startup_pending": True,  # Flag for entities to show proper status
+                }
+            else:
+                # After first success, NIBE failures are real errors
+                _LOGGER.error("Failed to read NIBE data: %s", err)
+                raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
         # GE-Spot price data (native 15-minute intervals)

@@ -84,6 +84,11 @@ class TestHomeAssistantBestPractices:
     """Verify implementation follows official HA documentation.
     
     Reference: https://developers.home-assistant.io/docs/config_entries_options_flow_handler/
+    
+    Per HA documentation:
+    - Options flow should ONLY update config_entry.options (runtime settings)
+    - Entity configuration belongs in config_entry.data (initial setup only)
+    - To change entity configuration after setup, use reconfigure flow (not options flow)
     """
 
     def test_no_init_method_defined(self):
@@ -116,4 +121,5 @@ class TestHomeAssistantBestPractices:
         
         # Verify it was created without passing config_entry
         # (the framework will set it later via property)
+
 

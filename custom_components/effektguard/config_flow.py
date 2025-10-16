@@ -411,6 +411,33 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            # Entity configuration fields that should be saved to entry.data (not options)
+            entity_fields = [
+                CONF_WEATHER_ENTITY,
+                CONF_DEGREE_MINUTES_ENTITY,
+                CONF_POWER_SENSOR_ENTITY,
+                CONF_ADDITIONAL_INDOOR_SENSORS,
+            ]
+            
+            # Separate entity configuration from runtime options
+            updated_data = dict(self.config_entry.data)
+            data_changed = False
+            
+            # Extract entity fields and update entry.data
+            for field in entity_fields:
+                if field in user_input:
+                    updated_data[field] = user_input[field]
+                    user_input.pop(field)  # Remove from options dict
+                    data_changed = True
+            
+            # Update config entry data if entity selections changed
+            if data_changed:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data=updated_data
+                )
+            
+            # Save runtime options (everything except entity fields)
             return self.async_create_entry(title="", data=user_input)
 
         return self.async_show_form(
@@ -480,6 +507,14 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         )
                     ),
                     vol.Optional(
+                        CONF_WEATHER_ENTITY,
+                        default=self.config_entry.data.get(CONF_WEATHER_ENTITY),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="weather",
+                        )
+                    ),
+                    vol.Optional(
                         CONF_DEGREE_MINUTES_ENTITY,
                         default=self.config_entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
                     ): selector.EntitySelector(
@@ -494,14 +529,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         selector.EntitySelectorConfig(
                             domain="sensor",
                             device_class="power",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_WEATHER_ENTITY,
-                        default=self.config_entry.data.get(CONF_WEATHER_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="weather",
                         )
                     ),
                     vol.Optional(
