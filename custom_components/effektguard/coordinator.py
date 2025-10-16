@@ -1,7 +1,7 @@
 """Data update coordinator for EffektGuard."""
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -99,6 +99,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.thermal_predictor = ThermalStatePredictor()
         self.weather_learner = WeatherPatternLearner()
         self.climate_region = self._detect_climate_region(hass)
+
+        # DHW optimizer
+        from .optimization.dhw_optimizer import IntelligentDHWScheduler
+
+        self.dhw_optimizer = IntelligentDHWScheduler()
 
         # Learning storage
         self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
@@ -419,6 +424,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Track temperature for trend analysis
             self.last_dhw_temp = current_dhw_temp
 
+            # Update DHW optimizer with temperature history
+            self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
+
+            # Get DHW recommendation from optimizer
+            dhw_recommendation = self._calculate_dhw_recommendation(
+                nibe_data, price_data, weather_data, current_dhw_temp, now_time
+            )
+        else:
+            dhw_recommendation = "DHW sensor not configured"
+
         return {
             "nibe": nibe_data,
             "price": price_data,
@@ -434,7 +449,82 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_last_heated": dhw_last_heated,
             "dhw_heating_start": self.dhw_heating_start,
             "dhw_heating_end": self.dhw_heating_end,
+            "dhw_recommendation": dhw_recommendation,
         }
+
+    def _calculate_dhw_recommendation(
+        self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
+    ) -> str:
+        """Calculate DHW heating recommendation based on optimizer logic.
+
+        Args:
+            nibe_data: Current NIBE state
+            price_data: GE-Spot price data
+            weather_data: Weather forecast
+            current_dhw_temp: Current DHW temperature (°C)
+            now_time: Current datetime
+
+        Returns:
+            Human-readable recommendation string
+        """
+        # Get current price classification
+        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        price_classification = (
+            self.engine.price.get_current_classification(current_quarter)
+            if price_data
+            else "normal"
+        )
+
+        # Calculate space heating demand (simplified - from indoor temp deficit)
+        indoor_temp = nibe_data.indoor_temp if nibe_data else 20.0
+        target_indoor = 21.0  # Default target
+        indoor_deficit = target_indoor - indoor_temp
+        space_heating_demand = max(0, indoor_deficit * 2.0)  # Rough kW estimate
+
+        # Get thermal debt
+        thermal_debt = nibe_data.degree_minutes if nibe_data else -60.0
+
+        # Get outdoor temp
+        outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
+
+        # Get recommendation from optimizer
+        decision = self.dhw_optimizer.should_start_dhw(
+            current_dhw_temp=current_dhw_temp,
+            space_heating_demand_kw=space_heating_demand,
+            thermal_debt_dm=thermal_debt,
+            indoor_temp=indoor_temp,
+            target_indoor_temp=target_indoor,
+            outdoor_temp=outdoor_temp,
+            price_classification=price_classification,
+            current_time=now_time,
+        )
+
+        # Convert decision to human-readable recommendation
+        if not decision.should_heat:
+            if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
+                return f"⚠️ Block DHW - Critical thermal debt (DM: {thermal_debt:.0f})"
+            elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
+                return f"🏠 Block DHW - House too cold ({indoor_temp:.1f}°C)"
+            elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
+                return f"⏸️ Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
+            elif decision.priority_reason == "DHW_ADEQUATE":
+                return f"✅ DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+            else:
+                return "⏸️ Wait - Conditions not optimal"
+
+        # Should heat - give specific recommendation
+        if decision.priority_reason == "DHW_SAFETY_MINIMUM":
+            return f"🔴 Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
+        elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
+            return f"💰 Heat now - Cheap electricity ({price_classification})"
+        elif decision.priority_reason.startswith("URGENT_DEMAND"):
+            return f"⏰ Heat now - Demand period approaching"
+        elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
+            return f"✨ Heat now - Pre-heating for demand ({price_classification})"
+        elif decision.priority_reason == "NORMAL_DHW_HEATING":
+            return f"🔵 Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+        else:
+            return f"✅ Heat recommended - Target: {decision.target_temp:.0f}°C"
 
     def _get_fallback_prices(self):
         """Get fallback price data when GE-Spot unavailable.
