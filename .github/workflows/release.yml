@@ -21,13 +21,11 @@ jobs:
         run: |
           mkdir -p release/effektguard
           cp -r custom_components/effektguard/* release/effektguard/
-          cp README.md release/
-          cp LICENSE release/
 
       - name: Create ZIP
         run: |
           cd release
-          zip -r ../effektguard.zip .
+          zip -r ../effektguard.zip effektguard/
 
       - name: Create release
         env:
