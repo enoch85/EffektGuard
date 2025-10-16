@@ -291,10 +291,14 @@ class NibeAdapter:
         # Patterns based on NIBE Myuplink integration entity naming
         # Use specific entity names from parameter IDs when possible
         patterns = {
-            "outdoor_temp": ["bt1", "_outdoor", "40004"],  # BT1 / param 40004
-            "indoor_temp": ["40033", "bt50"],  # param 40033 "Temperature" (BT50) / BT50 direct
-            "supply_temp": ["bt25", "_supply", "40008"],  # BT25/BT63 / param 40008
-            "return_temp": ["bt3", "_return", "40012"],  # BT3 / param 40012
+            "outdoor_temp": ["bt1", "outdoor_temp", "40004"],  # BT1 / param 40004
+            "indoor_temp": [
+                "bt50",
+                "room_temperature",
+                "40033",
+            ],  # BT50 / param 40033 "Temperature"
+            "supply_temp": ["bt25", "supply_temp", "40008"],  # BT25/BT63 / param 40008
+            "return_temp": ["bt3", "return_temp", "40012"],  # BT3 / param 40012
             "degree_minutes": ["degree_minutes", "40941"],  # param 40941
             "offset": ["offset", "47011"],  # param 47011
             "compressor_status": ["compressor", "43427"],  # param 43427
@@ -333,24 +337,52 @@ class NibeAdapter:
                             ]:
                                 # Check if it's actually a temperature sensor
                                 state = self.hass.states.get(entity.entity_id)
-                                if state and state.attributes.get("device_class") != "temperature":
-                                    _LOGGER.debug(
-                                        "Skipping %s (not a temperature sensor): %s",
-                                        key,
-                                        entity.entity_id,
-                                    )
-                                    continue
+                                if state:
+                                    device_class = state.attributes.get("device_class")
+                                    unit = state.attributes.get("unit_of_measurement")
+
+                                    # Accept if device_class is temperature OR unit is °C/°F
+                                    # This handles cases where device_class is not set but unit is
+                                    is_temp_sensor = device_class == "temperature" or unit in [
+                                        "°C",
+                                        "°F",
+                                        "C",
+                                        "F",
+                                    ]
+
+                                    if not is_temp_sensor:
+                                        _LOGGER.debug(
+                                            "Skipping %s (not a temperature sensor, device_class=%s, unit=%s): %s",
+                                            key,
+                                            device_class,
+                                            unit,
+                                            entity.entity_id,
+                                        )
+                                        continue
 
                             self._entity_cache[key] = entity.entity_id
                             _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
                             break
 
         # Log all discovered entities for debugging
-        _LOGGER.info("Discovered %d NIBE entities:", len(self._entity_cache))
+        _LOGGER.info("NIBE Entity Discovery: Found %d entities", len(self._entity_cache))
         for key, entity_id in self._entity_cache.items():
             state = self.hass.states.get(entity_id)
             state_value = state.state if state else "unavailable"
-            _LOGGER.debug("  - %s: %s = %s", key, entity_id, state_value)
+            unit = state.attributes.get("unit_of_measurement", "") if state else ""
+            _LOGGER.info("  %s: %s = %s %s", key, entity_id, state_value, unit)
+
+        # Warn if critical sensors are missing
+        if "indoor_temp" not in self._entity_cache:
+            _LOGGER.warning(
+                "No indoor temperature sensor (BT50) found! "
+                "Looking for entities with: bt50, room_temperature, or 40033. "
+                "Will use default fallback temperature (21°C)."
+            )
+        if "outdoor_temp" not in self._entity_cache:
+            _LOGGER.warning("No outdoor temperature sensor (BT1) found!")
+        if "degree_minutes" not in self._entity_cache:
+            _LOGGER.warning("No degree minutes sensor found, will estimate from thermal model")
 
     async def _read_entity_float(
         self,
