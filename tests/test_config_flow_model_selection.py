@@ -29,13 +29,37 @@ from custom_components.effektguard.const import (
 
 
 @pytest.fixture
-def mock_hass():
+def mock_entity_registry():
+    """Create mock entity registry with MyUplink entities."""
+    mock_ent_reg = MagicMock()
+    
+    # Mock entity entry for MyUplink offset entity
+    mock_entity_entry = MagicMock()
+    mock_entity_entry.platform = "myuplink"
+    
+    def mock_registry_get(entity_id):
+        if "offset" in entity_id:
+            return mock_entity_entry
+        return None
+    
+    mock_ent_reg.async_get = mock_registry_get
+    return mock_ent_reg
+
+
+@pytest.fixture
+def mock_hass(mock_entity_registry, monkeypatch):
     """Create mock Home Assistant instance with entities."""
     hass = MagicMock(spec=HomeAssistant)
 
     # Create mock states object
     mock_states_obj = MagicMock()
     hass.states = mock_states_obj
+
+    # Patch entity registry import in config_flow
+    monkeypatch.setattr(
+        'homeassistant.helpers.entity_registry.async_get', 
+        lambda h: mock_entity_registry
+    )
 
     # Mock states for discovery
     mock_states = {
@@ -103,20 +127,30 @@ class TestConfigFlowUserStep:
         assert result["step_id"] == "user"
         assert CONF_NIBE_ENTITY in result["data_schema"].schema
 
-    async def test_user_step_nibe_not_found(self, mock_hass):
-        """Test abort when no NIBE entities found."""
+    async def test_user_step_nibe_not_found(self, mock_entity_registry, monkeypatch):
+        """Test form still shows when no NIBE entities found (allows manual selection)."""
         hass = MagicMock(spec=HomeAssistant)
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
         mock_states_obj.async_all = lambda: []  # No entities
+
+        # Patch entity registry
+        monkeypatch.setattr(
+            'homeassistant.helpers.entity_registry.async_get', 
+            lambda h: mock_entity_registry
+        )
 
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = hass
 
         result = await config_flow.async_step_user()
 
-        assert result["type"] == FlowResultType.ABORT
-        assert result["reason"] == "nibe_not_found"
+        # Should show form with warning message, not abort
+        assert result["type"] == FlowResultType.FORM
+        assert result["step_id"] == "user"
+        # Check for warning content, not emoji (to avoid Unicode issues)
+        assert "No NIBE offset entities auto-detected" in result["description_placeholders"]["info"]
+        assert "MyUplink just loaded" in result["description_placeholders"]["info"]
 
     async def test_user_step_valid_submission(self, mock_hass):
         """Test valid NIBE entity submission proceeds to GE-Spot step."""

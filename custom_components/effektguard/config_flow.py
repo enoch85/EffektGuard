@@ -63,11 +63,18 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return await self.async_step_gespot()
 
-        # Discover NIBE entities
+        # Discover NIBE entities (but don't abort if none found - entities may still load)
         nibe_entities = self._discover_nibe_entities()
 
-        if not nibe_entities:
-            return self.async_abort(reason="nibe_not_found")
+        # Build helpful description based on discovery results
+        if nibe_entities:
+            info_msg = f"Found {len(nibe_entities)} NIBE offset entity(ies). Select the heating curve offset control."
+        else:
+            info_msg = (
+                "No NIBE offset entities auto-detected. "
+                "If MyUplink just loaded, wait a moment and try again. "
+                "Otherwise, manually select the number.* entity for heating curve offset control."
+            )
 
         return self.async_show_form(
             step_id="user",
@@ -84,7 +91,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "nibe_count": str(len(nibe_entities)),
-                "info": "Select the NIBE heating curve offset entity (number.* with 'offset' in name)",
+                "info": info_msg,
             },
         )
 
@@ -293,10 +300,15 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Discover NIBE heating curve offset entities.
 
         Filters for entities that can control heating curve offset:
-        - number.* entities with 'offset' in name
+        - number.* entities with 'offset' in name from MyUplink integration
+        - OR number.* entities with 'offset' in name AND 'nibe' in entity_id
         - Excludes entities with translation errors
         """
+        from homeassistant.helpers import entity_registry as er
+
         entities = []
+        ent_reg = er.async_get(self.hass)
+
         for state in self.hass.states.async_all():
             entity_id = state.entity_id
 
@@ -304,12 +316,20 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not entity_id.startswith("number."):
                 continue
 
-            # Must contain NIBE/MyUplink identifier
-            if not ("nibe" in entity_id.lower() or "myuplink" in entity_id.lower()):
-                continue
-
             # Must be related to offset/curve control
             if "offset" not in entity_id.lower():
+                continue
+
+            # Check if entity is from MyUplink integration (preferred method)
+            entity_entry = ent_reg.async_get(entity_id)
+            if entity_entry and entity_entry.platform == "myuplink":
+                # MyUplink entity with offset - this is what we want!
+                pass
+            elif "nibe" in entity_id.lower() or "myuplink" in entity_id.lower():
+                # Fallback: entity_id contains nibe/myuplink (older naming patterns)
+                pass
+            else:
+                # Not a NIBE/MyUplink entity
                 continue
 
             # Exclude entities with translation errors
