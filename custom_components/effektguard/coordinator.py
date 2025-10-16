@@ -101,9 +101,40 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.climate_region = self._detect_climate_region(hass)
 
         # DHW optimizer
-        from .optimization.dhw_optimizer import IntelligentDHWScheduler
+        from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
 
-        self.dhw_optimizer = IntelligentDHWScheduler()
+        # Configure DHW demand periods from options
+        demand_periods = []
+
+        # Morning demand period (e.g., shower time)
+        if entry.options.get("dhw_morning_enabled", True):
+            morning_hour = entry.options.get("dhw_morning_hour", 7)
+            demand_periods.append(
+                DHWDemandPeriod(
+                    start_hour=morning_hour,
+                    target_temp=55.0,  # Extra hot for morning shower
+                    duration_hours=2,  # 2-hour window
+                )
+            )
+
+        # Evening demand period (e.g., dishes, evening shower)
+        if entry.options.get("dhw_evening_enabled", True):
+            evening_hour = entry.options.get("dhw_evening_hour", 18)
+            demand_periods.append(
+                DHWDemandPeriod(
+                    start_hour=evening_hour,
+                    target_temp=55.0,  # Extra hot for dishes
+                    duration_hours=3,  # 3-hour window
+                )
+            )
+
+        self.dhw_optimizer = IntelligentDHWScheduler(demand_periods=demand_periods)
+
+        if demand_periods:
+            _LOGGER.info(
+                "DHW demand periods configured: %s",
+                [f"{p.start_hour}:00 ({p.target_temp}°C)" for p in demand_periods],
+            )
 
         # Learning storage
         self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
@@ -366,6 +397,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         dhw_status = "not_configured"
         dhw_next_boost = None
         dhw_last_heated = self.last_dhw_heated
+        dhw_recommendation = "DHW sensor not configured"
+
+        # Debug logging for DHW sensor detection
+        if nibe_data:
+            _LOGGER.debug(
+                "DHW sensor check: has_dhw_top_temp=%s, dhw_top_temp=%s",
+                hasattr(nibe_data, "dhw_top_temp"),
+                getattr(nibe_data, "dhw_top_temp", "N/A"),
+            )
 
         if nibe_data and hasattr(nibe_data, "dhw_top_temp") and nibe_data.dhw_top_temp is not None:
             current_dhw_temp = nibe_data.dhw_top_temp
@@ -432,7 +472,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 nibe_data, price_data, weather_data, current_dhw_temp, now_time
             )
         else:
-            dhw_recommendation = "DHW sensor not configured"
+            # DHW sensor not available - provide basic recommendation
+            if nibe_data:
+                _LOGGER.warning(
+                    "DHW sensor (BT7) not found - check MyUplink integration has exposed BT7/40013 sensor"
+                )
+                dhw_recommendation = "DHW sensor not found - check MyUplink integration"
+            else:
+                _LOGGER.warning("NIBE data not available")
+                dhw_recommendation = "NIBE data unavailable"
 
         return {
             "nibe": nibe_data,
@@ -502,29 +550,29 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Convert decision to human-readable recommendation
         if not decision.should_heat:
             if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
-                return f"⚠️ Block DHW - Critical thermal debt (DM: {thermal_debt:.0f})"
+                return f"Block DHW - Critical thermal debt (DM: {thermal_debt:.0f})"
             elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
-                return f"🏠 Block DHW - House too cold ({indoor_temp:.1f}°C)"
+                return f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
             elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
-                return f"⏸️ Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
+                return f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
             elif decision.priority_reason == "DHW_ADEQUATE":
-                return f"✅ DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+                return f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
             else:
-                return "⏸️ Wait - Conditions not optimal"
+                return "Wait - Conditions not optimal"
 
         # Should heat - give specific recommendation
         if decision.priority_reason == "DHW_SAFETY_MINIMUM":
-            return f"🔴 Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
+            return f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
         elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
-            return f"💰 Heat now - Cheap electricity ({price_classification})"
+            return f"Heat now - Cheap electricity ({price_classification})"
         elif decision.priority_reason.startswith("URGENT_DEMAND"):
-            return f"⏰ Heat now - Demand period approaching"
+            return "Heat now - Demand period approaching"
         elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
-            return f"✨ Heat now - Pre-heating for demand ({price_classification})"
+            return f"Heat now - Pre-heating for demand ({price_classification})"
         elif decision.priority_reason == "NORMAL_DHW_HEATING":
-            return f"🔵 Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+            return f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
         else:
-            return f"✅ Heat recommended - Target: {decision.target_temp:.0f}°C"
+            return f"Heat recommended - Target: {decision.target_temp:.0f}°C"
 
     def _get_fallback_prices(self):
         """Get fallback price data when GE-Spot unavailable.

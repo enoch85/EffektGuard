@@ -518,6 +518,39 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             multiple=True,
                         )
                     ),
+                    # DHW demand periods
+                    vol.Optional(
+                        "dhw_morning_hour",
+                        default=self.config_entry.options.get("dhw_morning_hour", 7),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=23,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="hour",
+                        )
+                    ),
+                    vol.Optional(
+                        "dhw_morning_enabled",
+                        default=self.config_entry.options.get("dhw_morning_enabled", True),
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        "dhw_evening_hour",
+                        default=self.config_entry.options.get("dhw_evening_hour", 18),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=23,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="hour",
+                        )
+                    ),
+                    vol.Optional(
+                        "dhw_evening_enabled",
+                        default=self.config_entry.options.get("dhw_evening_enabled", True),
+                    ): selector.BooleanSelector(),
                 }
             ),
         )
