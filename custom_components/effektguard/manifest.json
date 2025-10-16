@@ -5,7 +5,6 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/enoch85/EffektGuard",
-  "icon": "mdi:heat-pump",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/enoch95/EffektGuard/issues",
   "requirements": [],
