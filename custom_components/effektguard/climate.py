@@ -151,12 +151,16 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
         # Request coordinator refresh to recalculate with new target
         await self.coordinator.async_request_refresh()
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
         """Set HVAC mode.
 
         HEAT: Optimization active
         OFF: Optimization disabled (safety monitoring only)
         """
+        # Convert string to HVACMode if needed
+        if isinstance(hvac_mode, str):
+            hvac_mode = HVACMode(hvac_mode)
+
         _LOGGER.info("Setting HVAC mode to %s", hvac_mode)
         self._attr_hvac_mode = hvac_mode
 

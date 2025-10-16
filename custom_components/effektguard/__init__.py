@@ -182,7 +182,12 @@ async def _create_coordinator(
     # Create data adapters
     nibe_adapter = NibeAdapter(hass, entry.data)
     gespot_adapter = GESpotAdapter(hass, entry.data)
-    weather_adapter = WeatherAdapter(hass, entry.data)
+
+    # Weather adapter: check options first, fall back to data
+    weather_config = dict(entry.data)
+    if "weather_entity" in entry.options:
+        weather_config["weather_entity"] = entry.options["weather_entity"]
+    weather_adapter = WeatherAdapter(hass, weather_config)
 
     # Create optimization components
     price_analyzer = PriceAnalyzer()
@@ -224,6 +229,8 @@ async def _create_coordinator(
     await coordinator.async_initialize_learning()
 
     # Connect thermal predictor and weather learner to decision engine (Phase 6)
+    # CRITICAL: Use adaptive learning model for UFH-specific prediction horizons (enoch95 feedback)
+    decision_engine.thermal = coordinator.adaptive_learning  # AdaptiveThermalModel
     decision_engine.predictor = coordinator.thermal_predictor
     decision_engine.weather_learner = coordinator.weather_learner
 

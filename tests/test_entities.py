@@ -104,6 +104,8 @@ def mock_coordinator():
             baseline_cost=1200.0,
             optimized_cost=750.0,
         ),
+        "current_classification": "normal",  # Added for hour_classification sensor
+        "current_quarter": 42,  # Added for consistency
     }
     coordinator.peak_today = 4.5
     coordinator.peak_this_month = 5.2
@@ -171,8 +173,8 @@ def test_sensor_count():
     from custom_components.effektguard.sensor import SENSORS
 
     assert (
-        len(SENSORS) == 15
-    )  # Updated count with optional_features_status + heat_pump_model sensors
+        len(SENSORS) == 18
+    )  # Updated count: added heat pump model sensors + optional features status
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -187,7 +189,7 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
 
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
-    assert len(sensors) == 15
+    assert len(sensors) == 18  # Updated: added DHW sensors + optional features status
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):

@@ -112,11 +112,14 @@ class TestEffectLayerIntegration:
             current_peak=0.0,
         )
 
-        # Should have 8 layers (safety, emergency, effect, prediction, weather, weather_comp, price, comfort)
-        assert len(decision.layers) == 8
+        # Should have 9 layers:
+        # 1. Safety, 2. Emergency, 3. Effect, 4. Prediction (learned),
+        # 5. Weather Compensation, 6. Weather (pre-heat), 7. Price, 8. Comfort
+        # Note: Phase 6 added prediction layer between effect and weather
+        assert len(decision.layers) == 9
 
-        # Find effect layer (layer 2, 0-indexed)
-        effect_layer = decision.layers[2]
+        # Find effect layer (layer 3, 0-indexed)
+        effect_layer = decision.layers[3]
         assert "peak" in effect_layer.reason.lower() or "ok" in effect_layer.reason.lower()
 
     @pytest.mark.asyncio
@@ -131,7 +134,7 @@ class TestEffectLayerIntegration:
             current_peak=0.0,
         )
 
-        effect_layer = decision.layers[2]
+        effect_layer = decision.layers[3]  # Effect is layer 3 (0-indexed)
 
         # Should have zero weight when no limiting needed
         assert effect_layer.weight == 0.0
@@ -156,7 +159,7 @@ class TestEffectLayerIntegration:
             current_peak=3.0,
         )
 
-        effect_layer = decision.layers[2]
+        effect_layer = decision.layers[3]  # Effect is layer 3 (after safety, emergency, thermal debt)
 
         # Should recommend reduction when approaching peak
         # (exact values depend on power estimation)
@@ -241,7 +244,7 @@ class TestPeakProtectionScenarios:
         )
 
         # Should include peak protection in reasoning
-        assert decision.layers[2].weight >= 0.0  # Effect layer active
+        assert decision.layers[3].weight >= 0.0  # Effect layer active
 
     @pytest.mark.asyncio
     async def test_nighttime_peak_weighting(
@@ -265,7 +268,7 @@ class TestPeakProtectionScenarios:
 
         # Night time should allow higher actual power (effective = actual * 0.5)
         # So 10 kW actual = 5 kW effective
-        effect_layer = decision.layers[2]
+        effect_layer = decision.layers[3]  # Effect is layer 3 (after safety, emergency, thermal debt)
         assert effect_layer.weight >= 0.0
 
 

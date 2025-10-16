@@ -57,11 +57,29 @@ class NibeState:
     is_heating: bool
     is_hot_water: bool
     timestamp: datetime
+    dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
+    dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
 
     @property
     def flow_temp(self) -> float:
         """Alias for supply_temp (flow temperature = supply temperature)."""
         return self.supply_temp
+    
+    @property
+    def dhw_temp(self) -> float | None:
+        """Primary DHW temperature for heating decisions (BT6 charging sensor).
+        
+        Returns BT6 (charging/bottom) if available, falls back to BT7 (top) if not.
+        
+        BT6 is preferred because:
+        - Drops faster when hot water is used (bottom of tank cools first)
+        - Provides early warning that heating is needed
+        - BT7 stays hot until tank is nearly empty (too late for proactive heating)
+        
+        BT7 is useful for Legionella detection (monitors peak temperatures),
+        but BT6 is better for triggering DHW heating cycles.
+        """
+        return self.dhw_charging_temp if self.dhw_charging_temp is not None else self.dhw_top_temp
 
 
 class NibeAdapter:
@@ -170,6 +188,20 @@ class NibeAdapter:
             self._entity_cache.get("hot_water_status"), default=False
         )
 
+        # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
+        dhw_top_temp = await self._read_entity_float(
+            self._entity_cache.get("dhw_top_temp"), default=None
+        )
+        dhw_charging_temp = await self._read_entity_float(
+            self._entity_cache.get("dhw_charging_temp"), default=None
+        )
+
+        # Log DHW sensor status
+        if dhw_top_temp is not None:
+            _LOGGER.debug("DHW top temperature (BT7): %.1f°C", dhw_top_temp)
+        if dhw_charging_temp is not None:
+            _LOGGER.debug("DHW charging temperature (BT6): %.1f°C", dhw_charging_temp)
+
         return NibeState(
             outdoor_temp=outdoor_temp,
             indoor_temp=indoor_temp,
@@ -180,6 +212,8 @@ class NibeAdapter:
             is_heating=is_heating,
             is_hot_water=is_hot_water,
             timestamp=dt_util.utcnow(),
+            dhw_top_temp=dhw_top_temp,
+            dhw_charging_temp=dhw_charging_temp,
         )
 
     async def set_curve_offset(self, offset: float) -> None:
@@ -248,6 +282,8 @@ class NibeAdapter:
         - offset (S1 offset)
         - compressor_status
         - hot_water_status
+        - dhw_top_temp (BT7 - hot water top)
+        - dhw_charging_temp (BT6 - hot water charging/bottom)
         """
         registry = er.async_get(self.hass)
 
@@ -263,6 +299,8 @@ class NibeAdapter:
             "offset": ["offset", "47011"],  # param 47011
             "compressor_status": ["compressor", "43427"],  # param 43427
             "hot_water_status": ["hot_water", "dhw"],
+            "dhw_top_temp": ["bt7", "hw_top", "40013"],  # BT7 / param 40013 - hot water top
+            "dhw_charging_temp": ["bt6", "hw_bottom", "hw_charging", "40014"],  # BT6 / param 40014
         }
 
         # Find entities
@@ -285,7 +323,14 @@ class NibeAdapter:
                     for pattern in patterns_list:
                         if pattern in entity_id_lower:
                             # Additional validation for temperature sensors
-                            if key in ["outdoor_temp", "indoor_temp", "supply_temp", "return_temp"]:
+                            if key in [
+                                "outdoor_temp",
+                                "indoor_temp",
+                                "supply_temp",
+                                "return_temp",
+                                "dhw_top_temp",
+                                "dhw_charging_temp",
+                            ]:
                                 # Check if it's actually a temperature sensor
                                 state = self.hass.states.get(entity.entity_id)
                                 if state and state.attributes.get("device_class") != "temperature":

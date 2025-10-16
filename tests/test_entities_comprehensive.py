@@ -90,6 +90,9 @@ def full_coordinator():
             baseline_cost=1200.0,
             optimized_cost=750.0,
         ),
+        # Add current_quarter and current_classification at top level for sensors
+        "current_quarter": 42,
+        "current_classification": "normal",
     }
     coordinator.peak_today = 4.5
     coordinator.peak_this_month = 5.2
@@ -102,6 +105,8 @@ def full_coordinator():
         CONF_POWER_SENSOR_ENTITY: "sensor.house_power",
         CONF_WEATHER_ENTITY: "weather.home",
     }
+    # Coordinator also has `entry` attribute (same as config_entry for compatibility)
+    coordinator.entry = coordinator.config_entry
     return coordinator
 
 
@@ -118,6 +123,8 @@ def empty_coordinator():
     coordinator.hass = MagicMock(spec=HomeAssistant)
     coordinator.config_entry = MagicMock()
     coordinator.config_entry.data = {}
+    # Coordinator also has `entry` attribute
+    coordinator.entry = coordinator.config_entry
     return coordinator
 
 
@@ -263,7 +270,7 @@ def test_all_sensors_with_full_data(full_coordinator, mock_entry):
 
 
 def test_all_sensors_with_no_data(empty_coordinator, mock_entry):
-    """Test all 14 sensors handle missing data gracefully."""
+    """Test all 18 sensors handle missing data gracefully."""
     for sensor_desc in SENSORS:
         sensor = EffektGuardSensor(empty_coordinator, mock_entry, sensor_desc)
 
@@ -279,10 +286,12 @@ def test_all_sensors_with_no_data(empty_coordinator, mock_entry):
             assert value == 0.0, f"{sensor_desc.key}: expected 0.0"
         elif sensor_desc.key == "optimization_reasoning":
             assert value == "No decision yet", f"{sensor_desc.key}: expected 'No decision yet'"
-        elif sensor_desc.key in ["hour_classification", "peak_status"]:
+        elif sensor_desc.key in ["hour_classification", "peak_status", "dhw_status"]:
             assert value == "unknown", f"{sensor_desc.key}: expected 'unknown'"
         elif sensor_desc.key == "heat_pump_model":
             assert value == "Unknown", f"{sensor_desc.key}: expected 'Unknown'"
+        elif sensor_desc.key == "dhw_recommendation":
+            assert value == "No recommendation", f"{sensor_desc.key}: expected 'No recommendation'"
         else:
             # All other sensors should return None
             assert value is None, f"Sensor {sensor_desc.key} returned {value!r}, expected None"
@@ -523,12 +532,13 @@ async def test_number_target_temperature_clamping_max(mock_hass, full_coordinato
             # Home Assistant platform handles clamping, but we test the defined limits
             await number.async_set_native_value(30.0)
 
-            # Value was set (HA platform would clamp at UI level)
+            # Value was set to options (not data)
             call_args = mock_update.call_args
-            updated_data = call_args[1]["data"]
+            updated_options = call_args[1]["options"]
             # In production, HA's NumberEntity platform prevents values > max
             # Here we verify the limits are properly defined
             assert number.entity_description.native_max_value == 26.0
+            assert updated_options[CONF_TARGET_INDOOR_TEMP] == 30.0  # Raw value stored
 
 
 async def test_number_target_temperature_clamping_min(mock_hass, full_coordinator, mock_entry):
@@ -678,7 +688,7 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
 
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
-    assert len(entities) == 15
+    assert len(entities) == 18  # Updated: 18 sensors (added DHW + optional features)
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

@@ -194,6 +194,17 @@ class ThermalModel:
         if len(self._learning_data) > 1000:
             self._learning_data = self._learning_data[-1000:]
 
+    def get_prediction_horizon(self) -> float:
+        """Get prediction horizon for weather forecasting.
+        
+        Base implementation returns default 12 hours.
+        AdaptiveThermalModel overrides this with UFH-type-specific values.
+        
+        Returns:
+            Prediction horizon in hours (default 12.0)
+        """
+        return 12.0  # Default medium horizon
+
     def get_thermal_characteristics(self) -> dict[str, Any]:
         """Get current thermal model characteristics.
 

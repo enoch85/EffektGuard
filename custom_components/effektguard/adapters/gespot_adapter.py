@@ -1,4 +1,4 @@
-"""GE-Spot adapter for reading Swedish electricity prices.
+"""GE-Spot adapter for reading electricity prices.
 
 This adapter reads electricity price data from the GE-Spot integration,
 which provides native 15-minute price intervals perfectly aligned with
@@ -8,7 +8,13 @@ GE-Spot features:
 - Native 15-minute granularity (96 periods per day)
 - Multiple data sources with automatic fallback
 - Today + tomorrow prices
-- Matches Swedish electricity market structure
+- Multi-currency support (SEK, EUR, etc.) with automatic conversion
+- Flexible display units (main unit or subunit: SEK/öre, EUR/cents)
+
+This adapter:
+- Uses prices exactly as configured in GE-Spot (respects user's display preference)
+- GE-Spot handles all currency and unit conversions
+- No unit conversion performed - user's choice is respected
 """
 
 import logging
@@ -33,12 +39,15 @@ class QuarterPeriod:
     - Quarter 24: 06:00-06:15 (daytime starts)
     - Quarter 87: 21:45-22:00 (daytime ends)
     - Quarter 95: 23:45-00:00
+    
+    Note: Prices are in whatever unit the user configured in GE-Spot.
+    GE-Spot handles all conversions, we use values as-is.
     """
 
     quarter_of_day: int  # 0-95
     hour: int  # 0-23
     minute: int  # 0, 15, 30, 45
-    price: float  # SEK/kWh
+    price: float  # Price in user's configured GE-Spot unit (öre/kWh, SEK/kWh, cents/kWh, EUR/kWh, etc.)
     is_daytime: bool  # True if 06:00-22:00 (full effect tariff weight)
 
 
@@ -58,7 +67,7 @@ class PriceData:
         """Get current quarter's price.
         
         Returns:
-            Current price in SEK/kWh, or None if not available
+            Current price in user's configured GE-Spot unit, or None if not available
         """
         if not self.today:
             return None
@@ -129,15 +138,24 @@ class GESpotAdapter:
             else:
                 _LOGGER.debug("  - %s: %s", attr_name, attr_value)
 
+        # Get GE-Spot unit configuration for logging
+        # We don't convert - just use whatever the user configured
+        unit_of_measurement = state.attributes.get("unit_of_measurement", "unknown")
+        
+        _LOGGER.debug(
+            "GE-Spot configured unit: %s (using prices as-is, no conversion)",
+            unit_of_measurement,
+        )
+
         # Parse today's prices from attributes
         # GE-Spot stores prices in attributes as list of dicts with:
         # - time: datetime string (ISO format with timezone)
-        # - value: float (in configured unit, e.g., öre/kWh, cents/kWh)
-        # Note: GE-Spot handles currency conversion, we use values as-is
+        # - value: float (in user's configured display unit)
+        # We use values exactly as GE-Spot provides them - no conversion
         today_raw = state.attributes.get("today_interval_prices", [])
         tomorrow_raw = state.attributes.get("tomorrow_interval_prices", [])
 
-        # Convert to QuarterPeriod objects
+        # Convert to QuarterPeriod objects (no unit conversion, use as-is)
         today_periods = self._parse_periods(today_raw)
         tomorrow_periods = self._parse_periods(tomorrow_raw) if tomorrow_raw else []
 
@@ -160,15 +178,20 @@ class GESpotAdapter:
             has_tomorrow=len(tomorrow_periods) > 0,
         )
 
-    def _parse_periods(self, raw_prices: list[dict[str, Any]]) -> list[QuarterPeriod]:
+    def _parse_periods(
+        self, raw_prices: list[dict[str, Any]]
+    ) -> list[QuarterPeriod]:
         """Parse raw price data into QuarterPeriod objects.
 
         Args:
             raw_prices: List of dicts with 'time' (datetime string) and 'value' (float)
-                       GE-Spot handles currency conversion automatically
 
         Returns:
             List of 96 QuarterPeriod objects for the day
+            
+        Note:
+            Prices are used exactly as GE-Spot provides them.
+            No unit conversion is performed - we respect user's configured unit.
         """
         periods = []
 
@@ -188,7 +211,7 @@ class GESpotAdapter:
                 minute = start.minute
                 quarter_of_day = (hour * 4) + (minute // 15)
 
-                # Parse price (GE-Spot uses 'value' key, already in correct unit)
+                # Parse price - use exactly as provided by GE-Spot (no conversion)
                 price = float(item.get("value", 0.0))
 
                 # Determine if daytime (06:00-22:00 = full effect tariff weight)

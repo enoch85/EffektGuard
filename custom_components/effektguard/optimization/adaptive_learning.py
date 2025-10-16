@@ -174,17 +174,20 @@ class AdaptiveThermalModel:
             return None
 
     def _detect_ufh_type(self) -> UFHType:
-        """Detect UFH type from thermal response lag.
+        """Detect heating system thermal response speed from observation data.
 
-        Analyzes step response to offset changes:
-        - 6+ hour lag = concrete slab
-        - 2-3 hour lag = timber
-        - <1 hour lag = radiators
+        Analyzes step response lag time to heating offset changes:
+        - 6+ hour lag = SLOW (typically concrete slab UFH)
+        - 2-3 hour lag = MEDIUM (typically timber UFH)
+        - <1 hour lag = FAST (typically radiators)
+
+        Note: Detects RESPONSE TIME, not actual materials. A well-insulated
+        timber floor could show slow response, or a thin screed could be medium.
 
         Based on Forum_Summary.md and Floor_Heating_Enhancements.md research.
 
         Returns:
-            Detected UFH type
+            Detected thermal response type
         """
         if len(self.observations) < LEARNING_MIN_OBSERVATIONS * 2:
             return UFHType.UNKNOWN
@@ -210,13 +213,13 @@ class AdaptiveThermalModel:
 
         # Classify based on research thresholds
         if median_lag >= 6.0:
-            return UFHType.CONCRETE_SLAB
+            return UFHType.SLOW_RESPONSE  # Typically concrete slab UFH
         elif median_lag >= 2.0:
-            return UFHType.TIMBER
+            return UFHType.MEDIUM_RESPONSE  # Typically timber UFH
         elif median_lag >= 0.5:
-            return UFHType.RADIATOR
+            return UFHType.FAST_RESPONSE  # Typically radiators
         else:
-            return UFHType.RADIATOR  # Very fast response = radiators
+            return UFHType.FAST_RESPONSE  # Very fast response
 
     def _measure_response_lag(self, change_index: int) -> float | None:
         """Measure thermal lag time after offset change.
@@ -421,12 +424,12 @@ class AdaptiveThermalModel:
         Returns:
             Prediction horizon in hours
         """
-        if self.ufh_type == UFHType.CONCRETE_SLAB:
-            return UFH_CONCRETE_PREDICTION_HORIZON
-        elif self.ufh_type == UFHType.TIMBER:
-            return UFH_TIMBER_PREDICTION_HORIZON
-        elif self.ufh_type == UFHType.RADIATOR:
-            return UFH_RADIATOR_PREDICTION_HORIZON
+        if self.ufh_type == UFHType.SLOW_RESPONSE:
+            return UFH_CONCRETE_PREDICTION_HORIZON  # 24 hours
+        elif self.ufh_type == UFHType.MEDIUM_RESPONSE:
+            return UFH_TIMBER_PREDICTION_HORIZON  # 12 hours
+        elif self.ufh_type == UFHType.FAST_RESPONSE:
+            return UFH_RADIATOR_PREDICTION_HORIZON  # 6 hours
         else:
             # Unknown - use moderate horizon
             return UFH_TIMBER_PREDICTION_HORIZON

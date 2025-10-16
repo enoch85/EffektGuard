@@ -104,7 +104,7 @@ class DecisionEngine:
         self.heat_pump_model = heat_pump_model  # Model profile
 
         # Configuration with defaults
-        self.target_temp = config.get("target_temperature", DEFAULT_TARGET_TEMP)
+        self.target_temp = config.get("target_indoor_temp", DEFAULT_TARGET_TEMP)
         self.tolerance = config.get("tolerance", DEFAULT_TOLERANCE)
         self.tolerance_range = self.tolerance * 0.4  # Scale: 1-10 -> 0.4-4.0°C
 
@@ -644,16 +644,22 @@ class DecisionEngine:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather forecast")
 
         try:
-            # Extract forecast temperatures (next 12 hours)
-            forecast_temps = [hour.temperature for hour in weather_data.forecast_hours[:12]]
+            # Use UFH-type-specific forecast horizon for learned predictions
+            # Concrete slab: 24h, Timber: 12h, Radiators: 6h
+            prediction_horizon = int(self.thermal.get_prediction_horizon())
+            forecast_temps = [
+                hour.temperature for hour in weather_data.forecast_hours[:prediction_horizon]
+            ]
 
             if not forecast_temps:
                 return LayerDecision(offset=0.0, weight=0.0, reason="Empty weather forecast")
 
             # Check if pre-heating is recommended
+            # Use half of prediction horizon as lookahead (balance between early and late)
+            hours_until_event = prediction_horizon // 2
             preheat_decision = self.predictor.should_pre_heat(
                 target_temp=self.target_temp,
-                hours_until_event=6,  # 6-hour lookahead for balance
+                hours_until_event=hours_until_event,
                 outdoor_forecast_temps=forecast_temps,
             )
 
@@ -685,7 +691,10 @@ class DecisionEngine:
         """Weather prediction layer: Pre-heat before predicted cold periods.
 
         Uses dynamic thresholds based on building thermal mass and
-        rate-of-change analysis over 6-hour forecast window.
+        rate-of-change analysis. Forecast window adapts to UFH type:
+        - Concrete slab: 24 hours (6+ hour thermal lag, needs early pre-heating)
+        - Timber UFH: 12 hours (2-3 hour lag)
+        - Radiators: 6 hours (<1 hour lag)
 
         Args:
             nibe_state: Current NIBE state
@@ -697,13 +706,20 @@ class DecisionEngine:
         if not weather_data or not weather_data.forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
 
-        forecast_6h = weather_data.forecast_hours[:6]  # 6-hour window
+        # Use UFH-type-specific forecast horizon (enoch95 feedback: 24h for concrete)
+        # Concrete slab needs longer horizon for extreme cold snaps (20°C drops)
+        prediction_horizon = int(self.thermal.get_prediction_horizon())
+        forecast_hours = weather_data.forecast_hours[:prediction_horizon]
+
+        if not forecast_hours:
+            return LayerDecision(offset=0.0, weight=0.0, reason="No forecast data")
+
         current_outdoor = nibe_state.outdoor_temp
 
         # Calculate minimum temperature and rate of change
-        min_temp = min(f.temperature for f in forecast_6h)
+        min_temp = min(f.temperature for f in forecast_hours)
         temp_drop = min_temp - current_outdoor
-        hourly_rate = temp_drop / len(forecast_6h) if forecast_6h else 0.0
+        hourly_rate = temp_drop / len(forecast_hours) if forecast_hours else 0.0
 
         # Dynamic threshold based on building thermal mass
         # MORE AGGRESSIVE (enoch95 feedback): Act sooner to prevent thermal debt
@@ -720,7 +736,7 @@ class DecisionEngine:
             preheat_target = self.thermal.calculate_preheating_target(
                 current_temp=nibe_state.indoor_temp,
                 desired_temp=self.target_temp,
-                hours_until_peak=len(forecast_6h),
+                hours_until_peak=len(forecast_hours),
                 outdoor_temp=current_outdoor,
                 forecast_min_temp=min_temp,
             )
@@ -728,13 +744,13 @@ class DecisionEngine:
             return LayerDecision(
                 offset=offset,
                 weight=0.7,
-                reason=f"Pre-heat: {temp_drop:.1f}°C drop, {hourly_rate:.1f}°C/h rate",
+                reason=f"Pre-heat: {temp_drop:.1f}°C drop in {len(forecast_hours)}h, {hourly_rate:.1f}°C/h rate",
             )
         else:
             return LayerDecision(
                 offset=0.0,
                 weight=0.0,
-                reason=f"Weather OK: {temp_drop:.1f}°C drop < {threshold:.1f}°C threshold",
+                reason=f"Weather OK: {temp_drop:.1f}°C drop < {threshold:.1f}°C threshold ({len(forecast_hours)}h window)",
             )
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:

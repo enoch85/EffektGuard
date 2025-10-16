@@ -103,10 +103,12 @@ DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
 DM_THRESHOLD_ABSOLUTE_MAX: Final = -1500  # NEVER EXCEED - hard safety limit
 
 # UFH prediction horizons based on thermal lag research
-# Source: Enhancement_Proposals.md, Floor_Heating_Enhancements.md
-UFH_CONCRETE_PREDICTION_HORIZON: Final = 12.0  # hours - 6+ hour lag
-UFH_TIMBER_PREDICTION_HORIZON: Final = 6.0  # hours - 2-3 hour lag
-UFH_RADIATOR_PREDICTION_HORIZON: Final = 2.0  # hours - <1 hour lag
+# Source: glyn.hudson F2040 case study, enoch95 extreme cold snap feedback
+UFH_CONCRETE_PREDICTION_HORIZON: Final = (
+    24.0  # hours - 6+ hour lag, needs 24h for extreme cold (20°C drops)
+)
+UFH_TIMBER_PREDICTION_HORIZON: Final = 12.0  # hours - 2-3 hour lag (increased from 6h)
+UFH_RADIATOR_PREDICTION_HORIZON: Final = 6.0  # hours - <1 hour lag (increased from 2h)
 
 # UFH comfort targets (°C)
 UFH_CONCRETE_COMFORT_TOLERANCE: Final = 0.3  # ±0.3°C for concrete slab
@@ -253,11 +255,11 @@ class QuarterClassification(StrEnum):
 
 
 class UFHType(StrEnum):
-    """Underfloor heating system type."""
+    """Heating system thermal response type (detected from lag time, not material)."""
 
-    CONCRETE_SLAB = "concrete_slab"
-    TIMBER = "timber"
-    RADIATOR = "radiator"
+    SLOW_RESPONSE = "slow_response"  # 6+ hours lag (typically concrete slab UFH)
+    MEDIUM_RESPONSE = "medium_response"  # 2-3 hours lag (typically timber UFH)
+    FAST_RESPONSE = "fast_response"  # <1 hour lag (typically radiators)
     UNKNOWN = "unknown"
 
 

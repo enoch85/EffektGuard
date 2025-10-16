@@ -84,13 +84,17 @@ class IntelligentDHWScheduler:
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
     def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
-        """Update BT7 temperature history and detect NIBE's Legionella boost.
+        """Update BT7/BT6 temperature history and detect NIBE's Legionella boost.
 
         Call this every coordinator update to track DHW temperature and
         automatically detect when NIBE's automatic Legionella boost runs.
+        
+        Note: Despite the name, this can accept either BT7 (top) or BT6 (charging)
+        temperature. BT7 is preferred for Legionella detection (peaks at 65°C),
+        but BT6 works as fallback if BT7 not available.
 
         Args:
-            temp: Current BT7 (hot water top) temperature
+            temp: Current DHW temperature (BT7 top preferred, BT6 charging acceptable)
             timestamp: Current timestamp
         """
         self.bt7_history.append((timestamp, temp))
@@ -99,7 +103,7 @@ class IntelligentDHWScheduler:
         if self._detect_legionella_boost_completion():
             self.last_legionella_boost = timestamp
             _LOGGER.info(
-                "NIBE Legionella boost detected (automatic): peaked at %s°C at %s",
+                "NIBE Legionella boost detected (automatic): peaked at %.1f°C at %s",
                 max(t for _, t in self.bt7_history),
                 timestamp,
             )

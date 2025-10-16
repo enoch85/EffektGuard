@@ -408,10 +408,6 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options flow for EffektGuard."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
-
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
@@ -506,6 +502,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     ): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="weather",
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ADDITIONAL_INDOOR_SENSORS,
+                        default=self.config_entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
+                    ): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor",
+                            device_class="temperature",
+                            multiple=True,
                         )
                     ),
                 }

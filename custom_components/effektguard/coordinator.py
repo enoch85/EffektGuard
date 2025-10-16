@@ -31,6 +31,7 @@ from .models.nibe import (
     NibeS1155Profile,
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
+from .optimization.dhw_optimizer import IntelligentDHWScheduler
 from .optimization.thermal_predictor import ThermalStatePredictor
 from .optimization.weather_learning import WeatherPatternLearner
 
@@ -99,6 +100,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.thermal_predictor = ThermalStatePredictor()
         self.weather_learner = WeatherPatternLearner()
         self.climate_region = self._detect_climate_region(hass)
+
+        # DHW optimizer (intelligent hot water scheduling)
+        self.dhw_scheduler = IntelligentDHWScheduler()
 
         # Learning storage
         self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
@@ -225,9 +229,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         _LOGGER.debug("Starting EffektGuard data update")
 
-        # Gather core data (NIBE - must succeed)
+        # Gather core data (NIBE - must succeed, but retry during startup)
         try:
             nibe_data = await self.nibe.get_current_state()
+
+            # Mark startup complete after first successful NIBE read
+            if not hasattr(self, "_startup_complete"):
+                _LOGGER.info("All required entities available - EffektGuard fully initialized")
+                self._startup_complete = True
+
             _LOGGER.debug(
                 "NIBE data retrieved: indoor %.1f°C, outdoor %.1f°C, flow %.1f°C, DM %.0f",
                 nibe_data.indoor_temp,
@@ -236,8 +246,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 nibe_data.degree_minutes,
             )
         except Exception as err:
-            _LOGGER.error("Failed to read NIBE data: %s", err)
-            raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
+            # During startup, entities may not be ready yet - log as info not error
+            if not hasattr(self, "_startup_complete"):
+                _LOGGER.info(
+                    "NIBE entities not ready yet (normal during startup), will retry: %s", err
+                )
+                # Set flag after first successful read
+                self._startup_complete = False
+            else:
+                _LOGGER.error("Failed to read NIBE data: %s", err)
+            raise UpdateFailed(f"Waiting for NIBE entities: {err}") from err
 
         # Gather optional data with graceful degradation
         # GE-Spot price data (native 15-minute intervals)
@@ -246,12 +264,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if price_data and price_data.today:
                 current_q = (dt_util.now().hour * 4) + (dt_util.now().minute // 15)
                 current_price = (
-                    price_data.today[current_q].price_ore
+                    price_data.today[current_q].price
                     if current_q < len(price_data.today)
                     else 0
                 )
                 _LOGGER.debug(
-                    "GE-Spot data retrieved: %d quarters today, current Q%d = %.1f öre/kWh",
+                    "GE-Spot data retrieved: %d quarters today, current Q%d price = %.2f",
                     len(price_data.today),
                     current_q,
                     current_price,
@@ -342,6 +360,46 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
+        # Calculate DHW boost schedule if BT6/BT7 sensors available
+        # BT6 (40014) = hot water charging/bottom temperature (primary for heating decisions)
+        # BT7 (40013) = hot water top temperature (for Legionella detection)
+        # Strategy: BT6 drops first when water is used → early warning for heating
+        dhw_next_boost = None
+        dhw_status = "not_configured"  # Shows until BT6/BT7 auto-detected
+        dhw_target_temp = None
+        
+        if nibe_data and nibe_data.dhw_temp is not None:
+            # Track BT7 (top) for Legionella detection if available
+            # Falls back to BT6 if BT7 not present (better than nothing)
+            bt7_for_legionella = nibe_data.dhw_top_temp if nibe_data.dhw_top_temp is not None else nibe_data.dhw_charging_temp
+            if bt7_for_legionella is not None:
+                self.dhw_scheduler.update_bt7_temperature(bt7_for_legionella, now_time)
+            
+            # Use BT6 (charging/bottom) for heating decisions - drops faster, earlier warning
+            # dhw_temp property already prioritizes BT6 over BT7
+            try:
+                dhw_decision = self.dhw_scheduler.should_start_dhw(
+                    current_dhw_temp=nibe_data.dhw_temp,  # BT6 preferred, BT7 fallback
+                    space_heating_demand_kw=6.0,  # TODO: Calculate from flow temp & outdoor temp
+                    thermal_debt_dm=nibe_data.degree_minutes,
+                    indoor_temp=nibe_data.indoor_temp,
+                    target_indoor_temp=self.config_entry.options.get("target_indoor_temp", 21.0),
+                    outdoor_temp=nibe_data.outdoor_temp,
+                    price_classification=current_classification,
+                    current_time=now_time,
+                )
+                
+                if dhw_decision.should_heat:
+                    dhw_next_boost = dhw_decision.recommended_start_time
+                    dhw_status = dhw_decision.priority_reason
+                    dhw_target_temp = dhw_decision.target_temp
+                else:
+                    dhw_status = dhw_decision.priority_reason
+                    
+            except Exception as err:
+                _LOGGER.warning("DHW scheduling failed: %s", err)
+                dhw_status = "error"
+
         return {
             "nibe": nibe_data,
             "price": price_data,
@@ -352,6 +410,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
             "current_classification": current_classification,
+            "dhw_next_boost": dhw_next_boost,
+            "dhw_status": dhw_status,
+            "dhw_target_temp": dhw_target_temp,
         }
 
     def _get_fallback_prices(self):

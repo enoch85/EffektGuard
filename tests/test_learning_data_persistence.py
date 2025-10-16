@@ -8,6 +8,7 @@ import pytest
 from datetime import datetime, timedelta
 from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
 from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.const import UFHType
 
 
 class TestAdaptiveLearningSerializa:
@@ -87,12 +88,12 @@ class TestAdaptiveLearningSerializa:
     def test_preserves_ufh_type_setting(self):
         """Test UFH type is preserved through save/load."""
         model1 = AdaptiveThermalModel()
-        model1.ufh_type = "concrete_slab"
+        model1.ufh_type = UFHType.SLOW_RESPONSE  # Updated: use enum
 
         data = model1.to_dict()
         model2 = AdaptiveThermalModel.from_dict(data)
 
-        assert model2.ufh_type == "concrete_slab"
+        assert model2.ufh_type == UFHType.SLOW_RESPONSE  # Updated: use enum
 
     def test_round_trip_preserves_observation_count(self):
         """Test complete round-trip preserves observation count."""

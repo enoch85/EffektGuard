@@ -442,7 +442,10 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 }
 
             # Weather forecast status
-            weather_entity = config.get("weather_entity")
+            # Check both options and data for weather entity
+            weather_entity = config.get("weather_entity") or self.coordinator.entry.data.get(
+                "weather_entity"
+            )
             if weather_entity:
                 weather_state = self.coordinator.hass.states.get(weather_entity)
                 if weather_state and "forecast" in weather_state.attributes:
