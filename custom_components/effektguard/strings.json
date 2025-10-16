@@ -3,9 +3,12 @@
     "step": {
       "user": {
         "title": "Configure NIBE Integration",
-        "description": "Select your NIBE heat pump entity. Found {nibe_count} NIBE entities.",
+        "description": "Select your NIBE heating curve offset entity (number.* with 'offset' in name). Found {nibe_count} compatible entities.\n\n**Your entity:** `number.f750_cu_3x400v_offset`",
         "data": {
-          "nibe_entity": "NIBE Entity"
+          "nibe_entity": "NIBE Heating Curve Offset Entity"
+        },
+        "data_description": {
+          "nibe_entity": "The NIBE entity that controls the heating curve offset (typically number.*_offset)"
         }
       },
       "gespot": {

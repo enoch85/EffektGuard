@@ -75,13 +75,17 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_NIBE_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(
-                            domain=["sensor", "number"],
+                            domain=["number"],
+                            multiple=False,
                         )
                     ),
                 }
             ),
             errors=errors,
-            description_placeholders={"nibe_count": str(len(nibe_entities))},
+            description_placeholders={
+                "nibe_count": str(len(nibe_entities)),
+                "info": "Select the NIBE heating curve offset entity (number.* with 'offset' in name)",
+            },
         )
 
     async def async_step_gespot(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -286,12 +290,35 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     def _discover_nibe_entities(self) -> list[str]:
-        """Discover NIBE entities."""
+        """Discover NIBE heating curve offset entities.
+
+        Filters for entities that can control heating curve offset:
+        - number.* entities with 'offset' in name
+        - Excludes entities with translation errors
+        """
         entities = []
         for state in self.hass.states.async_all():
-            # Look for NIBE-related entities
-            if "nibe" in state.entity_id.lower() or "myuplink" in state.entity_id.lower():
-                entities.append(state.entity_id)
+            entity_id = state.entity_id
+
+            # Must be a number entity (writable)
+            if not entity_id.startswith("number."):
+                continue
+
+            # Must contain NIBE/MyUplink identifier
+            if not ("nibe" in entity_id.lower() or "myuplink" in entity_id.lower()):
+                continue
+
+            # Must be related to offset/curve control
+            if "offset" not in entity_id.lower():
+                continue
+
+            # Exclude entities with translation errors
+            friendly_name = state.attributes.get("friendly_name", "")
+            if "text not found" in friendly_name.lower():
+                continue
+
+            entities.append(entity_id)
+
         return entities
 
     def _discover_gespot_entities(self) -> list[str]:
