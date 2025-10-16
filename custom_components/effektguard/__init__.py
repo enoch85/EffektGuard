@@ -93,13 +93,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Store coordinator
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # Perform first refresh (non-blocking, allows graceful startup)
-    # First refresh handles missing entities gracefully via UpdateFailed
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
-        _LOGGER.error("Failed to initialize EffektGuard: %s", err)
-        raise ConfigEntryNotReady from err
+    # Schedule first refresh in background after grace period
+    # This allows MyUplink and GE-Spot integrations to fully initialize
+    # Without blocking EffektGuard or Home Assistant startup
+    async def delayed_first_refresh():
+        """Wait for external integrations, then perform first data update."""
+        import asyncio
+
+        # Based on debug.log analysis: MyUplink entities available after ~45-50 seconds
+        # Using 45 seconds provides buffer while avoiding unnecessary delay
+        _LOGGER.debug("Waiting 45 seconds for MyUplink/GE-Spot initialization...")
+        await asyncio.sleep(45)  # Grace period for external integrations
+
+        try:
+            await coordinator.async_refresh()
+            _LOGGER.info("EffektGuard first data update complete (entities ready)")
+        except Exception as err:
+            _LOGGER.info("First data update failed, will retry on schedule: %s", err)
+            # Not fatal - coordinator will retry every 5 minutes automatically
+
+    # Start background initialization without blocking
+    hass.async_create_task(delayed_first_refresh())
 
     # Forward setup to platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

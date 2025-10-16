@@ -131,10 +131,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_optimizer = IntelligentDHWScheduler(demand_periods=demand_periods)
 
         if demand_periods:
-            _LOGGER.info(
-                "DHW demand periods configured: %s",
-                [f"{p.start_hour}:00 ({p.target_temp}°C)" for p in demand_periods],
-            )
+            try:
+                # Format DHW periods for logging (handle both real values and test mocks)
+                formatted_periods = []
+                for p in demand_periods:
+                    try:
+                        hour = int(p.start_hour)
+                        temp = float(p.target_temp)
+                        formatted_periods.append(f"{hour:02d}:00 ({temp:.1f}°C)")
+                    except (TypeError, ValueError):
+                        # Fallback for mock objects in tests
+                        formatted_periods.append(f"{p.start_hour}:00 ({p.target_temp}°C)")
+
+                _LOGGER.info("DHW demand periods configured: %s", formatted_periods)
+            except Exception as err:
+                _LOGGER.debug("Could not format DHW periods: %s", err)
 
         # Learning storage
         self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
