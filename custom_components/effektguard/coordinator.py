@@ -350,6 +350,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
+        # Calculate DHW status based on temperature
+        dhw_status = "not_configured"
+        if nibe_data and hasattr(nibe_data, "dhw_top_temp") and nibe_data.dhw_top_temp is not None:
+            # Simple status based on temperature thresholds
+            # Based on research: 35°C minimum safety, 50°C normal target, 55°C high demand
+            if nibe_data.dhw_top_temp < 35.0:
+                dhw_status = "low"  # Below safety minimum
+            elif nibe_data.dhw_top_temp < 45.0:
+                dhw_status = "heating"  # Below comfort, likely heating
+            elif nibe_data.dhw_top_temp < 52.0:
+                dhw_status = "ready"  # At normal target
+            else:
+                dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
+
         return {
             "nibe": nibe_data,
             "price": price_data,
@@ -360,6 +374,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
             "current_classification": current_classification,
+            "dhw_status": dhw_status,
         }
 
     def _get_fallback_prices(self):
