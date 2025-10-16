@@ -1,7 +1,3 @@
-# EffektGuard
-
-<img src="EffektGuard-logo.png" alt="drawing" width="200"/>
-
 # ⚠️ WORK IN PROGRESS ⚠️
 
 **This integration is currently under active development and is NOT ready for production use.**
@@ -11,6 +7,8 @@ Do not attempt to install or use this integration yet. Documentation and release
 ---
 
 ## What is EffektGuard?
+
+<img src="EffektGuard-logo.png" alt="drawing" width="200"/>
 
 EffektGuard is a Home Assistant custom integration for intelligent NIBE heat pump control, optimizing for Swedish electricity costs while maintaining comfort and heat pump health.
 
