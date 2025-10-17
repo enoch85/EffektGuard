@@ -100,7 +100,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.weather_learner = WeatherPatternLearner()
         self.climate_region = self._detect_climate_region(hass)
 
-        # DHW optimizer
+        # DHW optimizer - pass climate detector for climate-aware thresholds
         from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
 
         # Configure DHW demand periods from options
@@ -128,7 +128,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             )
 
-        self.dhw_optimizer = IntelligentDHWScheduler(demand_periods=demand_periods)
+        # Pass climate detector from decision engine to DHW optimizer for dynamic thresholds
+        self.dhw_optimizer = IntelligentDHWScheduler(
+            demand_periods=demand_periods,
+            climate_detector=decision_engine.climate_detector,
+        )
 
         if demand_periods:
             try:
@@ -648,7 +652,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Convert decision to human-readable recommendation
         if not decision.should_heat:
             if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
-                return f"Block DHW - Critical thermal debt (DM: {thermal_debt:.0f})"
+                # Show climate-aware context in the message
+                climate_zone = (
+                    self.engine.climate_detector.zone_info.name
+                    if self.engine.climate_detector
+                    else "Unknown"
+                )
+                return f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {climate_zone})"
             elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
                 return f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
             elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
