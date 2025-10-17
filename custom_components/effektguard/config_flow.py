@@ -234,6 +234,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Store optional sensor settings
             self._data[CONF_DEGREE_MINUTES_ENTITY] = user_input.get(CONF_DEGREE_MINUTES_ENTITY)
             self._data[CONF_POWER_SENSOR_ENTITY] = user_input.get(CONF_POWER_SENSOR_ENTITY)
+            self._data[CONF_NIBE_TEMP_LUX_ENTITY] = user_input.get(CONF_NIBE_TEMP_LUX_ENTITY)
             self._data[CONF_ADDITIONAL_INDOOR_SENSORS] = user_input.get(
                 CONF_ADDITIONAL_INDOOR_SENSORS, []
             )
