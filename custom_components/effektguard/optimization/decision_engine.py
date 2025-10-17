@@ -280,6 +280,51 @@ class DecisionEngine:
 
         return lead_time
 
+    def _calculate_preheat_intensity(
+        self,
+        temp_drop: float,
+        thermal_trend: dict,
+        indoor_deficit: float,
+    ) -> tuple[float, str]:
+        """Calculate adaptive pre-heating intensity (Phase 3.3).
+
+        Modulates pre-heating strength based on indoor state and trend to prevent
+        over-heating when house already warm, or boost when house struggling.
+
+        Args:
+            temp_drop: Forecasted outdoor temperature drop (°C)
+            thermal_trend: Indoor temperature trend data
+            indoor_deficit: Current indoor temp below target (°C)
+
+        Returns:
+            Tuple of (offset, reasoning)
+
+        References:
+            MASTER_IMPLEMENTATION_PLAN.md: Phase 3.3 - Adaptive Pre-Heat Intensity
+        """
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # Base intensity from forecast
+        base_intensity = abs(temp_drop) / 10.0
+        base_offset = min(base_intensity * 2.0, 2.5)
+
+        # Modulate based on indoor state and trend
+        if indoor_deficit > 0.5 and trend_rate < -0.2:
+            intensity_factor = 1.4
+            reason = "aggressive: already cooling below target"
+        elif indoor_deficit < -0.3 and trend_rate > 0.2:
+            intensity_factor = 0.6
+            reason = "gentle: already warm and rising"
+        elif abs(indoor_deficit) < 0.2 and abs(trend_rate) < 0.1:
+            intensity_factor = 1.0
+            reason = "normal: stable at target"
+        else:
+            intensity_factor = 0.9
+            reason = "moderate: mixed conditions"
+
+        final_offset = base_offset * intensity_factor
+        return final_offset, reason
+
     def calculate_decision(
         self,
         nibe_state,
@@ -344,7 +389,9 @@ class DecisionEngine:
         layers = [
             self._safety_layer(nibe_state),
             self._emergency_layer(nibe_state),
-            self._proactive_debt_prevention_layer(nibe_state),  # Prevent debt before it gets bad
+            self._proactive_debt_prevention_layer(
+                nibe_state, weather_data
+            ),  # Phase 3.2: Pass weather_data for forecast validation
             self._effect_layer(nibe_state, current_peak),
             self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
             self._weather_compensation_layer(
@@ -579,7 +626,7 @@ class DecisionEngine:
             "warning": dm_range["warning"],  # Warning threshold
         }
 
-    def _proactive_debt_prevention_layer(self, nibe_state) -> LayerDecision:
+    def _proactive_debt_prevention_layer(self, nibe_state, weather_data=None) -> LayerDecision:
         """Proactive thermal debt prevention with climate-aware thresholds and trend prediction.
 
         PHILOSOPHY (from Forum_Summary.md):
@@ -591,6 +638,11 @@ class DecisionEngine:
         Uses indoor temperature trend to detect problems 30-60 minutes before they occur.
         Rapid cooling (-0.3°C/h or faster) combined with outdoor cold and temperature deficit
         indicates thermal debt will develop soon - intervene proactively.
+
+        PHASE 3.2 - FORECAST VALIDATION:
+        Validates rapid cooling trend against weather forecast to reduce false positives.
+        When both signals agree (indoor cooling + outdoor cooling forecast), boost response.
+        When they disagree (indoor cooling + stable forecast), reduce response (likely temporary).
 
         CLIMATE-AWARE DESIGN:
         Unlike hardcoded DM thresholds, this layer adapts to climate and outdoor temperature:
@@ -622,9 +674,13 @@ class DecisionEngine:
 
         Args:
             nibe_state: Current NIBE state
+            weather_data: Weather forecast data (optional, for forecast validation)
 
         Returns:
             LayerDecision with climate-aware proactive gentle heating
+
+        References:
+            MASTER_IMPLEMENTATION_PLAN.md: Phase 3.2 - Forecast Validation of Trend
         """
         degree_minutes = nibe_state.degree_minutes
         outdoor_temp = nibe_state.outdoor_temp
@@ -652,12 +708,29 @@ class DecisionEngine:
             if outdoor_temp < 0.0 and deficit > 0.3:
                 # Cold outside + already below target + rapid cooling = trouble ahead
                 boost = min(abs(trend_rate) * 2.0, 3.0)  # Proportional to cooling rate
+
+                # PHASE 3.2: Validate against weather forecast to reduce false positives
+                forecast_reason = ""
+                if weather_data and weather_data.forecast_hours:
+                    next_3h_temps = [h.temperature for h in weather_data.forecast_hours[:3]]
+                    if next_3h_temps:
+                        min_forecast_temp = min(next_3h_temps)
+                        temp_will_drop = min_forecast_temp < outdoor_temp - 1.0
+
+                        if temp_will_drop:
+                            boost *= 1.3  # 30% boost when forecast confirms cooling
+                            forecast_reason = " (forecast confirms cooling)"
+                        else:
+                            boost *= 0.8  # 20% reduction (likely temporary, e.g., door open)
+                            forecast_reason = " (forecast stable, likely temporary)"
+
                 return LayerDecision(
                     offset=boost,
                     weight=0.8,  # High priority but not safety-level
                     reason=(
                         f"Proactive: Rapid cooling ({trend_rate:.2f}°C/h), "
                         f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
+                        f"{forecast_reason}"
                     ),
                 )
 
@@ -923,34 +996,51 @@ class DecisionEngine:
             else:
                 outdoor_note = "outdoor stable"
 
+            # PHASE 3.1: Adjust lead time based on indoor temperature trend
+            # If house already cooling, need MORE lead time to compensate
+            # If house already warming, need LESS lead time (save energy)
+            thermal_trend = self._get_thermal_trend()
+            trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+            if trend_rate < -0.3:
+                # House already cooling - need MORE lead time
+                adjusted_lead_time = lead_time_hours * 1.3  # +30%
+                timing_note = "extended: house cooling"
+            elif trend_rate > 0.2:
+                # House already warming - need LESS lead time
+                adjusted_lead_time = lead_time_hours * 0.8  # -20%
+                timing_note = "reduced: house warming"
+            else:
+                adjusted_lead_time = lead_time_hours
+                timing_note = "normal"
+
             # Check if we need to start pre-heating NOW
             hours_until_cold = cold_arrival_hour
 
-            if hours_until_cold <= lead_time_hours:
+            if hours_until_cold <= adjusted_lead_time:
                 # Cold arriving within lead time - START PRE-HEATING NOW
 
                 # Calculate urgency: less time = more urgent
-                urgency_factor = 1.0 + (lead_time_hours - hours_until_cold) / lead_time_hours
+                urgency_factor = 1.0 + (adjusted_lead_time - hours_until_cold) / adjusted_lead_time
                 urgency_factor = min(urgency_factor, 2.0)  # Cap at 2x
 
-                # Calculate pre-heat target
-                preheat_target = self.thermal.calculate_preheating_target(
-                    current_temp=nibe_state.indoor_temp,
-                    desired_temp=self.target_temp,
-                    hours_until_peak=hours_until_cold,
-                    outdoor_temp=current_outdoor,
-                    forecast_min_temp=min_temp,
+                # PHASE 3.3: Calculate adaptive pre-heat intensity
+                indoor_deficit = self.target_temp - nibe_state.indoor_temp
+                offset, intensity_reason = self._calculate_preheat_intensity(
+                    temp_drop, thermal_trend, indoor_deficit
                 )
 
-                offset = (preheat_target - self.target_temp) * urgency_factor
+                # Apply urgency factor
+                offset = offset * urgency_factor
                 offset = min(offset, 3.0)  # Safety cap
 
                 return LayerDecision(
                     offset=offset,
                     weight=0.7,
                     reason=(
-                        f"Pre-heat: {temp_drop:.1f}°C in {hours_until_cold}h "
-                        f"(lead: {lead_time_hours:.1f}h, {outdoor_note}, "
+                        f"Pre-heat: {temp_drop:.1f}°C in {hours_until_cold}h, "
+                        f"{intensity_reason} "
+                        f"(lead time: {adjusted_lead_time:.1f}h {timing_note}, "
                         f"urgency: {urgency_factor:.1f}x)"
                     ),
                 )
