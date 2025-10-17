@@ -218,11 +218,14 @@ class NibeAdapter:
             dhw_charging_temp=dhw_charging_temp,
         )
 
-    async def set_curve_offset(self, offset: float) -> None:
+    async def set_curve_offset(self, offset: float) -> bool:
         """Set heating curve offset via NIBE entity.
 
         Args:
             offset: Offset value in °C (-10 to +10)
+
+        Returns:
+            True if offset was written to NIBE, False if deferred/accumulated
 
         Note:
             Requires NIBE Myuplink Premium subscription for write access.
@@ -234,13 +237,13 @@ class NibeAdapter:
         now = dt_util.utcnow()
         if self._last_write and now - self._last_write < timedelta(minutes=5):
             _LOGGER.debug("Skipping offset write, too soon since last write")
-            return
+            return False
 
         # Get offset entity
         offset_entity = self._entity_cache.get("offset")
         if not offset_entity:
             _LOGGER.error("No offset entity found")
-            return
+            return False
 
         # CHECK: Verify entity is available before service call
         # Prevents "Action number.set_value not found" errors during startup
@@ -252,7 +255,7 @@ class NibeAdapter:
                 offset_entity,
                 state.state if state else "None",
             )
-            return
+            return False
 
         # NIBE offset rounding with fractional accumulation
         # NIBE MyUplink entities have step=1 (integer only), but optimization
@@ -310,7 +313,7 @@ class NibeAdapter:
                 "(accumulator: %.2f°C, will apply when ≥±1.0°C)",
                 self._fractional_accumulator,
             )
-            return
+            return False
 
         # Log accumulator status
         if abs(fractional_part) > 0.01:
@@ -368,10 +371,12 @@ class NibeAdapter:
                 original_offset,
                 self._fractional_accumulator,
             )
+            return True
         except Exception as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             # Don't raise - allow system to continue gracefully
             # Error logged for debugging, but not fatal
+            return False
 
     async def _discover_nibe_entities(self) -> None:
         """Discover NIBE entities from entity registry.

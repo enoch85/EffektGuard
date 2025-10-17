@@ -219,8 +219,7 @@ class WeatherAdapter:
             try:
                 dt = item.get("datetime")
                 if isinstance(dt, str):
-                    from homeassistant.util import dt as dt_util
-
+                    # dt_util already imported at module level
                     dt = dt_util.parse_datetime(dt)
 
                 temp = item.get("temperature")

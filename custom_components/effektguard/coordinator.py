@@ -447,8 +447,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # This sends the calculated offset to the MyUplink number entity (parameter 47011)
         # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
         try:
-            await self.nibe.set_curve_offset(decision.offset)
-            _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
+            was_applied = await self.nibe.set_curve_offset(decision.offset)
+            if was_applied:
+                _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
+            else:
+                _LOGGER.debug(
+                    "Offset %.2f°C deferred (accumulating fractional changes or rate limited)",
+                    decision.offset,
+                )
         except Exception as err:
             _LOGGER.error("Failed to apply offset to NIBE: %s", err)
             # Continue anyway - next cycle will retry
