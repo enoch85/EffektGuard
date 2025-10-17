@@ -664,7 +664,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
-        
+
         return {
             "nibe": nibe_data,
             "price": price_data,

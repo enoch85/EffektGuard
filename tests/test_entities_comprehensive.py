@@ -79,6 +79,11 @@ def full_coordinator():
             temperature_trend=-0.2,
             prediction_3h=21.0,
         ),
+        "thermal_trend": {
+            "rate_per_hour": -0.2,
+            "prediction_3h": 21.0,
+            "prediction_6h": 20.5,
+        },
         "weather": MagicMock(
             forecast_hours=[
                 MagicMock(datetime="2025-10-14T15:00:00", temperature=4.0),
@@ -276,7 +281,7 @@ def test_all_sensors_with_full_data(full_coordinator, mock_entry):
 
 
 def test_all_sensors_with_no_data(empty_coordinator, mock_entry):
-    """Test all 18 sensors handle missing data gracefully."""
+    """Test all 19 sensors handle missing data gracefully."""
     for sensor_desc in SENSORS:
         sensor = EffektGuardSensor(empty_coordinator, mock_entry, sensor_desc)
 
@@ -811,8 +816,8 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
     assert (
-        len(entities) == 18
-    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
+        len(entities) == 19
+    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

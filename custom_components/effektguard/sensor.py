@@ -92,6 +92,20 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         ),
     ),
     EffektGuardSensorEntityDescription(
+        key="indoor_temperature",
+        name="Indoor Temperature",
+        icon="mdi:home-thermometer",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data["nibe"].indoor_temp
+            if coordinator.data and coordinator.data.get("nibe")
+            else None
+        ),
+    ),
+    EffektGuardSensorEntityDescription(
         key="current_price",
         name="Current Electricity Price",
         icon="mdi:currency-eur",
@@ -463,13 +477,13 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         attrs["confidence"] = trend_data["confidence"]
                     if "samples" in trend_data:
                         attrs["samples"] = trend_data["samples"]
-                        
+
             # Add prediction from thermal model if available
             if "thermal" in self.coordinator.data:
                 thermal_data = self.coordinator.data["thermal"]
                 if thermal_data and hasattr(thermal_data, "prediction_3h"):
                     attrs["prediction_3h"] = thermal_data.prediction_3h
-                    
+
             # Add weather forecast if available
             if "weather" in self.coordinator.data:
                 weather = self.coordinator.data["weather"]
@@ -478,6 +492,65 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         {"time": f.datetime, "temp": f.temperature}
                         for f in weather.forecast_hours[:3]
                     ]
+
+        elif key == "indoor_temperature":
+            # Show all temperature sources and calculation method
+            if "nibe" in self.coordinator.data:
+                nibe_data = self.coordinator.data["nibe"]
+                if nibe_data and hasattr(nibe_data, "indoor_temp"):
+                    attrs["nibe_bt50"] = nibe_data.indoor_temp
+
+                    # Show if multi-sensor averaging is being used
+                    try:
+                        config = self.coordinator.config_entry.data
+                        additional_sensors = config.get("additional_indoor_sensors", [])
+
+                        if additional_sensors:
+                            # User has configured additional sensors
+                            attrs["calculation_method"] = config.get("indoor_temp_method", "median")
+                            attrs["sensor_count"] = len(additional_sensors) + 1  # +1 for NIBE
+
+                            # Show each additional sensor value
+                            sensor_temps = {}
+                            for i, entity_id in enumerate(additional_sensors, 1):
+                                state = self.coordinator.hass.states.get(entity_id)
+                                if state and state.state not in ["unknown", "unavailable"]:
+                                    try:
+                                        temp = float(state.state)
+                                        sensor_temps[f"sensor_{i}"] = {
+                                            "entity_id": entity_id,
+                                            "temperature": temp,
+                                            "name": state.attributes.get(
+                                                "friendly_name", entity_id
+                                            ),
+                                        }
+                                    except (ValueError, TypeError):
+                                        sensor_temps[f"sensor_{i}"] = {
+                                            "entity_id": entity_id,
+                                            "temperature": None,
+                                            "status": "invalid",
+                                        }
+
+                            attrs["additional_sensors"] = sensor_temps
+                            attrs["all_sensors"] = {
+                                "nibe_bt50": nibe_data.indoor_temp,
+                                **{
+                                    f"sensor_{i+1}": sensor_temps[f"sensor_{i+1}"]["temperature"]
+                                    for i in range(len(sensor_temps))
+                                    if f"sensor_{i+1}" in sensor_temps
+                                },
+                            }
+                        else:
+                            # Only NIBE sensor
+                            attrs["calculation_method"] = "single_sensor"
+                            attrs["sensor_count"] = 1
+                            attrs["note"] = (
+                                "Using NIBE BT50 sensor only. Add additional room sensors in configuration for better whole-house temperature."
+                            )
+                    except AttributeError:
+                        # Mock/test environment - just show basic info
+                        attrs["calculation_method"] = "single_sensor"
+                        attrs["sensor_count"] = 1
 
         elif key == "savings_estimate":
             # Show breakdown of savings
@@ -605,7 +678,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
         elif key == "peak_this_month":
             # Monthly peak tracking status and configuration help
             attrs["daily_peak"] = self.coordinator.peak_today
-            
+
             # Check if user has real power measurement configured
             has_external_power = hasattr(self.coordinator.nibe, "_power_sensor_entity") and bool(
                 self.coordinator.nibe._power_sensor_entity
@@ -614,11 +687,11 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
             if "nibe" in self.coordinator.data and self.coordinator.data["nibe"]:
                 nibe_data = self.coordinator.data["nibe"]
                 has_phase_currents = getattr(nibe_data, "phase1_current", None) is not None
-            
+
             attrs["has_power_meter"] = has_external_power
             attrs["has_phase_currents"] = has_phase_currents
             attrs["has_real_measurement"] = has_external_power or has_phase_currents
-            
+
             # Provide helpful guidance if no real measurements
             if not has_external_power and not has_phase_currents:
                 attrs["status"] = "No power measurement configured"
@@ -637,14 +710,16 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 attrs["status"] = "Tracking with NIBE phase currents"
                 attrs["measurement_source"] = "nibe_currents"
                 attrs["billing_accuracy"] = "NIBE heat pump only (other house loads not included)"
-            
+
             # Monthly reset info
             now = dt_util.now()
             attrs["current_month"] = now.strftime("%B %Y")
             attrs["days_into_month"] = now.day
-            days_in_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            days_in_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(
+                days=1
+            )
             attrs["days_remaining"] = days_in_month.day - now.day
-            
+
         elif key == "optimization_reasoning":
             # Add full reasoning in attributes (not limited to 255 chars)
             if "decision" in self.coordinator.data:

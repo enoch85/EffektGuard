@@ -206,8 +206,8 @@ def test_sensor_count():
     from custom_components.effektguard.sensor import SENSORS
 
     assert (
-        len(SENSORS) == 18
-    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
+        len(SENSORS) == 19
+    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -223,8 +223,8 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
     assert (
-        len(sensors) == 18
-    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
+        len(sensors) == 19
+    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):
@@ -326,6 +326,23 @@ def test_sensor_outdoor_temperature(mock_coordinator, mock_entry):
     assert sensor.native_value == 5.0
     assert sensor.entity_description.device_class == SensorDeviceClass.TEMPERATURE
     assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_indoor_temperature(mock_coordinator, mock_entry):
+    """Test indoor temperature sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "indoor_temperature")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 21.5  # From mock nibe.indoor_temp
+    assert sensor.entity_description.device_class == SensorDeviceClass.TEMPERATURE
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+    # Check attributes
+    attrs = sensor.extra_state_attributes
+    assert "nibe_bt50" in attrs
+    assert attrs["nibe_bt50"] == 21.5
+    assert "calculation_method" in attrs
+    assert "sensor_count" in attrs
 
 
 def test_sensor_current_price(mock_coordinator, mock_entry):
