@@ -357,16 +357,72 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         price_data.today_prices
                     )
 
-        elif key == "peak_status":
-            # Show margin to peak and top peaks
-            if "decision" in self.coordinator.data:
-                decision = self.coordinator.data["decision"]
-                if decision and hasattr(decision, "peak_margin"):
-                    attrs["margin_to_peak"] = decision.peak_margin
-                if decision and hasattr(decision, "current_power"):
-                    attrs["current_power"] = decision.current_power
-            attrs["monthly_peak"] = self.coordinator.peak_this_month
-            attrs["daily_peak"] = self.coordinator.peak_today
+        elif key == "dhw_recommendation":
+            # Add human-readable planning summary
+            if self.coordinator.data and "dhw_planning_summary" in self.coordinator.data:
+                attrs["planning_summary"] = self.coordinator.data["dhw_planning_summary"]
+            
+            # Add DHW planning attributes (machine-readable details)
+            if self.coordinator.data and "dhw_planning" in self.coordinator.data:
+                planning = self.coordinator.data.get("dhw_planning", {})
+                
+                # Core decision info
+                if "should_heat" in planning:
+                    attrs["should_heat"] = planning["should_heat"]
+                if "priority_reason" in planning:
+                    attrs["priority_reason"] = planning["priority_reason"]
+                
+                # Temperature info
+                if "current_temperature" in planning:
+                    attrs["current_temperature"] = planning["current_temperature"]
+                if "target_temperature" in planning:
+                    attrs["target_temperature"] = planning["target_temperature"]
+                
+                # Thermal debt info
+                if "thermal_debt" in planning:
+                    attrs["thermal_debt"] = planning["thermal_debt"]
+                if "thermal_debt_threshold_block" in planning:
+                    attrs["thermal_debt_threshold_block"] = planning["thermal_debt_threshold_block"]
+                if "thermal_debt_threshold_abort" in planning:
+                    attrs["thermal_debt_threshold_abort"] = planning["thermal_debt_threshold_abort"]
+                if "thermal_debt_status" in planning:
+                    attrs["thermal_debt_status"] = planning["thermal_debt_status"]
+                
+                # Heating demand and conditions
+                if "space_heating_demand_kw" in planning:
+                    attrs["space_heating_demand_kw"] = planning["space_heating_demand_kw"]
+                if "current_price_classification" in planning:
+                    attrs["current_price_classification"] = planning["current_price_classification"]
+                if "outdoor_temperature" in planning:
+                    attrs["outdoor_temperature"] = planning["outdoor_temperature"]
+                if "indoor_temperature" in planning:
+                    attrs["indoor_temperature"] = planning["indoor_temperature"]
+                if "climate_zone" in planning:
+                    attrs["climate_zone"] = planning["climate_zone"]
+                
+                # Weather opportunity
+                if "weather_opportunity" in planning:
+                    attrs["weather_opportunity"] = planning["weather_opportunity"]
+                
+                # Optimal heating windows (next 3 windows)
+                if "optimal_heating_windows" in planning and planning["optimal_heating_windows"]:
+                    windows = planning["optimal_heating_windows"]
+                    attrs["optimal_windows_count"] = len(windows)
+                    
+                    # Format windows for display
+                    for i, window in enumerate(windows[:3], 1):
+                        prefix = f"window_{i}"
+                        attrs[f"{prefix}_time"] = window.get("time_range", "Unknown")
+                        attrs[f"{prefix}_price"] = window.get("price_classification", "Unknown")
+                        attrs[f"{prefix}_duration_hours"] = window.get("duration_hours", 0)
+                        attrs[f"{prefix}_thermal_debt_ok"] = window.get("thermal_debt_ok", False)
+                    
+                    # Next optimal window (most important)
+                    if "next_optimal_window" in planning and planning["next_optimal_window"]:
+                        next_window = planning["next_optimal_window"]
+                        attrs["next_window_time"] = next_window.get("time_range", "Unknown")
+                        attrs["next_window_price"] = next_window.get("price_classification", "Unknown")
+                        attrs["next_window_duration"] = f"{next_window.get('duration_hours', 0):.1f}h"
 
         elif key == "temperature_trend":
             # Show prediction
@@ -395,6 +451,17 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         attrs["baseline_cost"] = savings.baseline_cost
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
+
+        elif key == "peak_status":
+            # Show margin to peak and top peaks
+            if "decision" in self.coordinator.data:
+                decision = self.coordinator.data["decision"]
+                if decision and hasattr(decision, "peak_margin"):
+                    attrs["margin_to_peak"] = decision.peak_margin
+                if decision and hasattr(decision, "current_power"):
+                    attrs["current_power"] = decision.current_power
+            attrs["monthly_peak"] = self.coordinator.peak_this_month
+            attrs["daily_peak"] = self.coordinator.peak_today
 
         elif key == "optimization_reasoning":
             # Add full reasoning in attributes (not limited to 255 chars)

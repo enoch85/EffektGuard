@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -18,6 +18,7 @@ from .const import (
     CLIMATE_SOUTHERN_SWEDEN,
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
+    DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DOMAIN,
     ESTIMATED_POWER_BASELINE,
     STORAGE_KEY_LEARNING,
@@ -552,11 +553,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Update DHW optimizer with temperature history
             self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
 
-            # Get DHW recommendation from optimizer
+            # Get DHW recommendation from optimizer with detailed planning
             try:
-                dhw_recommendation = self._calculate_dhw_recommendation(
+                dhw_result = self._calculate_dhw_recommendation(
                     nibe_data, price_data, weather_data, current_dhw_temp, now_time
                 )
+                dhw_recommendation = dhw_result["recommendation"]
+                dhw_planning_summary = dhw_result["summary"]
+                dhw_planning_details = dhw_result["details"]
             except Exception as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "
@@ -565,6 +569,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     exc_info=True,
                 )
                 dhw_recommendation = f"DHW calculation error: {str(e)[:50]}"
+                dhw_planning_summary = "Error calculating DHW planning"
+                dhw_planning_details = {}
                 # Don't fail entire coordinator update for DHW subsystem issue
                 # Core heating optimization continues to work
 
@@ -600,12 +606,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_heating_start": self.dhw_heating_start,
             "dhw_heating_end": self.dhw_heating_end,
             "dhw_recommendation": dhw_recommendation,
+            "dhw_planning_summary": dhw_planning_summary,  # Human-readable summary
+            "dhw_planning": dhw_planning_details,  # Detailed machine-readable data
         }
 
     def _calculate_dhw_recommendation(
         self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
-    ) -> str:
-        """Calculate DHW heating recommendation based on optimizer logic.
+    ) -> dict[str, Any]:
+        """Calculate DHW heating recommendation with detailed planning.
 
         Args:
             nibe_data: Current NIBE state
@@ -615,7 +623,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             now_time: Current datetime
 
         Returns:
-            Human-readable recommendation string
+            Dictionary with recommendation text and detailed planning info
         """
         # Get current price classification
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
@@ -637,6 +645,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
 
+        # Get climate zone thresholds
+        from .optimization.climate_zones import get_dm_thresholds_for_temp
+
+        climate_zone = (
+            self.engine.climate_detector.zone_info if self.engine.climate_detector else None
+        )
+        dm_thresholds = get_dm_thresholds_for_temp(outdoor_temp, climate_zone)
+
         # Get recommendation from optimizer
         decision = self.dhw_optimizer.should_start_dhw(
             current_dhw_temp=current_dhw_temp,
@@ -649,38 +665,251 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             current_time=now_time,
         )
 
+        # Calculate optimal heating windows for today (next 24 hours)
+        optimal_windows = self._find_optimal_dhw_windows(
+            price_data, now_time, thermal_debt, dm_thresholds
+        )
+
+        # Build detailed planning attributes
+        planning_details = {
+            "should_heat": decision.should_heat,
+            "priority_reason": decision.priority_reason,
+            "current_temperature": current_dhw_temp,
+            "target_temperature": decision.target_temp,
+            "thermal_debt": thermal_debt,
+            "thermal_debt_threshold_block": dm_thresholds["block"],
+            "thermal_debt_threshold_abort": dm_thresholds["abort"],
+            "thermal_debt_status": self._get_thermal_debt_status(
+                thermal_debt, dm_thresholds
+            ),
+            "space_heating_demand_kw": round(space_heating_demand, 2),
+            "current_price_classification": price_classification,
+            "outdoor_temperature": outdoor_temp,
+            "indoor_temperature": indoor_temp,
+            "climate_zone": climate_zone.name if climate_zone else "Unknown",
+            "optimal_heating_windows": optimal_windows,
+            "next_optimal_window": optimal_windows[0] if optimal_windows else None,
+        }
+
+        # Check for weather opportunity
+        if weather_data and hasattr(weather_data, "current_temp"):
+            # Unusually warm weather is good for DHW
+            zone_avg = climate_zone.winter_avg_low if climate_zone else 0.0
+            temp_deviation = outdoor_temp - zone_avg
+            if temp_deviation > 5.0:
+                planning_details["weather_opportunity"] = (
+                    f"Unusually warm (+{temp_deviation:.1f}°C), good for DHW heating"
+                )
+
         # Convert decision to human-readable recommendation
         if not decision.should_heat:
             if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
-                # Show climate-aware context in the message
-                climate_zone = (
-                    self.engine.climate_detector.zone_info.name
-                    if self.engine.climate_detector
-                    else "Unknown"
-                )
-                return f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {climate_zone})"
+                recommendation = f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {planning_details['climate_zone']})"
             elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
-                return f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
+                recommendation = f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
             elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
-                return f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
+                recommendation = f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
             elif decision.priority_reason == "DHW_ADEQUATE":
-                return f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+                recommendation = f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
             else:
-                return "Wait - Conditions not optimal"
+                recommendation = "Wait - Conditions not optimal"
 
-        # Should heat - give specific recommendation
-        if decision.priority_reason == "DHW_SAFETY_MINIMUM":
-            return f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
-        elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
-            return f"Heat now - Cheap electricity ({price_classification})"
-        elif decision.priority_reason.startswith("URGENT_DEMAND"):
-            return "Heat now - Demand period approaching"
-        elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
-            return f"Heat now - Pre-heating for demand ({price_classification})"
-        elif decision.priority_reason == "NORMAL_DHW_HEATING":
-            return f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+            # Add next optimal window if available
+            if optimal_windows:
+                next_window = optimal_windows[0]
+                recommendation += f" | Next window: {next_window['time_range']}"
         else:
-            return f"Heat recommended - Target: {decision.target_temp:.0f}°C"
+            # Should heat - give specific recommendation
+            if decision.priority_reason == "DHW_SAFETY_MINIMUM":
+                recommendation = f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
+            elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
+                recommendation = (
+                    f"Heat now - Cheap electricity ({price_classification})"
+                )
+            elif decision.priority_reason.startswith("URGENT_DEMAND"):
+                recommendation = "Heat now - Demand period approaching"
+            elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
+                recommendation = (
+                    f"Heat now - Pre-heating for demand ({price_classification})"
+                )
+            elif decision.priority_reason == "NORMAL_DHW_HEATING":
+                recommendation = f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+            else:
+                recommendation = f"Heat recommended - Target: {decision.target_temp:.0f}°C"
+
+        # Build human-readable planning summary
+        planning_summary = self._format_dhw_planning_summary(
+            recommendation=recommendation,
+            current_temp=current_dhw_temp,
+            target_temp=decision.target_temp,
+            thermal_debt=thermal_debt,
+            dm_thresholds=dm_thresholds,
+            space_heating_demand=space_heating_demand,
+            price_classification=price_classification,
+            optimal_windows=optimal_windows,
+            weather_opportunity=planning_details.get("weather_opportunity"),
+        )
+
+        # Return combined result with both machine-readable and human-readable data
+        return {
+            "recommendation": recommendation,
+            "summary": planning_summary,
+            "details": planning_details,
+        }
+
+    def _format_dhw_planning_summary(
+        self,
+        recommendation: str,
+        current_temp: float,
+        target_temp: float,
+        thermal_debt: float,
+        dm_thresholds: dict,
+        space_heating_demand: float,
+        price_classification: str,
+        optimal_windows: list,
+        weather_opportunity: Optional[str],
+    ) -> str:
+        """Format human-readable DHW planning summary.
+        
+        Args:
+            recommendation: Base recommendation text
+            current_temp: Current DHW temperature
+            target_temp: Target DHW temperature
+            thermal_debt: Current thermal debt (DM)
+            dm_thresholds: Thermal debt thresholds
+            space_heating_demand: Current heating demand in kW
+            price_classification: Current price classification
+            optimal_windows: List of optimal heating windows
+            weather_opportunity: Weather opportunity text if any
+            
+        Returns:
+            Multi-line human-readable summary
+        """
+        lines = []
+        lines.append("DHW Planning Summary")
+        lines.append("=" * 40)
+        lines.append(f"Current: {current_temp:.1f}°C -> Target: {target_temp:.0f}°C")
+        lines.append(f"Price: {price_classification}")
+        
+        # Thermal debt status
+        if thermal_debt < dm_thresholds["abort"]:
+            status_text = f"CRITICAL (DM {thermal_debt:.0f})"
+        elif thermal_debt < dm_thresholds["block"]:
+            status_text = f"WARNING (DM {thermal_debt:.0f})"
+        else:
+            status_text = f"OK (DM {thermal_debt:.0f})"
+        lines.append(f"Thermal Debt: {status_text}")
+        
+        # Space heating status
+        if space_heating_demand > 2.0:
+            lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
+        elif space_heating_demand > 0.5:
+            lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
+        else:
+            lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")
+        
+        # Weather opportunity
+        if weather_opportunity:
+            lines.append(f"Weather: {weather_opportunity}")
+        
+        # Next optimal windows
+        if optimal_windows:
+            lines.append("")
+            lines.append("Optimal Heating Windows:")
+            for i, window in enumerate(optimal_windows[:3], 1):
+                duration = window['duration_hours']
+                price = window['price_classification']
+                time_range = window['time_range']
+                lines.append(f"  {i}. {time_range} ({duration:.1f}h, {price})")
+        else:
+            lines.append("")
+            lines.append("No optimal windows found")
+        
+        lines.append("")
+        lines.append(f"Recommendation: {recommendation}")
+        
+        return "\n".join(lines)
+
+    async def _apply_dhw_control(
+        self, price_data, now_time: datetime, thermal_debt: float, dm_thresholds: dict
+    ) -> list[dict]:
+        """Find optimal DHW heating windows in the next 24 hours.
+
+        Args:
+            price_data: GE-Spot price data
+            now_time: Current datetime
+            thermal_debt: Current thermal debt (DM)
+            dm_thresholds: Thermal debt thresholds for climate zone
+
+        Returns:
+            List of optimal heating windows with time ranges and reasoning
+        """
+        if not price_data or not hasattr(price_data, "quarters_today"):
+            return []
+
+        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        windows = []
+
+        # Analyze price periods for next 24 hours (96 quarters)
+        for i in range(current_quarter, min(current_quarter + 96, 96)):
+            classification = self.engine.price.get_current_classification(i)
+
+            # Consider CHEAP periods as opportunities
+            if classification in ["CHEAP", "NORMAL"]:
+                # Check if thermal debt allows DHW heating
+                if thermal_debt > dm_thresholds["block"]:
+                    hour = i // 4
+                    minute = (i % 4) * 15
+                    quarter_time = now_time.replace(
+                        hour=hour, minute=minute, second=0, microsecond=0
+                    )
+
+                    # Group consecutive cheap quarters into windows
+                    if windows and windows[-1]["end_quarter"] == i - 1:
+                        # Extend existing window
+                        windows[-1]["end_quarter"] = i
+                        windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime("%H:%M")
+                        windows[-1]["duration_hours"] = (i - windows[-1]["start_quarter"] + 1) * 0.25
+                    else:
+                        # Start new window
+                        window = {
+                            "start_quarter": i,
+                            "end_quarter": i,
+                            "start_time": quarter_time.strftime("%H:%M"),
+                            "end_time": (quarter_time + timedelta(minutes=15)).strftime("%H:%M"),
+                            "time_range": f"{quarter_time.strftime('%H:%M')}-{(quarter_time + timedelta(minutes=15)).strftime('%H:%M')}",
+                            "price_classification": classification,
+                            "duration_hours": 0.25,
+                            "thermal_debt_ok": True,
+                        }
+                        windows.append(window)
+
+        # Update time ranges for windows
+        for window in windows:
+            window["time_range"] = f"{window['start_time']}-{window['end_time']}"
+
+        # Limit to next 3 optimal windows
+        return windows[:3]
+
+    def _get_thermal_debt_status(self, thermal_debt: float, dm_thresholds: dict) -> str:
+        """Get human-readable thermal debt status.
+
+        Args:
+            thermal_debt: Current thermal debt (DM)
+            dm_thresholds: Thresholds for climate zone
+
+        Returns:
+            Status string
+        """
+        if thermal_debt < dm_thresholds["abort"]:
+            margin = abs(thermal_debt - dm_thresholds["abort"])
+            return f"CRITICAL - {margin:.0f} DM from abort threshold"
+        elif thermal_debt < dm_thresholds["block"]:
+            margin = abs(thermal_debt - dm_thresholds["block"])
+            return f"WARNING - {margin:.0f} DM from block threshold"
+        else:
+            margin = thermal_debt - dm_thresholds["block"]
+            return f"OK - {margin:.0f} DM safety margin"
 
     async def _apply_dhw_control(
         self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
@@ -738,13 +967,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             current_time=now_time,
         )
 
-        # Rate limiting: Don't change lux state too frequently (minimum 10 minutes)
+        # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
         if hasattr(self, "_last_dhw_control_time"):
             time_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
-            if time_since_last < 10:
+            if time_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
                 _LOGGER.debug(
-                    "DHW control rate limited: %.1f min since last change (min 10 min)",
+                    "DHW control rate limited: %.1f min since last change (min %d min)",
                     time_since_last,
+                    DHW_CONTROL_MIN_INTERVAL_MINUTES,
                 )
                 return
 

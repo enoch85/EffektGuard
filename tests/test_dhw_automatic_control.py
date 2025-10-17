@@ -204,17 +204,17 @@ class TestDHWAutomaticControl:
         await coordinator._apply_dhw_control(mock_nibe_data, mock_price_data, None, 42.0, now)
         assert mock_hass.services.async_call.call_count == 1
 
-        # Second call 5 minutes later - should be rate limited
+        # Second call 30 minutes later - should be rate limited (min 60 minutes)
         mock_hass.services.async_call.reset_mock()
         await coordinator._apply_dhw_control(
-            mock_nibe_data, mock_price_data, None, 41.0, now + timedelta(minutes=5)
+            mock_nibe_data, mock_price_data, None, 41.0, now + timedelta(minutes=30)
         )
         assert mock_hass.services.async_call.call_count == 0  # Rate limited
 
-        # Third call 11 minutes later - should succeed
+        # Third call 61 minutes later - should succeed
         mock_hass.services.async_call.reset_mock()
         await coordinator._apply_dhw_control(
-            mock_nibe_data, mock_price_data, None, 40.0, now + timedelta(minutes=11)
+            mock_nibe_data, mock_price_data, None, 40.0, now + timedelta(minutes=61)
         )
         assert mock_hass.services.async_call.call_count == 1  # Allowed
 
