@@ -95,6 +95,12 @@ def mock_coordinator():
             ],
         ),
         "thermal": MagicMock(temperature_trend=-0.2, prediction_3h=21.0, prediction_6h=20.5),
+        "thermal_trend": {
+            "rate_per_hour": -0.2,
+            "trend": "falling",
+            "confidence": 0.8,
+            "samples": 12,
+        },
         "weather": MagicMock(
             forecast_hours=[
                 MagicMock(datetime="2025-10-14T15:00:00", temperature=4.0),
@@ -261,8 +267,10 @@ def test_sensor_temperature_trend(mock_coordinator, mock_entry):
 
     assert sensor.native_value == -0.2
     attrs = sensor.extra_state_attributes
-    assert "prediction_3h" in attrs
-    assert "forecast" in attrs
+    assert "trend_direction" in attrs
+    assert attrs["trend_direction"] == "falling"
+    assert "confidence" in attrs
+    assert attrs["confidence"] == 0.8
 
 
 def test_sensor_savings_estimate(mock_coordinator, mock_entry):

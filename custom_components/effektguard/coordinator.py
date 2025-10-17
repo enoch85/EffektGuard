@@ -662,11 +662,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_planning_summary = "NIBE data unavailable"
                 dhw_planning_details = {}
 
+        # Get temperature trend from thermal predictor
+        temperature_trend_data = self.thermal_predictor.get_current_trend()
+        
         return {
             "nibe": nibe_data,
             "price": price_data,
             "weather": weather_data,
-            "thermal": self.engine.thermal,  # Thermal model for temperature_trend sensor
+            "thermal": self.engine.thermal,  # Thermal model for predictions
+            "thermal_trend": temperature_trend_data,  # Temperature trend from predictor
             "decision": decision,
             "offset": decision.offset,
             "peak_today": self.peak_today,

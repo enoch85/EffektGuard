@@ -201,10 +201,11 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
-            coordinator.data["thermal"].temperature_trend
+            coordinator.data["thermal_trend"]["rate_per_hour"]
             if coordinator.data
-            and coordinator.data.get("thermal")
-            and hasattr(coordinator.data["thermal"], "temperature_trend")
+            and coordinator.data.get("thermal_trend")
+            and isinstance(coordinator.data["thermal_trend"], dict)
+            and "rate_per_hour" in coordinator.data["thermal_trend"]
             else None
         ),
     ),
@@ -451,18 +452,32 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                         )
 
         elif key == "temperature_trend":
-            # Show prediction
+            # Show prediction and trend details
+            if "thermal_trend" in self.coordinator.data:
+                trend_data = self.coordinator.data["thermal_trend"]
+                if trend_data and isinstance(trend_data, dict):
+                    # Add trend information
+                    if "trend" in trend_data:
+                        attrs["trend_direction"] = trend_data["trend"]
+                    if "confidence" in trend_data:
+                        attrs["confidence"] = trend_data["confidence"]
+                    if "samples" in trend_data:
+                        attrs["samples"] = trend_data["samples"]
+                        
+            # Add prediction from thermal model if available
             if "thermal" in self.coordinator.data:
                 thermal_data = self.coordinator.data["thermal"]
                 if thermal_data and hasattr(thermal_data, "prediction_3h"):
                     attrs["prediction_3h"] = thermal_data.prediction_3h
-                if "weather" in self.coordinator.data:
-                    weather = self.coordinator.data["weather"]
-                    if weather and hasattr(weather, "forecast_hours"):
-                        attrs["forecast"] = [
-                            {"time": f.datetime, "temp": f.temperature}
-                            for f in weather.forecast_hours[:3]
-                        ]
+                    
+            # Add weather forecast if available
+            if "weather" in self.coordinator.data:
+                weather = self.coordinator.data["weather"]
+                if weather and hasattr(weather, "forecast_hours"):
+                    attrs["forecast"] = [
+                        {"time": f.datetime, "temp": f.temperature}
+                        for f in weather.forecast_hours[:3]
+                    ]
 
         elif key == "savings_estimate":
             # Show breakdown of savings
@@ -587,6 +602,49 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
             # Monthly peak for context
             attrs["monthly_peak"] = self.coordinator.peak_this_month
 
+        elif key == "peak_this_month":
+            # Monthly peak tracking status and configuration help
+            attrs["daily_peak"] = self.coordinator.peak_today
+            
+            # Check if user has real power measurement configured
+            has_external_power = hasattr(self.coordinator.nibe, "_power_sensor_entity") and bool(
+                self.coordinator.nibe._power_sensor_entity
+            )
+            has_phase_currents = False
+            if "nibe" in self.coordinator.data and self.coordinator.data["nibe"]:
+                nibe_data = self.coordinator.data["nibe"]
+                has_phase_currents = getattr(nibe_data, "phase1_current", None) is not None
+            
+            attrs["has_power_meter"] = has_external_power
+            attrs["has_phase_currents"] = has_phase_currents
+            attrs["has_real_measurement"] = has_external_power or has_phase_currents
+            
+            # Provide helpful guidance if no real measurements
+            if not has_external_power and not has_phase_currents:
+                attrs["status"] = "No power measurement configured"
+                attrs["help"] = (
+                    "Monthly peak tracking requires either: "
+                    "(1) External power meter sensor, or "
+                    "(2) NIBE phase current sensors (BE1/BE2/BE3). "
+                    "Configure a power sensor in EffektGuard settings to enable peak tracking."
+                )
+                attrs["billing_accuracy"] = "Not available - no measurement source"
+            elif has_external_power:
+                attrs["status"] = "Tracking with external power meter"
+                attrs["measurement_source"] = "external_meter"
+                attrs["billing_accuracy"] = "Whole-house measurement (best for billing)"
+            elif has_phase_currents:
+                attrs["status"] = "Tracking with NIBE phase currents"
+                attrs["measurement_source"] = "nibe_currents"
+                attrs["billing_accuracy"] = "NIBE heat pump only (other house loads not included)"
+            
+            # Monthly reset info
+            now = dt_util.now()
+            attrs["current_month"] = now.strftime("%B %Y")
+            attrs["days_into_month"] = now.day
+            days_in_month = (now.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+            attrs["days_remaining"] = days_in_month.day - now.day
+            
         elif key == "optimization_reasoning":
             # Add full reasoning in attributes (not limited to 255 chars)
             if "decision" in self.coordinator.data:
@@ -674,32 +732,43 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 }
 
             # Weather forecast status
-            # Check both options and data for weather entity
+            # Check actual weather data from coordinator (not just entity attributes)
+            # This works for both attribute-based (Met.no) and service-based (OpenWeatherMap) forecasts
             weather_entity = config.get("weather_entity") or self.coordinator.entry.data.get(
                 "weather_entity"
             )
             if weather_entity:
-                weather_state = self.coordinator.hass.states.get(weather_entity)
-                if weather_state and "forecast" in weather_state.attributes:
-                    forecast = weather_state.attributes["forecast"]
-                    forecast_hours = len(forecast)
-                    attrs["weather_forecast"] = {
-                        "status": "available",
-                        "entity": weather_entity,
-                        "hours": forecast_hours,
-                        "minimum_required": 12,
-                        "note": (
-                            f"{forecast_hours}h forecast available"
-                            if forecast_hours >= 12
-                            else f"Only {forecast_hours}h (12h minimum recommended)"
-                        ),
-                    }
+                # Check if coordinator has actual weather data
+                if "weather" in self.coordinator.data and self.coordinator.data["weather"]:
+                    weather_data = self.coordinator.data["weather"]
+                    if hasattr(weather_data, "forecast_hours") and weather_data.forecast_hours:
+                        forecast_hours = len(weather_data.forecast_hours)
+                        attrs["weather_forecast"] = {
+                            "status": "available",
+                            "entity": weather_entity,
+                            "hours": forecast_hours,
+                            "minimum_required": 12,
+                            "note": (
+                                f"{forecast_hours}h forecast available"
+                                if forecast_hours >= 12
+                                else f"Only {forecast_hours}h (12h minimum recommended)"
+                            ),
+                        }
+                    else:
+                        attrs["weather_forecast"] = {
+                            "status": "configured_but_no_forecast",
+                            "entity": weather_entity,
+                            "hours": 0,
+                            "minimum_required": 12,
+                            "note": "Forecast data not available from weather integration",
+                        }
                 else:
                     attrs["weather_forecast"] = {
                         "status": "configured_but_no_forecast",
                         "entity": weather_entity,
                         "hours": 0,
                         "minimum_required": 12,
+                        "note": "Forecast data not available from weather integration",
                     }
             else:
                 attrs["weather_forecast"] = {
