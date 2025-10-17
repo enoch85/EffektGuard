@@ -666,6 +666,16 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         """
         validated = user_input.copy()
 
+        # Validate DHW target temperature
+        if "dhw_target_temp" in validated:
+            try:
+                dhw_target = float(validated["dhw_target_temp"])
+                if dhw_target < 45.0 or dhw_target > 60.0:
+                    raise vol.Invalid("DHW target temperature must be between 45-60°C")
+                validated["dhw_target_temp"] = dhw_target
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid DHW target temperature: {e}")
+
         # Convert hour values to int (NumberSelector returns float)
         if "dhw_morning_hour" in validated:
             try:
@@ -758,6 +768,19 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                             max=2.0,
                             step=0.1,
                             mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    # DHW target temperature
+                    vol.Optional(
+                        "dhw_target_temp",
+                        default=self.config_entry.options.get("dhw_target_temp", 50.0),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=45.0,
+                            max=60.0,
+                            step=1.0,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                            unit_of_measurement="°C",
                         )
                     ),
                     # DHW demand periods

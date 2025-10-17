@@ -100,6 +100,8 @@ class NibeAdapter:
         self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
         self._last_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
+        # Accumulator for fractional offset changes (NIBE only accepts integers)
+        self._fractional_accumulator: float = 0.0
 
     async def get_current_state(self) -> NibeState:
         """Read current NIBE heat pump state from entities.
@@ -252,6 +254,77 @@ class NibeAdapter:
             )
             return
 
+        # NIBE offset rounding with fractional accumulation
+        # NIBE MyUplink entities have step=1 (integer only), but optimization
+        # calculates fractional offsets (e.g., 0.35°C for gentle nudges).
+        # Solution: Accumulate fractional parts and apply when they sum to ±1°C
+        # This preserves gentle optimization while respecting NIBE constraints.
+
+        original_offset = offset
+
+        # Add fractional part to accumulator
+        integer_part = int(offset)
+        fractional_part = offset - integer_part
+
+        _LOGGER.debug(
+            "Offset calculation: original=%.2f°C, integer=%d°C, fractional=%.2f°C, "
+            "accumulator_before=%.2f°C",
+            original_offset,
+            integer_part,
+            fractional_part,
+            self._fractional_accumulator,
+        )
+
+        self._fractional_accumulator += fractional_part
+
+        # Check if accumulated fractional changes warrant an adjustment
+        if abs(self._fractional_accumulator) >= 1.0:
+            # Apply accumulated change
+            accumulated_adjustment = int(self._fractional_accumulator)
+            integer_part += accumulated_adjustment
+            self._fractional_accumulator -= accumulated_adjustment
+            _LOGGER.info(
+                "✓ Accumulated fractional offset reached threshold: "
+                "applying %+d°C adjustment (accumulator: %.2f°C → %.2f°C)",
+                accumulated_adjustment,
+                self._fractional_accumulator + accumulated_adjustment,
+                self._fractional_accumulator,
+            )
+            _LOGGER.debug(
+                "Accumulator triggered: total_accumulated=%.2f°C, adjustment=%+d°C, "
+                "new_integer=%d°C, remaining=%.2f°C",
+                self._fractional_accumulator + accumulated_adjustment,
+                accumulated_adjustment,
+                integer_part,
+                self._fractional_accumulator,
+            )
+
+        offset_to_apply = integer_part
+
+        # Log accumulator status
+        if abs(fractional_part) > 0.01:
+            if abs(self._fractional_accumulator) < 1.0:
+                _LOGGER.debug(
+                    "→ Deferring fractional offset %.2f°C → applying %d°C "
+                    "(accumulator: %.2f°C, needs %.2f°C more to trigger)",
+                    original_offset,
+                    offset_to_apply,
+                    self._fractional_accumulator,
+                    1.0 - abs(self._fractional_accumulator),
+                )
+            else:
+                _LOGGER.debug(
+                    "→ Fractional offset %.2f°C → applying %d°C (after accumulator adjustment)",
+                    original_offset,
+                    offset_to_apply,
+                )
+        else:
+            _LOGGER.debug(
+                "→ Integer offset %.2f°C → applying %d°C (no accumulation needed)",
+                original_offset,
+                offset_to_apply,
+            )
+
         # Set value via number entity service (non-blocking)
         try:
             await self.hass.services.async_call(
@@ -259,12 +332,31 @@ class NibeAdapter:
                 "set_value",
                 {
                     "entity_id": offset_entity,
-                    "value": offset,
+                    "value": offset_to_apply,
                 },
                 blocking=False,  # Non-blocking to avoid UI delays
             )
             self._last_write = now
-            _LOGGER.info("Set NIBE offset to %.2f°C", offset)
+
+            # Summary logging
+            if abs(original_offset - offset_to_apply) > 0.01:
+                _LOGGER.info(
+                    "Set NIBE offset to %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                    offset_to_apply,
+                    original_offset,
+                    self._fractional_accumulator,
+                )
+            else:
+                _LOGGER.info("Set NIBE offset to %d°C", offset_to_apply)
+
+            _LOGGER.debug(
+                "Offset write complete: entity=%s, value=%d°C, "
+                "original=%.2f°C, accumulator=%.2f°C",
+                offset_entity,
+                offset_to_apply,
+                original_offset,
+                self._fractional_accumulator,
+            )
         except Exception as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             # Don't raise - allow system to continue gracefully
@@ -290,21 +382,36 @@ class NibeAdapter:
         # Search for NIBE entities
         # Patterns based on NIBE Myuplink integration entity naming
         # Use specific entity names from parameter IDs when possible
+        # CRITICAL: Use word boundaries (_btX, btX_) to prevent substring matches
+        # e.g., "bt6" would match "bt63", "bt1" would match "bt10", etc.
+        # This ensures we match the exact sensor, not similar named sensors
         patterns = {
-            "outdoor_temp": ["bt1", "outdoor_temp", "40004"],  # BT1 / param 40004
+            "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "40004"],  # BT1 / param 40004
             "indoor_temp": [
-                "bt50",
+                "_bt50",
+                "bt50_",
                 "room_temperature",
                 "40033",
             ],  # BT50 / param 40033 "Temperature"
-            "supply_temp": ["bt25", "supply_temp", "40008"],  # BT25/BT63 / param 40008
-            "return_temp": ["bt3", "return_temp", "40012"],  # BT3 / param 40012
+            "supply_temp": ["_bt25", "bt25_", "supply_temp", "40008"],  # BT25/BT63 / param 40008
+            "return_temp": ["_bt3", "bt3_", "return_temp", "40012"],  # BT3 / param 40012
             "degree_minutes": ["degree_minutes", "40941"],  # param 40941
             "offset": ["offset", "47011"],  # param 47011
             "compressor_status": ["compressor", "43427"],  # param 43427
             "hot_water_status": ["hot_water", "dhw"],
-            "dhw_top_temp": ["bt7", "hw_top", "40013"],  # BT7 / param 40013 - hot water top
-            "dhw_charging_temp": ["bt6", "hw_bottom", "hw_charging", "40014"],  # BT6 / param 40014
+            "dhw_top_temp": [
+                "_bt7",
+                "bt7_",
+                "hw_top",
+                "40013",
+            ],  # BT7 / param 40013 - hot water top
+            "dhw_charging_temp": [
+                "_bt6",
+                "bt6_",
+                "hw_bottom",
+                "hw_charging",
+                "40014",
+            ],  # BT6 / param 40014
         }
 
         # Find entities

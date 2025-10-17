@@ -47,8 +47,9 @@ def test_dhw_smart_scheduling_cheapest_hours():
     assert decision.target_temp == 55.0
 
     # Scenario 2: EXPENSIVE price at 5:00 AM - should NOT heat yet
+    # DHW at 50°C (5°C below 55°C target) - can wait for cheaper electricity
     decision_expensive = scheduler.should_start_dhw(
-        current_dhw_temp=45.0,
+        current_dhw_temp=50.0,  # Close to target (55°C), can wait for cheaper prices
         space_heating_demand_kw=2.0,
         thermal_debt_dm=-50,
         indoor_temp=21.0,

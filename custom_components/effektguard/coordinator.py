@@ -104,6 +104,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # DHW optimizer - pass climate detector for climate-aware thresholds
         from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
 
+        # Get user-configured DHW target temperature (default 50°C)
+        from .const import DEFAULT_DHW_TARGET_TEMP
+
+        dhw_target_temp = float(entry.options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
+
         # Configure DHW demand periods from options
         demand_periods = []
 
@@ -113,7 +118,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             demand_periods.append(
                 DHWDemandPeriod(
                     start_hour=morning_hour,
-                    target_temp=55.0,  # Extra hot for morning shower
+                    target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=2,  # 2-hour window
                 )
             )
@@ -124,7 +129,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             demand_periods.append(
                 DHWDemandPeriod(
                     start_hour=evening_hour,
-                    target_temp=55.0,  # Extra hot for dishes
+                    target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=3,  # 3-hour window
                 )
             )
@@ -600,6 +605,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "nibe": nibe_data,
             "price": price_data,
             "weather": weather_data,
+            "thermal": self.engine.thermal,  # Thermal model for temperature_trend sensor
             "decision": decision,
             "offset": decision.offset,
             "peak_today": self.peak_today,

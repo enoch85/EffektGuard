@@ -10,11 +10,13 @@ Used for:
 """
 
 import logging
+import random
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from ..const import CONF_WEATHER_ENTITY
 
@@ -50,6 +52,25 @@ class WeatherAdapter:
         """
         self.hass = hass
         self._weather_entity = config.get(CONF_WEATHER_ENTITY)
+        self._last_forecast_time: datetime | None = None  # When we last got a valid forecast
+        self._last_service_call_time: datetime | None = None  # When we last tried service call
+        self._next_random_attempt: datetime | None = None  # Next scheduled random attempt
+
+    def _schedule_next_random_attempt(self) -> None:
+        """Schedule next random forecast attempt within the next hour.
+
+        This helps avoid API rate limits while still retrying periodically
+        when forecast is unavailable.
+        """
+        now = dt_util.utcnow()
+        # Random time between 5-55 minutes from now
+        minutes_delay = random.randint(5, 55)
+        self._next_random_attempt = now + timedelta(minutes=minutes_delay)
+        _LOGGER.debug(
+            "Next random forecast attempt scheduled in %d minutes (at %s)",
+            minutes_delay,
+            self._next_random_attempt.strftime("%H:%M"),
+        )
 
     async def get_forecast(self) -> WeatherData | None:
         """Read weather forecast from entity.
@@ -59,12 +80,19 @@ class WeatherAdapter:
         - OpenWeatherMap: requires weather.get_forecasts service call
         - AccuWeather: forecast attribute
 
+        Implements smart retry logic:
+        - If forecast unavailable, retry at random times each hour
+        - Checks before calling to avoid unnecessary API calls
+        - Rate limiting to prevent API abuse
+
         Returns:
             WeatherData with forecast, or None if unavailable
         """
         if not self._weather_entity:
             _LOGGER.info("Weather forecast disabled - no entity configured in setup")
             return None
+
+        now = dt_util.utcnow()
 
         _LOGGER.debug("Reading weather forecast from entity: %s", self._weather_entity)
 
@@ -76,6 +104,9 @@ class WeatherAdapter:
                 self._weather_entity,
                 state.state if state else "missing",
             )
+            # Schedule next random attempt if not already scheduled
+            if self._next_random_attempt is None:
+                self._schedule_next_random_attempt()
             return None
 
         # Get current temperature
@@ -89,6 +120,24 @@ class WeatherAdapter:
 
         # If no forecast attribute, try service call (OpenWeatherMap, etc.)
         if not forecast_raw:
+            # Check if we should attempt service call now
+            # Conditions:
+            # 1. No next attempt scheduled (first try), OR
+            # 2. Current time is past the scheduled attempt time
+            should_attempt = self._next_random_attempt is None or now >= self._next_random_attempt
+
+            if not should_attempt:
+                minutes_until_next = (
+                    (self._next_random_attempt - now).total_seconds() / 60
+                    if self._next_random_attempt
+                    else 0
+                )
+                _LOGGER.debug(
+                    "Skipping forecast service call, next attempt in %.1f minutes",
+                    minutes_until_next,
+                )
+                return None
+
             _LOGGER.debug(
                 "No forecast attribute in %s, trying weather.get_forecasts service call",
                 self._weather_entity,
@@ -104,6 +153,8 @@ class WeatherAdapter:
                     return_response=True,
                 )
 
+                self._last_service_call_time = now  # Track service call time
+
                 _LOGGER.debug(
                     "Service call response keys: %s",
                     list(forecast_data.keys()) if forecast_data else "None",
@@ -113,15 +164,27 @@ class WeatherAdapter:
                 # Response format: {entity_id: {"forecast": [...]}}
                 if forecast_data and self._weather_entity in forecast_data:
                     forecast_raw = forecast_data[self._weather_entity].get("forecast", [])
-                    _LOGGER.debug(
-                        "Weather forecast retrieved via service call: %d hours",
-                        len(forecast_raw),
-                    )
+                    if forecast_raw:
+                        _LOGGER.debug(
+                            "Weather forecast retrieved via service call: %d hours",
+                            len(forecast_raw),
+                        )
+                        # Success! Reset random attempt timer
+                        self._next_random_attempt = None
+                    else:
+                        _LOGGER.warning(
+                            "Service call succeeded but returned no forecast data. " "Response: %s",
+                            forecast_data,
+                        )
+                        # Schedule next random attempt
+                        self._schedule_next_random_attempt()
                 else:
                     _LOGGER.warning(
                         "Service call succeeded but returned no forecast data. " "Response: %s",
                         forecast_data,
                     )
+                    # Schedule next random attempt
+                    self._schedule_next_random_attempt()
             except Exception as err:
                 _LOGGER.warning(
                     "Failed to get forecast via service call from %s: %s. "
@@ -132,6 +195,8 @@ class WeatherAdapter:
                     err,
                     exc_info=True,
                 )
+                # Schedule next random attempt after error
+                self._schedule_next_random_attempt()
                 return None
 
         if not forecast_raw:
@@ -191,6 +256,10 @@ class WeatherAdapter:
                 self._weather_entity,
                 forecast_count,
             )
+
+        # Successfully retrieved forecast - update timestamp and reset random attempts
+        self._last_forecast_time = now
+        self._next_random_attempt = None
 
         return WeatherData(
             current_temp=float(current_temp),

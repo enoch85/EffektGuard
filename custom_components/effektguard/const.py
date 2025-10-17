@@ -22,6 +22,7 @@ CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"  # Optional: DHW temperature sen
 CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.temporary_lux_50004
 CONF_ENABLE_DHW_OPTIMIZATION: Final = "enable_dhw_optimization"  # Enable intelligent DHW scheduling
 CONF_DHW_DEMAND_PERIODS: Final = "dhw_demand_periods"  # High DHW demand periods (JSON list)
+CONF_DHW_TARGET_TEMP: Final = "dhw_target_temp"  # User-configurable DHW target temperature (°C)
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
@@ -53,6 +54,7 @@ DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_PEAK_PROTECTION_MARGIN: Final = 0.5  # kW
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.49  # User-configurable weight (matches layer weight)
 DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
+DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 
 # Climate entity temperature limits (displayed in UI)
 MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature
@@ -238,9 +240,12 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 # DHW (Domestic Hot Water) Optimization Constants
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature
-DHW_MAX_TEMP: Final = 55.0  # °C - Maximum normal DHW temperature (comfort)
+DHW_MAX_TEMP: Final = 60.0  # °C - Maximum normal DHW temperature (comfort)
 DHW_COMFORT_TEMP: Final = 50.0  # °C - Optimal comfort temperature
 DHW_ECO_TEMP: Final = 45.0  # °C - Economy mode temperature
+# User-configurable DHW target temperature limits
+MIN_DHW_TARGET_TEMP: Final = 45.0  # °C - Minimum configurable DHW target (safety)
+MAX_DHW_TARGET_TEMP: Final = 60.0  # °C - Maximum configurable DHW target (comfort)
 DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling

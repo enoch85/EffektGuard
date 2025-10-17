@@ -35,6 +35,13 @@ def mock_config_entry():
         "target_indoor_temp": 21.0,
         "latitude": 55.60,
     }
+    entry.options = {
+        "dhw_target_temp": 50.0,  # Default DHW target temperature
+        "dhw_morning_enabled": True,
+        "dhw_morning_hour": 7,
+        "dhw_evening_enabled": True,
+        "dhw_evening_hour": 18,
+    }
     entry.entry_id = "test_entry"
     return entry
 

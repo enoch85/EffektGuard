@@ -116,6 +116,13 @@ class IntelligentDHWScheduler:
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
+        # Extract user-configured target temperature from demand periods
+        # Use first demand period's target, or fall back to class constant
+        if self.demand_periods:
+            self.user_target_temp = self.demand_periods[0].target_temp
+        else:
+            self.user_target_temp = self.DHW_TARGET_NORMAL
+
         if self.climate_detector:
             _LOGGER.info(
                 "DHW optimizer initialized with climate-aware thresholds: %s zone",
@@ -258,7 +265,7 @@ class IntelligentDHWScheduler:
             return DHWScheduleDecision(
                 should_heat=True,
                 priority_reason="DHW_SAFETY_MINIMUM",
-                target_temp=self.DHW_TARGET_NORMAL,
+                target_temp=self.user_target_temp,
                 max_runtime_minutes=30,  # Limited to prevent thermal debt
                 abort_conditions=[
                     f"thermal_debt < {dm_abort_threshold:.0f}",
@@ -321,13 +328,14 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 6: CHEAP ELECTRICITY - OPPORTUNISTIC HEATING ===
-        if price_classification == "cheap" and current_dhw_temp < self.DHW_TARGET_HIGH:
+        # Heat to user target + 5°C buffer during cheap electricity
+        if price_classification == "cheap" and current_dhw_temp < (self.user_target_temp + 5.0):
             # Only if space heating is satisfied
             if indoor_deficit < 0.3 and thermal_debt_dm > -100:
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="CHEAP_ELECTRICITY_OPPORTUNITY",
-                    target_temp=self.DHW_TARGET_HIGH,  # Extra buffer
+                    target_temp=min(self.user_target_temp + 5.0, 60.0),  # Extra buffer, max 60°C
                     max_runtime_minutes=45,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
@@ -336,13 +344,13 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 7: NORMAL DHW HEATING - TEMPERATURE LOW ===
-        if current_dhw_temp < (self.DHW_TARGET_NORMAL - 5.0):
+        if current_dhw_temp < (self.user_target_temp - 5.0):
             # Only if indoor comfortable and thermal debt OK
             if indoor_deficit < 0.3 and thermal_debt_dm > -100:
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="NORMAL_DHW_HEATING",
-                    target_temp=self.DHW_TARGET_NORMAL,
+                    target_temp=self.user_target_temp,
                     max_runtime_minutes=30,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
