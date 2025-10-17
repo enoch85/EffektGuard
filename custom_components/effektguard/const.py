@@ -84,6 +84,7 @@ MAX_TEMP_LIMIT: Final = 24.0
 # Service call rate limiting (boost, DHW, general)
 BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
+DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 
 # Decision engine layer weights
