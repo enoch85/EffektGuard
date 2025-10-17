@@ -301,6 +301,17 @@ class NibeAdapter:
 
         offset_to_apply = integer_part
 
+        # Skip API call if offset rounds to 0 (no actual change)
+        # Only write to NIBE when we have a meaningful integer offset
+        # Fractional changes are accumulated but not applied until threshold reached
+        if offset_to_apply == 0 and abs(self._fractional_accumulator) < 1.0:
+            _LOGGER.debug(
+                "⏸ Skipping NIBE write: offset rounds to 0°C "
+                "(accumulator: %.2f°C, will apply when ≥±1.0°C)",
+                self._fractional_accumulator,
+            )
+            return
+
         # Log accumulator status
         if abs(fractional_part) > 0.01:
             if abs(self._fractional_accumulator) < 1.0:
