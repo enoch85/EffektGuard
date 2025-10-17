@@ -19,13 +19,16 @@ jobs:
 
       - name: Prepare Release Assets
         run: |
-          mkdir -p release/effektguard
-          cp -r custom_components/effektguard/* release/effektguard/
+          mkdir release
+          cp -r custom_components/effektguard release/
+          cp README.md release/
+          cp LICENSE release/
+          cp hacs.json release/
 
       - name: Create ZIP
         run: |
           cd release
-          zip -r ../effektguard.zip effektguard/
+          zip -r ../effektguard.zip .
 
       - name: Create release
         env:
