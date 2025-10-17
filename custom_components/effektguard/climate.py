@@ -23,6 +23,7 @@ from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -53,7 +54,7 @@ async def async_setup_entry(
     async_add_entities([EffektGuardClimate(coordinator, entry)])
 
 
-class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
+class EffektGuardClimate(CoordinatorEntity, RestoreEntity, ClimateEntity):
     """Climate entity for EffektGuard.
 
     Main user interface displaying current optimization status and allowing
@@ -90,6 +91,33 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_preset_mode = PRESET_NONE
 
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added to hass.
+        
+        Restore previous state to maintain HVAC mode across restarts.
+        """
+        await super().async_added_to_hass()
+        
+        # Restore previous state if available
+        if (last_state := await self.async_get_last_state()) is not None:
+            # Restore HVAC mode if valid
+            if last_state.state in [mode.value for mode in self._attr_hvac_modes]:
+                try:
+                    self._attr_hvac_mode = HVACMode(last_state.state)
+                    _LOGGER.debug(
+                        "Restored HVAC mode: %s from previous state",
+                        self._attr_hvac_mode
+                    )
+                except ValueError:
+                    _LOGGER.warning(
+                        "Invalid HVAC mode '%s' in restored state, using default HEAT",
+                        last_state.state
+                    )
+                    self._attr_hvac_mode = HVACMode.HEAT
+            else:
+                _LOGGER.debug("No valid HVAC mode to restore, using default HEAT")
+                self._attr_hvac_mode = HVACMode.HEAT
+
     @property
     def current_temperature(self) -> float | None:
         """Return current indoor temperature from NIBE."""
@@ -107,11 +135,6 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
             CONF_TARGET_INDOOR_TEMP,
             self._entry.data.get(CONF_TARGET_INDOOR_TEMP, DEFAULT_INDOOR_TEMP),
         )
-
-    @property
-    def hvac_mode(self) -> HVACMode:
-        """Return current HVAC mode."""
-        return self._attr_hvac_mode
 
     @property
     def preset_mode(self) -> str:
@@ -147,6 +170,9 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
         new_options[CONF_TARGET_INDOOR_TEMP] = temperature
 
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+
+        # Write state update immediately
+        self.async_write_ha_state()
 
         # Request coordinator refresh to recalculate with new target
         await self.coordinator.async_request_refresh()
