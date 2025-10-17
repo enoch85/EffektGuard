@@ -211,6 +211,45 @@ class DecisionEngine:
 
         return self._manual_override_offset
 
+    def _get_thermal_trend(self) -> dict:
+        """Get current indoor temperature trend data.
+
+        Returns:
+            Dictionary with trend info, or empty dict if unavailable
+        """
+        if self.predictor and len(self.predictor.state_history) >= 8:
+            return self.predictor.get_current_trend()
+        return {
+            "trend": "unknown",
+            "rate_per_hour": 0.0,
+            "confidence": 0.0,
+            "samples": 0,
+        }
+
+    def _is_cooling_rapidly(self, thermal_trend: dict, threshold: float = -0.3) -> bool:
+        """Check if house is cooling rapidly.
+
+        Args:
+            thermal_trend: Trend data from _get_thermal_trend()
+            threshold: Cooling rate threshold (°C/h, negative)
+
+        Returns:
+            True if cooling faster than threshold
+        """
+        return thermal_trend.get("rate_per_hour", 0.0) < threshold
+
+    def _is_warming_rapidly(self, thermal_trend: dict, threshold: float = 0.3) -> bool:
+        """Check if house is warming rapidly.
+
+        Args:
+            thermal_trend: Trend data from _get_thermal_trend()
+            threshold: Warming rate threshold (°C/h, positive)
+
+        Returns:
+            True if warming faster than threshold
+        """
+        return thermal_trend.get("rate_per_hour", 0.0) > threshold
+
     def calculate_decision(
         self,
         nibe_state,
@@ -287,10 +326,34 @@ class DecisionEngine:
         ]
 
         # Aggregate layers with priority weighting
-        final_offset = self._aggregate_layers(layers)
+        raw_offset = self._aggregate_layers(layers)
+
+        # NEW: Trend-aware damping to prevent overshoot/undershoot
+        thermal_trend = self._get_thermal_trend()
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        if self._is_warming_rapidly(thermal_trend, threshold=0.3):
+            # House warming rapidly - reduce offset to prevent overshoot
+            damping_factor = 0.75
+            reason_suffix = f" (damped 25%: warming {trend_rate:.2f}°C/h)"
+        elif self._is_cooling_rapidly(thermal_trend, threshold=-0.3):
+            # House cooling rapidly - boost offset to prevent undershoot
+            # But only if not already at high offset (safety limit)
+            if raw_offset < 3.0:
+                damping_factor = 1.15
+                reason_suffix = f" (boosted 15%: cooling {trend_rate:.2f}°C/h)"
+            else:
+                damping_factor = 1.0
+                reason_suffix = " (at safety limit, no boost)"
+        else:
+            # Normal rate of change
+            damping_factor = 1.0
+            reason_suffix = ""
+
+        final_offset = raw_offset * damping_factor
 
         # Generate human-readable reasoning
-        reasoning = self._generate_reasoning(layers, final_offset)
+        reasoning = self._generate_reasoning(layers, final_offset) + reason_suffix
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
 
@@ -487,12 +550,17 @@ class DecisionEngine:
         }
 
     def _proactive_debt_prevention_layer(self, nibe_state) -> LayerDecision:
-        """Proactive thermal debt prevention with climate-aware thresholds.
+        """Proactive thermal debt prevention with climate-aware thresholds and trend prediction.
 
         PHILOSOPHY (from Forum_Summary.md):
         - "Continuous modulation beats forced cycling" (stevedvo research)
         - Thermal debt from forced stops worse than running low power
         - Prevent peaks by maintaining gentle background heating
+
+        NEW - PREDICTIVE TREND ANALYSIS:
+        Uses indoor temperature trend to detect problems 30-60 minutes before they occur.
+        Rapid cooling (-0.3°C/h or faster) combined with outdoor cold and temperature deficit
+        indicates thermal debt will develop soon - intervene proactively.
 
         CLIMATE-AWARE DESIGN:
         Unlike hardcoded DM thresholds, this layer adapts to climate and outdoor temperature:
@@ -530,6 +598,38 @@ class DecisionEngine:
         """
         degree_minutes = nibe_state.degree_minutes
         outdoor_temp = nibe_state.outdoor_temp
+        indoor_temp = nibe_state.indoor_temp
+
+        # NEW: Get temperature trend for predictive intervention
+        thermal_trend = self._get_thermal_trend()
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # Calculate current deficit
+        deficit = self.target_temp - indoor_temp
+
+        # Predict deficit in 1 hour if trend continues
+        predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
+
+        # ========================================
+        # NEW: RAPID COOLING DETECTION (Predictive)
+        # ========================================
+        # Detect rapid cooling BEFORE thermal debt accumulates in degree minutes
+        # This gives 30-60 minutes advance warning vs reactive DM-based approach
+        if self._is_cooling_rapidly(thermal_trend, threshold=-0.3):
+            # House cooling faster than -0.3°C/hour
+            # This often precedes thermal debt if outdoor temp is cold
+
+            if outdoor_temp < 0.0 and deficit > 0.3:
+                # Cold outside + already below target + rapid cooling = trouble ahead
+                boost = min(abs(trend_rate) * 2.0, 3.0)  # Proportional to cooling rate
+                return LayerDecision(
+                    offset=boost,
+                    weight=0.8,  # High priority but not safety-level
+                    reason=(
+                        f"Proactive: Rapid cooling ({trend_rate:.2f}°C/h), "
+                        f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
+                    ),
+                )
 
         # Get climate-aware expected DM range for current conditions
         expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
@@ -545,10 +645,18 @@ class DecisionEngine:
         if zone2_threshold < degree_minutes <= zone1_threshold:
             # Gentle nudge to prevent deeper deficit
             offset = 0.5
+
+            # NEW: Boost more if also cooling rapidly
+            if trend_rate < -0.2:
+                offset *= 1.3  # 30% boost when cooling rapidly
+                reason_suffix = f" (trend: {trend_rate:.2f}°C/h)"
+            else:
+                reason_suffix = ""
+
             return LayerDecision(
                 offset=offset,
                 weight=LAYER_WEIGHT_PROACTIVE_MIN,
-                reason=f"Proactive Z1: DM {degree_minutes:.0f} (threshold: {zone1_threshold:.0f}), gentle heating prevents debt",
+                reason=f"Proactive Z1: DM {degree_minutes:.0f} (threshold: {zone1_threshold:.0f}), gentle heating prevents debt{reason_suffix}",
             )
 
         # PROACTIVE ZONE 2: Compressor running, monitor trend

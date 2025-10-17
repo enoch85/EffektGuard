@@ -723,6 +723,41 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
 
+        # Get indoor temperature trend for predictive DHW blocking
+        thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # NEW: Block DHW if indoor cooling rapidly AND below target
+        # Prevents DHW from causing comfort issues when house already struggling
+        if indoor_deficit > 0.3 and trend_rate < -0.3:
+            # House is below target AND cooling rapidly
+            # DHW would make this worse - block it
+            planning_summary = (
+                f"⚠️ DHW Blocked - Space Heating Priority\n"
+                f"Indoor: {indoor_temp:.1f}°C (target {target_indoor:.1f}°C)\n"
+                f"Trend: Cooling {abs(trend_rate):.2f}°C/hour\n"
+                f"Reason: Prevent further indoor temperature drop"
+            )
+
+            recommendation = (
+                f"Block DHW - Indoor temp falling rapidly ({trend_rate:.2f}°C/h), "
+                f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
+            )
+
+            return {
+                "recommendation": recommendation,
+                "summary": planning_summary,
+                "details": {
+                    "should_heat": False,
+                    "priority_reason": "INDOOR_COOLING_RAPIDLY",
+                    "current_temperature": current_dhw_temp,
+                    "target_temperature": 50.0,
+                    "indoor_temp": indoor_temp,
+                    "indoor_trend": trend_rate,
+                    "indoor_deficit": indoor_deficit,
+                },
+            }
+
         # Get climate zone DM thresholds from climate detector
         if self.engine.climate_detector:
             dm_range = self.engine.climate_detector.get_expected_dm_range(outdoor_temp)

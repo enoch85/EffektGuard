@@ -23,24 +23,43 @@ Home Assistant custom integration for intelligent NIBE heat pump control, optimi
 
 ### Safety-First Design
 
-**Critical thresholds control entire system behavior:**
+**Climate-aware thresholds control entire system behavior:**
 ```python
-# ✅ Correct - from const.py
+# ✅ Correct - climate zone-aware from ClimateZoneDetector
+from .optimization.climate_zones import ClimateZoneDetector
+
+# Initialize climate detector (uses Home Assistant's latitude)
+climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm example
+
+# Get context-aware DM thresholds for current outdoor temperature
+outdoor_temp = -10.0
+dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
+
+# Thresholds automatically adapt to location and conditions:
+# Stockholm at -10°C: normal_min=-450, normal_max=-700, warning=-700, critical=-1500
+# Kiruna at -30°C: normal_min=-800, normal_max=-1200, warning=-1200, critical=-1500
+# Paris at 5°C: normal_min=-200, normal_max=-350, warning=-350, critical=-1500
+
+if degree_minutes < dm_range["critical"]:  # Always -1500 (absolute maximum)
+    # Emergency recovery mode
+elif degree_minutes < dm_range["warning"]:  # Zone-specific warning threshold
+    # Warning: Stop cost optimization, gentle recovery
+    
+# ❌ Wrong - NEVER hardcode DM thresholds (not climate-aware!)
+if degree_minutes < -500:  # DANGEROUS - ignores climate context!
+```
+
+**Key Safety Constants:**
+```python
 from .const import (
     DM_THRESHOLD_START,              # -60 (normal compressor start)
     DM_THRESHOLD_EXTENDED,           # -240 (extended runs, acceptable)
-    DM_THRESHOLD_WARNING,            # -400 (approaching danger, prevent reductions)
-    DM_THRESHOLD_CRITICAL,           # -500 (catastrophic, emergency recovery)
-    DM_THRESHOLD_AUX_SWEDISH,        # -1000 to -1500 (Swedish aux optimization)
+    DM_THRESHOLD_ABSOLUTE_MAX,       # -1500 (absolute critical, never exceed)
 )
 
-if degree_minutes < DM_THRESHOLD_CRITICAL:
-    # Emergency recovery mode
-elif degree_minutes < DM_THRESHOLD_WARNING:
-    # Warning: Stop cost optimization, gentle recovery
-    
-# ❌ Wrong - NEVER hardcode safety thresholds
-if degree_minutes < -500:  # DANGEROUS!
+# Climate zone system provides context-aware thresholds:
+# - DM_THRESHOLD_WARNING: Climate/temp specific (e.g., -700 for Stockholm at -10°C)
+# - DM_THRESHOLD_CRITICAL: Always -1500 (validated in Swedish forums)
 ```
 
 ### Four-Layer Structure
@@ -393,7 +412,7 @@ def test_blocks_activation_wrong_pump_config():
 
 ### When Real Values
 
-- NIBE thresholds (use actual DM -60, -240, -400, -500, -1500)
+- NIBE thresholds (use climate-aware DM ranges from ClimateZoneDetector)
 - Thermal calculations
 - Configuration validation
 - Decision engine logic
@@ -617,16 +636,19 @@ def calculate_optimal_flow_temp(
 
 ### Critical NIBE Knowledge
 
-**Degree Minutes (DM):**
+**Degree Minutes (DM) - Climate Zone Aware:**
 - Swedish term: Gradminuter (GM) in NIBE Menu 4.9.3
 - Tracks thermal balance: `DM = ∫(BT25 - S1) dt`
 - BT25 = actual flow temperature
 - S1 = target flow temperature
 - Standard compressor start: DM -60
 - Extended runs: DM -240 (stevedvo custom setting, acceptable)
-- **WARNING: DM -400** (approaching thermal debt, prevent further reductions)
-- **CATASTROPHIC: DM -500** (15kW spikes, 10°K overshoot, emergency recovery)
-- Swedish auxiliary optimization: DM -1000 to -1500 (delays auxiliary heat for efficiency)
+- **CLIMATE-AWARE WARNING**: Varies by zone and outdoor temp
+  - Stockholm at -10°C: DM -700 warning threshold
+  - Kiruna at -30°C: DM -1200 warning threshold
+  - Paris at 5°C: DM -350 warning threshold
+- **ABSOLUTE CRITICAL: DM -1500** (validated in Swedish forums, never exceed)
+- Use `ClimateZoneDetector.get_expected_dm_range(outdoor_temp)` for context-aware thresholds
 
 **Pump Configuration:**
 - **Open-loop UFH**: MUST use Auto mode, 10% (ASHP) or 20% (GSHP) idle
@@ -734,9 +756,9 @@ set_optimization_mode:
 - Real homes depend on this (heat pump health matters)
 
 **Research-Based:**
-- All thresholds from real NIBE failures
-- All optimizations from Swedish forum validation
-- Mathematical formulas from OEM research
+- All thresholds from real NIBE failures and Swedish forum validation
+- Climate zone system: Adapts DM thresholds from Arctic (-30°C) to Mediterranean (5°C)
+- Mathematical formulas from OEM research (André Kühne, Timbones)
 
 **Swedish-Specific:**
 - 15-minute effect tariff windows (quarterly measurement)
@@ -744,7 +766,7 @@ set_optimization_mode:
 - F750/F2040 focus with S-series support
 
 **Known Critical Issues:**
-- Thermal debt DM -500 (Degree Minutes) = catastrophic failure
+- Climate-aware thermal debt thresholds (DM -1500 absolute maximum, validated in Swedish forums)
 - Open-loop pump Intermittent = 8-hour off periods
 - BT50 indoor sensor + UFH = instability (not recommended)
 - DHW during heating demand = thermal debt accumulation
