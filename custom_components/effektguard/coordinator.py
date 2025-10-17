@@ -1236,11 +1236,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             e,
                         )
                 else:
-                    _LOGGER.warning(
-                        "External power sensor %s not available (state: %s)",
-                        power_entity_id,
-                        power_state.state if power_state else "None",
-                    )
+                    # Template sensors and other sensors may not be ready immediately at startup
+                    # Log as debug for "unknown" state (normal at startup), warning for "unavailable"
+                    if power_state and power_state.state == "unknown":
+                        _LOGGER.debug(
+                            "External power sensor %s not ready yet (state: unknown) - will retry",
+                            power_entity_id,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "External power sensor %s not available (state: %s)",
+                            power_entity_id,
+                            power_state.state if power_state else "None",
+                        )
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
@@ -1327,11 +1335,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 measurement_source = "estimate"
 
+            # Get current timestamp for peak tracking
+            now = dt_util.now()
+            quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
+
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
-                now = dt_util.now()
-                quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
-
                 self.peak_today = current_power
                 self.peak_today_time = now
                 self.peak_today_source = measurement_source
@@ -1362,8 +1371,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 return
 
             # Update monthly peak through effect manager
-            quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
-
             peak_event = await self.effect.record_quarter_measurement(
                 power_kw=current_power,
                 quarter=quarter_of_day,
