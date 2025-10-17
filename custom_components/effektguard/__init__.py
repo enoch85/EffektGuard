@@ -106,6 +106,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Ensure MyUplink integration is loaded and entities are available."
         ) from err
 
+    # Set up power sensor availability listener AFTER first refresh
+    # This ensures coordinator is fully initialized before setting up event listeners
+    # Event listener provides instant detection when external power sensor becomes available
+    coordinator.setup_power_sensor_listener()
+
     # Forward setup to platforms (only if coordinator initialized successfully)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

@@ -194,6 +194,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
+        
+        # Power sensor availability tracking (event-driven)
+        # Event listener detects when external power sensor becomes available during startup
+        # Listener unsubscribes after detection to avoid overhead
+        self._power_sensor_available = False
+        self._power_sensor_listener = None
 
     def _detect_climate_region(self, hass: HomeAssistant) -> str:
         """Detect Swedish climate region based on Home Assistant location.
@@ -290,6 +296,67 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
 
+    def setup_power_sensor_listener(self) -> None:
+        """Set up event listener to detect when external power sensor becomes available.
+        
+        Uses Home Assistant's event bus to react immediately when the power sensor
+        state changes from unknown/unavailable to a valid value. This provides
+        instant detection during startup without polling overhead.
+        
+        The listener automatically unsubscribes after detecting availability,
+        so there's no ongoing event processing overhead.
+        """
+        # Check if we have an external power sensor configured
+        if not hasattr(self.nibe, "_power_sensor_entity") or not self.nibe._power_sensor_entity:
+            _LOGGER.debug("No external power sensor configured - skipping availability listener")
+            return
+        
+        power_entity_id = self.nibe._power_sensor_entity
+        
+        # Check if sensor is already available (immediate check)
+        power_state = self.hass.states.get(power_entity_id)
+        if power_state and power_state.state not in ["unknown", "unavailable"]:
+            self._power_sensor_available = True
+            _LOGGER.info("External power sensor %s already available at startup", power_entity_id)
+            return
+        
+        from homeassistant.core import callback
+        
+        @callback
+        def power_sensor_state_changed(event):
+            """Handle power sensor state change event."""
+            new_state = event.data.get("new_state")
+            if new_state and new_state.state not in ["unknown", "unavailable"]:
+                if not self._power_sensor_available:
+                    _LOGGER.info(
+                        "External power sensor %s is now available (state: %s)",
+                        power_entity_id,
+                        new_state.state,
+                    )
+                    self._power_sensor_available = True
+                    
+                    # Unsubscribe - we don't need this listener anymore
+                    if self._power_sensor_listener:
+                        self._power_sensor_listener()
+                        self._power_sensor_listener = None
+                        _LOGGER.debug("Power sensor availability listener unsubscribed")
+                    
+                    # Trigger immediate coordinator refresh to start using the sensor
+                    self.hass.async_create_task(self.async_request_refresh())
+        
+        # Subscribe to state_changed events for this specific entity
+        self._power_sensor_listener = self.hass.bus.async_listen(
+            "state_changed",
+            power_sensor_state_changed,
+            event_filter=lambda event: event.data.get("entity_id") == power_entity_id,
+        )
+        
+        _LOGGER.debug(
+            "Listening for external power sensor %s availability (current state: %s)",
+            power_entity_id,
+            power_state.state if power_state else "None",
+        )
+
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
 
@@ -302,6 +369,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Shutting down EffektGuard coordinator")
 
         try:
+            # Unsubscribe power sensor listener if still active
+            if self._power_sensor_listener:
+                self._power_sensor_listener()
+                self._power_sensor_listener = None
+                _LOGGER.debug("Power sensor availability listener unsubscribed")
+            
             # Save learning state
             if self.adaptive_learning or self.thermal_predictor or self.weather_learner:
                 await self._save_learned_data(
@@ -1219,6 +1292,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if has_external_power_sensor:
                 power_entity_id = self.nibe._power_sensor_entity
                 power_state = self.hass.states.get(power_entity_id)
+                
+                # Only attempt to use external sensor if it's available
+                # Availability is tracked via event listener for fast startup detection
                 if power_state and power_state.state not in ["unknown", "unavailable"]:
                     try:
                         # Power sensor typically in watts, convert to kW
@@ -1228,6 +1304,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             current_power,
                             power_entity_id,
                         )
+                        # Mark sensor as available (in case event listener hasn't fired yet)
+                        if not self._power_sensor_available:
+                            self._power_sensor_available = True
+                            _LOGGER.debug("External power sensor marked as available")
                     except (ValueError, TypeError) as e:
                         _LOGGER.warning(
                             "Failed to read power sensor %s (state: %s): %s",
@@ -1235,20 +1315,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             power_state.state,
                             e,
                         )
-                else:
-                    # Template sensors and other sensors may not be ready immediately at startup
-                    # Log as debug for "unknown" state (normal at startup), warning for "unavailable"
-                    if power_state and power_state.state == "unknown":
-                        _LOGGER.debug(
-                            "External power sensor %s not ready yet (state: unknown) - will retry",
-                            power_entity_id,
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "External power sensor %s not available (state: %s)",
-                            power_entity_id,
-                            power_state.state if power_state else "None",
-                        )
+                elif not self._power_sensor_available:
+                    # Sensor still not available - skip peak tracking this cycle
+                    # Event listener will trigger refresh when sensor becomes available
+                    _LOGGER.debug(
+                        "External power sensor %s not yet available (state: %s) - "
+                        "skipping peak tracking (listener active: %s)",
+                        power_entity_id,
+                        power_state.state if power_state else "None",
+                        self._power_sensor_listener is not None,
+                    )
+                    return  # Exit early, event listener will trigger refresh when ready
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
