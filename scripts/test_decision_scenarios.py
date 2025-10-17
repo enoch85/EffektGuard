@@ -73,7 +73,7 @@ Temperature Targets:
 AUTHORS:
 --------
 EffektGuard Development Team
-https://github.com/enoch95/EffektGuard
+https://github.com/enoch85/EffektGuard
 
 LICENSE:
 --------

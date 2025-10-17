@@ -118,7 +118,7 @@ DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
 DM_THRESHOLD_ABSOLUTE_MAX: Final = -1500  # NEVER EXCEED - hard safety limit
 
 # UFH prediction horizons based on thermal lag research
-# Source: glyn.hudson F2040 case study, enoch95 extreme cold snap feedback
+# Source: glyn.hudson F2040 case study, enoch85 extreme cold snap feedback
 UFH_CONCRETE_PREDICTION_HORIZON: Final = (
     24.0  # hours - 6+ hour lag, needs 24h for extreme cold (20°C drops)
 )

@@ -420,7 +420,7 @@ function run_release_process {
     fi
     
     success_log "GitHub release will be created automatically by GitHub Actions when tag is pushed"
-    echo -e "${BLUE}Monitor the process at:${NC} https://github.com/enoch95/${REPO_NAME}/actions"
+    echo -e "${BLUE}Monitor the process at:${NC} https://github.com/enoch85/${REPO_NAME}/actions"
     
     if [[ "$IS_PRERELEASE" == true ]]; then
         success_log "${MAIN_NAME} ${version_tag} (PRE-RELEASE) successfully prepared!"

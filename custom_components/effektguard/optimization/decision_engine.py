@@ -834,7 +834,7 @@ class DecisionEngine:
         if not weather_data or not weather_data.forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
 
-        # Use UFH-type-specific forecast horizon (enoch95 feedback: 24h for concrete)
+        # Use UFH-type-specific forecast horizon (enoch85 feedback: 24h for concrete)
         # Concrete slab needs longer horizon for extreme cold snaps (20°C drops)
         prediction_horizon = int(self.thermal.get_prediction_horizon())
         forecast_hours = weather_data.forecast_hours[:prediction_horizon]
@@ -850,7 +850,7 @@ class DecisionEngine:
         hourly_rate = temp_drop / len(forecast_hours) if forecast_hours else 0.0
 
         # Dynamic threshold based on building thermal mass
-        # MORE AGGRESSIVE (enoch95 feedback): Act sooner to prevent thermal debt
+        # MORE AGGRESSIVE (enoch85 feedback): Act sooner to prevent thermal debt
         # Lower threshold = more sensitive = earlier pre-heating
         # Old: -2.0°C * thermal_mass (required 2-4°C drop)
         # New: -1.0°C * thermal_mass (activates at 1-2°C drop)

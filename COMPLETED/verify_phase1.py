@@ -10,37 +10,41 @@ import os
 import sys
 from pathlib import Path
 
+
 def check_file_exists(path: str) -> bool:
     """Check if file exists."""
     return Path(path).exists()
 
+
 def check_python_syntax(path: str) -> bool:
     """Check if Python file has valid syntax."""
     try:
-        with open(path, 'r') as f:
-            compile(f.read(), path, 'exec')
+        with open(path, "r") as f:
+            compile(f.read(), path, "exec")
         return True
     except SyntaxError as e:
         print(f"  ✗ Syntax error in {path}: {e}")
         return False
 
+
 def check_json_valid(path: str) -> bool:
     """Check if JSON file is valid."""
     try:
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             json.load(f)
         return True
     except json.JSONDecodeError as e:
         print(f"  ✗ JSON error in {path}: {e}")
         return False
 
+
 def main():
     """Run verification checks."""
     print("EffektGuard Phase 1 Verification")
     print("=" * 50)
-    
+
     base_path = "custom_components/effektguard"
-    
+
     # Core files
     print("\n1. Core Integration Files")
     core_files = [
@@ -50,23 +54,23 @@ def main():
         "coordinator.py",
         "config_flow.py",
     ]
-    
+
     for file in core_files:
         path = f"{base_path}/{file}"
         if check_file_exists(path):
-            if file.endswith('.py'):
+            if file.endswith(".py"):
                 if check_python_syntax(path):
                     print(f"  ✓ {file}")
                 else:
                     print(f"  ✗ {file} has syntax errors")
-            elif file.endswith('.json'):
+            elif file.endswith(".json"):
                 if check_json_valid(path):
                     print(f"  ✓ {file}")
                 else:
                     print(f"  ✗ {file} has JSON errors")
         else:
             print(f"  ✗ {file} missing")
-    
+
     # Adapters
     print("\n2. Data Adapters")
     adapter_files = [
@@ -75,12 +79,12 @@ def main():
         "adapters/gespot_adapter.py",
         "adapters/weather_adapter.py",
     ]
-    
+
     for file in adapter_files:
         path = f"{base_path}/{file}"
         if check_file_exists(path) and check_python_syntax(path):
             print(f"  ✓ {file}")
-    
+
     # Optimization
     print("\n3. Optimization Engine")
     opt_files = [
@@ -90,12 +94,12 @@ def main():
         "optimization/thermal_model.py",
         "optimization/decision_engine.py",
     ]
-    
+
     for file in opt_files:
         path = f"{base_path}/{file}"
         if check_file_exists(path) and check_python_syntax(path):
             print(f"  ✓ {file}")
-    
+
     # Entities
     print("\n4. Entity Files")
     entity_files = [
@@ -105,12 +109,12 @@ def main():
         "select.py",
         "switch.py",
     ]
-    
+
     for file in entity_files:
         path = f"{base_path}/{file}"
         if check_file_exists(path) and check_python_syntax(path):
             print(f"  ✓ {file}")
-    
+
     # Translations
     print("\n5. Translations")
     trans_files = [
@@ -118,19 +122,19 @@ def main():
         "translations/en.json",
         "translations/sv.json",
     ]
-    
+
     for file in trans_files:
         path = f"{base_path}/{file}"
         if check_file_exists(path) and check_json_valid(path):
             print(f"  ✓ {file}")
-    
+
     # Architecture checks
     print("\n6. Architecture Compliance")
-    
+
     # Check constants defined
-    with open(f"{base_path}/const.py", 'r') as f:
+    with open(f"{base_path}/const.py", "r") as f:
         const_content = f.read()
-    
+
     checks = {
         "DM_THRESHOLD_CRITICAL": "Degree minutes critical threshold",
         "DM_THRESHOLD_WARNING": "Degree minutes warning threshold",
@@ -138,18 +142,19 @@ def main():
         "QuarterClassification": "Quarter classification enum",
         "DOMAIN": "Domain constant",
     }
-    
+
     for key, desc in checks.items():
         if key in const_content:
             print(f"  ✓ {desc} defined")
         else:
             print(f"  ✗ {desc} missing")
-    
+
     print("\n" + "=" * 50)
     print("Phase 1 Verification Complete!")
     print("\nAll files are syntactically correct.")
     print("Architecture follows implementation plan.")
     print("\n✅ Ready for Phase 2")
+
 
 if __name__ == "__main__":
     main()

@@ -272,7 +272,7 @@ NIBE_DHW_SAFETY_MIN = 35       # °C - Can defer if 30-35°C with conditions
 
 ### DHW Heating Time (Research-Based):
 ```python
-DHW_HEATING_TIME_HOURS = 1.5     # Typical (from enoch95 case study)
+DHW_HEATING_TIME_HOURS = 1.5     # Typical (from enoch85 case study)
 DHW_HEATING_TIME_MIN_HOURS = 1.0 # Minimum
 DHW_HEATING_TIME_MAX_HOURS = 2.0 # Maximum
 ```
@@ -303,7 +303,7 @@ from custom_components.effektguard.const import (
 ### Real-World Scenarios
 Tests validate actual NIBE behavior patterns:
 - Real thermal debt values from stevedvo case study (DM -500 catastrophic)
-- Real DHW heating times from enoch95 research (1-2 hours)
+- Real DHW heating times from enoch85 research (1-2 hours)
 - Real power consumption ranges from F750 performance curves
 - Real Swedish 3-phase standards (240V, 0.95 PF)
 

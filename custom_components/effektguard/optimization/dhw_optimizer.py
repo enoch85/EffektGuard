@@ -13,7 +13,7 @@ Priority order:
 5. DHW comfort (50°C normal)
 6. NIBE's automatic Legionella prevention (MONITOR ONLY - we don't trigger it)
 
-DHW Heating Speed (enoch95):
+DHW Heating Speed (enoch85):
 - Tank heat-up: 1-2 hours (MUCH faster than UFH space heating!)
 - No thermal mass delays like concrete slab UFH (6+ hours)
 """

@@ -53,9 +53,7 @@ def check_sensor_entities():
     assert "value_fn=lambda coordinator:" in content, "Missing value_fn pattern"
 
     # Check device info
-    assert "_attr_device_info" in content or "device_info" in content, (
-        "Missing device_info"
-    )
+    assert "_attr_device_info" in content or "device_info" in content, "Missing device_info"
 
     print(f"  ✅ All 14 sensors implemented with proper structure")
 
@@ -169,9 +167,9 @@ def check_climate_entity():
         assert preset in content, f"Missing preset mode: {preset}"
 
     # Check supported features
-    assert "ClimateEntityFeature.TARGET_TEMPERATURE" in content, (
-        "Missing target temperature feature"
-    )
+    assert (
+        "ClimateEntityFeature.TARGET_TEMPERATURE" in content
+    ), "Missing target temperature feature"
     assert "ClimateEntityFeature.PRESET_MODE" in content, "Missing preset mode feature"
 
     # Check temperature properties
@@ -184,9 +182,7 @@ def check_climate_entity():
     assert "async def async_set_hvac_mode" in content, "Missing set_hvac_mode method"
 
     # Check extra state attributes
-    assert "def extra_state_attributes" in content, (
-        "Missing extra_state_attributes property"
-    )
+    assert "def extra_state_attributes" in content, "Missing extra_state_attributes property"
 
     print(f"  ✅ Climate entity implemented with preset modes and full features")
 
@@ -231,14 +227,14 @@ def check_device_info_implementation():
         content = file_path.read_text()
 
         # Check device_info is set
-        assert "_attr_device_info" in content or "device_info" in content, (
-            f"Missing device_info in {file}"
-        )
+        assert (
+            "_attr_device_info" in content or "device_info" in content
+        ), f"Missing device_info in {file}"
 
         # Check unique_id is set
-        assert "_attr_unique_id" in content or "unique_id" in content, (
-            f"Missing unique_id in {file}"
-        )
+        assert (
+            "_attr_unique_id" in content or "unique_id" in content
+        ), f"Missing unique_id in {file}"
 
     print(f"  ✅ All entities have device_info and unique_id")
 
@@ -271,9 +267,7 @@ def check_entity_tests():
     ]
 
     for test in original_tests:
-        assert f"def {test}" in content or f"async def {test}" in content, (
-            f"Missing test: {test}"
-        )
+        assert f"def {test}" in content or f"async def {test}" in content, f"Missing test: {test}"
 
     # Check comprehensive tests
     comprehensive_tests = [
@@ -380,17 +374,15 @@ def check_optional_features_sensor():
     content = sensor_file.read_text()
 
     # Check optional_features_status sensor exists
-    assert 'key="optional_features_status"' in content, (
-        "Missing optional_features_status sensor"
-    )
+    assert 'key="optional_features_status"' in content, "Missing optional_features_status sensor"
 
     # Check it provides attributes
     test_file = project_root / "tests" / "test_entities_comprehensive.py"
     test_content = test_file.read_text()
 
-    assert "test_sensor_optional_features_status_attributes" in test_content, (
-        "Missing test for optional features attributes"
-    )
+    assert (
+        "test_sensor_optional_features_status_attributes" in test_content
+    ), "Missing test for optional features attributes"
 
     print("  ✅ Optional features status sensor ready for Phase 5")
 

@@ -275,7 +275,7 @@ async def _create_coordinator(
     await coordinator.async_initialize_learning()
 
     # Connect thermal predictor and weather learner to decision engine (Phase 6)
-    # CRITICAL: Use adaptive learning model for UFH-specific prediction horizons (enoch95 feedback)
+    # CRITICAL: Use adaptive learning model for UFH-specific prediction horizons (enoch85 feedback)
     decision_engine.thermal = coordinator.adaptive_learning  # AdaptiveThermalModel
     decision_engine.predictor = coordinator.thermal_predictor
     decision_engine.weather_learner = coordinator.weather_learner

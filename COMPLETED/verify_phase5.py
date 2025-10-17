@@ -77,11 +77,7 @@ def check_decision_engine_override():
     print("✓ Checking decision engine manual override...")
 
     engine_file = (
-        project_root
-        / "custom_components"
-        / "effektguard"
-        / "optimization"
-        / "decision_engine.py"
+        project_root / "custom_components" / "effektguard" / "optimization" / "decision_engine.py"
     )
     content = engine_file.read_text()
 
@@ -100,9 +96,9 @@ def check_decision_engine_override():
     assert "_manual_override_until" in content, "Missing override expiry variable"
 
     # Check integration in calculate_decision
-    assert "manual_override = self._check_manual_override()" in content, (
-        "Manual override not checked in calculate_decision"
-    )
+    assert (
+        "manual_override = self._check_manual_override()" in content
+    ), "Manual override not checked in calculate_decision"
 
     print("  ✅ Manual override fully integrated with time-based expiration")
 
@@ -112,11 +108,7 @@ def check_effect_manager_reset():
     print("✓ Checking effect manager reset...")
 
     effect_file = (
-        project_root
-        / "custom_components"
-        / "effektguard"
-        / "optimization"
-        / "effect_manager.py"
+        project_root / "custom_components" / "effektguard" / "optimization" / "effect_manager.py"
     )
     content = effect_file.read_text()
 
@@ -176,9 +168,7 @@ def check_test_coverage():
     ]
 
     for test in required_tests:
-        assert f"def {test}" in content or f"async def {test}" in content, (
-            f"Missing test: {test}"
-        )
+        assert f"def {test}" in content or f"async def {test}" in content, f"Missing test: {test}"
 
     print("  ✅ Comprehensive test coverage (21 tests)")
 

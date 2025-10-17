@@ -7,7 +7,7 @@ Tests the new DHW safety thresholds:
 This prevents peak billing hits when DHW can safely wait for better prices.
 
 IMPORTANT: DHW heating time considerations:
-- Tank heat-up: 1-2 hours (enoch95 research)
+- Tank heat-up: 1-2 hours (enoch85 research)
 - No thermal mass delays like concrete slab UFH
 - Must check if price peak occurs within heating window
 - Defer heating if peak is coming within 1-2 hours
@@ -27,7 +27,7 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
 )
 
-# DHW heating time constants (from research: enoch95 case study)
+# DHW heating time constants (from research: enoch85 case study)
 DHW_HEATING_TIME_HOURS = 1.5  # Typical DHW tank heat-up time
 DHW_HEATING_TIME_MIN_HOURS = 1.0  # Minimum heating time
 DHW_HEATING_TIME_MAX_HOURS = 2.0  # Maximum heating time
@@ -487,7 +487,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         def estimate_dhw_heating_time(current_temp: float, target_temp: float) -> float:
             """Estimate DHW heating time in hours.
 
-            Based on enoch95 research: 1-2 hours typical for full heat-up.
+            Based on enoch85 research: 1-2 hours typical for full heat-up.
             Linear interpolation between temps.
             """
             temp_diff = target_temp - current_temp
