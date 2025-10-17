@@ -172,6 +172,9 @@ def mock_hass():
     hass.states = MagicMock()
     hass.states.get = MagicMock(return_value=None)
 
+    # Mock hass.data to prevent AttributeError in async_write_ha_state
+    hass.data = {}
+
     return hass
 
 
@@ -193,6 +196,7 @@ async def test_climate_set_temperature_clamping_max(mock_hass, full_coordinator,
     """Test temperature clamping at maximum."""
     climate = EffektGuardClimate(full_coordinator, mock_entry)
     climate.hass = mock_hass
+    climate.entity_id = "climate.effektguard"  # Set entity_id to prevent NoEntitySpecifiedError
 
     with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
         await climate.async_set_temperature(**{ATTR_TEMPERATURE: 30.0})
@@ -207,6 +211,7 @@ async def test_climate_set_temperature_clamping_min(mock_hass, full_coordinator,
     """Test temperature clamping at minimum."""
     climate = EffektGuardClimate(full_coordinator, mock_entry)
     climate.hass = mock_hass
+    climate.entity_id = "climate.effektguard"  # Set entity_id to prevent NoEntitySpecifiedError
 
     with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
         await climate.async_set_temperature(**{ATTR_TEMPERATURE: 10.0})
@@ -806,8 +811,8 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
     assert (
-        len(entities) == 17
-    )  # Updated: 17 sensors (removed dhw_next_boost, consolidated into dhw_status attributes)
+        len(entities) == 18
+    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

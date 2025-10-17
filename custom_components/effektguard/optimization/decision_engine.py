@@ -673,11 +673,14 @@ class DecisionEngine:
 
             # Check if pre-heating is recommended
             # Use half of prediction horizon as lookahead (balance between early and late)
-            hours_until_event = prediction_horizon // 2
+            hours_ahead = prediction_horizon // 2
             preheat_decision = self.predictor.should_pre_heat(
                 target_temp=self.target_temp,
-                hours_until_event=hours_until_event,
-                outdoor_forecast_temps=forecast_temps,
+                hours_ahead=hours_ahead,
+                future_outdoor_temps=forecast_temps,
+                current_outdoor_temp=nibe_state.outdoor_temp,
+                thermal_mass=self.thermal.thermal_mass,
+                insulation_quality=self.thermal.insulation_quality,
             )
 
             if preheat_decision.should_preheat:

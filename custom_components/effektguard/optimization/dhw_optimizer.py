@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from ..const import NIBE_DHW_SAFETY_CRITICAL, NIBE_DHW_SAFETY_MIN
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -89,8 +91,11 @@ class IntelligentDHWScheduler:
     Uses ClimateZoneDetector to determine appropriate DM thresholds for current conditions.
     """
 
-    # Temperature thresholds (from research)
-    DHW_SAFETY_MIN = 35.0  # °C - health/safety minimum (Legionella risk below this)
+    # Temperature thresholds (from const.py - Swedish NIBE standards)
+    DHW_SAFETY_CRITICAL = NIBE_DHW_SAFETY_CRITICAL  # °C - Always heat below this (safety override)
+    DHW_SAFETY_MIN = (
+        NIBE_DHW_SAFETY_MIN  # °C - Safety minimum (can defer 30-35°C during expensive periods)
+    )
     DHW_TARGET_NORMAL = 50.0  # °C - comfortable target
     DHW_TARGET_HIGH = 55.0  # °C - extra comfort for high demand periods
     DHW_LEGIONELLA_DETECT = 63.0  # °C - threshold to detect NIBE's Legionella boost
@@ -261,7 +266,36 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
+        # Safety minimum: Heat below 35°C BUT defer if:
+        # - Price is expensive/peak AND thermal debt is concerning
+        # - This prevents peak billing hits when DHW can wait
         if current_dhw_temp < self.DHW_SAFETY_MIN:
+            # Check if we should defer due to peak pricing + thermal debt
+            # Only defer if temp is still safe (30-35°C range) and not critically low
+            can_defer_for_peak = (
+                current_dhw_temp >= self.DHW_SAFETY_CRITICAL  # Not critically low (>= 30°C)
+                and price_classification in ["expensive", "peak"]  # High cost period
+                and thermal_debt_dm < (dm_block_threshold + 20)  # DM concerning but not critical
+            )
+
+            if can_defer_for_peak:
+                _LOGGER.info(
+                    "DHW safety minimum defer: temp %.1f°C (safe >= %.1f°C), price=%s, DM=%.0f. "
+                    "Waiting for better price to avoid peak billing.",
+                    current_dhw_temp,
+                    self.DHW_SAFETY_CRITICAL,
+                    price_classification,
+                    thermal_debt_dm,
+                )
+                return DHWScheduleDecision(
+                    should_heat=False,
+                    priority_reason="DHW_SAFETY_DEFERRED_PEAK_PRICE",
+                    target_temp=0.0,
+                    max_runtime_minutes=0,
+                    abort_conditions=[],
+                )
+
+            # Otherwise heat immediately (critically low or good price)
             return DHWScheduleDecision(
                 should_heat=True,
                 priority_reason="DHW_SAFETY_MINIMUM",

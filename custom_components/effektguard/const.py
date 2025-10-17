@@ -255,6 +255,44 @@ DHW_SCHEDULING_WINDOW_MIN: Final = 1  # Min hours ahead for DHW scheduling
 NIBE_TEMP_LUX_ENTITY_ID: Final = "switch.temporary_lux_50004"  # Temporary lux boost
 NIBE_BT7_SENSOR_ID: Final = "sensor.bt7_hw_top_40013"  # Hot water top temperature
 
+# NIBE Power Calculation Constants (Swedish 3-phase standard)
+# All NIBE heat pumps in Sweden are 3-phase systems
+NIBE_VOLTAGE_PER_PHASE: Final = (
+    240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
+)
+NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
+NIBE_DHW_SAFETY_CRITICAL: Final = 30.0  # °C - Below this, always heat (safety override)
+NIBE_DHW_SAFETY_MIN: Final = (
+    35.0  # °C - Safety minimum (can defer if 30-35°C during expensive periods)
+)
+
+# Savings Calculation Constants (Swedish electricity market)
+# Swedish effect tariff - typical cost per kW of monthly peak
+# Based on common Swedish grid operators (Ellevio ~55, Vattenfall/E.ON ~50 SEK/kW/month)
+SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
+
+# Baseline peak estimation - assumes optimization reduces peak by ~15%
+# If no baseline observed, estimate unoptimized peak from current optimized peak
+BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
+
+# Monthly calculation constants
+DAYS_PER_MONTH: Final = 30.0  # Average days for monthly savings calculation
+ORE_TO_SEK_CONVERSION: Final = 100.0  # Convert öre to SEK (1 SEK = 100 öre)
+
+# Heating impact factors
+HEATING_FACTOR_PER_DEGREE: Final = 0.1  # 10% power change per °C offset change
+CHEAP_PERIOD_BONUS_MULTIPLIER: Final = 1.2  # 20% bonus for strategic preheating
+EXPENSIVE_AVOIDANCE_BONUS_MULTIPLIER: Final = 1.3  # 30% bonus for avoiding expensive periods
+EMERGENCY_HEATING_COST_FACTOR: Final = 0.7  # 30% cost recognition for unavoidable heating
+
+# Baseline tracking - exponential moving average weights
+BASELINE_EMA_WEIGHT_OLD: Final = 0.8  # 80% weight on existing baseline
+BASELINE_EMA_WEIGHT_NEW: Final = 0.2  # 20% weight on new observation
+
+# Default heat pump power for savings estimation (system-specific, will vary)
+# F750: typically 2-7 kW depending on outdoor temp and compressor frequency
+DEFAULT_HEAT_PUMP_POWER_KW: Final = 4.0  # Mid-range estimate for average conditions
+
 
 class OptimizationMode(StrEnum):
     """Optimization mode options."""

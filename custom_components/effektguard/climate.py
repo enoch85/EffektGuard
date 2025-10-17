@@ -93,11 +93,11 @@ class EffektGuardClimate(CoordinatorEntity, RestoreEntity, ClimateEntity):
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass.
-        
+
         Restore previous state to maintain HVAC mode across restarts.
         """
         await super().async_added_to_hass()
-        
+
         # Restore previous state if available
         if (last_state := await self.async_get_last_state()) is not None:
             # Restore HVAC mode if valid
@@ -105,13 +105,12 @@ class EffektGuardClimate(CoordinatorEntity, RestoreEntity, ClimateEntity):
                 try:
                     self._attr_hvac_mode = HVACMode(last_state.state)
                     _LOGGER.debug(
-                        "Restored HVAC mode: %s from previous state",
-                        self._attr_hvac_mode
+                        "Restored HVAC mode: %s from previous state", self._attr_hvac_mode
                     )
                 except ValueError:
                     _LOGGER.warning(
                         "Invalid HVAC mode '%s' in restored state, using default HEAT",
-                        last_state.state
+                        last_state.state,
                     )
                     self._attr_hvac_mode = HVACMode.HEAT
             else:

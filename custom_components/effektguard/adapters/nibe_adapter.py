@@ -34,6 +34,8 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
+    NIBE_POWER_FACTOR,
+    NIBE_VOLTAGE_PER_PHASE,
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
@@ -45,7 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 class NibeState:
     """Current state of NIBE heat pump.
 
-    All temperatures in °C, power in kW.
+    All temperatures in °C, power in kW, currents in Amps.
     """
 
     outdoor_temp: float
@@ -59,6 +61,10 @@ class NibeState:
     timestamp: datetime
     dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
     dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
+    phase1_current: float | None = None  # BE1 - Phase 1 current (43086) - optional
+    phase2_current: float | None = None  # BE2 - Phase 2 current (43122) - optional
+    phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
+    compressor_hz: int | None = None  # Compressor frequency - optional
 
     @property
     def flow_temp(self) -> float:
@@ -204,6 +210,29 @@ class NibeAdapter:
         if dhw_charging_temp is not None:
             _LOGGER.debug("DHW charging temperature (BT6): %.1f°C", dhw_charging_temp)
 
+        # Read phase current sensors (optional - BE1, BE2, BE3)
+        phase1_current = await self._read_entity_float(
+            self._entity_cache.get("phase1_current"), default=None
+        )
+        phase2_current = await self._read_entity_float(
+            self._entity_cache.get("phase2_current"), default=None
+        )
+        phase3_current = await self._read_entity_float(
+            self._entity_cache.get("phase3_current"), default=None
+        )
+        compressor_hz = await self._read_entity_float(
+            self._entity_cache.get("compressor_hz"), default=None
+        )
+
+        # Log current sensors if available
+        if phase1_current is not None:
+            _LOGGER.debug(
+                "Phase currents (BE): L1=%.1fA, L2=%.1fA, L3=%.1fA",
+                phase1_current,
+                phase2_current or 0.0,
+                phase3_current or 0.0,
+            )
+
         return NibeState(
             outdoor_temp=outdoor_temp,
             indoor_temp=indoor_temp,
@@ -216,6 +245,10 @@ class NibeAdapter:
             timestamp=dt_util.utcnow(),
             dhw_top_temp=dhw_top_temp,
             dhw_charging_temp=dhw_charging_temp,
+            phase1_current=phase1_current,
+            phase2_current=phase2_current,
+            phase3_current=phase3_current,
+            compressor_hz=int(compressor_hz) if compressor_hz else None,
         )
 
     async def set_curve_offset(self, offset: float) -> bool:
@@ -436,6 +469,29 @@ class NibeAdapter:
                 "hw_charging",
                 "40014",
             ],  # BT6 / param 40014
+            "phase1_current": [
+                "current_be1",
+                "_be1",
+                "phase_1_current",
+                "43086",
+            ],  # BE1 / param 43086
+            "phase2_current": [
+                "current_be2",
+                "_be2",
+                "phase_2_current",
+                "43122",
+            ],  # BE2 / param 43122
+            "phase3_current": [
+                "current_be3",
+                "_be3",
+                "phase_3_current",
+                "electrical_addition",
+                "43081",
+            ],  # BE3 / param 43081
+            "compressor_hz": [
+                "compressor_frequency",
+                "43136",
+            ],  # Compressor frequency param 43136
         }
 
         # Find entities
@@ -663,6 +719,56 @@ class NibeAdapter:
             return estimated_power
 
         return None
+
+    def calculate_power_from_currents(
+        self,
+        phase1_amps: float | None,
+        phase2_amps: float | None = None,
+        phase3_amps: float | None = None,
+        voltage_per_phase: float = NIBE_VOLTAGE_PER_PHASE,
+        power_factor: float = NIBE_POWER_FACTOR,
+    ) -> float | None:
+        """Calculate real power consumption from phase current sensors.
+
+        Uses NIBE's built-in current sensors (BE1, BE2, BE3) to calculate
+        actual power consumption instead of estimating.
+
+        All NIBE heat pumps in Sweden are 3-phase systems (F730, F750, F2040, S1155).
+
+        Args:
+            phase1_amps: Phase 1 current (BE1) in Amps
+            phase2_amps: Phase 2 current (BE2) in Amps (may be 0 when compressor off)
+            phase3_amps: Phase 3 current (BE3) in Amps (may be 0 when compressor off)
+            voltage_per_phase: Voltage per phase (from const.py: NIBE_VOLTAGE_PER_PHASE)
+            power_factor: Motor power factor (from const.py: NIBE_POWER_FACTOR)
+
+        Returns:
+            Power consumption in kW, or None if no current data available
+
+        Notes:
+            - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
+            - All NIBE heat pumps are 3-phase (no single-phase models in Sweden)
+            - Power factor from const.py (conservative 0.95, real likely 0.96-0.98)
+            - Formula: P = V × (I1 + I2 + I3) × cos(φ) / 1000
+        """
+        if phase1_amps is None:
+            return None
+
+        # All NIBE heat pumps are 3-phase in Sweden
+        total_amps = phase1_amps + (phase2_amps or 0.0) + (phase3_amps or 0.0)
+        power_kw = voltage_per_phase * total_amps * power_factor / 1000
+
+        _LOGGER.debug(
+            "NIBE 3-phase power: %.1fV × (%.1f + %.1f + %.1f)A × %.2f = %.2f kW",
+            voltage_per_phase,
+            phase1_amps,
+            phase2_amps or 0.0,
+            phase3_amps or 0.0,
+            power_factor,
+            power_kw,
+        )
+
+        return power_kw
 
     async def _calculate_multi_sensor_temperature(self, nibe_temp: float) -> float:
         """Calculate indoor temperature from NIBE sensor + additional sensors.

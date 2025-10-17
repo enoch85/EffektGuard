@@ -22,6 +22,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import EffektGuardCoordinator
@@ -122,6 +123,26 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: coordinator.peak_this_month,
+    ),
+    EffektGuardSensorEntityDescription(
+        key="nibe_power",
+        name="NIBE Power",
+        icon="mdi:heat-pump",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.nibe.calculate_power_from_currents(
+                coordinator.data["nibe"].phase1_current,
+                coordinator.data["nibe"].phase2_current,
+                coordinator.data["nibe"].phase3_current,
+            )
+            if coordinator.data
+            and coordinator.data.get("nibe")
+            and coordinator.data["nibe"].phase1_current is not None
+            else None
+        ),
     ),
     EffektGuardSensorEntityDescription(
         key="optimization_reasoning",
@@ -466,6 +487,104 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                     attrs["current_power"] = decision.current_power
             attrs["monthly_peak"] = self.coordinator.peak_this_month
             attrs["daily_peak"] = self.coordinator.peak_today
+
+        elif key == "peak_today":
+            # Peak tracking metadata - when, how, and context
+            # Most common user questions: When did it happen? Is it real data? Does it affect my bill?
+
+            # When did today's peak occur?
+            if self.coordinator.peak_today_time:
+                attrs["peak_time"] = self.coordinator.peak_today_time.isoformat()
+                attrs["peak_hour"] = self.coordinator.peak_today_time.hour
+
+                # Calculate time since peak for context
+                now = dt_util.now()
+                time_since = now - self.coordinator.peak_today_time
+                hours = int(time_since.total_seconds() // 3600)
+                minutes = int((time_since.total_seconds() % 3600) // 60)
+                if hours > 0:
+                    attrs["time_since_peak"] = f"{hours}h {minutes}m ago"
+                else:
+                    attrs["time_since_peak"] = f"{minutes}m ago"
+            else:
+                attrs["peak_time"] = None
+                attrs["time_since_peak"] = "No peak recorded today"
+
+            # Which 15-minute quarter (Swedish effect tariff)
+            if self.coordinator.peak_today_quarter is not None:
+                attrs["peak_quarter"] = self.coordinator.peak_today_quarter
+                # Convert quarter to human-readable time
+                hour = self.coordinator.peak_today_quarter // 4
+                minute = (self.coordinator.peak_today_quarter % 4) * 15
+                attrs["peak_quarter_time"] = f"{hour:02d}:{minute:02d}"
+            else:
+                attrs["peak_quarter"] = None
+                attrs["peak_quarter_time"] = None
+
+            # How was it measured? (Trust/accuracy)
+            attrs["measurement_source"] = self.coordinator.peak_today_source
+
+            # Human-readable source description
+            source_descriptions = {
+                "external_meter": "Whole-house power meter (best accuracy)",
+                "nibe_currents": "NIBE phase currents (NIBE only)",
+                "estimate": "Estimated from compressor (display only)",
+                "unknown": "No measurement available yet",
+            }
+            attrs["measurement_description"] = source_descriptions.get(
+                self.coordinator.peak_today_source, "Unknown source"
+            )
+
+            # Is this real measurement or estimate?
+            attrs["is_real_measurement"] = self.coordinator.peak_today_source in [
+                "external_meter",
+                "nibe_currents",
+            ]
+
+            # Will this affect monthly billing?
+            # Only real measurements from external meter affect effect tariff billing
+            # NIBE currents measure only heat pump (missing other house loads)
+            will_affect = (
+                self.coordinator.peak_today_source == "external_meter"
+                and self.coordinator.peak_today > self.coordinator.peak_this_month
+            )
+            attrs["will_affect_billing"] = will_affect
+
+            if will_affect:
+                attrs["billing_impact"] = (
+                    f"New monthly peak: {self.coordinator.peak_today:.2f} kW "
+                    f"(previous: {self.coordinator.peak_this_month:.2f} kW)"
+                )
+            elif self.coordinator.peak_today_source != "external_meter":
+                attrs["billing_impact"] = "Not used for billing (no external meter configured)"
+            else:
+                attrs["billing_impact"] = (
+                    f"Below monthly peak of {self.coordinator.peak_this_month:.2f} kW"
+                )
+
+            # Yesterday's peak for comparison (trends/learning)
+            attrs["yesterday_peak"] = self.coordinator.yesterday_peak
+
+            if self.coordinator.yesterday_peak > 0:
+                # Calculate percentage change from yesterday
+                change = self.coordinator.peak_today - self.coordinator.yesterday_peak
+                change_pct = (change / self.coordinator.yesterday_peak) * 100
+                attrs["change_vs_yesterday"] = change
+                attrs["change_vs_yesterday_percent"] = round(change_pct, 1)
+
+                if change > 0:
+                    attrs["trend"] = f"↑ {abs(change):.2f} kW higher than yesterday"
+                elif change < 0:
+                    attrs["trend"] = f"↓ {abs(change):.2f} kW lower than yesterday"
+                else:
+                    attrs["trend"] = "Same as yesterday"
+            else:
+                attrs["change_vs_yesterday"] = None
+                attrs["change_vs_yesterday_percent"] = None
+                attrs["trend"] = "No yesterday data yet"
+
+            # Monthly peak for context
+            attrs["monthly_peak"] = self.coordinator.peak_this_month
 
         elif key == "optimization_reasoning":
             # Add full reasoning in attributes (not limited to 255 chars)

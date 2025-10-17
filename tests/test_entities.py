@@ -19,8 +19,10 @@ from homeassistant.components.climate.const import (
     PRESET_ECO,
     PRESET_NONE,
 )
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.effektguard.climate import EffektGuardClimate
@@ -54,6 +56,8 @@ from custom_components.effektguard.const import (
 @pytest.fixture
 def mock_coordinator():
     """Create mock coordinator."""
+    from datetime import datetime, timezone
+
     coordinator = MagicMock(spec=DataUpdateCoordinator)
     coordinator.last_update_success = True  # Add for availability check
     coordinator.data = {
@@ -106,10 +110,26 @@ def mock_coordinator():
         ),
         "current_classification": "normal",  # Added for hour_classification sensor
         "current_quarter": 42,  # Added for consistency
+        "dhw_status": "idle",  # DHW sensors read from coordinator.data
+        "dhw_recommendation": "Run DHW now - cheap period",
     }
     coordinator.peak_today = 4.5
     coordinator.peak_this_month = 5.2
     coordinator.current_peak = 5.2  # Add this for climate entity
+
+    # Peak tracking metadata (use timezone-aware datetime)
+    coordinator.peak_today_time = datetime.now(timezone.utc)
+    coordinator.peak_today_source = "nibe_currents"
+    coordinator.peak_today_quarter = 42
+    coordinator.yesterday_peak = 4.2
+
+    # Additional sensor values
+    coordinator.nibe_power = None  # Not available if phase currents missing
+    coordinator.optimization_reasoning = "Pre-heating before peak hours"
+
+    # Heat pump model (mock as object with model_name attribute)
+    coordinator.heat_pump_model = type("HeatPumpModel", (), {"model_name": "NIBE F2040"})()
+
     coordinator.async_request_refresh = AsyncMock()
     return coordinator
 
@@ -129,6 +149,13 @@ def mock_hass():
     hass.config = MagicMock()
     hass.config.units = MagicMock()
     hass.config.units.temperature_unit = UnitOfTemperature.CELSIUS
+
+    # Mock hass.data to prevent AttributeError in async_write_ha_state
+    hass.data = {}
+
+    # Mock states for async_write_ha_state
+    hass.states = MagicMock()
+    hass.states.async_set_internal = MagicMock()
 
     return hass
 
@@ -173,8 +200,8 @@ def test_sensor_count():
     from custom_components.effektguard.sensor import SENSORS
 
     assert (
-        len(SENSORS) == 17
-    )  # Updated count: removed dhw_next_boost (consolidated into dhw_status attributes)
+        len(SENSORS) == 18
+    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -190,8 +217,8 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
     assert (
-        len(sensors) == 17
-    )  # Updated: removed dhw_next_boost (consolidated into dhw_status attributes)
+        len(sensors) == 18
+    )  # All sensors including dhw_status, dhw_recommendation (was 17, now 18)
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):
@@ -262,6 +289,155 @@ def test_sensor_extra_attributes_current_offset(mock_coordinator, mock_entry):
     assert attrs["layer_votes"][0]["reason"] == "Temp OK"
     assert attrs["layer_votes"][1]["offset"] == 2.0
     assert attrs["layer_votes"][1]["reason"] == "Cheap period"
+
+
+def test_sensor_degree_minutes(mock_coordinator, mock_entry):
+    """Test degree minutes sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "degree_minutes")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == -60  # From mock nibe.degree_minutes
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_supply_temperature(mock_coordinator, mock_entry):
+    """Test supply temperature sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "supply_temperature")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 35.0
+    assert sensor.entity_description.device_class == SensorDeviceClass.TEMPERATURE
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_outdoor_temperature(mock_coordinator, mock_entry):
+    """Test outdoor temperature sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "outdoor_temperature")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 5.0
+    assert sensor.entity_description.device_class == SensorDeviceClass.TEMPERATURE
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_current_price(mock_coordinator, mock_entry):
+    """Test current electricity price sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "current_price")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 1.25  # From mock price.current_price
+    assert sensor.entity_description.device_class == SensorDeviceClass.MONETARY
+
+
+def test_sensor_peak_today(mock_coordinator, mock_entry):
+    """Test peak today sensor with new attributes."""
+    sensor_desc = next(s for s in SENSORS if s.key == "peak_today")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 4.5  # From mock coordinator.peak_today
+    assert sensor.entity_description.device_class == SensorDeviceClass.POWER
+
+    # Test new peak_today attributes
+    attrs = sensor.extra_state_attributes
+    assert "peak_time" in attrs
+    assert "peak_quarter" in attrs
+    assert attrs["peak_quarter"] == 42  # From mock coordinator.peak_today_quarter
+    assert "measurement_source" in attrs
+    assert attrs["measurement_source"] == "nibe_currents"  # From mock
+    assert "will_affect_billing" in attrs
+    assert "yesterday_peak" in attrs
+    assert attrs["yesterday_peak"] == 4.2  # From mock coordinator.yesterday_peak
+    assert "measurement_description" in attrs
+    assert "is_real_measurement" in attrs
+
+
+def test_sensor_peak_this_month(mock_coordinator, mock_entry):
+    """Test peak this month sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "peak_this_month")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 5.2
+    assert sensor.entity_description.device_class == SensorDeviceClass.POWER
+
+
+def test_sensor_nibe_power(mock_coordinator, mock_entry):
+    """Test NIBE power calculation sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "nibe_power")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    # Mock returns None when phase currents not available
+    assert sensor.native_value is None  # From mock coordinator.nibe_power
+    assert sensor.entity_description.device_class == SensorDeviceClass.POWER
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_optimization_reasoning(mock_coordinator, mock_entry):
+    """Test optimization reasoning sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "optimization_reasoning")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value is not None
+    assert isinstance(sensor.native_value, str)
+    # Full reasoning should be in attributes
+    attrs = sensor.extra_state_attributes
+    assert "full_reasoning" in attrs or len(sensor.native_value) <= 255
+
+
+def test_sensor_quarter_of_day(mock_coordinator, mock_entry):
+    """Test quarter of day sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "quarter_of_day")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    assert sensor.native_value == 42  # From mock_coordinator
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_optional_features_status(mock_coordinator, mock_entry):
+    """Test optional features status sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "optional_features_status")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    # Sensor returns "active" if coordinator.data exists (see value_fn lambda)
+    assert sensor.native_value == "active"
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_heat_pump_model(mock_coordinator, mock_entry):
+    """Test heat pump model sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "heat_pump_model")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    # Should return model name from coordinator
+    assert sensor.native_value == "NIBE F2040"  # From mock
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_dhw_status(mock_coordinator, mock_entry):
+    """Test DHW status sensor."""
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    # Sensor reads from coordinator.data["dhw_status"]
+    assert sensor.native_value == "idle"  # From mock data["dhw_status"]
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+
+def test_sensor_dhw_recommendation(mock_coordinator, mock_entry):
+    """Test DHW recommendation sensor with attributes."""
+    sensor_desc = next(s for s in SENSORS if s.key == "dhw_recommendation")
+    sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
+
+    # Sensor reads from coordinator.data["dhw_recommendation"]
+    assert (
+        sensor.native_value == "Run DHW now - cheap period"
+    )  # From mock data["dhw_recommendation"]
+    assert sensor.entity_description.entity_category == EntityCategory.DIAGNOSTIC
+
+    # Test DHW planning attributes
+    attrs = sensor.extra_state_attributes
+    # Should have planning attributes if available
+    if "planning_summary" in attrs:
+        assert isinstance(attrs["planning_summary"], str)
 
 
 # ============================================================================
@@ -510,6 +686,7 @@ async def test_climate_set_temperature(mock_hass, mock_coordinator, mock_entry):
     """Test setting target temperature."""
     climate = EffektGuardClimate(mock_coordinator, mock_entry)
     climate.hass = mock_hass
+    climate.entity_id = "climate.effektguard"  # Set entity_id to prevent NoEntitySpecifiedError
 
     with patch.object(mock_hass.config_entries, "async_update_entry") as mock_update:
         await climate.async_set_temperature(**{ATTR_TEMPERATURE: 22.0})

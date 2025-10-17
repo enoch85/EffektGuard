@@ -103,6 +103,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # DHW optimizer - pass climate detector for climate-aware thresholds
         from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
+        from .optimization.savings_calculator import SavingsCalculator
 
         # Get user-configured DHW target temperature (default 50°C)
         from .const import DEFAULT_DHW_TARGET_TEMP
@@ -140,6 +141,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             climate_detector=decision_engine.climate_detector,
         )
 
+        # Savings calculator
+        self.savings_calculator = SavingsCalculator()
+
         if demand_periods:
             try:
                 # Format DHW periods for logging (handle both real values and test mocks)
@@ -173,6 +177,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.peak_this_month: float = 0.0
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
+
+        # Peak tracking metadata (for sensor attributes)
+        self.peak_today_time: datetime | None = None  # When today's peak occurred
+        self.peak_today_source: str = "unknown"  # external_meter, nibe_currents, estimate
+        self.peak_today_quarter: int | None = None  # 15-min quarter (0-95) for effect tariff
+        self.yesterday_peak: float = 0.0  # Yesterday's peak for comparison
 
         # DHW tracking
         self.last_dhw_heated = None  # Last time DHW was in heating mode
@@ -459,6 +469,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Failed to apply offset to NIBE: %s", err)
             # Continue anyway - next cycle will retry
 
+        # Check for day change and save yesterday's peak
+        now = dt_util.now()
+        if not hasattr(self, "_last_update_date"):
+            self._last_update_date = now.date()
+
+        if now.date() != self._last_update_date:
+            # New day detected - save yesterday's peak and reset
+            self.yesterday_peak = self.peak_today
+            _LOGGER.info(
+                "Day change detected: Yesterday's peak was %.2f kW, resetting daily peak",
+                self.yesterday_peak,
+            )
+            # Reset daily peak for new day
+            self.peak_today = 0.0
+            self.peak_today_time = None
+            self.peak_today_source = "unknown"
+            self.peak_today_quarter = None
+            self._last_update_date = now.date()
+
         # Update peak tracking
         await self._update_peak_tracking(nibe_data)
 
@@ -489,6 +518,32 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         now_time = datetime.now()
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
+
+        # Calculate estimated savings
+        # Get average price today for comparison
+        average_price_today = 0.0
+        current_price = 0.0
+        if price_data and hasattr(price_data, "today") and price_data.today:
+            prices_today = [q.price for q in price_data.today]
+            if prices_today:
+                average_price_today = sum(prices_today) / len(prices_today)
+            # Get current price
+            if current_quarter < len(price_data.today):
+                current_price = price_data.today[current_quarter].price
+
+        # Calculate savings estimate
+        savings_estimate = self.savings_calculator.estimate_monthly_savings(
+            current_peak_kw=self.peak_this_month,
+            baseline_peak_kw=self.savings_calculator.baseline_monthly_peak,
+            average_spot_savings_per_day=self.savings_calculator.average_daily_spot_savings,
+        )
+
+        _LOGGER.debug(
+            "Estimated savings: %.0f SEK/month (effect: %.0f SEK, spot: %.0f SEK)",
+            savings_estimate.monthly_estimate,
+            savings_estimate.effect_savings,
+            savings_estimate.spot_savings,
+        )
 
         # Calculate DHW status and tracking
         dhw_status = "not_configured"
@@ -618,6 +673,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
             "current_classification": current_classification,
+            "savings": savings_estimate,  # Estimated monthly savings
             "dhw_status": dhw_status,
             "dhw_next_boost": dhw_next_boost,
             "dhw_last_heated": dhw_last_heated,
@@ -1106,35 +1162,167 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Tracks 15-minute power consumption windows for Swedish Effektavgift.
 
-        Note: Only records peaks when actual power sensor is available.
-        Estimated power values are not stored to avoid recording standby/startup
-        noise as legitimate peaks.
+        Handles grid import meters with solar/battery offset by using smart fallback:
+        - If meter shows low reading BUT heat pump is running significantly,
+          use estimated power instead (solar export may offset grid import)
+        - Only record peaks above minimum threshold to avoid standby/noise
         """
         try:
-            # Check if we have actual power sensor (not just estimation)
-            has_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
+            # Check if we have external power sensor (whole house)
+            has_external_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
                 self.nibe._power_sensor_entity
             )
 
-            # Estimate current power consumption for decision-making
-            current_power = self._estimate_power_consumption(nibe_data)
+            # PRIORITY 1: External power meter (whole house including NIBE)
+            # This is MOST IMPORTANT for peak billing - measures total house consumption
+            # Used for: Monthly peak tracking (effect tariff billing)
+            current_power = None
+            if has_external_power_sensor:
+                power_entity_id = self.nibe._power_sensor_entity
+                power_state = self.hass.states.get(power_entity_id)
+                if power_state and power_state.state not in ["unknown", "unavailable"]:
+                    try:
+                        # Power sensor typically in watts, convert to kW
+                        current_power = float(power_state.state) / 1000
+                        _LOGGER.debug(
+                            "📊 External power meter (whole house): %.3f kW from %s",
+                            current_power,
+                            power_entity_id,
+                        )
+                    except (ValueError, TypeError) as e:
+                        _LOGGER.warning(
+                            "Failed to read power sensor %s (state: %s): %s",
+                            power_entity_id,
+                            power_state.state,
+                            e,
+                        )
+                else:
+                    _LOGGER.warning(
+                        "External power sensor %s not available (state: %s)",
+                        power_entity_id,
+                        power_state.state if power_state else "None",
+                    )
 
-            # Update daily peak (always track for display)
-            if current_power > self.peak_today:
-                self.peak_today = current_power
-                _LOGGER.debug("New daily peak: %.2f kW", current_power)
+            # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
+            # Calculates real NIBE power from BE1/BE2/BE3 current sensors
+            # Used when: No external meter available
+            # Note: Only measures NIBE, not whole house (less useful for peak billing)
+            if current_power is None and nibe_data.phase1_current is not None:
+                current_power = self.nibe.calculate_power_from_currents(
+                    nibe_data.phase1_current,
+                    nibe_data.phase2_current,
+                    nibe_data.phase3_current,
+                )
+                if current_power is not None:
+                    _LOGGER.debug(
+                        "⚡ NIBE power from phase currents: %.3f kW "
+                        "(L1=%.1fA, L2=%.1fA, L3=%.1fA)",
+                        current_power,
+                        nibe_data.phase1_current,
+                        nibe_data.phase2_current or 0.0,
+                        nibe_data.phase3_current or 0.0,
+                    )
 
-            # Only record monthly peaks if we have actual power sensor
-            # Prevents storing estimated standby power as legitimate peaks
-            if not has_power_sensor:
+            # PRIORITY 3: Estimate from compressor Hz (NOT FOR PEAK TRACKING!)
+            # Only used for display/debugging when no real measurements available
+            # WARNING: Never record estimated peaks - billing must use real measurements only
+            if current_power is None and nibe_data.compressor_hz:
+                current_power = self._estimate_power_from_compressor(
+                    nibe_data.compressor_hz, nibe_data.outdoor_temp
+                )
                 _LOGGER.debug(
-                    "Skipping monthly peak recording: using estimated power (%.2f kW)",
+                    "⚙️  Power estimated from compressor: %.2f kW (%d Hz, %.1f°C outdoor) "
+                    "[ESTIMATE ONLY - not used for peak billing]",
+                    current_power,
+                    nibe_data.compressor_hz,
+                    nibe_data.outdoor_temp,
+                )
+
+            # PRIORITY 4: Last resort estimation (NOT FOR PEAK TRACKING!)
+            # Only for display when nothing else available
+            # WARNING: Never record estimated peaks
+            if current_power is None:
+                current_power = self._estimate_power_consumption(nibe_data)
+                _LOGGER.warning(
+                    "⚠️  Power estimation fallback: %.2f kW (no real data available) "
+                    "[ESTIMATE ONLY - not used for peak billing]",
+                    current_power,
+                )
+
+            # SMART FALLBACK for grid import meters with solar/battery
+            # If meter shows unexpectedly low reading but compressor running significantly,
+            # the meter likely shows NET import (actual consumption minus solar export)
+            # In this case, use calculated/estimated heat pump power for peak tracking
+            if has_external_power_sensor and current_power < 0.5:
+                # Check if heat pump is actually working hard
+                compressor_hz = getattr(nibe_data, "compressor_frequency", 0)
+                is_heating = getattr(nibe_data, "is_heating", False)
+
+                if is_heating and compressor_hz > 20:
+                    # Compressor running significantly but meter shows low reading
+                    # This indicates solar/battery offsetting grid import
+                    estimated_power = self._estimate_power_from_compressor(nibe_data)
+
+                    if estimated_power > 1.0:  # Estimated power seems reasonable
+                        _LOGGER.info(
+                            "Smart fallback: Using estimated power %.2f kW "
+                            "(meter shows %.2f kW - likely solar/battery offset, compressor: %d Hz)",
+                            estimated_power,
+                            current_power,
+                            compressor_hz,
+                        )
+                        current_power = estimated_power
+
+            # Determine measurement source for metadata
+            measurement_source = "unknown"
+            if has_external_power_sensor and current_power is not None:
+                # Check if this was from external meter or smart fallback
+                if has_external_power_sensor and current_power >= 0.5:
+                    measurement_source = "external_meter"
+                elif nibe_data.phase1_current is not None:
+                    measurement_source = "nibe_currents"
+                else:
+                    measurement_source = "estimate"
+            elif nibe_data.phase1_current is not None:
+                measurement_source = "nibe_currents"
+            else:
+                measurement_source = "estimate"
+
+            # Update daily peak (always track for display, even if estimated)
+            if current_power > self.peak_today:
+                now = dt_util.now()
+                quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
+
+                self.peak_today = current_power
+                self.peak_today_time = now
+                self.peak_today_source = measurement_source
+                self.peak_today_quarter = quarter_of_day
+
+                _LOGGER.info(
+                    "New daily peak: %.2f kW at %s (quarter %d, source: %s)",
+                    current_power,
+                    now.strftime("%H:%M:%S"),
+                    quarter_of_day,
+                    measurement_source,
+                )
+
+            # CRITICAL: Only record monthly peaks with REAL measurements
+            # Monthly peak billing requires accurate whole-house power measurement
+            # We MUST have either:
+            #   1. External whole-house power meter (best for billing) OR
+            #   2. NIBE phase currents (accurate NIBE-only, but missing other house loads)
+            # Estimates are NEVER used for monthly peak tracking - billing must be accurate
+            has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
+            if not has_real_measurement:
+                _LOGGER.debug(
+                    "Skipping monthly peak recording: No real power measurement available. "
+                    "Current reading %.2f kW is estimated (not suitable for billing). "
+                    "Configure external power meter for accurate peak tracking.",
                     current_power,
                 )
                 return
 
             # Update monthly peak through effect manager
-            now = dt_util.now()
             quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
 
             peak_event = await self.effect.record_quarter_measurement(
@@ -1187,6 +1375,61 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 return base_power
         else:
             return 0.1  # Standby power
+
+    def _estimate_power_from_compressor(self, nibe_data) -> float:
+        """Estimate heat pump power from compressor frequency and outdoor temperature.
+
+        More accurate estimation when we know compressor is running.
+        Used for smart fallback when grid meter shows solar/battery offset.
+
+        Args:
+            nibe_data: Current NIBE state with compressor frequency
+
+        Returns:
+            Estimated power consumption in kW
+        """
+        if not nibe_data:
+            return 0.0
+
+        compressor_hz = getattr(nibe_data, "compressor_frequency", 0)
+        outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
+
+        if compressor_hz == 0:
+            return 0.1  # Standby
+
+        # F750 power estimation based on compressor frequency and outdoor temp
+        # Based on typical NIBE F750 performance curves:
+        # - 20 Hz (minimum): ~1.5-2.0 kW
+        # - 50 Hz (mid): ~3.5-4.5 kW
+        # - 80 Hz (maximum): ~6.0-7.0 kW
+
+        # Base power from frequency (linear approximation)
+        # 20-80 Hz range maps to ~1.5-6.5 kW
+        base_from_hz = 1.5 + (compressor_hz - 20) * (5.0 / 60)  # Linear interpolation
+        base_from_hz = max(1.5, min(base_from_hz, 6.5))  # Clamp to reasonable range
+
+        # Temperature adjustment (colder = more power needed for same output)
+        if outdoor_temp < -15:
+            temp_factor = 1.3
+        elif outdoor_temp < -5:
+            temp_factor = 1.2
+        elif outdoor_temp < 0:
+            temp_factor = 1.1
+        else:
+            temp_factor = 1.0
+
+        estimated = base_from_hz * temp_factor
+
+        _LOGGER.debug(
+            "Power estimation: %d Hz at %.1f°C → %.2f kW (base: %.2f, temp_factor: %.2f)",
+            compressor_hz,
+            outdoor_temp,
+            estimated,
+            base_from_hz,
+            temp_factor,
+        )
+
+        return estimated
 
     async def async_set_offset(self, offset: float) -> None:
         """Apply heating curve offset to NIBE system.
