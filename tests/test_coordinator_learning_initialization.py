@@ -2,7 +2,7 @@
 
 Verifies that the coordinator properly creates:
 - AdaptiveThermalModel
-- ThermalStatePredictor  
+- ThermalStatePredictor
 - WeatherPatternLearner
 """
 

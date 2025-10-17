@@ -120,9 +120,9 @@ class TestNibeF750Profile:
 
         for outdoor_temp, expected_cop in test_cases:
             cop = f750.get_cop_at_temperature(outdoor_temp)
-            assert abs(cop - expected_cop) < 0.01, (
-                f"COP mismatch at {outdoor_temp}°C: expected {expected_cop}, got {cop}"
-            )
+            assert (
+                abs(cop - expected_cop) < 0.01
+            ), f"COP mismatch at {outdoor_temp}°C: expected {expected_cop}, got {cop}"
 
     def test_cop_interpolation(self, f750):
         """Test COP interpolation between data points."""
@@ -150,24 +150,18 @@ class TestNibeF750Profile:
         """Test electrical consumption estimation."""
         # At 0°C with 6kW heat demand
         # COP = 4.0, so electrical = 6 / 4.0 = 1.5kW
-        electrical = f750.estimate_electrical_consumption(
-            heat_demand_kw=6.0, outdoor_temp=0.0
-        )
+        electrical = f750.estimate_electrical_consumption(heat_demand_kw=6.0, outdoor_temp=0.0)
         assert abs(electrical - 1.5) < 0.1
 
         # At -15°C with 10kW heat demand
         # COP = 2.7, so electrical = 10 / 2.7 = 3.7kW
-        electrical = f750.estimate_electrical_consumption(
-            heat_demand_kw=10.0, outdoor_temp=-15.0
-        )
+        electrical = f750.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
         assert abs(electrical - 3.7) < 0.2
 
     def test_electrical_consumption_capped_at_max(self, f750):
         """Test electrical consumption is capped at max power."""
         # Very high heat demand should cap at max electrical
-        electrical = f750.estimate_electrical_consumption(
-            heat_demand_kw=30.0, outdoor_temp=-20.0
-        )
+        electrical = f750.estimate_electrical_consumption(heat_demand_kw=30.0, outdoor_temp=-20.0)
         assert electrical <= f750.typical_electrical_range_kw[1]
 
     def test_optimal_flow_temp_calculation(self, f750):
@@ -289,9 +283,7 @@ class TestNibeF2040Profile:
     def test_higher_power_consumption(self, f2040):
         """Test F2040 has higher power consumption for large houses."""
         # 12kW heat demand at -15°C
-        electrical = f2040.estimate_electrical_consumption(
-            heat_demand_kw=12.0, outdoor_temp=-15.0
-        )
+        electrical = f2040.estimate_electrical_consumption(heat_demand_kw=12.0, outdoor_temp=-15.0)
 
         # COP ~2.5, so electrical ~4.8kW
         assert 4.0 <= electrical <= 5.5
@@ -327,12 +319,8 @@ class TestNibeS1155Profile:
         f2040 = NibeF2040Profile()
 
         # Same heat demand (10kW) at -15°C
-        elec_gshp = s1155.estimate_electrical_consumption(
-            heat_demand_kw=10.0, outdoor_temp=-15.0
-        )
-        elec_ashp = f2040.estimate_electrical_consumption(
-            heat_demand_kw=10.0, outdoor_temp=-15.0
-        )
+        elec_gshp = s1155.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
+        elec_ashp = f2040.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
 
         # GSHP should use much less power
         assert elec_gshp < elec_ashp
@@ -388,8 +376,7 @@ class TestModelComparisons:
             cop_gshp = s1155.get_cop_at_temperature(temp)
 
             assert cop_gshp > cop_ashp, (
-                f"GSHP should be more efficient at {temp}°C: "
-                f"GSHP {cop_gshp} vs ASHP {cop_ashp}"
+                f"GSHP should be more efficient at {temp}°C: " f"GSHP {cop_gshp} vs ASHP {cop_ashp}"
             )
 
     def test_all_models_have_required_attributes(self):
@@ -462,9 +449,7 @@ class TestValidationResults:
         assert warning.severity == "warning"
 
         # Error level
-        error = ValidationResult(
-            valid=False, severity="error", message="Error", suggestions=[]
-        )
+        error = ValidationResult(valid=False, severity="error", message="Error", suggestions=[])
         assert error.severity == "error"
 
 
@@ -476,9 +461,7 @@ class TestRealWorldScenarios:
         f750 = NibeF750Profile()
 
         # Stockholm winter: -10°C, 7kW heat demand
-        electrical = f750.estimate_electrical_consumption(
-            heat_demand_kw=7.0, outdoor_temp=-10.0
-        )
+        electrical = f750.estimate_electrical_consumption(heat_demand_kw=7.0, outdoor_temp=-10.0)
 
         # COP ~3.0, so 7 / 3.0 = ~2.3kW
         assert 2.0 <= electrical <= 2.7
@@ -489,9 +472,7 @@ class TestRealWorldScenarios:
         f730 = NibeF730Profile()
 
         # 10kW heat demand (too much for F730)
-        electrical = f730.estimate_electrical_consumption(
-            heat_demand_kw=10.0, outdoor_temp=-15.0
-        )
+        electrical = f730.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
 
         # Should be at or below max electrical (may be capped)
         assert electrical <= f730.typical_electrical_range_kw[1]
@@ -503,9 +484,7 @@ class TestRealWorldScenarios:
         f2040 = NibeF2040Profile()
 
         # Large house, 15kW heat demand
-        electrical = f2040.estimate_electrical_consumption(
-            heat_demand_kw=15.0, outdoor_temp=-25.0
-        )
+        electrical = f2040.estimate_electrical_consumption(heat_demand_kw=15.0, outdoor_temp=-25.0)
 
         # COP ~1.9, so 15 / 1.9 = ~7.9kW
         # Should be capped or close to max

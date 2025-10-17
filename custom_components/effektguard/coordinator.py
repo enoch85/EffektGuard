@@ -484,6 +484,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         dhw_next_boost = None
         dhw_last_heated = self.last_dhw_heated
         dhw_recommendation = "DHW sensor not configured"
+        dhw_planning_summary = "DHW sensor not configured"
+        dhw_planning_details = {}
 
         # Debug logging for DHW sensor detection
         if nibe_data:
@@ -586,9 +588,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW sensor (BT7) not found - check MyUplink integration has exposed BT7/40013 sensor"
                 )
                 dhw_recommendation = "DHW sensor not found - check MyUplink integration"
+                dhw_planning_summary = "DHW sensor not found"
+                dhw_planning_details = {}
             else:
                 _LOGGER.warning("NIBE data not available")
                 dhw_recommendation = "NIBE data unavailable"
+                dhw_planning_summary = "NIBE data unavailable"
+                dhw_planning_details = {}
 
         return {
             "nibe": nibe_data,
@@ -645,13 +651,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
 
-        # Get climate zone thresholds
-        from .optimization.climate_zones import get_dm_thresholds_for_temp
-
-        climate_zone = (
-            self.engine.climate_detector.zone_info if self.engine.climate_detector else None
-        )
-        dm_thresholds = get_dm_thresholds_for_temp(outdoor_temp, climate_zone)
+        # Get climate zone DM thresholds from climate detector
+        if self.engine.climate_detector:
+            dm_range = self.engine.climate_detector.get_expected_dm_range(outdoor_temp)
+            dm_thresholds = {
+                "block": dm_range["warning"],  # Block DHW at warning threshold
+                "abort": dm_range["critical"],  # Abort DHW at critical threshold
+            }
+            climate_zone = self.engine.climate_detector.zone_info
+        else:
+            # Fallback thresholds if climate detector not available
+            dm_thresholds = {
+                "block": -320,  # Conservative default
+                "abort": -500,  # Emergency default
+            }
+            climate_zone = None
 
         # Get recommendation from optimizer
         decision = self.dhw_optimizer.should_start_dhw(
@@ -679,9 +693,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "thermal_debt": thermal_debt,
             "thermal_debt_threshold_block": dm_thresholds["block"],
             "thermal_debt_threshold_abort": dm_thresholds["abort"],
-            "thermal_debt_status": self._get_thermal_debt_status(
-                thermal_debt, dm_thresholds
-            ),
+            "thermal_debt_status": self._get_thermal_debt_status(thermal_debt, dm_thresholds),
             "space_heating_demand_kw": round(space_heating_demand, 2),
             "current_price_classification": price_classification,
             "outdoor_temperature": outdoor_temp,
@@ -723,15 +735,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if decision.priority_reason == "DHW_SAFETY_MINIMUM":
                 recommendation = f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
             elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
-                recommendation = (
-                    f"Heat now - Cheap electricity ({price_classification})"
-                )
+                recommendation = f"Heat now - Cheap electricity ({price_classification})"
             elif decision.priority_reason.startswith("URGENT_DEMAND"):
                 recommendation = "Heat now - Demand period approaching"
             elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
-                recommendation = (
-                    f"Heat now - Pre-heating for demand ({price_classification})"
-                )
+                recommendation = f"Heat now - Pre-heating for demand ({price_classification})"
             elif decision.priority_reason == "NORMAL_DHW_HEATING":
                 recommendation = f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
             else:
@@ -770,7 +778,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         weather_opportunity: Optional[str],
     ) -> str:
         """Format human-readable DHW planning summary.
-        
+
         Args:
             recommendation: Base recommendation text
             current_temp: Current DHW temperature
@@ -781,7 +789,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             price_classification: Current price classification
             optimal_windows: List of optimal heating windows
             weather_opportunity: Weather opportunity text if any
-            
+
         Returns:
             Multi-line human-readable summary
         """
@@ -790,7 +798,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         lines.append("=" * 40)
         lines.append(f"Current: {current_temp:.1f}°C -> Target: {target_temp:.0f}°C")
         lines.append(f"Price: {price_classification}")
-        
+
         # Thermal debt status
         if thermal_debt < dm_thresholds["abort"]:
             status_text = f"CRITICAL (DM {thermal_debt:.0f})"
@@ -799,7 +807,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         else:
             status_text = f"OK (DM {thermal_debt:.0f})"
         lines.append(f"Thermal Debt: {status_text}")
-        
+
         # Space heating status
         if space_heating_demand > 2.0:
             lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
@@ -807,30 +815,30 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
         else:
             lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")
-        
+
         # Weather opportunity
         if weather_opportunity:
             lines.append(f"Weather: {weather_opportunity}")
-        
+
         # Next optimal windows
         if optimal_windows:
             lines.append("")
             lines.append("Optimal Heating Windows:")
             for i, window in enumerate(optimal_windows[:3], 1):
-                duration = window['duration_hours']
-                price = window['price_classification']
-                time_range = window['time_range']
+                duration = window["duration_hours"]
+                price = window["price_classification"]
+                time_range = window["time_range"]
                 lines.append(f"  {i}. {time_range} ({duration:.1f}h, {price})")
         else:
             lines.append("")
             lines.append("No optimal windows found")
-        
+
         lines.append("")
         lines.append(f"Recommendation: {recommendation}")
-        
+
         return "\n".join(lines)
 
-    async def _apply_dhw_control(
+    def _find_optimal_dhw_windows(
         self, price_data, now_time: datetime, thermal_debt: float, dm_thresholds: dict
     ) -> list[dict]:
         """Find optimal DHW heating windows in the next 24 hours.
@@ -868,8 +876,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if windows and windows[-1]["end_quarter"] == i - 1:
                         # Extend existing window
                         windows[-1]["end_quarter"] = i
-                        windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime("%H:%M")
-                        windows[-1]["duration_hours"] = (i - windows[-1]["start_quarter"] + 1) * 0.25
+                        windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime(
+                            "%H:%M"
+                        )
+                        windows[-1]["duration_hours"] = (
+                            i - windows[-1]["start_quarter"] + 1
+                        ) * 0.25
                     else:
                         # Start new window
                         window = {

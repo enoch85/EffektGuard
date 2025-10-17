@@ -159,7 +159,9 @@ class TestEffectLayerIntegration:
             current_peak=3.0,
         )
 
-        effect_layer = decision.layers[3]  # Effect is layer 3 (after safety, emergency, thermal debt)
+        effect_layer = decision.layers[
+            3
+        ]  # Effect is layer 3 (after safety, emergency, thermal debt)
 
         # Should recommend reduction when approaching peak
         # (exact values depend on power estimation)
@@ -268,7 +270,9 @@ class TestPeakProtectionScenarios:
 
         # Night time should allow higher actual power (effective = actual * 0.5)
         # So 10 kW actual = 5 kW effective
-        effect_layer = decision.layers[3]  # Effect is layer 3 (after safety, emergency, thermal debt)
+        effect_layer = decision.layers[
+            3
+        ]  # Effect is layer 3 (after safety, emergency, thermal debt)
         assert effect_layer.weight >= 0.0
 
 

@@ -557,8 +557,12 @@ async def test_service_handles_no_coordinator_gracefully(mock_hass):
         # Get handlers
         calls = mock_hass.services.async_register.call_args_list
 
-        force_offset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_FORCE_OFFSET)
-        reset_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_RESET_PEAK_TRACKING)
+        force_offset_handler = next(
+            call[0][2] for call in calls if call[0][1] == SERVICE_FORCE_OFFSET
+        )
+        reset_handler = next(
+            call[0][2] for call in calls if call[0][1] == SERVICE_RESET_PEAK_TRACKING
+        )
         boost_handler = next(call[0][2] for call in calls if call[0][1] == SERVICE_BOOST_HEATING)
 
         # Test each handler with no coordinator - should raise ServiceValidationError

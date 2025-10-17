@@ -32,16 +32,16 @@ from custom_components.effektguard.const import (
 def mock_entity_registry():
     """Create mock entity registry with MyUplink entities."""
     mock_ent_reg = MagicMock()
-    
+
     # Mock entity entry for MyUplink offset entity
     mock_entity_entry = MagicMock()
     mock_entity_entry.platform = "myuplink"
-    
+
     def mock_registry_get(entity_id):
         if "offset" in entity_id:
             return mock_entity_entry
         return None
-    
+
     mock_ent_reg.async_get = mock_registry_get
     return mock_ent_reg
 
@@ -57,8 +57,7 @@ def mock_hass(mock_entity_registry, monkeypatch):
 
     # Patch entity registry import in config_flow
     monkeypatch.setattr(
-        'homeassistant.helpers.entity_registry.async_get', 
-        lambda h: mock_entity_registry
+        "homeassistant.helpers.entity_registry.async_get", lambda h: mock_entity_registry
     )
 
     # Mock states for discovery
@@ -136,8 +135,7 @@ class TestConfigFlowUserStep:
 
         # Patch entity registry
         monkeypatch.setattr(
-            'homeassistant.helpers.entity_registry.async_get', 
-            lambda h: mock_entity_registry
+            "homeassistant.helpers.entity_registry.async_get", lambda h: mock_entity_registry
         )
 
         config_flow = EffektGuardConfigFlow()

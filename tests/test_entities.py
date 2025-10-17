@@ -189,7 +189,9 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
 
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
-    assert len(sensors) == 17  # Updated: removed dhw_next_boost (consolidated into dhw_status attributes)
+    assert (
+        len(sensors) == 17
+    )  # Updated: removed dhw_next_boost (consolidated into dhw_status attributes)
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):

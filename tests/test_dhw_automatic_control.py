@@ -262,7 +262,7 @@ class TestDHWAutomaticControl:
 
         # Set critical thermal debt
         mock_nibe_data.degree_minutes = -434.0  # Like in the user's log
-        
+
         # Mock DHW optimizer
         coordinator.dhw_optimizer.should_start_dhw = Mock(
             return_value=DHWScheduleDecision(
@@ -299,7 +299,7 @@ class TestDHWAutomaticControl:
 
         # Good thermal debt, cheap prices
         mock_nibe_data.degree_minutes = -80.0  # Safe
-        
+
         # Mock DHW optimizer
         coordinator.dhw_optimizer.should_start_dhw = Mock(
             return_value=DHWScheduleDecision(
@@ -365,7 +365,7 @@ class TestDHWOptimizerDecisions:
     def test_block_dhw_critical_thermal_debt(self):
         """Test that DM <= -240 blocks DHW."""
         optimizer = IntelligentDHWScheduler()
-        
+
         decision = optimizer.should_start_dhw(
             current_dhw_temp=42.0,
             space_heating_demand_kw=3.0,
@@ -376,14 +376,14 @@ class TestDHWOptimizerDecisions:
             price_classification="cheap",
             current_time=datetime.now(),
         )
-        
+
         assert decision.should_heat is False
         assert decision.priority_reason == "CRITICAL_THERMAL_DEBT"
 
     def test_heat_dhw_cheap_electricity(self):
         """Test that cheap electricity triggers DHW heating when safe."""
         optimizer = IntelligentDHWScheduler()
-        
+
         decision = optimizer.should_start_dhw(
             current_dhw_temp=42.0,
             space_heating_demand_kw=1.0,
@@ -394,14 +394,14 @@ class TestDHWOptimizerDecisions:
             price_classification="cheap",
             current_time=datetime.now(),
         )
-        
+
         assert decision.should_heat is True
         assert decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY"
 
     def test_safety_minimum_forces_heating(self):
         """Test that DHW < 35°C forces heating despite thermal debt."""
         optimizer = IntelligentDHWScheduler()
-        
+
         decision = optimizer.should_start_dhw(
             current_dhw_temp=33.0,  # Below safety minimum
             space_heating_demand_kw=5.0,
@@ -412,7 +412,7 @@ class TestDHWOptimizerDecisions:
             price_classification="expensive",
             current_time=datetime.now(),
         )
-        
+
         assert decision.should_heat is True
         assert decision.priority_reason == "DHW_SAFETY_MINIMUM"
         assert decision.max_runtime_minutes == 30  # Limited runtime

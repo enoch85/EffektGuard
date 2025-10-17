@@ -446,7 +446,7 @@ def test_sensor_optimization_reasoning_attributes(full_coordinator, mock_entry):
 def test_sensor_dhw_status_attributes_full_data(full_coordinator, mock_entry):
     """Test dhw_status sensor attributes with complete DHW data."""
     from datetime import datetime
-    
+
     sensor_desc = next(s for s in SENSORS if s.key == "dhw_status")
     sensor = EffektGuardSensor(full_coordinator, mock_entry, sensor_desc)
 
@@ -490,7 +490,14 @@ def test_sensor_dhw_status_state_values(full_coordinator, mock_entry):
     # (between 35-45°C range) - depends on is_hot_water sensor
     # Note: The coordinator calculates this automatically now
     if "dhw_status" in full_coordinator.data:
-        assert sensor.native_value in ["heating", "pending", "ready", "hot", "low", "not_configured"]
+        assert sensor.native_value in [
+            "heating",
+            "pending",
+            "ready",
+            "hot",
+            "low",
+            "not_configured",
+        ]
 
     # Test with different DHW status values (manual override)
     full_coordinator.data["dhw_status"] = "ready"
@@ -509,23 +516,23 @@ def test_sensor_dhw_status_state_values(full_coordinator, mock_entry):
 def test_coordinator_dhw_status_calculation():
     """Test coordinator calculates DHW status correctly based on temperature."""
     from unittest.mock import MagicMock
-    
+
     # Test: Temperature below 35°C = "low"
     nibe_data_low = MagicMock(dhw_top_temp=30.0)
     # Simulate coordinator logic
     if nibe_data_low.dhw_top_temp < 35.0:
         assert True  # Should be "low"
-    
+
     # Test: Temperature 35-45°C = "heating"
     nibe_data_heating = MagicMock(dhw_top_temp=40.0)
     if 35.0 <= nibe_data_heating.dhw_top_temp < 45.0:
         assert True  # Should be "heating"
-    
+
     # Test: Temperature 45-52°C = "ready"
     nibe_data_ready = MagicMock(dhw_top_temp=48.0)
     if 45.0 <= nibe_data_ready.dhw_top_temp < 52.0:
         assert True  # Should be "ready"
-    
+
     # Test: Temperature >= 52°C = "hot"
     nibe_data_hot = MagicMock(dhw_top_temp=55.0)
     if nibe_data_hot.dhw_top_temp >= 52.0:
@@ -798,7 +805,9 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
 
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
-    assert len(entities) == 17  # Updated: 17 sensors (removed dhw_next_boost, consolidated into dhw_status attributes)
+    assert (
+        len(entities) == 17
+    )  # Updated: 17 sensors (removed dhw_next_boost, consolidated into dhw_status attributes)
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

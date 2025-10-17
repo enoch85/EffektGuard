@@ -31,9 +31,7 @@ class TestKuehneFormula:
 
         # Test case: 20°C indoor target, 0°C outdoor
         # Expected: ~40-45°C flow temp (typical for SPF 4.0 systems)
-        flow_temp = calc.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=0.0
-        )
+        flow_temp = calc.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=0.0)
 
         # Verify formula: TFlow = 2.55 × (180 × (20 - 0))^0.78 + 20
         # = 2.55 × (3600)^0.78 + 20
@@ -70,9 +68,7 @@ class TestKuehneFormula:
         calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
 
         # Extreme cold: -20°C outdoor, 21°C indoor target
-        flow_temp = calc.calculate_kuehne_flow_temp(
-            indoor_setpoint=21.0, outdoor_temp=-20.0
-        )
+        flow_temp = calc.calculate_kuehne_flow_temp(indoor_setpoint=21.0, outdoor_temp=-20.0)
 
         # At 41°C temp difference, flow temp should be significantly higher
         # but still reasonable for heat pump operation (<65°C)
@@ -84,9 +80,7 @@ class TestKuehneFormula:
         calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
 
         # Mild: +10°C outdoor, 20°C indoor
-        flow_temp = calc.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=10.0
-        )
+        flow_temp = calc.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=10.0)
 
         # Small temp difference should give low flow temp
         assert 20.0 <= flow_temp <= 35.0
@@ -96,30 +90,22 @@ class TestKuehneFormula:
         calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
 
         # Outdoor temp equals indoor
-        flow_temp = calc.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=20.0
-        )
+        flow_temp = calc.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=20.0)
         assert flow_temp == 20.0
 
         # Outdoor temp exceeds indoor
-        flow_temp = calc.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=25.0
-        )
+        flow_temp = calc.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=25.0)
         assert flow_temp == 20.0
 
     def test_kuehne_different_heat_loss(self):
         """Test Kühne formula with different building insulation."""
         # Well-insulated house (low heat loss)
         calc_good = WeatherCompensationCalculator(heat_loss_coefficient=100.0)
-        flow_good = calc_good.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=0.0
-        )
+        flow_good = calc_good.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=0.0)
 
         # Poorly-insulated house (high heat loss)
         calc_poor = WeatherCompensationCalculator(heat_loss_coefficient=300.0)
-        flow_poor = calc_poor.calculate_kuehne_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=0.0
-        )
+        flow_poor = calc_poor.calculate_kuehne_flow_temp(indoor_setpoint=20.0, outdoor_temp=0.0)
 
         # Poor insulation should require higher flow temp
         assert flow_poor > flow_good
@@ -168,9 +154,7 @@ class TestTimbonesMethod:
             radiator_rated_output=None,  # Not configured
         )
 
-        flow_temp = calc.calculate_timbones_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=0.0
-        )
+        flow_temp = calc.calculate_timbones_flow_temp(indoor_setpoint=20.0, outdoor_temp=0.0)
 
         assert flow_temp is None
 
@@ -183,9 +167,7 @@ class TestTimbonesMethod:
 
         # Mild weather: 15°C outdoor, 20°C indoor
         # Heat demand = 180 × 5 = 900W (very low)
-        flow_temp = calc.calculate_timbones_flow_temp(
-            indoor_setpoint=20.0, outdoor_temp=15.0
-        )
+        flow_temp = calc.calculate_timbones_flow_temp(indoor_setpoint=20.0, outdoor_temp=15.0)
 
         # Low demand should give low flow temp (slightly higher due to flow-return DT)
         assert flow_temp is not None
@@ -200,9 +182,7 @@ class TestTimbonesMethod:
 
         # Cold weather: -15°C outdoor, 21°C indoor
         # Heat demand = 250 × 36 = 9000W (high demand, near radiator capacity)
-        flow_temp = calc.calculate_timbones_flow_temp(
-            indoor_setpoint=21.0, outdoor_temp=-15.0
-        )
+        flow_temp = calc.calculate_timbones_flow_temp(indoor_setpoint=21.0, outdoor_temp=-15.0)
 
         assert flow_temp is not None
         # High demand with radiators near capacity will push flow temp high
