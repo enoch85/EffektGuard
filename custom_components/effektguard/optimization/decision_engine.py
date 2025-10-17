@@ -226,6 +226,16 @@ class DecisionEngine:
             "samples": 0,
         }
 
+    def _get_outdoor_trend(self) -> dict[str, Any]:
+        """Get outdoor temperature trend (BT1 real-time).
+
+        Returns:
+            Outdoor trend data or empty if not available
+        """
+        if hasattr(self, "predictor") and self.predictor:
+            return self.predictor.get_outdoor_trend()
+        return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
+
     def _is_cooling_rapidly(self, thermal_trend: dict, threshold: float = -0.3) -> bool:
         """Check if house is cooling rapidly.
 
@@ -249,6 +259,26 @@ class DecisionEngine:
             True if warming faster than threshold
         """
         return thermal_trend.get("rate_per_hour", 0.0) > threshold
+
+    def _get_preheat_lead_time(self) -> float:
+        """Get required pre-heating lead time based on heating system type.
+
+        Lead time is the hours needed to warm house before cold arrives.
+        Based on thermal lag of heating system.
+
+        Returns:
+            Lead time in hours
+        """
+        # Get prediction horizon (based on UFH type from thermal model)
+        horizon = self.thermal.get_prediction_horizon()
+
+        # Lead time = 50% of prediction horizon
+        # Concrete UFH: 12h horizon → 6h lead time
+        # Timber UFH: 6h horizon → 3h lead time
+        # Radiator: 2h horizon → 1h lead time
+        lead_time = horizon * 0.5
+
+        return lead_time
 
     def calculate_decision(
         self,
@@ -816,7 +846,13 @@ class DecisionEngine:
             )
 
     def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Weather prediction layer: Pre-heat before predicted cold periods.
+        """Weather prediction layer with TIME-AWARE pre-heating.
+
+        CRITICAL FIX: Calculates WHEN cold arrives and ensures we start
+        pre-heating with sufficient lead time for thermal lag.
+
+        Old behavior: Pre-heated when cold detected (too late)
+        New behavior: Pre-heats lead_time hours BEFORE cold arrives
 
         Uses dynamic thresholds based on building thermal mass and
         rate-of-change analysis. Forecast window adapts to UFH type:
@@ -834,8 +870,6 @@ class DecisionEngine:
         if not weather_data or not weather_data.forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
 
-        # Use UFH-type-specific forecast horizon (enoch85 feedback: 24h for concrete)
-        # Concrete slab needs longer horizon for extreme cold snaps (20°C drops)
         prediction_horizon = int(self.thermal.get_prediction_horizon())
         forecast_hours = weather_data.forecast_hours[:prediction_horizon]
 
@@ -844,42 +878,84 @@ class DecisionEngine:
 
         current_outdoor = nibe_state.outdoor_temp
 
-        # Calculate minimum temperature and rate of change
-        min_temp = min(f.temperature for f in forecast_hours)
+        # Find WHEN significant cold arrives (not just IF)
+        cold_threshold = current_outdoor - 2.0  # Significant = 2°C+ drop
+
+        cold_arrival_hour = None
+        min_temp = current_outdoor
+
+        for i, forecast in enumerate(forecast_hours):
+            if forecast.temperature < min_temp:
+                min_temp = forecast.temperature
+            if forecast.temperature < cold_threshold and cold_arrival_hour is None:
+                cold_arrival_hour = i  # First hour cold arrives
+
         temp_drop = min_temp - current_outdoor
-        hourly_rate = temp_drop / len(forecast_hours) if forecast_hours else 0.0
 
-        # Dynamic threshold based on building thermal mass
-        # MORE AGGRESSIVE (enoch85 feedback): Act sooner to prevent thermal debt
-        # Lower threshold = more sensitive = earlier pre-heating
-        # Old: -2.0°C * thermal_mass (required 2-4°C drop)
-        # New: -1.0°C * thermal_mass (activates at 1-2°C drop)
-        threshold = -1.0 * self.thermal.thermal_mass
+        if temp_drop < -3.0:  # Significant cold snap
+            # Find when minimum temp occurs if not found above
+            if cold_arrival_hour is None:
+                cold_arrival_hour = next(
+                    (i for i, f in enumerate(forecast_hours) if f.temperature == min_temp),
+                    len(forecast_hours) - 1,
+                )
 
-        # Pre-heat if either condition met (OR not AND - more aggressive):
-        # 1. Temperature drop exceeds dynamic threshold, OR
-        # 2. Rate of cooling is significant (> 0.3°C/hour, reduced from 0.5°C)
-        if temp_drop < threshold or hourly_rate < -0.3:
-            # Calculate pre-heat target accounting for thermal decay
-            preheat_target = self.thermal.calculate_preheating_target(
-                current_temp=nibe_state.indoor_temp,
-                desired_temp=self.target_temp,
-                hours_until_peak=len(forecast_hours),
-                outdoor_temp=current_outdoor,
-                forecast_min_temp=min_temp,
-            )
-            offset = preheat_target - self.target_temp
-            return LayerDecision(
-                offset=offset,
-                weight=0.7,
-                reason=f"Pre-heat: {temp_drop:.1f}°C drop in {len(forecast_hours)}h, {hourly_rate:.1f}°C/h rate",
-            )
-        else:
-            return LayerDecision(
-                offset=0.0,
-                weight=0.0,
-                reason=f"Weather OK: {temp_drop:.1f}°C drop < {threshold:.1f}°C threshold ({len(forecast_hours)}h window)",
-            )
+            # Calculate required lead time based on heating system
+            lead_time_hours = self._get_preheat_lead_time()
+
+            # ENHANCEMENT: Adjust lead time based on outdoor cooling trend
+            # If outdoor already cooling rapidly, cold may arrive SOONER than forecast
+            outdoor_trend = self._get_outdoor_trend()
+            outdoor_rate = outdoor_trend.get("rate_per_hour", 0.0)
+
+            if outdoor_rate < -0.5:
+                # Outdoor cooling rapidly - extend lead time 50%
+                lead_time_hours *= 1.5
+                outdoor_note = "outdoor cooling rapidly"
+            elif outdoor_rate < -0.3:
+                # Outdoor cooling moderately - extend lead time 25%
+                lead_time_hours *= 1.25
+                outdoor_note = "outdoor cooling"
+            elif outdoor_rate > 0.3:
+                # Outdoor warming - reduce lead time 20%
+                lead_time_hours *= 0.8
+                outdoor_note = "outdoor warming"
+            else:
+                outdoor_note = "outdoor stable"
+
+            # Check if we need to start pre-heating NOW
+            hours_until_cold = cold_arrival_hour
+
+            if hours_until_cold <= lead_time_hours:
+                # Cold arriving within lead time - START PRE-HEATING NOW
+
+                # Calculate urgency: less time = more urgent
+                urgency_factor = 1.0 + (lead_time_hours - hours_until_cold) / lead_time_hours
+                urgency_factor = min(urgency_factor, 2.0)  # Cap at 2x
+
+                # Calculate pre-heat target
+                preheat_target = self.thermal.calculate_preheating_target(
+                    current_temp=nibe_state.indoor_temp,
+                    desired_temp=self.target_temp,
+                    hours_until_peak=hours_until_cold,
+                    outdoor_temp=current_outdoor,
+                    forecast_min_temp=min_temp,
+                )
+
+                offset = (preheat_target - self.target_temp) * urgency_factor
+                offset = min(offset, 3.0)  # Safety cap
+
+                return LayerDecision(
+                    offset=offset,
+                    weight=0.7,
+                    reason=(
+                        f"Pre-heat: {temp_drop:.1f}°C in {hours_until_cold}h "
+                        f"(lead: {lead_time_hours:.1f}h, {outdoor_note}, "
+                        f"urgency: {urgency_factor:.1f}x)"
+                    ),
+                )
+
+        return LayerDecision(offset=0.0, weight=0.0, reason="Weather: No pre-heating needed")
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
         """Mathematical weather compensation layer with adaptive climate system.

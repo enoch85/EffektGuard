@@ -370,6 +370,56 @@ class ThermalStatePredictor:
             "samples": len(self.state_history),
         }
 
+    def get_outdoor_trend(self) -> dict[str, Any]:
+        """Get outdoor temperature trend from BT1 sensor history.
+
+        Real-time outdoor trend can detect weather changes BEFORE forecast updates.
+        Useful for proactive pre-heating when outdoor temp dropping rapidly.
+
+        Returns:
+            Dictionary with outdoor trend information
+        """
+        if len(self.state_history) < 8:
+            return {
+                "trend": "unknown",
+                "rate_per_hour": 0.0,
+                "confidence": 0.0,
+            }
+
+        # Calculate outdoor temperature change over last 2 hours
+        current = self.state_history[-1]
+        two_hours_ago = (
+            self.state_history[-8] if len(self.state_history) >= 8 else self.state_history[0]
+        )
+
+        time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600
+        outdoor_delta = current.outdoor_temp - two_hours_ago.outdoor_temp
+
+        if time_delta > 0:
+            rate = outdoor_delta / time_delta
+        else:
+            rate = 0.0
+
+        # Classify trend (outdoor changes faster than indoor)
+        if rate > 0.5:
+            trend = "warming_rapidly"
+        elif rate > 0.2:
+            trend = "warming"
+        elif rate < -0.5:
+            trend = "cooling_rapidly"
+        elif rate < -0.2:
+            trend = "cooling"
+        else:
+            trend = "stable"
+
+        return {
+            "trend": trend,
+            "rate_per_hour": rate,
+            "confidence": self._calculate_prediction_confidence(),
+            "samples": len(self.state_history),
+            "temp_change_2h": outdoor_delta,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize predictor to dictionary for persistence.
 
