@@ -7,7 +7,7 @@ with the MyUplink API.
 Data read includes:
 - Indoor temperature (BT50 or room sensor)
 - Outdoor temperature (BT1)
-- Supply temperature (BT25)
+- Supply temperature (BT25 on F2040, BT63 on F750)
 - Return temperature (BT3)
 - Degree minutes (GM/DM)
 - Current heating curve offset
@@ -50,7 +50,7 @@ class NibeState:
 
     outdoor_temp: float
     indoor_temp: float
-    supply_temp: float  # BT25 - Flow/supply temperature
+    supply_temp: float  # BT25 (F2040) or BT63 (F750) - Flow/supply temperature
     return_temp: float | None
     degree_minutes: float
     current_offset: float
@@ -368,7 +368,7 @@ class NibeAdapter:
         Populates _entity_cache with entity IDs for:
         - outdoor_temp (BT1)
         - indoor_temp (BT50 or room sensor)
-        - supply_temp (BT25)
+        - supply_temp (BT25 on F2040, BT63 on F750)
         - return_temp (BT3)
         - degree_minutes (GM/DM)
         - offset (S1 offset)
@@ -393,7 +393,15 @@ class NibeAdapter:
                 "room_temperature",
                 "40033",
             ],  # BT50 / param 40033 "Temperature"
-            "supply_temp": ["_bt25", "bt25_", "supply_temp", "40008"],  # BT25/BT63 / param 40008
+            "supply_temp": [
+                "_bt25",
+                "bt25_",
+                "_bt63",
+                "bt63_",
+                "supply_temp",
+                "heating_medium_supply",
+                "40008",
+            ],  # BT25 (F2040) or BT63 (F750) / param 40008
             "return_temp": ["_bt3", "bt3_", "return_temp", "40012"],  # BT3 / param 40012
             "degree_minutes": ["degree_minutes", "40941"],  # param 40941
             "offset": ["offset", "47011"],  # param 47011
