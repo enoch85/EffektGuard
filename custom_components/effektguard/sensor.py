@@ -183,6 +183,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="peak_status",
         name="Peak Status",
         icon="mdi:alert-circle-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
             coordinator.data["decision"].peak_status
             if coordinator.data
