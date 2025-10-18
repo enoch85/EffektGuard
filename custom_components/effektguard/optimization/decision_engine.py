@@ -798,14 +798,25 @@ class DecisionEngine:
         )
 
     def _effect_layer(self, nibe_state, current_peak: float) -> LayerDecision:
-        """Effect tariff protection layer: Avoid creating new 15-minute peak.
+        """Effect tariff protection with PREDICTIVE peak avoidance (Phase 4).
+
+        Uses indoor temperature trend to predict heating demand in next 15 minutes.
+        Acts BEFORE power spikes instead of reacting to them.
+
+        PHILOSOPHY:
+        Traditional reactive approach waits until power is high, then reduces.
+        Predictive approach sees house cooling rapidly → knows compressor will ramp up soon
+        → reduces offset NOW before spike occurs → smoother power profile.
 
         Args:
             nibe_state: Current NIBE state
             current_peak: Current monthly peak (kW)
 
         Returns:
-            LayerDecision with peak protection
+            LayerDecision with predictive peak protection
+
+        References:
+            MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
         """
         # Estimate current power
         current_power = self._estimate_heat_pump_power(nibe_state)
@@ -817,25 +828,74 @@ class DecisionEngine:
         # Check if approaching monthly 15-minute peak
         limit_decision = self.effect.should_limit_power(current_power, current_quarter)
 
+        # PHASE 4: Get thermal trend for predictive analysis
+        thermal_trend = self._get_thermal_trend()
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # Predict power change in next 15 minutes based on indoor temperature trend
+        # When house cooling fast → heat pump will increase power soon
+        # When house warming → heat pump may reduce power
+        if trend_rate < -0.4:
+            # Rapid cooling → Compressor will ramp up significantly
+            predicted_power_increase = 1.5  # kW
+            prediction_reason = "cooling rapidly"
+        elif trend_rate < -0.2:
+            # Moderate cooling → Slight power increase expected
+            predicted_power_increase = 0.5  # kW
+            prediction_reason = "gentle cooling"
+        elif trend_rate > 0.3:
+            # Rapid warming → Compressor may reduce
+            predicted_power_increase = -0.5  # kW
+            prediction_reason = "warming"
+        else:
+            # Stable → No significant change expected
+            predicted_power_increase = 0.0
+            prediction_reason = "stable"
+
+        predicted_power = current_power + predicted_power_increase
+        predicted_margin = current_peak - predicted_power
+
+        # Peak protection logic with predictive enhancement
         if limit_decision.severity == "CRITICAL":
-            # Within 0.5 kW of peak, aggressively reduce
+            # Already at peak - immediate action (unchanged from Phase 3)
             return LayerDecision(
                 offset=-3.0,
                 weight=1.0,
-                reason=f"CRITICAL: Approaching 15-min peak (Q{current_quarter})",
+                reason=f"Peak: CRITICAL ({current_power:.1f}/{current_peak:.1f} kW, Q{current_quarter})",
             )
-        elif limit_decision.severity == "WARNING":
-            # Within 1.0 kW, moderate reduction
+        elif predicted_margin < 1.0 and predicted_power_increase > 0:
+            # PREDICTIVE: Will approach peak in next 15 min - act NOW
+            # This is the key innovation: prevent spike before it happens
             return LayerDecision(
                 offset=-1.5,
                 weight=0.8,
-                reason=f"WARNING: Near 15-min peak (Q{current_quarter})",
+                reason=(
+                    f"Peak: PREDICTIVE avoidance "
+                    f"(predicted {predicted_power:.1f} kW, {prediction_reason}, Q{current_quarter})"
+                ),
             )
+        elif limit_decision.severity == "WARNING":
+            # Close to peak - check if trend shows increasing demand
+            if predicted_power_increase > 0:
+                # Warning + rising demand = moderate reduction
+                return LayerDecision(
+                    offset=-1.0,
+                    weight=0.7,
+                    reason=f"Peak: WARNING + demand rising ({prediction_reason}, Q{current_quarter})",
+                )
+            else:
+                # Warning but demand stable/falling = gentle reduction
+                return LayerDecision(
+                    offset=-0.5,
+                    weight=0.6,
+                    reason=f"Peak: WARNING + demand {prediction_reason} (Q{current_quarter})",
+                )
         else:
+            # Safe margin - no action needed
             return LayerDecision(
                 offset=0.0,
                 weight=0.0,
-                reason=f"Peak OK (Q{current_quarter})",
+                reason=f"Peak: Safe margin ({current_power:.1f}/{current_peak:.1f} kW, Q{current_quarter})",
             )
 
     def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
