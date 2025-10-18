@@ -68,7 +68,7 @@ Native 15-minute (quarterly) integration:
 - **Day/night weighting** - full effect daytime, reduced nighttime
 - **Savings calculation** - estimates monthly savings (effect + spot)
 
-Works with any 15-min price source ([GE-Spot](https://github.com/Tropos-AS/ge-spot), Nordpool, Tibber, etc.).
+Works with any 15-min price source ([GE-Spot](https://github.com/enoch85/ge-spot), Nordpool, Tibber, etc.).
 
 ### 🌡️ Weather Compensation (Mathematical)
 Physics-based flow temperature optimization:
