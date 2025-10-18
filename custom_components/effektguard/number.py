@@ -164,14 +164,15 @@ class EffektGuardNumber(CoordinatorEntity, NumberEntity):
 
         _LOGGER.info("Setting %s to %.2f", config_key, value)
 
-        # FIX: Update config entry options (not data) to match climate entity behavior
-        # This ensures number entities and climate entity stay in sync
+        # Update config entry options (triggers update listener)
+        # This follows Home Assistant best practices for NumberEntity
         new_options = dict(self._entry.options)
         new_options[config_key] = value
 
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
+        # This automatically calls async_reload_entry() which updates coordinator config
+        # via async_update_config() - no need for explicit refresh
 
-        # Request coordinator refresh to apply new value
-        await self.coordinator.async_request_refresh()
-
+        # Update this entity's state immediately (standard HA pattern)
+        # User sees new value instantly, coordinator applies it on next cycle
         self.async_write_ha_state()

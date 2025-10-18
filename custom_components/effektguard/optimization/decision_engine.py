@@ -747,9 +747,15 @@ class DecisionEngine:
 
         # Climate-aware thresholds (adapt to outdoor temp and climate zone)
         # In Arctic winter (-30°C), these thresholds will be much deeper than mild climate (5°C)
-        zone1_threshold = expected_dm["normal"] * 0.05  # ~5% of normal max (early gentle intervention, ~DM -10 in mild weather)
-        zone2_threshold = expected_dm["normal"] * 0.20  # ~20% of normal max (better progression, was 40%)
-        zone3_threshold = expected_dm["normal"] * 0.50  # ~50% of normal max (leaves room for emergency, was 80%)
+        zone1_threshold = (
+            expected_dm["normal"] * 0.05
+        )  # ~5% of normal max (early gentle intervention, ~DM -10 in mild weather)
+        zone2_threshold = (
+            expected_dm["normal"] * 0.20
+        )  # ~20% of normal max (better progression, was 40%)
+        zone3_threshold = (
+            expected_dm["normal"] * 0.50
+        )  # ~50% of normal max (leaves room for emergency, was 80%)
 
         # PROACTIVE ZONE 1: Early warning (gentle nudge at any meaningful thermal debt)
         # 5% threshold adapts: Arctic -30°C → DM -60, Mild 10°C → DM -10 (climate-aware)
@@ -1255,7 +1261,7 @@ class DecisionEngine:
 
         reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
         reasoning_parts.append(f"Weight: {final_weight:.2f}")
-        
+
         if defer_reason:
             reasoning_parts.append(f"Deferred: {defer_reason}")
 
