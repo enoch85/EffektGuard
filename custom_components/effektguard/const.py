@@ -101,6 +101,19 @@ LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
 LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight
 
+# Weather compensation deferral (Conservative strategy)
+# Reduce weather comp weight when thermal debt exists, allowing thermal reality
+# (DM + comfort + proactive) to override outdoor temperature optimization
+WEATHER_COMP_DEFER_DM_LIGHT: Final = -150  # Start reducing influence (8% reduction)
+WEATHER_COMP_DEFER_DM_MODERATE: Final = -200  # Clear thermal priority (18% reduction)
+WEATHER_COMP_DEFER_DM_SIGNIFICANT: Final = -300  # Strong reduction (29% reduction)
+WEATHER_COMP_DEFER_DM_CRITICAL: Final = -400  # Minimal weather comp influence (39% reduction)
+
+WEATHER_COMP_DEFER_WEIGHT_LIGHT: Final = 0.45  # 8% reduction from 0.49
+WEATHER_COMP_DEFER_WEIGHT_MODERATE: Final = 0.41  # 16% reduction from 0.49
+WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT: Final = 0.36  # 27% reduction from 0.49
+WEATHER_COMP_DEFER_WEIGHT_CRITICAL: Final = 0.30  # 39% reduction from 0.49
+
 # Safety thresholds - Degree Minutes (DM) / Gradminuter (GM)
 # Based on Swedish NIBE forum research and real-world validation
 # Source: Forum_Summary.md, Swedish_NIBE_Forum_Findings.md, Swedish_Climate_Adaptations.md

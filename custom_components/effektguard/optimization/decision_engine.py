@@ -37,6 +37,14 @@ from ..const import (
     MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     QuarterClassification,
+    WEATHER_COMP_DEFER_DM_CRITICAL,
+    WEATHER_COMP_DEFER_DM_LIGHT,
+    WEATHER_COMP_DEFER_DM_MODERATE,
+    WEATHER_COMP_DEFER_DM_SIGNIFICANT,
+    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
+    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
+    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
+    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
 )
 from .climate_zones import ClimateZoneDetector
 from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
@@ -739,12 +747,12 @@ class DecisionEngine:
 
         # Climate-aware thresholds (adapt to outdoor temp and climate zone)
         # In Arctic winter (-30°C), these thresholds will be much deeper than mild climate (5°C)
-        zone1_threshold = expected_dm["normal"] * 0.15  # ~15% of normal max (early warning)
-        zone2_threshold = expected_dm["normal"] * 0.40  # ~40% of normal max (compressor start)
-        zone3_threshold = expected_dm["normal"] * 0.80  # ~80% of normal max (significant deficit)
+        zone1_threshold = expected_dm["normal"] * 0.05  # ~5% of normal max (early gentle intervention, ~DM -10 in mild weather)
+        zone2_threshold = expected_dm["normal"] * 0.20  # ~20% of normal max (better progression, was 40%)
+        zone3_threshold = expected_dm["normal"] * 0.50  # ~50% of normal max (leaves room for emergency, was 80%)
 
-        # PROACTIVE ZONE 1: Early warning (gentle nudge before compressor starts)
-        # Example: Arctic -30°C → -120, Cold -10°C → -67, Mild 0°C → -45
+        # PROACTIVE ZONE 1: Early warning (gentle nudge at any meaningful thermal debt)
+        # 5% threshold adapts: Arctic -30°C → DM -60, Mild 10°C → DM -10 (climate-aware)
         if zone2_threshold < degree_minutes <= zone1_threshold:
             # Gentle nudge to prevent deeper deficit
             offset = 0.5
@@ -1204,6 +1212,32 @@ class DecisionEngine:
         # Apply user-configured weight adjustment
         final_weight = dynamic_weight * self.weather_comp_weight
 
+        # Defer weather compensation when thermal debt exists (Conservative strategy)
+        # Allow thermal reality (DM + comfort + proactive) to override outdoor temp optimization
+        degree_minutes = nibe_state.degree_minutes
+        if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
+            # Critical debt: 39% reduction (0.49 → 0.30)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / LAYER_WEIGHT_WEATHER_COMP
+            defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
+            # Significant debt: 29% reduction (0.49 → 0.35)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / LAYER_WEIGHT_WEATHER_COMP
+            defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
+            # Moderate debt: 18% reduction (0.49 → 0.40)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / LAYER_WEIGHT_WEATHER_COMP
+            defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
+            # Light debt: 8% reduction (0.49 → 0.45)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / LAYER_WEIGHT_WEATHER_COMP
+            defer_reason = f"Light debt (DM {degree_minutes:.0f})"
+        else:
+            # No debt: full weather comp weight
+            defer_factor = 1.0
+            defer_reason = None
+
+        final_weight = final_weight * defer_factor
+
         # Build comprehensive reasoning
         zone_info = self.climate_system.get_climate_info()
         reasoning_parts = [
@@ -1221,6 +1255,9 @@ class DecisionEngine:
 
         reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
         reasoning_parts.append(f"Weight: {final_weight:.2f}")
+        
+        if defer_reason:
+            reasoning_parts.append(f"Deferred: {defer_reason}")
 
         reasoning = "; ".join(reasoning_parts)
 

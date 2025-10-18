@@ -10,6 +10,7 @@ Simulates the decision engine's multi-layer voting system with different scenari
 - Safety layer: Absolute temperature limits
 - Emergency layer: Thermal debt (degree minutes) recovery
 - Proactive layer: Prevent thermal debt accumulation
+- Effect layer: Peak protection (15-minute effect tariff)
 - Weather compensation: Mathematical flow temperature optimization
 - Price layer: Spot price optimization (CHEAP/NORMAL/EXPENSIVE/PEAK)
 - Comfort layer: Temperature error correction
@@ -35,35 +36,40 @@ USAGE EXAMPLES:
 
 # Override specific conditions:
     python3 scripts/test_decision_scenarios.py --scenario custom \\
-        --indoor 22.0 --outdoor 5.0 --dm -800 --price -50.0
+        --indoor 22.0 --outdoor 7.5 --dm -161 --flow-temp 35.0 --price -10.0
 
 # Test with different layer weights:
     python3 scripts/test_decision_scenarios.py --scenario custom \\
-        --indoor 21.0 --outdoor 7.5 --dm -300 --price 45.0 \\
+        --indoor 21.0 --outdoor 7.5 --dm -300 --flow-temp 30.0 --price 45.0 \\
         --price-weight 0.85 --weather-comp-weight 0.40
 
-# Tune CHEAP price offset:
-    python3 scripts/test_decision_scenarios.py --scenario custom \\
-        --indoor 21.5 --outdoor 8.0 --dm -200 --price 30.0 \\
-        --price-classification CHEAP --cheap-offset 3.5
+# Tune proactive Z1 weight:
+    python3 scripts/test_decision_scenarios.py --scenario negative_price \\
+        --proactive-z1-weight 0.5
 
-CURRENT CODE VALUES (as of 2025-10-17):
----------------------------------------
+CURRENT PRODUCTION VALUES (from const.py, as of 2025-10-18):
+------------------------------------------------------------
 Layer Weights:
-  - Safety/Emergency (Critical): 1.0 (absolute override)
-  - Emergency (Warning): 0.8 (strong influence)
-  - Price: 0.75 (high priority for cost optimization)
-  - Proactive (Zone 3): 0.6 (prevent thermal debt)
-  - Weather Compensation: 0.49 (dynamic, mathematical)
-  - Proactive (Zone 2): 0.4
-  - Proactive (Zone 1): 0.3
-  - Comfort: 0.2-0.5 (depends on temp error)
+  - LAYER_WEIGHT_SAFETY: 1.0 (absolute priority)
+  - LAYER_WEIGHT_EMERGENCY: 0.8 (high priority, DM beyond expected)
+  - LAYER_WEIGHT_PRICE: 0.75 (strong influence)
+  - LAYER_WEIGHT_WEATHER_COMP: 0.49 (moderate influence)
+  - LAYER_WEIGHT_PROACTIVE_MAX: 0.6 (Zone 3)
+  - LAYER_WEIGHT_PROACTIVE_MIN: 0.3 (Zone 1)
+  - LAYER_WEIGHT_COMFORT_MAX: 0.5
+  - LAYER_WEIGHT_COMFORT_MIN: 0.2
 
-Price Offsets:
+Price Offsets (from price_analyzer.py):
   - CHEAP: +3.0°C (charge thermal battery!)
   - NORMAL: 0.0°C (maintain)
-  - EXPENSIVE: -1.0°C (conserve)
-  - PEAK: -2.0°C (minimize)
+  - EXPENSIVE: -1.0°C (conserve, x1.5 during daytime)
+  - PEAK: -2.0°C (minimize, x1.5 during daytime)
+
+Effect/Peak Offsets (from decision_engine.py):
+  - CRITICAL (at peak): -3.0°C @ weight 1.0
+  - PREDICTIVE (approaching): -1.5°C @ weight 0.8
+  - WARNING (rising demand): -1.0°C @ weight 0.7
+  - WARNING (stable/falling): -0.5°C @ weight 0.6
 
 Temperature Targets:
   - Default indoor: 21.0°C
@@ -86,10 +92,56 @@ from dataclasses import dataclass
 from typing import Any, Optional
 from enum import Enum
 
-# Standalone script - minimal dependencies
-MIN_TEMP_LIMIT = 18.0
-MAX_TEMP_LIMIT = 24.0
-DEFAULT_TARGET_TEMP = 21.0
+# Import actual constants from production code
+try:
+    sys.path.insert(0, "/workspaces/EffektGuard/custom_components/effektguard")
+    from const import (
+        LAYER_WEIGHT_SAFETY,
+        LAYER_WEIGHT_EMERGENCY,
+        LAYER_WEIGHT_PRICE,
+        LAYER_WEIGHT_WEATHER_COMP,
+        LAYER_WEIGHT_PROACTIVE_MIN,
+        LAYER_WEIGHT_PROACTIVE_MAX,
+        LAYER_WEIGHT_COMFORT_MIN,
+        LAYER_WEIGHT_COMFORT_MAX,
+        MIN_TEMP_LIMIT,
+        MAX_TEMP_LIMIT,
+        DEFAULT_TARGET_TEMP,
+        DM_THRESHOLD_ABSOLUTE_MAX,
+        WEATHER_COMP_DEFER_DM_LIGHT,
+        WEATHER_COMP_DEFER_DM_MODERATE,
+        WEATHER_COMP_DEFER_DM_SIGNIFICANT,
+        WEATHER_COMP_DEFER_DM_CRITICAL,
+        WEATHER_COMP_DEFER_WEIGHT_LIGHT,
+        WEATHER_COMP_DEFER_WEIGHT_MODERATE,
+        WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
+        WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
+    )
+    USING_PRODUCTION_CONSTANTS = True
+except ImportError:
+    # Fallback if imports fail
+    LAYER_WEIGHT_SAFETY = 1.0
+    LAYER_WEIGHT_EMERGENCY = 0.8
+    LAYER_WEIGHT_PRICE = 0.75
+    LAYER_WEIGHT_WEATHER_COMP = 0.49
+    LAYER_WEIGHT_PROACTIVE_MIN = 0.3
+    LAYER_WEIGHT_PROACTIVE_MAX = 0.6
+    LAYER_WEIGHT_COMFORT_MIN = 0.2
+    LAYER_WEIGHT_COMFORT_MAX = 0.5
+    MIN_TEMP_LIMIT = 18.0
+    MAX_TEMP_LIMIT = 24.0
+    DEFAULT_TARGET_TEMP = 21.0
+    DM_THRESHOLD_ABSOLUTE_MAX = -1500
+    # Weather comp deferral constants
+    WEATHER_COMP_DEFER_DM_LIGHT = -150
+    WEATHER_COMP_DEFER_DM_MODERATE = -200
+    WEATHER_COMP_DEFER_DM_SIGNIFICANT = -300
+    WEATHER_COMP_DEFER_DM_CRITICAL = -400
+    WEATHER_COMP_DEFER_WEIGHT_LIGHT = 0.45
+    WEATHER_COMP_DEFER_WEIGHT_MODERATE = 0.40
+    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT = 0.35
+    WEATHER_COMP_DEFER_WEIGHT_CRITICAL = 0.30
+    USING_PRODUCTION_CONSTANTS = False
 
 
 class QuarterClassification(Enum):
@@ -119,6 +171,15 @@ class MockPriceData:
     current_price: float
     classification: QuarterClassification
     is_daytime: bool = True
+
+
+@dataclass
+class MockPeakData:
+    """Mock effect tariff peak data for testing."""
+
+    current_peak: float
+    current_power: float
+    current_quarter: int = 50  # Mid-day quarter
 
 
 @dataclass
@@ -153,12 +214,15 @@ class ScenarioTester:
 
     def __init__(
         self,
-        price_weight: float = 0.75,
-        weather_comp_weight: float = 0.49,
-        emergency_weight: float = 0.8,
-        comfort_weight_min: float = 0.2,
-        comfort_weight_max: float = 0.5,
-        cheap_offset: float = 3.0,
+        price_weight: float = LAYER_WEIGHT_PRICE,
+        weather_comp_weight: float = LAYER_WEIGHT_WEATHER_COMP,
+        emergency_weight: float = LAYER_WEIGHT_EMERGENCY,
+        proactive_weight_z1: float = LAYER_WEIGHT_PROACTIVE_MIN,
+        proactive_weight_z2: float = 0.4,  # Hardcoded in decision_engine.py
+        proactive_weight_z3: float = LAYER_WEIGHT_PROACTIVE_MAX,
+        comfort_weight_min: float = LAYER_WEIGHT_COMFORT_MIN,
+        comfort_weight_max: float = LAYER_WEIGHT_COMFORT_MAX,
+        cheap_offset: float = 3.0,  # From price_analyzer.py
         normal_offset: float = 0.0,
         expensive_offset: float = -1.0,
         peak_offset: float = -2.0,
@@ -169,6 +233,9 @@ class ScenarioTester:
             price_weight: Price layer weight (default: 0.75)
             weather_comp_weight: Weather compensation layer weight (default: 0.49)
             emergency_weight: Emergency layer weight (default: 0.8)
+            proactive_weight_z1: Proactive Zone 1 weight (default: 0.3)
+            proactive_weight_z2: Proactive Zone 2 weight (default: 0.4)
+            proactive_weight_z3: Proactive Zone 3 weight (default: 0.6)
             comfort_weight_min: Comfort layer minimum weight (default: 0.2)
             comfort_weight_max: Comfort layer maximum weight (default: 0.5)
             cheap_offset: CHEAP price base offset °C (default: +3.0)
@@ -178,7 +245,7 @@ class ScenarioTester:
         """
         self.tolerance = 5  # User-facing 1-10 scale (5 = default balanced)
         self.config = {
-            "target_indoor_temp": DEFAULT_TARGET_TEMP,
+            "target_indoor_temp": 22.0,  # Default to 22°C for testing
             "tolerance": self.tolerance,  # Use proper 1-10 scale
             "enable_weather_compensation": True,
             "weather_compensation_weight": weather_comp_weight,
@@ -190,6 +257,9 @@ class ScenarioTester:
         self.price_weight = price_weight
         self.weather_comp_weight = weather_comp_weight
         self.emergency_weight = emergency_weight
+        self.proactive_weight_z1 = proactive_weight_z1
+        self.proactive_weight_z2 = proactive_weight_z2
+        self.proactive_weight_z3 = proactive_weight_z3
         self.comfort_weight_min = comfort_weight_min
         self.comfort_weight_max = comfort_weight_max
 
@@ -220,21 +290,33 @@ class ScenarioTester:
         return LayerVote("Safety", offset=0.0, weight=0.0, reason="Within safe limits")
 
     def calculate_emergency_layer(self, nibe_state: MockNibeState) -> LayerVote:
-        """Calculate emergency layer vote (climate-aware)."""
+        """Calculate emergency layer vote (climate-aware).
+        
+        Mirrors production code from decision_engine.py._emergency_layer()
+        """
         dm = nibe_state.degree_minutes
         outdoor = nibe_state.outdoor_temp
 
-        # Absolute maximum (Swedish NIBE forums validated)
-        if dm <= -1500:
+        # Absolute maximum (hardcoded in production)
+        if dm <= DM_THRESHOLD_ABSOLUTE_MAX:  # -1500
+            return LayerVote(
+                "Emergency",
+                offset=5.0,
+                weight=1.0,
+                reason=f"ABSOLUTE MAX: DM {dm:.0f} at safety limit -1500 - EMERGENCY",
+            )
+
+        # CRITICAL: Within 300 DM of absolute maximum
+        margin_to_limit = dm - DM_THRESHOLD_ABSOLUTE_MAX
+        if margin_to_limit < 300:
             return LayerVote(
                 "Emergency",
                 offset=3.0,
                 weight=1.0,
-                reason=f"ABSOLUTE MAX: DM {dm:.0f} at limit!",
+                reason=f"CRITICAL: DM {dm:.0f} near absolute max (margin: {margin_to_limit:.0f})",
             )
 
-        # Calculate expected DM for temperature (simplified)
-        # Real implementation uses ClimateZoneDetector
+        # Calculate expected DM for temperature (simplified from ClimateZoneDetector)
         if outdoor < -20:
             expected_normal = -800
             expected_warning = -1120
@@ -245,10 +327,11 @@ class ScenarioTester:
             expected_normal = -300
             expected_warning = -420
         else:  # Mild weather (0°C+)
-            expected_normal = -150 - (outdoor * 20)  # -350 at 7.5°C
-            expected_warning = expected_normal * 1.4
+            # Linear interpolation for positive temps
+            expected_normal = -150 - (outdoor * 20)  # e.g., -350 at 7.5°C
+            expected_warning = expected_normal * 1.4  # e.g., -490 at 7.5°C
 
-        # Check if beyond expected
+        # WARNING: DM beyond expected range
         if dm < expected_warning:
             deviation = expected_warning - dm
             offset = min(2.0, 1.0 + (deviation / 400))
@@ -258,10 +341,19 @@ class ScenarioTester:
                 "Emergency",
                 offset=offset,
                 weight=self.emergency_weight,
-                reason=f"WARNING: DM {dm:.0f} beyond {expected_normal:.0f} ({percent_beyond:.0%} over)",
+                reason=f"WARNING: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (expected: {expected_normal:.0f}, {percent_beyond:.0%} over)",
             )
 
-        return LayerVote("Emergency", offset=0.0, weight=0.0, reason="DM OK")
+        # CAUTION: Approaching expected limits
+        elif dm < expected_normal:
+            return LayerVote(
+                "Emergency",
+                offset=0.5,
+                weight=0.5,
+                reason=f"CAUTION: DM {dm:.0f} at {outdoor:.1f}°C - monitoring",
+            )
+
+        return LayerVote("Emergency", offset=0.0, weight=0.0, reason=f"Thermal debt OK (DM: {dm:.0f} at {outdoor:.1f}°C)")
 
     def calculate_proactive_layer(self, nibe_state: MockNibeState) -> LayerVote:
         """Calculate proactive debt prevention layer."""
@@ -274,30 +366,122 @@ class ScenarioTester:
         else:
             expected_normal = -150 - (outdoor * 20)
 
-        # Zone thresholds
-        zone1 = expected_normal * 0.15
-        zone2 = expected_normal * 0.40
-        zone3 = expected_normal * 0.80
+        # Zone thresholds (percentages of expected_normal)
+        zone1 = expected_normal * 0.15  # Early warning
+        zone2 = expected_normal * 0.40  # Moderate action
+        zone3 = expected_normal * 0.80  # Prevent deeper debt
 
         if zone2 < dm <= zone1:
             return LayerVote(
-                "Proactive Z1", offset=0.5, weight=0.3, reason=f"DM {dm:.0f} early warning"
+                "Proactive Z1",
+                offset=0.5,
+                weight=self.proactive_weight_z1,
+                reason=f"DM {dm:.0f} (threshold: {zone1:.0f}), gentle heating prevents debt",
             )
         elif zone3 < dm <= zone2:
             return LayerVote(
-                "Proactive Z2", offset=1.0, weight=0.4, reason=f"DM {dm:.0f} moderate action"
+                "Proactive Z2",
+                offset=0.7,
+                weight=self.proactive_weight_z2,
+                reason=f"DM {dm:.0f} (threshold: {zone2:.0f}), boost recovery speed",
             )
         elif expected_normal < dm <= zone3:
-            deficit = (zone3 - dm) / (zone3 - expected_normal)
-            offset = 1.0 + (min(deficit, 1.0) * 0.5)
+            deficit_severity = (zone3 - dm) / (zone3 - expected_normal)
+            offset = 1.0 + (min(deficit_severity, 1.0) * 0.5)
             return LayerVote(
                 "Proactive Z3",
                 offset=offset,
-                weight=0.6,
-                reason=f"DM {dm:.0f} prevent deeper debt",
+                weight=self.proactive_weight_z3,
+                reason=f"DM {dm:.0f} (threshold: {zone3:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
             )
 
         return LayerVote("Proactive", offset=0.0, weight=0.0, reason="Not needed")
+
+    def calculate_effect_layer(
+        self, nibe_state: MockNibeState, peak_data: MockPeakData
+    ) -> LayerVote:
+        """Calculate effect tariff protection layer."""
+        current_power = peak_data.current_power
+        current_peak = peak_data.current_peak
+        margin = current_peak - current_power
+
+        # CRITICAL: Already at or exceeding peak
+        if current_power >= current_peak:
+            return LayerVote(
+                "Effect/Peak",
+                offset=-3.0,
+                weight=1.0,
+                reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW, Q{peak_data.current_quarter})",
+            )
+
+        # PREDICTIVE: Will approach peak (margin < 1 kW)
+        elif margin < 1.0:
+            return LayerVote(
+                "Effect/Peak",
+                offset=-1.5,
+                weight=0.8,
+                reason=f"PREDICTIVE avoidance (predicted {current_power:.1f} kW, Q{peak_data.current_quarter})",
+            )
+
+        # WARNING: Close to peak (margin < 1.5 kW)
+        elif margin < 1.5:
+            return LayerVote(
+                "Effect/Peak",
+                offset=-1.0,
+                weight=0.7,
+                reason=f"WARNING + demand rising (Q{peak_data.current_quarter})",
+            )
+
+        # WATCH: Margin exists but monitoring
+        elif margin < 2.5:
+            return LayerVote(
+                "Effect/Peak",
+                offset=-0.5,
+                weight=0.6,
+                reason=f"WATCH (margin {margin:.1f} kW, Q{peak_data.current_quarter})",
+            )
+
+        # Safe margin
+        return LayerVote(
+            "Effect/Peak",
+            offset=0.0,
+            weight=0.0,
+            reason=f"Safe margin ({current_power:.1f}/{current_peak:.1f} kW)",
+        )
+
+    def calculate_prediction_layer(self, nibe_state: MockNibeState) -> LayerVote:
+        """Calculate prediction layer (Phase 6 - learned pre-heating).
+        
+        Note: This is a placeholder. Real implementation requires thermal predictor
+        with historical data and learned building characteristics.
+        """
+        # Simplified: Not implemented in standalone tester
+        return LayerVote("Prediction", offset=0.0, weight=0.0, reason="Not available (requires learning)")
+
+    def calculate_weather_layer(
+        self, nibe_state: MockNibeState, weather_data: MockWeatherData
+    ) -> LayerVote:
+        """Calculate weather prediction layer (simple pre-heating)."""
+        if not weather_data or not weather_data.forecast_hours:
+            return LayerVote("Weather", offset=0.0, weight=0.0, reason="No forecast")
+
+        # Simple logic: check for significant temperature drop
+        current_outdoor = nibe_state.outdoor_temp
+        min_forecast = min(weather_data.forecast_hours) if weather_data.forecast_hours else current_outdoor
+        temp_drop = min_forecast - current_outdoor
+
+        if temp_drop < -3.0:
+            # Significant cold snap coming
+            # Scale offset based on drop magnitude
+            offset = min(abs(temp_drop) / 5.0 * 2.0, 2.5)
+            return LayerVote(
+                "Weather",
+                offset=offset,
+                weight=0.7,
+                reason=f"Pre-heat: {temp_drop:.1f}°C drop forecast",
+            )
+
+        return LayerVote("Weather", offset=0.0, weight=0.0, reason="No pre-heating needed")
 
     def calculate_weather_comp_layer(self, nibe_state: MockNibeState) -> LayerVote:
         """Calculate weather compensation layer (simplified)."""
@@ -321,11 +505,40 @@ class ScenarioTester:
         curve_sensitivity = 1.5
         required_offset = (optimal_flow - current_flow) / curve_sensitivity
 
+        # Apply weather comp deferral based on thermal debt (Conservative strategy)
+        # Defer weather compensation when thermal debt exists, allowing thermal reality
+        # (DM + comfort + proactive) to override outdoor temperature optimization
+        degree_minutes = nibe_state.degree_minutes
+        base_weight = self.weather_comp_weight
+        
+        if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
+            # Critical debt: 39% reduction (0.49 → 0.30)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / LAYER_WEIGHT_WEATHER_COMP
+            defer_note = f"; Deferred: Critical debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
+            # Significant debt: 29% reduction (0.49 → 0.35)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / LAYER_WEIGHT_WEATHER_COMP
+            defer_note = f"; Deferred: Significant debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
+            # Moderate debt: 18% reduction (0.49 → 0.40)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / LAYER_WEIGHT_WEATHER_COMP
+            defer_note = f"; Deferred: Moderate debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
+            # Light debt: 8% reduction (0.49 → 0.45)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / LAYER_WEIGHT_WEATHER_COMP
+            defer_note = f"; Deferred: Light debt (DM {degree_minutes:.0f})"
+        else:
+            # No debt: full weather comp weight
+            defer_factor = 1.0
+            defer_note = ""
+        
+        final_weight = base_weight * defer_factor
+
         return LayerVote(
             "Weather Comp",
             offset=required_offset,
-            weight=self.weather_comp_weight,
-            reason=f"Optimal {optimal_flow:.1f}°C vs {current_flow:.1f}°C",
+            weight=final_weight,
+            reason=f"Optimal {optimal_flow:.1f}°C vs {current_flow:.1f}°C{defer_note}",
         )
 
     def calculate_price_layer(self, price_data: MockPriceData) -> LayerVote:
@@ -407,6 +620,7 @@ class ScenarioTester:
         name: str,
         nibe_state: MockNibeState,
         price_data: MockPriceData,
+        peak_data: MockPeakData = None,
         weather_data: MockWeatherData = None,
     ) -> dict[str, Any]:
         """Test a specific scenario."""
@@ -425,17 +639,31 @@ class ScenarioTester:
         print(f"  Price: {price_data.current_price:.1f} öre/kWh ({price_data.classification.name})")
         if price_data.current_price < 0:
             print(f"  💰 NEGATIVE PRICE: They're paying YOU to use electricity!")
+        
+        if peak_data:
+            print(f"  Power: {peak_data.current_power:.1f} kW (peak: {peak_data.current_peak:.1f} kW)")
+            margin = peak_data.current_peak - peak_data.current_power
+            print(f"  Peak Margin: {margin:.1f} kW")
 
-        # Calculate all layers
+        # Calculate all layers (in priority order)
         layers = [
             self.calculate_safety_layer(nibe_state),
             self.calculate_emergency_layer(nibe_state),
             self.calculate_proactive_layer(nibe_state),
-            # Effect layer omitted (needs peak data)
+        ]
+        
+        # Add effect layer if peak data provided
+        if peak_data:
+            layers.append(self.calculate_effect_layer(nibe_state, peak_data))
+        
+        # Continue with remaining layers
+        layers.extend([
+            self.calculate_prediction_layer(nibe_state),
             self.calculate_weather_comp_layer(nibe_state),
+            self.calculate_weather_layer(nibe_state, weather_data),
             self.calculate_price_layer(price_data),
             self.calculate_comfort_layer(nibe_state),
-        ]
+        ])
 
         # Aggregate
         final_offset, active_layers = self.aggregate_layers(layers)
@@ -487,6 +715,14 @@ class ScenarioTester:
 
 def main():
     """Run scenario tests."""
+    
+    # Show whether using production constants
+    if USING_PRODUCTION_CONSTANTS:
+        print("✅ Using PRODUCTION constants from custom_components/effektguard/const.py")
+    else:
+        print("⚠️  Using FALLBACK constants (could not import from production code)")
+    print()
+    
     parser = argparse.ArgumentParser(
         description="Test EffektGuard decision engine scenarios",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -546,34 +782,54 @@ Examples:
     custom_group.add_argument(
         "--daytime", action="store_true", help="Set time to daytime (default: nighttime)"
     )
+    custom_group.add_argument("--current-power", type=float, help="Current power consumption (kW)")
+    custom_group.add_argument("--current-peak", type=float, help="Current monthly peak (kW)")
 
     # Layer weight overrides
     weight_group = parser.add_argument_group(
         "Layer Weight Overrides", "Current production values shown in defaults"
     )
     weight_group.add_argument(
-        "--price-weight", type=float, default=0.75, help="Price layer weight (default: 0.75)"
+        "--price-weight", type=float, default=LAYER_WEIGHT_PRICE, help=f"Price layer weight (default: {LAYER_WEIGHT_PRICE})"
     )
     weight_group.add_argument(
         "--weather-comp-weight",
         type=float,
-        default=0.49,
-        help="Weather compensation layer weight (default: 0.49)",
+        default=LAYER_WEIGHT_WEATHER_COMP,
+        help=f"Weather compensation layer weight (default: {LAYER_WEIGHT_WEATHER_COMP})",
     )
     weight_group.add_argument(
-        "--emergency-weight", type=float, default=0.8, help="Emergency layer weight (default: 0.8)"
+        "--emergency-weight", type=float, default=LAYER_WEIGHT_EMERGENCY, help=f"Emergency layer weight (default: {LAYER_WEIGHT_EMERGENCY})"
+    )
+    weight_group.add_argument(
+        "--proactive-z1-weight",
+        type=float,
+        default=LAYER_WEIGHT_PROACTIVE_MIN,
+        help=f"Proactive Zone 1 weight (default: {LAYER_WEIGHT_PROACTIVE_MIN})",
+    )
+    weight_group.add_argument(
+        "--proactive-z2-weight",
+        type=float,
+        default=0.4,
+        help="Proactive Zone 2 weight (default: 0.4)",
+    )
+    weight_group.add_argument(
+        "--proactive-z3-weight",
+        type=float,
+        default=LAYER_WEIGHT_PROACTIVE_MAX,
+        help=f"Proactive Zone 3 weight (default: {LAYER_WEIGHT_PROACTIVE_MAX})",
     )
     weight_group.add_argument(
         "--comfort-weight-min",
         type=float,
-        default=0.2,
-        help="Comfort layer min weight (default: 0.2)",
+        default=LAYER_WEIGHT_COMFORT_MIN,
+        help=f"Comfort layer min weight (default: {LAYER_WEIGHT_COMFORT_MIN})",
     )
     weight_group.add_argument(
         "--comfort-weight-max",
         type=float,
-        default=0.5,
-        help="Comfort layer max weight (default: 0.5)",
+        default=LAYER_WEIGHT_COMFORT_MAX,
+        help=f"Comfort layer max weight (default: {LAYER_WEIGHT_COMFORT_MAX})",
     )
 
     # Price offset overrides
@@ -606,24 +862,37 @@ Examples:
     # Show defaults and exit
     if args.show_defaults:
         print("=" * 80)
-        print("CURRENT PRODUCTION DEFAULTS")
+        print("CURRENT PRODUCTION DEFAULTS (from const.py & decision_engine.py)")
         print("=" * 80)
-        print("\nLayer Weights:")
-        print(f"  Safety:            1.00 (hardcoded, absolute priority)")
-        print(f"  Peak Protection:   0.80-1.00 (dynamic based on effect threshold)")
-        print(f"  Emergency:         {args.emergency_weight:.2f}")
-        print(f"  Price:             {args.price_weight:.2f}")
-        print(f"  Weather Comp:      {args.weather_comp_weight:.2f}")
-        print(f"  Proactive:         0.30-0.60 (dynamic)")
-        print(
-            f"  Comfort:           {args.comfort_weight_min:.2f}-{args.comfort_weight_max:.2f} (dynamic)"
-        )
-        print("\nPrice Offsets:")
-        print(f"  CHEAP:             {args.cheap_offset:+.1f}°C (charge thermal battery)")
-        print(f"  NORMAL:            {args.normal_offset:+.1f}°C (baseline)")
-        print(f"  EXPENSIVE:         {args.expensive_offset:+.1f}°C (reduce heating)")
-        print(f"  PEAK:              {args.peak_offset:+.1f}°C (aggressive reduction)")
-        print("\nPhilosophy: Charge heat when cheap, without peaking the peak")
+        if not USING_PRODUCTION_CONSTANTS:
+            print("⚠️  WARNING: Could not import production constants, showing fallback values")
+            print()
+        print("\nLayer Weights (from const.py):")
+        print(f"  LAYER_WEIGHT_SAFETY:        {LAYER_WEIGHT_SAFETY:.2f} (absolute priority)")
+        print(f"  LAYER_WEIGHT_EMERGENCY:     {LAYER_WEIGHT_EMERGENCY:.2f} (DM beyond expected)")
+        print(f"  LAYER_WEIGHT_PRICE:         {LAYER_WEIGHT_PRICE:.2f} (strong influence)")
+        print(f"  LAYER_WEIGHT_WEATHER_COMP:  {LAYER_WEIGHT_WEATHER_COMP:.2f} (moderate influence)")
+        print(f"  LAYER_WEIGHT_PROACTIVE_MAX: {LAYER_WEIGHT_PROACTIVE_MAX:.2f} (Zone 3)")
+        print(f"  LAYER_WEIGHT_PROACTIVE_MIN: {LAYER_WEIGHT_PROACTIVE_MIN:.2f} (Zone 1)")
+        print(f"  Proactive Zone 2:           0.40 (hardcoded in decision_engine.py)")
+        print(f"  LAYER_WEIGHT_COMFORT_MAX:   {LAYER_WEIGHT_COMFORT_MAX:.2f}")
+        print(f"  LAYER_WEIGHT_COMFORT_MIN:   {LAYER_WEIGHT_COMFORT_MIN:.2f}")
+        print("\nCritical Emergency Weights (hardcoded at weight 1.0):")
+        print(f"  DM <= {DM_THRESHOLD_ABSOLUTE_MAX} (absolute max):  offset=+5.0°C, weight=1.0")
+        print(f"  DM margin < 300 (critical):         offset=+3.0°C, weight=1.0")
+        print("\nEffect/Peak Protection (from decision_engine._effect_layer):")
+        print(f"  CRITICAL (at peak):      -3.0°C @ weight 1.0")
+        print(f"  PREDICTIVE (margin<1kW): -1.5°C @ weight 0.8")
+        print(f"  WARNING (rising):        -1.0°C @ weight 0.7")
+        print(f"  WARNING (stable):        -0.5°C @ weight 0.6")
+        print("\nPrice Offsets (from price_analyzer.get_base_offset):")
+        print(f"  CHEAP:      {args.cheap_offset:+.1f}°C (charge thermal battery!)")
+        print(f"  NORMAL:     {args.normal_offset:+.1f}°C (maintain)")
+        print(f"  EXPENSIVE:  {args.expensive_offset:+.1f}°C (conserve, x1.5 if daytime)")
+        print(f"  PEAK:       {args.peak_offset:+.1f}°C (minimize, x1.5 if daytime)")
+        print("\nNote: Price offsets adjusted by tolerance factor (tolerance/5.0)")
+        print(f"      Default tolerance=5 → factor=1.0 (no adjustment)")
+        print("\nPhilosophy: 'Charge heat when cheap, without peaking the peak'")
         print("=" * 80)
         return
 
@@ -638,6 +907,9 @@ Examples:
         price_weight=args.price_weight,
         weather_comp_weight=args.weather_comp_weight,
         emergency_weight=args.emergency_weight,
+        proactive_weight_z1=args.proactive_z1_weight,
+        proactive_weight_z2=args.proactive_z2_weight,
+        proactive_weight_z3=args.proactive_z3_weight,
         comfort_weight_min=args.comfort_weight_min,
         comfort_weight_max=args.comfort_weight_max,
         cheap_offset=args.cheap_offset,
@@ -648,18 +920,22 @@ Examples:
 
     scenarios = {}
 
-    # Scenario 1: Negative Price with Thermal Debt (user's question)
+    # Scenario 1: Negative Price with Thermal Debt (user's original question)
     if args.scenario in ["all", "negative_price"]:
         scenarios["negative_price"] = tester.test_scenario(
             name="Negative Price + Thermal Debt",
             nibe_state=MockNibeState(
                 indoor_temp=22.0,
                 outdoor_temp=7.5,
-                degree_minutes=-600,
+                degree_minutes=-161,  # From user's example - proactive Z1
                 flow_temp=35.0,
             ),
             price_data=MockPriceData(
                 current_price=-10.0, classification=QuarterClassification.CHEAP, is_daytime=False
+            ),
+            peak_data=MockPeakData(
+                current_peak=6.5,
+                current_power=3.2,  # Safe margin
             ),
         )
 
@@ -676,6 +952,10 @@ Examples:
             price_data=MockPriceData(
                 current_price=45.0, classification=QuarterClassification.NORMAL
             ),
+            peak_data=MockPeakData(
+                current_peak=6.5,
+                current_power=2.8,
+            ),
         )
 
     # Scenario 3: Expensive Peak Hour
@@ -691,6 +971,10 @@ Examples:
             price_data=MockPriceData(
                 current_price=180.0, classification=QuarterClassification.PEAK, is_daytime=True
             ),
+            peak_data=MockPeakData(
+                current_peak=6.5,
+                current_power=6.3,  # Close to peak!
+            ),
         )
 
     # Scenario 4: Severe Thermal Debt, Cold Weather
@@ -705,6 +989,10 @@ Examples:
             ),
             price_data=MockPriceData(
                 current_price=95.0, classification=QuarterClassification.EXPENSIVE
+            ),
+            peak_data=MockPeakData(
+                current_peak=7.2,
+                current_power=5.8,
             ),
         )
 
@@ -724,6 +1012,14 @@ Examples:
             else:
                 classification = QuarterClassification.PEAK
 
+        # Create peak data if power/peak provided
+        peak_data = None
+        if args.current_power is not None and args.current_peak is not None:
+            peak_data = MockPeakData(
+                current_peak=args.current_peak,
+                current_power=args.current_power,
+            )
+
         scenarios["custom"] = tester.test_scenario(
             name="Custom Scenario",
             nibe_state=MockNibeState(
@@ -737,6 +1033,7 @@ Examples:
                 classification=classification,
                 is_daytime=args.daytime,
             ),
+            peak_data=peak_data,
         )
 
     # Summary
