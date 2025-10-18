@@ -178,6 +178,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # State tracking
         self.current_offset: float = 0.0
+        self.last_applied_offset: float | None = None  # Last offset written to NIBE
+        self.last_offset_timestamp: datetime | None = None  # When offset was last applied
         self.peak_today: float = 0.0
         self.peak_this_month: float = 0.0
         self.last_decision_time = None
@@ -273,6 +275,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             learned_data = await self._load_learned_data()
 
             if learned_data:
+                # Restore last applied offset to avoid redundant API calls
+                if "last_offset" in learned_data:
+                    offset_data = learned_data["last_offset"]
+                    self.last_applied_offset = offset_data.get("value")
+                    timestamp_str = offset_data.get("timestamp")
+                    if timestamp_str:
+                        from datetime import datetime
+
+                        self.last_offset_timestamp = datetime.fromisoformat(timestamp_str)
+                    _LOGGER.info(
+                        "Restored last offset: %.1f°C from %s",
+                        self.last_applied_offset,
+                        timestamp_str or "unknown",
+                    )
+
                 # Restore adaptive thermal model
                 if "thermal_model" in learned_data:
                     thermal_data = learned_data["thermal_model"]
@@ -282,6 +299,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         "Restored thermal model: mass=%.2f, UFH=%s",
                         self.adaptive_learning.thermal_mass,
                         self.adaptive_learning.ufh_type,
+                    )
+
+                # Restore thermal predictor (temperature trends)
+                if "thermal_predictor" in learned_data:
+                    from .optimization.thermal_predictor import ThermalStatePredictor
+
+                    self.thermal_predictor = ThermalStatePredictor.from_dict(
+                        learned_data["thermal_predictor"]
+                    )
+                    _LOGGER.info(
+                        "Restored thermal predictor with %d historical snapshots",
+                        len(self.thermal_predictor.state_history),
                     )
 
                 # Restore weather patterns
@@ -562,18 +591,32 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Apply offset to NIBE heat pump via MyUplink integration
         # This sends the calculated offset to the MyUplink number entity (parameter 47011)
         # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
-        try:
-            was_applied = await self.nibe.set_curve_offset(decision.offset)
-            if was_applied:
-                _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
-            else:
-                _LOGGER.debug(
-                    "Offset %.2f°C deferred (accumulating fractional changes or rate limited)",
-                    decision.offset,
-                )
-        except (AttributeError, OSError, ValueError) as err:
-            _LOGGER.error("Failed to apply offset to NIBE: %s", err)
-            # Continue anyway - next cycle will retry
+        # Skip if offset matches last known value (avoids redundant API calls on startup)
+        if (
+            self.last_applied_offset is not None
+            and abs(decision.offset - self.last_applied_offset) < 0.01
+        ):
+            _LOGGER.debug(
+                "Offset %.2f°C matches last applied value, skipping redundant API call",
+                decision.offset,
+            )
+        else:
+            try:
+                was_applied = await self.nibe.set_curve_offset(decision.offset)
+                if was_applied:
+                    _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
+                    # Track successfully applied offset to avoid redundant API calls on restart
+                    self.last_applied_offset = decision.offset
+                    self.last_offset_timestamp = dt_util.utcnow()
+                    self._learned_data_changed = True  # Trigger save on shutdown
+                else:
+                    _LOGGER.debug(
+                        "Offset %.2f°C deferred (accumulating fractional changes or rate limited)",
+                        decision.offset,
+                    )
+            except (AttributeError, OSError, ValueError) as err:
+                _LOGGER.error("Failed to apply offset to NIBE: %s", err)
+                # Continue anyway - next cycle will retry
 
         # Check for day change and save yesterday's peak
         now = dt_util.now()
@@ -1804,6 +1847,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             await self.nibe.set_curve_offset(offset)
             self.current_offset = offset
+            # Track successfully applied offset to avoid redundant API calls on restart
+            self.last_applied_offset = offset
+            self.last_offset_timestamp = dt_util.utcnow()
+            self._learned_data_changed = True  # Trigger save on shutdown
             _LOGGER.info("Applied offset: %.2f°C", offset)
         except (AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset: %s", err)
@@ -1838,6 +1885,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         _LOGGER.debug("Updating configuration: %s", new_options)
 
+        # Update decision engine cached configuration values
+        # CRITICAL: Decision engine caches these at init, must update them here
+        if "target_indoor_temp" in new_options:
+            self.engine.target_temp = float(new_options["target_indoor_temp"])
+            _LOGGER.debug("Updated target temperature: %.1f°C", self.engine.target_temp)
+
+        if "tolerance" in new_options:
+            self.engine.tolerance = float(new_options["tolerance"])
+            self.engine.tolerance_range = self.engine.tolerance * 0.4  # Recalculate range
+            _LOGGER.debug(
+                "Updated tolerance: %.1f (range: %.1f°C)",
+                self.engine.tolerance,
+                self.engine.tolerance_range,
+            )
+
         # Update thermal model parameters
         if "thermal_mass" in new_options:
             self.engine.thermal.thermal_mass = new_options["thermal_mass"]
@@ -1847,38 +1909,70 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.engine.thermal.insulation_quality = new_options["insulation_quality"]
             _LOGGER.debug("Updated insulation quality: %.2f", new_options["insulation_quality"])
 
+        # Update optimization mode (note: stored in config dict, not cached)
+        if "optimization_mode" in new_options:
+            self.engine.config["optimization_mode"] = new_options["optimization_mode"]
+            _LOGGER.debug("Updated optimization mode: %s", new_options["optimization_mode"])
+
+        # Update control priority (note: stored in config dict, not cached)
+        if "control_priority" in new_options:
+            self.engine.config["control_priority"] = new_options["control_priority"]
+            _LOGGER.debug("Updated control priority: %s", new_options["control_priority"])
+
+        # Update peak protection margin (note: stored in config dict, not cached)
+        if "peak_protection_margin" in new_options:
+            self.engine.config["peak_protection_margin"] = new_options["peak_protection_margin"]
+            _LOGGER.debug(
+                "Updated peak protection margin: %.2f", new_options["peak_protection_margin"]
+            )
+
         # Update DHW settings
         dhw_config_changed = False
-        if "dhw_morning_hour" in new_options or "dhw_morning_enabled" in new_options:
-            dhw_config_changed = True
-        if "dhw_evening_hour" in new_options or "dhw_evening_enabled" in new_options:
+        dhw_keys = {
+            "dhw_morning_hour",
+            "dhw_morning_enabled",
+            "dhw_evening_hour",
+            "dhw_evening_enabled",
+            "dhw_target_temp",
+        }
+
+        if any(key in new_options for key in dhw_keys):
             dhw_config_changed = True
 
         if dhw_config_changed:
             # Rebuild DHW demand periods
             from .optimization.dhw_optimizer import DHWDemandPeriod
+            from .const import DEFAULT_DHW_TARGET_TEMP
 
+            dhw_target = float(new_options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
             demand_periods = []
+
             if new_options.get("dhw_morning_enabled", True):
-                morning_hour = new_options.get("dhw_morning_hour", 7)
+                morning_hour = int(new_options.get("dhw_morning_hour", 7))
                 demand_periods.append(
                     DHWDemandPeriod(
                         start_hour=morning_hour,
-                        target_temp=55.0,
+                        target_temp=dhw_target,
                         duration_hours=2,
                     )
                 )
+
             if new_options.get("dhw_evening_enabled", True):
-                evening_hour = new_options.get("dhw_evening_hour", 18)
+                evening_hour = int(new_options.get("dhw_evening_hour", 18))
                 demand_periods.append(
                     DHWDemandPeriod(
                         start_hour=evening_hour,
-                        target_temp=55.0,
+                        target_temp=dhw_target,
                         duration_hours=3,
                     )
                 )
+
             self.dhw_optimizer.demand_periods = demand_periods
-            _LOGGER.debug("Updated DHW demand periods: %d periods", len(demand_periods))
+            _LOGGER.debug(
+                "Updated DHW demand periods: %d periods (target: %.1f°C)",
+                len(demand_periods),
+                dhw_target,
+            )
 
         # Trigger immediate refresh with new settings
         await self.async_request_refresh()
@@ -1983,6 +2077,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 "last_updated": dt_util.utcnow().isoformat(),
             }
 
+            # Save last applied offset to avoid redundant API calls on restart
+            if self.last_applied_offset is not None:
+                learned_data["last_offset"] = {
+                    "value": self.last_applied_offset,
+                    "timestamp": (
+                        self.last_offset_timestamp.isoformat()
+                        if self.last_offset_timestamp
+                        else None
+                    ),
+                }
+
             # Save thermal model parameters
             if adaptive_learning:
                 learned_params = adaptive_learning.learned_parameters
@@ -1993,12 +2098,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "observation_count": len(adaptive_learning.observations),
                 }
 
-            # Save thermal predictor state
+            # Save thermal predictor state (full state_history for trend analysis)
             if thermal_predictor:
-                learned_data["thermal_predictor"] = {
-                    "responsiveness": thermal_predictor._thermal_responsiveness,
-                    "state_count": len(thermal_predictor.state_history),
-                }
+                learned_data["thermal_predictor"] = thermal_predictor.to_dict()
 
             # Save weather patterns
             if weather_learner:

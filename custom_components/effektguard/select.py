@@ -115,7 +115,11 @@ class EffektGuardSelect(CoordinatorEntity, SelectEntity):
             CONF_CONTROL_PRIORITY: DEFAULT_CONTROL_PRIORITY,
         }
 
-        return self._entry.data.get(config_key, defaults.get(config_key, "balanced"))
+        # FIX: Read from OPTIONS first (runtime settings), fall back to data for migration
+        # This matches number entity behavior and prevents unnecessary integration reloads
+        return self._entry.options.get(
+            config_key, self._entry.data.get(config_key, defaults.get(config_key, "balanced"))
+        )
 
     async def async_select_option(self, option: str) -> None:
         """Change the selected option."""
@@ -129,11 +133,12 @@ class EffektGuardSelect(CoordinatorEntity, SelectEntity):
 
         _LOGGER.info("Setting %s to %s", config_key, option)
 
-        # Update config entry data
-        new_data = dict(self._entry.data)
-        new_data[config_key] = option
+        # FIX: Update OPTIONS (not data) to match number entity behavior
+        # This allows hot-reload without full integration restart
+        new_options = dict(self._entry.options)
+        new_options[config_key] = option
 
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.hass.config_entries.async_update_entry(self._entry, options=new_options)
 
         # Request coordinator refresh to apply new mode
         await self.coordinator.async_request_refresh()

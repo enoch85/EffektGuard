@@ -190,15 +190,18 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     # Runtime options that DON'T require reload (can be hot-reloaded)
     runtime_options = {
-        "target_temperature",
+        "target_indoor_temp",
         "tolerance",
-        "optimization_mode",
+        "optimization_mode",  # FIX: Added to prevent unnecessary reload
+        "control_priority",  # FIX: Added to prevent unnecessary reload
         "thermal_mass",
         "insulation_quality",
         "dhw_morning_hour",
         "dhw_morning_enabled",
         "dhw_evening_hour",
         "dhw_evening_enabled",
+        "dhw_target_temp",  # FIX: Added to prevent unnecessary reload
+        "peak_protection_margin",  # FIX: Added to prevent unnecessary reload
     }
 
     # Check if only runtime options changed

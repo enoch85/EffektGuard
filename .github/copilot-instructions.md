@@ -431,7 +431,12 @@ pytest tests/unit/test_thermal_debt.py::test_dm_500_emergency -v
 
 # With coverage
 pytest tests/ --cov=custom_components/effektguard --cov-report=html
+
+# All tests (use tail -30 to see summary)
+python -m pytest tests/ -v 2>&1 | tail -30
 ```
+
+**Important:** When running tests, always use `tail -30` or `tail -50` to show only the summary and avoid overwhelming output.
 
 ---
 

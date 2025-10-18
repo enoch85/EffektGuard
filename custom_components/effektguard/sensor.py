@@ -22,6 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -368,11 +369,12 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class EffektGuardSensor(CoordinatorEntity, SensorEntity):
-    """EffektGuard diagnostic sensor."""
+class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
+    """EffektGuard diagnostic sensor with state restoration."""
 
     entity_description: EffektGuardSensorEntityDescription
     _attr_has_entity_name = True
+    _restored_value: Any = None
 
     def __init__(
         self,
@@ -391,9 +393,38 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
             model="Heat Pump Optimizer",
         )
 
+    async def async_added_to_hass(self) -> None:
+        """Restore last state when entity is added to hass."""
+        await super().async_added_to_hass()
+
+        # Restore last state for specific sensors that benefit from persistence
+        should_restore = self.entity_description.key in {
+            "peak_today",
+            "peak_this_month",
+            "savings_estimate",
+        }
+
+        if should_restore:
+            last_state = await self.async_get_last_state()
+            if last_state and last_state.state not in ("unknown", "unavailable"):
+                try:
+                    self._restored_value = float(last_state.state)
+                    _LOGGER.debug(
+                        "Restored %s: %.2f", self.entity_description.key, self._restored_value
+                    )
+                except (ValueError, TypeError):
+                    _LOGGER.debug(
+                        "Could not restore %s, will use coordinator value",
+                        self.entity_description.key,
+                    )
+
     @property
     def native_value(self) -> Any:
         """Return the state of the sensor."""
+        # For restorable sensors, use restored value if coordinator not ready
+        if self._restored_value is not None and not self.coordinator.data:
+            return self._restored_value
+
         if self.entity_description.value_fn:
             try:
                 value = self.entity_description.value_fn(self.coordinator)
@@ -406,6 +437,10 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 ):
                     _LOGGER.debug("Reasoning truncated to 255 chars, full reasoning in attributes")
 
+                # Clear restored value once we have real data
+                if value is not None and self._restored_value is not None:
+                    self._restored_value = None
+
                 return value
             except (AttributeError, KeyError, TypeError) as err:
                 _LOGGER.warning(
@@ -414,8 +449,9 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                     err,
                     type(err).__name__,
                 )
-                return None
-        return None
+                # Fall back to restored value if available
+                return self._restored_value
+        return self._restored_value
 
     @property
     def native_unit_of_measurement(self) -> str | None:
