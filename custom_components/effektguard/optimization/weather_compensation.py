@@ -18,25 +18,20 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from ..const import (
+    DEFAULT_HEAT_LOSS_COEFFICIENT,
+    KUEHNE_COEFFICIENT,
+    KUEHNE_POWER,
+    RADIATOR_POWER_COEFFICIENT,
+    RADIATOR_RATED_DT,
+    UFH_FLOW_REDUCTION_CONCRETE,
+    UFH_FLOW_REDUCTION_TIMBER,
+    UFH_MIN_FLOW_TEMP_CONCRETE,
+    UFH_MIN_FLOW_TEMP_TIMBER,
+)
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
-
-
-# Mathematical constants from research
-KUEHNE_COEFFICIENT = 2.55  # André Kühne's universal constant
-KUEHNE_POWER = 0.78  # Power coefficient for heat transfer physics
-RADIATOR_POWER = 1.3  # Radiator output power coefficient (BS EN442 standard)
-RADIATOR_RATED_DT = 50.0  # Standard test DT (75°C flow, 65°C return, 20°C room)
-
-# UFH flow temperature reductions (lower temps due to larger heat exchange surface)
-UFH_CONCRETE_REDUCTION = 8.0  # °C reduction for concrete slab UFH
-UFH_TIMBER_REDUCTION = 5.0  # °C reduction for timber/lightweight UFH
-UFH_MIN_TEMP_CONCRETE = 25.0  # Minimum effective concrete slab temp
-UFH_MIN_TEMP_TIMBER = 22.0  # Minimum effective timber UFH temp
-
-# Default heat loss coefficient for typical house (160-220 W/°C range)
-DEFAULT_HEAT_LOSS_COEFFICIENT = 180.0  # W/°C
 
 
 @dataclass
@@ -180,7 +175,7 @@ class WeatherCompensationCalculator:
         # From radiator equation: Output = Rated × (ΔT/50K)^1.3
         # Inverted: ΔT = 50K × (Output/Rated)^(1/1.3)
         output_ratio = heat_demand / self.radiator_rated_output
-        required_dt = RADIATOR_RATED_DT * (output_ratio ** (1 / RADIATOR_POWER))
+        required_dt = RADIATOR_RATED_DT * (output_ratio ** (1 / RADIATOR_POWER_COEFFICIENT))
 
         # Mean water temperature = room temp + required DT
         mean_water_temp = indoor_setpoint + required_dt
@@ -223,30 +218,30 @@ class WeatherCompensationCalculator:
         """
         if ufh_type == "concrete_slab":
             # Concrete slab UFH: 8°C reduction, minimum 25°C
-            ufh_flow_temp = radiator_flow_temp - UFH_CONCRETE_REDUCTION
-            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_TEMP_CONCRETE)
+            ufh_flow_temp = radiator_flow_temp - UFH_FLOW_REDUCTION_CONCRETE
+            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_FLOW_TEMP_CONCRETE)
 
             _LOGGER.debug(
                 "UFH concrete adjustment: radiator=%.1f°C -> UFH=%.1f°C "
                 "(reduction=%.1f°C, min=%.1f°C)",
                 radiator_flow_temp,
                 ufh_flow_temp,
-                UFH_CONCRETE_REDUCTION,
-                UFH_MIN_TEMP_CONCRETE,
+                UFH_FLOW_REDUCTION_CONCRETE,
+                UFH_MIN_FLOW_TEMP_CONCRETE,
             )
 
         elif ufh_type == "timber":
             # Timber UFH: 5°C reduction, minimum 22°C
-            ufh_flow_temp = radiator_flow_temp - UFH_TIMBER_REDUCTION
-            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_TEMP_TIMBER)
+            ufh_flow_temp = radiator_flow_temp - UFH_FLOW_REDUCTION_TIMBER
+            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_FLOW_TEMP_TIMBER)
 
             _LOGGER.debug(
                 "UFH timber adjustment: radiator=%.1f°C -> UFH=%.1f°C "
                 "(reduction=%.1f°C, min=%.1f°C)",
                 radiator_flow_temp,
                 ufh_flow_temp,
-                UFH_TIMBER_REDUCTION,
-                UFH_MIN_TEMP_TIMBER,
+                UFH_FLOW_REDUCTION_TIMBER,
+                UFH_MIN_FLOW_TEMP_TIMBER,
             )
 
         else:

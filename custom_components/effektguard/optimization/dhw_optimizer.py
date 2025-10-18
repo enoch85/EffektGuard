@@ -26,16 +26,21 @@ from typing import Any
 
 from ..const import (
     DHW_EXTENDED_RUNTIME_MINUTES,
+    DHW_LEGIONELLA_DETECT,
     DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_PREHEAT_TARGET_OFFSET,
+    DHW_SAFETY_CRITICAL,
+    DHW_SAFETY_MIN,
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_SPARE_CAPACITY_PERCENT,
+    DHW_TARGET_HIGH_DEMAND,
+    DHW_TARGET_NORMAL,
     DHW_URGENT_RUNTIME_MINUTES,
+    DM_DHW_ABORT_FALLBACK,
+    DM_DHW_BLOCK_FALLBACK,
+    DM_DHW_SPARE_CAPACITY_FALLBACK,
     MIN_DHW_TARGET_TEMP,
-    NIBE_DHW_NORMAL_TARGET,
-    NIBE_DHW_SAFETY_CRITICAL,
-    NIBE_DHW_SAFETY_MIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,21 +122,8 @@ class IntelligentDHWScheduler:
     CLIMATE-AWARE THRESHOLDS:
     DHW blocking thresholds are now dynamic based on climate zone and outdoor temperature.
     Uses ClimateZoneDetector to determine appropriate DM thresholds for current conditions.
+    Fallback constants from const.py used only if climate detector unavailable.
     """
-
-    # Temperature thresholds (from const.py - Swedish NIBE standards)
-    DHW_SAFETY_CRITICAL = NIBE_DHW_SAFETY_CRITICAL  # °C - Always heat below this (safety override)
-    DHW_SAFETY_MIN = (
-        NIBE_DHW_SAFETY_MIN  # °C - Safety minimum (can defer 30-35°C during expensive periods)
-    )
-    DHW_TARGET_NORMAL = NIBE_DHW_NORMAL_TARGET  # °C - comfortable target (from const.py)
-    DHW_TARGET_HIGH = 55.0  # °C - extra comfort for high demand periods
-    DHW_LEGIONELLA_DETECT = 63.0  # °C - threshold to detect NIBE's Legionella boost
-
-    # Thermal debt limits - DEPRECATED: Now using climate-aware thresholds
-    # These are kept as fallback values if climate detector unavailable
-    DM_DHW_BLOCK_FALLBACK = -240  # Fallback: Never start DHW below this
-    DM_DHW_ABORT_FALLBACK = -400  # Fallback: Abort DHW if reached during run
 
     def __init__(
         self,
@@ -150,11 +142,11 @@ class IntelligentDHWScheduler:
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
         # Extract user-configured target temperature from demand periods
-        # Use first demand period's target, or fall back to class constant
+        # Use first demand period's target, or fall back to const.py constant
         if self.demand_periods:
             self.user_target_temp = self.demand_periods[0].target_temp
         else:
-            self.user_target_temp = self.DHW_TARGET_NORMAL
+            self.user_target_temp = DHW_TARGET_NORMAL
 
         if self.climate_detector:
             _LOGGER.info(
@@ -165,8 +157,8 @@ class IntelligentDHWScheduler:
             _LOGGER.warning(
                 "DHW optimizer initialized without climate detector, using fallback thresholds "
                 "(DM block: %.0f, abort: %.0f)",
-                self.DM_DHW_BLOCK_FALLBACK,
-                self.DM_DHW_ABORT_FALLBACK,
+                DM_DHW_BLOCK_FALLBACK,
+                DM_DHW_ABORT_FALLBACK,
             )
 
     def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
@@ -237,9 +229,8 @@ class IntelligentDHWScheduler:
             return has_capacity
         else:
             # Fallback: Conservative fixed threshold if climate detector unavailable
-            # Use -80 DM as fallback (allows DHW when space heating not under stress)
-            fallback_threshold = -80.0
-            return thermal_debt_dm > fallback_threshold
+            # Use fallback constant from const.py
+            return thermal_debt_dm > DM_DHW_SPARE_CAPACITY_FALLBACK
 
     def _detect_legionella_boost_completion(self) -> bool:
         """Detect when NIBE's automatic Legionella boost just completed.
@@ -260,7 +251,7 @@ class IntelligentDHWScheduler:
         current_temp = recent_temps[-1]
 
         # Check if peaked above Legionella threshold and now cooling
-        if max_temp >= self.DHW_LEGIONELLA_DETECT and current_temp < (max_temp - 3.0):
+        if max_temp >= DHW_LEGIONELLA_DETECT and current_temp < (max_temp - 3.0):
             # Make sure we haven't already recorded this boost
             if self.last_legionella_boost:
                 time_since_last = (
@@ -320,9 +311,9 @@ class IntelligentDHWScheduler:
                 dm_abort_threshold,
             )
         else:
-            # Fallback to fixed thresholds if climate detector unavailable
-            dm_block_threshold = self.DM_DHW_BLOCK_FALLBACK
-            dm_abort_threshold = self.DM_DHW_ABORT_FALLBACK
+            # Fallback to fixed thresholds from const.py if climate detector unavailable
+            dm_block_threshold = DM_DHW_BLOCK_FALLBACK
+            dm_abort_threshold = DM_DHW_ABORT_FALLBACK
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if thermal_debt_dm <= dm_block_threshold:
@@ -348,11 +339,11 @@ class IntelligentDHWScheduler:
         # Safety minimum: Heat below 35°C BUT defer if:
         # - Price is expensive/peak AND thermal debt is concerning
         # - This prevents peak billing hits when DHW can wait
-        if current_dhw_temp < self.DHW_SAFETY_MIN:
+        if current_dhw_temp < DHW_SAFETY_MIN:
             # Check if we should defer due to peak pricing + thermal debt
             # Only defer if temp is still safe (30-35°C range) and not critically low
             can_defer_for_peak = (
-                current_dhw_temp >= self.DHW_SAFETY_CRITICAL  # Not critically low (>= 30°C)
+                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 30°C)
                 and price_classification in ["expensive", "peak"]  # High cost period
                 and thermal_debt_dm < (dm_block_threshold + 20)  # DM concerning but not critical
             )
@@ -362,7 +353,7 @@ class IntelligentDHWScheduler:
                     "DHW safety minimum defer: temp %.1f°C (safe >= %.1f°C), price=%s, DM=%.0f. "
                     "Waiting for better price to avoid peak billing.",
                     current_dhw_temp,
-                    self.DHW_SAFETY_CRITICAL,
+                    DHW_SAFETY_CRITICAL,
                     price_classification,
                     thermal_debt_dm,
                 )
@@ -468,7 +459,7 @@ class IntelligentDHWScheduler:
                 if optimal_window is None:
                     # No price data - heat now if needed (spare capacity check)
                     if (
-                        current_dhw_temp < self.DHW_TARGET_NORMAL
+                        current_dhw_temp < DHW_TARGET_NORMAL
                         and self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp)
                     ):
                         return DHWScheduleDecision(
@@ -513,7 +504,7 @@ class IntelligentDHWScheduler:
 
             # Fallback: No price data, use simple cheap classification
             # Heat now if DHW getting low
-            if current_dhw_temp < self.DHW_TARGET_NORMAL and self._has_spare_compressor_capacity(
+            if current_dhw_temp < DHW_TARGET_NORMAL and self._has_spare_compressor_capacity(
                 thermal_debt_dm, outdoor_temp
             ):
                 return DHWScheduleDecision(

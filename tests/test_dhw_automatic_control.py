@@ -19,6 +19,8 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 def mock_hass():
     """Create mock Home Assistant instance."""
     hass = MagicMock()
+    hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
+    hass.config.longitude = 18.07  # Stockholm longitude
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
     hass.states = MagicMock()
@@ -346,7 +348,7 @@ class TestDHWAutomaticControl:
         mock_hass.states.get.return_value = mock_lux_state
 
         # Mock service call to raise exception
-        mock_hass.services.async_call = AsyncMock(side_effect=Exception("Service call failed"))
+        mock_hass.services.async_call = AsyncMock(side_effect=OSError("Service call failed"))
 
         # Mock DHW optimizer to return should_heat=True
         decision = DHWScheduleDecision(

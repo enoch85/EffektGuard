@@ -434,6 +434,8 @@ def coordinator_with_external_meter():
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
     hass = MagicMock()
+    hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
+    hass.config.longitude = 18.07  # Stockholm longitude
     nibe_adapter = MagicMock()
     nibe_adapter._power_sensor_entity = "sensor.house_power"  # External meter configured
     gespot_adapter = MagicMock()
@@ -468,6 +470,8 @@ def coordinator_without_external_meter():
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
     hass = MagicMock()
+    hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
+    hass.config.longitude = 18.07  # Stockholm longitude
     nibe_adapter = MagicMock()
     nibe_adapter._power_sensor_entity = None  # No external meter
     # Mock calculate_power_from_currents method
@@ -506,6 +510,8 @@ def coordinator():
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
     hass = MagicMock()
+    hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
+    hass.config.longitude = 18.07  # Stockholm longitude
     nibe_adapter = MagicMock()
     gespot_adapter = MagicMock()
     weather_adapter = MagicMock()

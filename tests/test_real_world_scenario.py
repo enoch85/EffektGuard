@@ -292,20 +292,22 @@ class TestRealWorldScenario:
         # The system correctly prioritizes cost savings when there's adequate time
         # before the cold snap (5 hours with 6h lead time = not urgent)
         assert decision.offset is not None, "Decision should have an offset"
-        
+
         # Verify all major layers contributed to the decision
         layer_reasons = [l.reason for l in decision.layers if l.weight > 0]
         assert any("Pre-heat" in r for r in layer_reasons), "Weather layer should be active"
-        assert any("EXPENSIVE" in r or "PEAK" in r for r in layer_reasons), "Price layer should be active"
+        assert any(
+            "EXPENSIVE" in r or "PEAK" in r for r in layer_reasons
+        ), "Price layer should be active"
 
         # Expected range: Price optimization may win if not urgent
         # If offset is negative: cost optimization dominant (correct when not urgent)
         # If offset is positive: weather protection dominant (correct when urgent)
         # The multi-layer system balances all factors - result can be negative or positive
         # depending on the relative weights and urgency
-        assert -3.0 <= decision.offset <= 3.0, (
-            f"Final offset {decision.offset}°C outside safety bounds -3.0 to 3.0°C"
-        )
+        assert (
+            -3.0 <= decision.offset <= 3.0
+        ), f"Final offset {decision.offset}°C outside safety bounds -3.0 to 3.0°C"
 
         # Verify reasoning includes active layers
         assert decision.reasoning != ""

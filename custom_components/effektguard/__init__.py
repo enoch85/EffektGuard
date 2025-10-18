@@ -98,7 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # If not ready, raises ConfigEntryNotReady and HA will retry automatically
     try:
         await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
+    except (UpdateFailed, TimeoutError, OSError) as err:
         # Clean up on failure
         hass.data[DOMAIN].pop(entry.entry_id, None)
         raise ConfigEntryNotReady(
@@ -136,7 +136,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             await coordinator.async_shutdown()
             _LOGGER.debug("Coordinator shutdown complete")
-        except Exception as err:
+        except (OSError, RuntimeError, ValueError) as err:
             _LOGGER.warning("Failed to shutdown coordinator cleanly: %s", err)
 
     # Unload platforms
@@ -578,7 +578,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             _LOGGER.info("Calculated optimal schedule for next 24 hours")
             return {"schedule": schedule, "generated_at": current_time.isoformat()}
 
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to calculate optimal schedule: %s", err)
             return {"error": str(err)}
 

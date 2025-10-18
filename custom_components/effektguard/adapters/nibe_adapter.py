@@ -405,7 +405,7 @@ class NibeAdapter:
                 self._fractional_accumulator,
             )
             return True
-        except Exception as err:
+        except (AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             # Don't raise - allow system to continue gracefully
             # Error logged for debugging, but not fatal

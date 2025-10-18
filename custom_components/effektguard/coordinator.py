@@ -167,7 +167,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     [f"{p.start_hour}:00" for p in demand_periods],
                     [f"{type(p.start_hour).__name__}" for p in demand_periods],
                 )
-            except Exception as err:
+            except (AttributeError, TypeError, ValueError) as err:
                 _LOGGER.debug("Could not format DHW periods: %s", err)
 
         # Learning storage
@@ -254,7 +254,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             return region
 
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError) as err:
             _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
             return CLIMATE_CENTRAL_SWEDEN
 
@@ -294,7 +294,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.info("No learned data found - starting fresh learning")
 
-        except Exception as err:
+        except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
 
@@ -398,7 +398,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             _LOGGER.info("Coordinator shutdown complete")
 
-        except Exception as err:
+        except (OSError, RuntimeError, ValueError) as err:
             _LOGGER.error("Error during coordinator shutdown: %s", err, exc_info=True)
             # Don't raise - allow shutdown to complete
 
@@ -438,7 +438,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._first_successful_update = True
                 _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
 
-        except Exception as err:
+        except (UpdateFailed, AttributeError, KeyError, ValueError, TypeError) as err:
             # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
@@ -493,7 +493,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 _LOGGER.debug("GE-Spot data empty, using fallback prices")
                 price_data = self._get_fallback_prices()
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Price data unavailable, using fallback: %s", err)
             price_data = self._get_fallback_prices()
 
@@ -508,7 +508,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             else:
                 _LOGGER.debug("Weather forecast not available (optional feature disabled)")
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.info("Weather forecast unavailable: %s", err)
             weather_data = None
 
@@ -526,7 +526,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.offset,
                 decision.reasoning,
             )
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as err:
             _LOGGER.error("Optimization failed: %s", err)
             # Fall back to safe operation (no offset)
             decision = self._get_safe_default_decision()
@@ -547,7 +547,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "Offset %.2f°C deferred (accumulating fractional changes or rate limited)",
                     decision.offset,
                 )
-        except Exception as err:
+        except (AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset to NIBE: %s", err)
             # Continue anyway - next cycle will retry
 
@@ -711,7 +711,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_recommendation = dhw_result["recommendation"]
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
-            except Exception as e:
+            except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "
                     "Optimization continues without DHW recommendations.",
@@ -1185,7 +1185,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
                 _LOGGER.debug("No ON state in history for %s", temp_lux_entity)
 
-            except Exception as err:
+            except (AttributeError, KeyError, ValueError, OSError) as err:
                 _LOGGER.error("Failed to read DHW heating history: %s", err)
 
         else:
@@ -1354,7 +1354,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         blocking=False,
                     )
                     self._last_dhw_control_time = now_time
-                except Exception as err:
+                except (AttributeError, OSError, ValueError) as err:
                     _LOGGER.error("Failed to abort DHW heating: %s", err)
                 return  # Exit early - abort handled
 
@@ -1386,7 +1386,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     blocking=False,
                 )
                 self._last_dhw_control_time = now_time
-            except Exception as err:
+            except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn on temporary lux: %s", err)
 
         elif not decision.should_heat and is_lux_on:
@@ -1405,7 +1405,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     blocking=False,
                 )
                 self._last_dhw_control_time = now_time
-            except Exception as err:
+            except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn off temporary lux: %s", err)
         else:
             # No change needed
@@ -1657,7 +1657,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.peak_this_month = peak_event.effective_power
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to update peak tracking: %s", err)
 
     def _estimate_power_consumption(self, nibe_data) -> float:
@@ -1763,7 +1763,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             await self.nibe.set_curve_offset(offset)
             self.current_offset = offset
             _LOGGER.info("Applied offset: %.2f°C", offset)
-        except Exception as err:
+        except (AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset: %s", err)
             raise
 
@@ -1782,7 +1782,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Reset offset to neutral (0.0)
             try:
                 await self.async_set_offset(0.0)
-            except Exception as err:
+            except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to reset offset: %s", err)
 
     async def async_update_config(self, new_options: dict[str, Any]) -> None:
@@ -1918,7 +1918,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             _LOGGER.debug("Recorded learning observations successfully")
 
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to record learning observations: %s", err)
             # Don't raise - learning is optional, don't break optimization
 
@@ -1967,7 +1967,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             await self.learning_store.async_save(learned_data)
             _LOGGER.debug("Saved learned data to storage")
 
-        except Exception as err:
+        except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.error("Failed to save learned data: %s", err, exc_info=True)
 
     async def _load_learned_data(self) -> dict[str, Any] | None:
@@ -1990,6 +1990,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("No learned data in storage yet")
                 return None
 
-        except Exception as err:
+        except (OSError, ValueError, KeyError) as err:
             _LOGGER.warning("Failed to load learned data: %s", err)
             return None

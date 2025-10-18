@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 
+from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER
 from ..base import HeatPumpProfile, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -62,7 +63,9 @@ class NibeF2040Profile(HeatPumpProfile):
         heat_loss_coefficient = 250.0  # W/°C large/poorly insulated house
         temp_diff = indoor_target - outdoor_temp
 
-        flow_from_formula = 2.55 * (heat_loss_coefficient * temp_diff) ** 0.78 + indoor_target
+        flow_from_formula = (
+            KUEHNE_COEFFICIENT * (heat_loss_coefficient * temp_diff) ** KUEHNE_POWER + indoor_target
+        )
         flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
 
         optimal = min(flow_from_formula, flow_from_efficiency + 4.0)

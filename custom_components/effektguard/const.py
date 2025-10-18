@@ -255,6 +255,8 @@ MIN_DHW_TARGET_TEMP: Final = (
     45.0  # °C - Minimum user-configurable DHW target (safety + comfort threshold)
 )
 DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
+DHW_TARGET_HIGH_DEMAND: Final = 55.0  # °C - Extra comfort target for high demand periods
+DHW_TARGET_NORMAL: Final = 50.0  # °C - Normal DHW comfort target temperature
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 1  # Min hours ahead for DHW scheduling
@@ -268,6 +270,12 @@ DHW_SPARE_CAPACITY_PERCENT: Final = 50.0  # Require 50% spare capacity above war
 # Example: Stockholm at -10°C has warning=-700, so require DM > -350 (-700 * 0.5)
 # Example: Kiruna at -30°C has warning=-1200, so require DM > -600 (-1200 * 0.5)
 # This keeps DHW heating within the normal operating range, not near thermal debt warning
+
+# DHW thermal debt fallback thresholds (used only if climate detector unavailable)
+# These are conservative fixed values for rare fallback scenarios
+DM_DHW_BLOCK_FALLBACK: Final = -240.0  # Fallback: Never start DHW below this DM
+DM_DHW_ABORT_FALLBACK: Final = -400.0  # Fallback: Abort DHW if reached during run
+DM_DHW_SPARE_CAPACITY_FALLBACK: Final = -80.0  # Fallback: Spare capacity threshold
 
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)
 DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
@@ -285,13 +293,10 @@ NIBE_VOLTAGE_PER_PHASE: Final = (
     240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
 )
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
-NIBE_DHW_SAFETY_CRITICAL: Final = 30.0  # °C - Below this, always heat (safety override)
-NIBE_DHW_SAFETY_MIN: Final = (
-    35.0  # °C - Safety minimum (can defer if 30-35°C during expensive periods)
-)
+DHW_SAFETY_CRITICAL: Final = 30.0  # °C - Below this, always heat (safety override)
+DHW_SAFETY_MIN: Final = 35.0  # °C - Safety minimum (can defer if 30-35°C during expensive periods)
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 NIBE_DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
-NIBE_DHW_NORMAL_TARGET: Final = 50.0  # °C - Normal DHW comfort target temperature
 
 # Savings Calculation Constants (Swedish electricity market)
 # Swedish effect tariff - typical cost per kW of monthly peak

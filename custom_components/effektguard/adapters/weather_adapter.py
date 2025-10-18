@@ -185,7 +185,7 @@ class WeatherAdapter:
                     )
                     # Schedule next random attempt
                     self._schedule_next_random_attempt()
-            except Exception as err:
+            except (AttributeError, KeyError, ValueError, TypeError, OSError) as err:
                 _LOGGER.warning(
                     "Failed to get forecast via service call from %s: %s. "
                     "Weather-based optimization disabled. "

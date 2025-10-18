@@ -169,7 +169,7 @@ class AdaptiveThermalModel:
 
             return learned
 
-        except Exception as e:
+        except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
             _LOGGER.error("Failed to update learned parameters: %s", e, exc_info=True)
             return None
 

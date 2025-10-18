@@ -970,7 +970,7 @@ class DecisionEngine:
                     reason="Learned: No pre-heat needed",
                 )
 
-        except Exception as err:
+        except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as err:
             _LOGGER.warning("Prediction layer failed: %s", err)
             return LayerDecision(
                 offset=0.0,
@@ -1173,7 +1173,7 @@ class DecisionEngine:
                         unusual.recommendation,
                         unusual.deviation_from_typical,
                     )
-            except Exception as e:
+            except (AttributeError, KeyError, ValueError, TypeError) as e:
                 _LOGGER.warning("Weather learning check failed: %s", e)
 
         # Get adaptive safety margin from climate system

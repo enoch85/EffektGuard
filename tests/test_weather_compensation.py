@@ -6,15 +6,17 @@ against real-world examples from OpenEnergyMonitor community research.
 
 import pytest
 
-from custom_components.effektguard.optimization.weather_compensation import (
-    WeatherCompensationCalculator,
-    FlowTempCalculation,
+from custom_components.effektguard.const import (
+    DEFAULT_HEAT_LOSS_COEFFICIENT,
     KUEHNE_COEFFICIENT,
     KUEHNE_POWER,
-    RADIATOR_POWER,
-    UFH_CONCRETE_REDUCTION,
-    UFH_TIMBER_REDUCTION,
-    DEFAULT_HEAT_LOSS_COEFFICIENT,
+    RADIATOR_POWER_COEFFICIENT,
+    UFH_FLOW_REDUCTION_CONCRETE,
+    UFH_FLOW_REDUCTION_TIMBER,
+)
+from custom_components.effektguard.optimization.weather_compensation import (
+    FlowTempCalculation,
+    WeatherCompensationCalculator,
 )
 
 
@@ -202,7 +204,7 @@ class TestUFHAdjustments:
         # Apply concrete UFH adjustment: -8°C
         ufh_flow = calc.apply_ufh_adjustment(radiator_flow, "concrete_slab")
 
-        assert ufh_flow == 40.0 - UFH_CONCRETE_REDUCTION
+        assert ufh_flow == 40.0 - UFH_FLOW_REDUCTION_CONCRETE
         assert ufh_flow == 32.0
 
     def test_timber_ufh_adjustment(self):
@@ -215,7 +217,7 @@ class TestUFHAdjustments:
         # Apply timber UFH adjustment: -5°C
         ufh_flow = calc.apply_ufh_adjustment(radiator_flow, "timber")
 
-        assert ufh_flow == 35.0 - UFH_TIMBER_REDUCTION
+        assert ufh_flow == 35.0 - UFH_FLOW_REDUCTION_TIMBER
         assert ufh_flow == 30.0
 
     def test_ufh_minimum_temperature_concrete(self):
@@ -339,7 +341,7 @@ class TestOptimalFlowCalculation:
 
         # Flow temp should be reduced by ~8°C from radiator calculation
         assert result.raw_kuehne is not None
-        expected_reduction = result.raw_kuehne - UFH_CONCRETE_REDUCTION
+        expected_reduction = result.raw_kuehne - UFH_FLOW_REDUCTION_CONCRETE
         # Allow for minimum temp clamping
         assert result.flow_temp <= result.raw_kuehne
 
