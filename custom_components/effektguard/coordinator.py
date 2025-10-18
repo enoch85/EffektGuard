@@ -325,8 +325,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         @callback
         def power_sensor_state_changed(event):
             """Handle power sensor state change event."""
+            # Filter for this specific entity ID
+            if event.data.get("entity_id") != power_entity_id:
+                return
+
             new_state = event.data.get("new_state")
-            if new_state and new_state.state not in ["unknown", "unavailable"]:
+            # Filter out events without new_state (deletions)
+            if new_state is None:
+                return
+
+            if new_state.state not in ["unknown", "unavailable"]:
                 if not self._power_sensor_available:
                     _LOGGER.info(
                         "External power sensor %s is now available (state: %s)",
@@ -344,11 +352,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # Trigger immediate coordinator refresh to start using the sensor
                     self.hass.async_create_task(self.async_request_refresh())
 
-        # Subscribe to state_changed events for this specific entity
+        # Subscribe to state_changed events (no event_filter parameter)
         self._power_sensor_listener = self.hass.bus.async_listen(
             "state_changed",
             power_sensor_state_changed,
-            event_filter=lambda event: event.data.get("entity_id") == power_entity_id,
         )
 
         _LOGGER.debug(
@@ -1142,15 +1149,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Entity is OFF - check history for last ON state
             try:
-                from homeassistant.components.recorder import history
+                from homeassistant.components import recorder
 
                 # Look back 48 hours
                 start_time = dt_util.utcnow() - timedelta(hours=48)
                 end_time = dt_util.utcnow()
 
-                # Get state history (async)
-                states = await self.hass.async_add_executor_job(
-                    history.state_changes_during_period,
+                # Get recorder instance and use its executor
+                rec = recorder.get_instance(self.hass)
+                if rec is None:
+                    _LOGGER.warning("Recorder not available, cannot check DHW history")
+                    return None
+
+                # Get state history using recorder instance executor
+                states = await rec.async_add_executor_job(
+                    recorder.history.state_changes_during_period,
                     self.hass,
                     start_time,
                     end_time,
