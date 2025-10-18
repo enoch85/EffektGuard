@@ -1,10 +1,13 @@
 """Pytest configuration for EffektGuard tests."""
 
+import asyncio
 import sys
 import tempfile
 import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 # Add custom_components to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -16,6 +19,20 @@ pytest_plugins = ("pytest_asyncio",)
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="josepy")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="acme")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="homeassistant")
+
+
+@pytest.fixture(autouse=True)
+async def setup_frame_helper():
+    """Set up the frame helper for all tests."""
+    from homeassistant.helpers import frame
+    from homeassistant.core import HomeAssistant
+    
+    # Create a minimal hass instance for frame setup
+    hass = HomeAssistant("/tmp")
+    frame.async_setup(hass)  # This is not actually async, just named that way
+    yield
+    # Teardown
+    await hass.async_stop()
 
 
 # Common mock helper functions
@@ -32,7 +49,9 @@ def create_mock_hass(latitude: float = 59.3):
     mock_hass.data = {}
     mock_hass.config.latitude = latitude
     mock_hass.config.config_dir = tempfile.mkdtemp()
-    mock_hass.async_add_executor_job = AsyncMock()
+    mock_hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
+    mock_hass.loop = Mock()  # Add loop for DataUpdateCoordinator
+    mock_hass.loop.call_soon_threadsafe = Mock()
     return mock_hass
 
 

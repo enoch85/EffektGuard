@@ -157,7 +157,7 @@ def mock_hass():
     hass.config.units.temperature_unit = UnitOfTemperature.CELSIUS
 
     # Mock hass.data to prevent AttributeError in async_write_ha_state
-    hass.data = {}
+    hass.data = {"integrations": {}}  # Add integrations key for async_update_entry
 
     # Mock states for async_write_ha_state
     hass.states = MagicMock()

@@ -178,7 +178,7 @@ def mock_hass():
     hass.states.get = MagicMock(return_value=None)
 
     # Mock hass.data to prevent AttributeError in async_write_ha_state
-    hass.data = {}
+    hass.data = {"integrations": {}}  # Add integrations key for async_update_entry
 
     return hass
 

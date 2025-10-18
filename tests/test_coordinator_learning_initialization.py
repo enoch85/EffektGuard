@@ -40,7 +40,9 @@ def create_mock_hass(latitude: float = 59.3):
     mock_hass.data = {}  # Store requires hass.data to be a dict
     mock_hass.config.latitude = latitude
     mock_hass.config.config_dir = tempfile.mkdtemp()  # Store needs a valid path
-    mock_hass.async_add_executor_job = AsyncMock()
+    mock_hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
+    mock_hass.loop = Mock()  # Add loop for DataUpdateCoordinator
+    mock_hass.loop.call_soon_threadsafe = Mock()
     return mock_hass
 
 
