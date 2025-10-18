@@ -20,6 +20,8 @@ def mock_hass():
 
     # Initialize hass.data for entity registry
     hass.data = {}
+    # Add mock entity_registry to prevent KeyError
+    hass.data["entity_registry"] = MagicMock()
 
     # Initialize hass.config for storage manager
     hass.config = MagicMock()

@@ -19,6 +19,9 @@ from .const import (
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
+    DM_DHW_ABORT_FALLBACK,
+    DM_DHW_BLOCK_FALLBACK,
+    DM_THRESHOLD_ABSOLUTE_MAX,
     DOMAIN,
     ESTIMATED_POWER_BASELINE,
     NIBE_DHW_COOLING_RATE,
@@ -841,22 +844,38 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             }
 
         # Get climate zone DM thresholds from climate detector
+        # Climate detector is REQUIRED - don't use arbitrary fallback values
         if self.engine.climate_detector:
             dm_range = self.engine.climate_detector.get_expected_dm_range(outdoor_temp)
             dm_thresholds = {
                 "block": dm_range["warning"],  # Block DHW at warning threshold
-                "abort": dm_range["critical"],  # Abort DHW at critical threshold
+                "abort": dm_range["critical"],  # Abort DHW at critical threshold (always -1500)
             }
             climate_zone = self.engine.climate_detector.zone_info
         else:
-            # Fallback thresholds if climate detector not available
+            # Climate detector not initialized - use balanced fallback thresholds
+            # -340/-500 provides reasonable DHW operation while maintaining safety margin
+            _LOGGER.warning(
+                "Climate detector not initialized - using balanced fallback DM thresholds "
+                "(block: %d, abort: %d). Configure latitude in EffektGuard settings for "
+                "accurate climate-aware thresholds.",
+                DM_DHW_BLOCK_FALLBACK,
+                DM_DHW_ABORT_FALLBACK,
+            )
             dm_thresholds = {
-                "block": -320,  # Conservative default
-                "abort": -500,  # Emergency default
+                "block": DM_DHW_BLOCK_FALLBACK,  # -340: Never start DHW below this
+                "abort": DM_DHW_ABORT_FALLBACK,  # -500: Abort DHW if reached during run
             }
             climate_zone = None
 
-        # Get hours since last DHW heating for max wait check
+            # Show persistent notification in UI
+            self.hass.components.persistent_notification.async_create(
+                "EffektGuard could not detect your climate zone. "
+                "Using balanced thermal debt thresholds. "
+                "Configure latitude in integration settings for optimal climate-aware operation.",
+                title="EffektGuard Configuration Recommended",
+                notification_id="effektguard_climate_detection_missing",
+            )  # Get hours since last DHW heating for max wait check
         hours_since_last = await self._calculate_hours_since_last_dhw()
 
         # Get price periods for window-based scheduling

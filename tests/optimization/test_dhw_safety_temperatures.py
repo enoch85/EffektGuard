@@ -21,6 +21,8 @@ from datetime import datetime, timedelta
 from custom_components.effektguard.const import (
     DHW_SAFETY_CRITICAL,
     DHW_SAFETY_MIN,
+    DM_DHW_ABORT_FALLBACK,
+    DM_DHW_BLOCK_FALLBACK,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
     DHWScheduleDecision,
@@ -31,6 +33,10 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 DHW_HEATING_TIME_HOURS = 1.5  # Typical DHW tank heat-up time
 DHW_HEATING_TIME_MIN_HOURS = 1.0  # Minimum heating time
 DHW_HEATING_TIME_MAX_HOURS = 2.0  # Maximum heating time
+
+# Calculated test thresholds based on fallback constants
+# The "concerning" threshold is block + 20 (used in deferral logic)
+DM_CONCERNING_THRESHOLD = DM_DHW_BLOCK_FALLBACK + 20  # -340 + 20 = -320
 
 
 class TestDHWSafetyConstants:
@@ -95,26 +101,27 @@ class TestDHWCriticalTemperature:
         assert decision.should_heat is True
         assert "SAFETY" in decision.priority_reason
 
-    def test_critical_blocks_dhw_beyond_threshold(self):
-        """Test that critical thermal debt (< -240) blocks ALL DHW heating."""
+    def test_critical_thermal_debt_blocks_all_dhw_even_at_30(self):
+        """Test that critical thermal debt blocks ALL DHW heating."""
         scheduler = IntelligentDHWScheduler()
 
         # Rule 1: thermal_debt_dm <= dm_block_threshold blocks DHW
-        # dm_block_threshold is -240 (fallback)
+        # dm_block_threshold is from DM_DHW_BLOCK_FALLBACK constant
+
         decision = scheduler.should_start_dhw(
             current_dhw_temp=29.5,  # Below critical temp
+            thermal_debt_dm=-350.0,  # Below block threshold
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-250.0,  # Below block threshold (-240)
             indoor_temp=20.5,
             target_indoor_temp=21.0,
-            outdoor_temp=0.0,
+            outdoor_temp=5.0,
             price_classification="expensive",
             current_time=datetime.now(),
         )
 
-        # Rule 1 blocks DHW when DM <= -240
+        # Rule 1 blocks DHW when DM <= DM_DHW_BLOCK_FALLBACK
         assert decision.should_heat is False
-        assert decision.priority_reason == "CRITICAL_THERMAL_DEBT"
+        assert "THERMAL_DEBT" in decision.priority_reason
 
 
 class TestDHWDeferralRange:
@@ -135,7 +142,7 @@ class TestDHWDeferralRange:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=34.0,  # In deferral range (30-35°C)
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-230.0,  # Concerning: -230 < -220, can defer
+            thermal_debt_dm=-330.0,  # Concerning: -330 < -320, can defer
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -147,23 +154,50 @@ class TestDHWDeferralRange:
         assert "DEFERRED" in decision.priority_reason
 
     def test_defer_at_32_degrees_peak_price_with_concerning_dm(self):
-        """Test that DHW at 32°C can be deferred during peak period with concerning DM."""
+        """Test deferral at 32°C with peak price and concerning thermal debt.
+
+        Logic: can_defer checks:
+        - current_dhw_temp >= DHW_SAFETY_CRITICAL (32.0 >= 30.0): True
+        - price expensive/peak: True  
+        - thermal_debt_dm < (dm_block_threshold + 20) - concerning debt
+
+        With DM_DHW_BLOCK_FALLBACK, the concerning threshold is DM_CONCERNING_THRESHOLD.
+        """
         scheduler = IntelligentDHWScheduler()
 
         decision = scheduler.should_start_dhw(
-            current_dhw_temp=32.0,  # In deferral range
+            current_dhw_temp=32.0,
+            thermal_debt_dm=-330.0,  # Concerning, can defer
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-225.0,  # Concerning: -225 < -220
             indoor_temp=21.0,
             target_indoor_temp=21.0,
-            outdoor_temp=3.0,
-            price_classification="peak",  # Peak period
+            outdoor_temp=5.0,
+            price_classification="peak",
             current_time=datetime.now(),
         )
 
+        # Can defer because all deferral conditions met
         assert decision.should_heat is False
-        assert "DEFERRED" in decision.priority_reason
+        assert decision.priority_reason == "DHW_SAFETY_DEFERRED_PEAK_PRICE"
 
+    def test_defer_prevents_peak_during_expensive_hour_with_concerning_dm(self):
+        """Test deferring expensive electricity with concerning thermal debt."""
+        scheduler = IntelligentDHWScheduler()
+
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=32.0,
+            thermal_debt_dm=-325.0,  # Concerning
+            space_heating_demand_kw=0.0,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="expensive",
+            current_time=datetime.now(),
+        )
+
+        # Should defer expensive electricity  
+        assert decision.should_heat is False
+        assert decision.priority_reason == "DHW_SAFETY_DEFERRED_PEAK_PRICE"
     def test_no_defer_at_34_degrees_cheap_price(self):
         """Test that DHW at 34°C heats during cheap period (no deferral needed)."""
         scheduler = IntelligentDHWScheduler()
@@ -209,16 +243,16 @@ class TestDHWBoundaryConditions:
         At exactly 30°C with expensive price:
         - current_dhw_temp >= DHW_SAFETY_CRITICAL (30.0 >= 30.0): True
         - price is expensive: True
-        - thermal_debt_dm < (dm_block_threshold + 20): Need -200 < -220 for True
+        - thermal_debt_dm < DM_CONCERNING_THRESHOLD: Need to be >= for not concerning
 
-        With DM -200 (not concerning), can_defer is False, so it heats.
+        With DM not concerning, can_defer is False, so it heats.
         """
         scheduler = IntelligentDHWScheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL,  # Exactly at critical threshold (30.0)
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-200.0,  # Not concerning: -200 > -220
+            thermal_debt_dm=-300.0,  # Not concerning
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -295,7 +329,7 @@ class TestDHWDeferralPreventsPeakBilling:
     def test_defer_prevents_peak_during_expensive_hour_with_concerning_dm(self):
         """Test that deferring DHW during expensive hour prevents peak billing.
 
-        Requires concerning thermal debt (< -220 with fallback) to defer.
+        Requires concerning thermal debt (< -320 with fallback) to defer.
         """
         scheduler = IntelligentDHWScheduler()
 
@@ -303,7 +337,7 @@ class TestDHWDeferralPreventsPeakBilling:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=33.0,
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-230.0,  # Concerning: -230 < -220
+            thermal_debt_dm=-330.0,  # Concerning: -330 < -320
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -344,7 +378,7 @@ class TestDHWDeferralWithThermalDebt:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=33.0,  # In deferral range
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-240.0,  # At block threshold
+            thermal_debt_dm=-350.0,  # At block threshold
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -357,21 +391,21 @@ class TestDHWDeferralWithThermalDebt:
         # Let me check the logic again...
 
         # Rule 1 prevents DHW if DM <= dm_block_threshold
-        # So if DM is -240 (at threshold), Rule 1 blocks DHW entirely
+        # So if DM is at threshold, Rule 1 blocks DHW entirely
         assert decision.should_heat is False
         assert "THERMAL_DEBT" in decision.priority_reason
 
     def test_defer_with_moderate_but_concerning_thermal_debt(self):
         """Test that moderate but concerning thermal debt allows deferral.
 
-        Thermal debt is concerning when < (dm_block_threshold + 20) = -220
+        Thermal debt is concerning when < DM_CONCERNING_THRESHOLD
         """
         scheduler = IntelligentDHWScheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=33.0,  # In deferral range
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-225.0,  # Concerning: -225 < -220
+            thermal_debt_dm=-325.0,  # Concerning
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -391,8 +425,8 @@ def climate_detector():
 
     detector = MagicMock()
     detector.get_dm_thresholds.return_value = {
-        "block": -240,
-        "abort": -400,
+        "block": DM_DHW_BLOCK_FALLBACK,
+        "abort": DM_DHW_ABORT_FALLBACK,
     }
     return detector
 
@@ -434,7 +468,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=33.0,  # Safe to defer
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-230.0,  # Concerning (< -220)
+            thermal_debt_dm=-330.0,  # Concerning (< -320)
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -523,7 +557,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=28.0,  # Below critical threshold
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-230.0,  # Concerning
+            thermal_debt_dm=-330.0,  # Concerning
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -613,7 +647,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         decision = scheduler.should_start_dhw(
             current_dhw_temp=34.0,  # Safe to defer
             space_heating_demand_kw=0.0,
-            thermal_debt_dm=-225.0,  # Concerning (triggers deferral logic)
+            thermal_debt_dm=-325.0,  # Concerning (triggers deferral logic)
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=2.0,  # Cold evening

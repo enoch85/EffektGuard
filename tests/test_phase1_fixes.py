@@ -185,20 +185,26 @@ async def test_dhw_history_uses_recorder_executor():
     nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
     coordinator = EffektGuardCoordinator(mock_hass, nibe, gespot, weather, engine, effect, entry)
 
-    # Mock recorder.get_instance
-    mock_recorder = MagicMock()
-    mock_recorder.async_add_executor_job = AsyncMock(return_value={})
+    # Mock recorder module and instance
+    mock_recorder_instance = MagicMock()
+    mock_recorder_instance.async_add_executor_job = AsyncMock(return_value={})
 
-    # Mock recorder.history module
-    with patch("homeassistant.components.recorder.get_instance", return_value=mock_recorder), patch(
-        "homeassistant.components.recorder.history.state_changes_during_period"
+    mock_recorder_module = MagicMock()
+    mock_recorder_module.get_instance = MagicMock(return_value=mock_recorder_instance)
+    mock_recorder_module.history = MagicMock()
+    mock_recorder_module.history.state_changes_during_period = MagicMock(return_value={})
+
+    # Patch the recorder import in coordinator module
+    with patch.dict(
+        "sys.modules",
+        {"homeassistant.components.recorder": mock_recorder_module},
     ):
         # This should use recorder instance executor, not hass executor
         result = await coordinator._get_last_dhw_heating_time()
 
         # Verify recorder executor was used
         assert (
-            mock_recorder.async_add_executor_job.called
+            mock_recorder_instance.async_add_executor_job.called
         ), "FAIL: Should use recorder.get_instance().async_add_executor_job (Phase 1 Fix 1.2)"
 
 
@@ -233,10 +239,14 @@ async def test_dhw_history_handles_no_recorder():
     nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
     coordinator = EffektGuardCoordinator(mock_hass, nibe, gespot, weather, engine, effect, entry)
 
-    # Mock recorder.get_instance returning None
-    with patch(
-        "homeassistant.components.recorder.get_instance",
-        return_value=None,
+    # Mock recorder module returning None for get_instance
+    mock_recorder_module = MagicMock()
+    mock_recorder_module.get_instance = MagicMock(return_value=None)
+
+    # Patch the recorder import in coordinator module
+    with patch.dict(
+        "sys.modules",
+        {"homeassistant.components.recorder": mock_recorder_module},
     ):
         result = await coordinator._get_last_dhw_heating_time()
 

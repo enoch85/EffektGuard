@@ -268,7 +268,7 @@ def test_option_c_no_side_effects():
     decision_thermal = scheduler.should_start_dhw(
         current_dhw_temp=48.0,
         space_heating_demand_kw=1.0,
-        thermal_debt_dm=-250,  # Critical thermal debt
+        thermal_debt_dm=-350,  # Critical thermal debt
         indoor_temp=21.0,
         target_indoor_temp=21.0,
         outdoor_temp=5.0,

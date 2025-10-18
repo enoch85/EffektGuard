@@ -272,9 +272,9 @@ DHW_SPARE_CAPACITY_PERCENT: Final = 50.0  # Require 50% spare capacity above war
 # This keeps DHW heating within the normal operating range, not near thermal debt warning
 
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
-# These are conservative fixed values for rare fallback scenarios
-DM_DHW_BLOCK_FALLBACK: Final = -240.0  # Fallback: Never start DHW below this DM
-DM_DHW_ABORT_FALLBACK: Final = -400.0  # Fallback: Abort DHW if reached during run
+# These are balanced fixed values for rare fallback scenarios
+DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
+DM_DHW_ABORT_FALLBACK: Final = -500.0  # Fallback: Abort DHW if reached during run
 DM_DHW_SPARE_CAPACITY_FALLBACK: Final = -80.0  # Fallback: Spare capacity threshold
 
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)

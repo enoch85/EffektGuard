@@ -86,7 +86,7 @@ def test_dhw_thermal_debt_blocks_heating():
     decision = scheduler.should_start_dhw(
         current_dhw_temp=35.0,  # Low temp
         space_heating_demand_kw=2.0,
-        thermal_debt_dm=-250,  # CRITICAL - below -240 threshold
+        thermal_debt_dm=-350,  # CRITICAL - below -340 threshold
         indoor_temp=21.0,
         target_indoor_temp=21.0,
         outdoor_temp=5.0,
