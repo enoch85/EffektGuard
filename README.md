@@ -6,7 +6,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.0.23-blue)
-![HA](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue)
+![HA](https://img.shields.io/badge/Home%20Assistant-2025.10%2B-blue)
 
 ---
 
