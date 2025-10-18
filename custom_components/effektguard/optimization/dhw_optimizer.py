@@ -24,20 +24,47 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from ..const import NIBE_DHW_SAFETY_CRITICAL, NIBE_DHW_SAFETY_MIN
+from ..const import (
+    DHW_EXTENDED_RUNTIME_MINUTES,
+    DHW_MAX_WAIT_HOURS,
+    DHW_NORMAL_RUNTIME_MINUTES,
+    DHW_PREHEAT_TARGET_OFFSET,
+    DHW_SAFETY_RUNTIME_MINUTES,
+    DHW_SPARE_CAPACITY_PERCENT,
+    DHW_URGENT_RUNTIME_MINUTES,
+    MIN_DHW_TARGET_TEMP,
+    NIBE_DHW_SAFETY_CRITICAL,
+    NIBE_DHW_SAFETY_MIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
 class DHWScheduleDecision:
-    """DHW scheduling decision with safety conditions."""
+    """DHW scheduling decision with safety conditions.
+
+    IMPORTANT: max_runtime_minutes is for MONITORING/LOGGING only, not auto-off control.
+    NIBE controls actual DHW completion based on BT7 reaching target temperature.
+    We monitor abort_conditions (thermal debt, indoor temp) to decide if we should
+    request NIBE to stop heating early via temp lux switch.
+
+    Workflow:
+    1. Decision says should_heat=True → Turn on temp lux switch
+    2. NIBE heats DHW until BT7 reaches target OR coordinator detects abort condition
+    3. If abort condition hit → Turn off temp lux switch early
+    4. max_runtime_minutes is reference for logging/diagnostics, not enforced timer
+    5. After heating completes, DHW_CONTROL_MIN_INTERVAL_MINUTES cooldown applies
+
+    The coordinator respects DHW_CONTROL_MIN_INTERVAL_MINUTES (60 min) between
+    control actions to avoid switch spam and allow NIBE to complete heating cycles.
+    """
 
     should_heat: bool
     priority_reason: str
     target_temp: float
-    max_runtime_minutes: int
-    abort_conditions: list[str]
+    max_runtime_minutes: int  # Reference for logging - not enforced auto-off timer
+    abort_conditions: list[str]  # Monitor these to decide early abort
     recommended_start_time: datetime | None = None
 
 
@@ -165,6 +192,53 @@ class IntelligentDHWScheduler:
                 max(t for _, t in self.bt7_history),
                 timestamp,
             )
+
+    def _has_spare_compressor_capacity(self, thermal_debt_dm: float, outdoor_temp: float) -> bool:
+        """Check if heat pump has spare capacity for DHW without risking thermal debt.
+
+        Uses climate-aware calculation: requires thermal debt to be at least
+        DHW_SPARE_CAPACITY_PERCENT above the warning threshold for current conditions.
+
+        Example calculations:
+        - Stockholm at -10°C: warning=-700, spare capacity threshold = -700 * 0.8 = -560
+          * DM -400: Has spare capacity (✓)
+          * DM -650: No spare capacity (✗)
+        - Kiruna at -30°C: warning=-1200, spare capacity threshold = -1200 * 0.8 = -960
+          * DM -800: Has spare capacity (✓)
+          * DM -1000: No spare capacity (✗)
+
+        Args:
+            thermal_debt_dm: Current degree minutes
+            outdoor_temp: Current outdoor temperature (°C)
+
+        Returns:
+            True if has spare capacity, False if space heating needs all capacity
+        """
+        if self.climate_detector:
+            dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+            warning_threshold = dm_range["warning"]
+
+            # Calculate spare capacity threshold (20% buffer above warning)
+            spare_capacity_threshold = warning_threshold * (
+                1.0 - DHW_SPARE_CAPACITY_PERCENT / 100.0
+            )
+
+            has_capacity = thermal_debt_dm > spare_capacity_threshold
+
+            _LOGGER.debug(
+                "DHW spare capacity check: DM=%.0f, warning=%.0f, threshold=%.0f, has_capacity=%s",
+                thermal_debt_dm,
+                warning_threshold,
+                spare_capacity_threshold,
+                has_capacity,
+            )
+
+            return has_capacity
+        else:
+            # Fallback: Conservative fixed threshold if climate detector unavailable
+            # Use -80 DM as fallback (allows DHW when space heating not under stress)
+            fallback_threshold = -80.0
+            return thermal_debt_dm > fallback_threshold
 
     def _detect_legionella_boost_completion(self) -> bool:
         """Detect when NIBE's automatic Legionella boost just completed.
@@ -304,7 +378,7 @@ class IntelligentDHWScheduler:
                 should_heat=True,
                 priority_reason="DHW_SAFETY_MINIMUM",
                 target_temp=self.user_target_temp,
-                max_runtime_minutes=30,  # Limited to prevent thermal debt
+                max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                 abort_conditions=[
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -313,17 +387,19 @@ class IntelligentDHWScheduler:
 
         # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
         # Must heat every 36 hours (hygiene, comfort)
-        if hours_since_last_dhw and hours_since_last_dhw > 36.0:
+        if hours_since_last_dhw and hours_since_last_dhw > DHW_MAX_WAIT_HOURS:
             # Only heat during cheap/normal prices (avoid expensive/peak even with max wait)
             if price_classification in ["cheap", "normal"]:
                 _LOGGER.warning(
-                    "DHW maximum wait exceeded: %.1f hours (limit 36h)", hours_since_last_dhw
+                    "DHW maximum wait exceeded: %.1f hours (limit %.0fh)",
+                    hours_since_last_dhw,
+                    DHW_MAX_WAIT_HOURS,
                 )
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
                     target_temp=self.user_target_temp,
-                    max_runtime_minutes=60,
+                    max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                     ],
@@ -357,7 +433,7 @@ class IntelligentDHWScheduler:
                         should_heat=True,
                         priority_reason=f"URGENT_DEMAND_IN_{hours_until:.1f}H",
                         target_temp=target,
-                        max_runtime_minutes=90,  # Longer for high demand
+                        max_runtime_minutes=DHW_URGENT_RUNTIME_MINUTES,
                         abort_conditions=[
                             f"thermal_debt < {dm_abort_threshold:.0f}",
                             f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -389,13 +465,16 @@ class IntelligentDHWScheduler:
                 )
 
                 if optimal_window is None:
-                    # No price data - heat now if needed (thermal debt check)
-                    if current_dhw_temp < 50.0 and thermal_debt_dm > -100:
+                    # No price data - heat now if needed (spare capacity check)
+                    if (
+                        current_dhw_temp < self.DHW_TARGET_NORMAL
+                        and self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp)
+                    ):
                         return DHWScheduleDecision(
                             should_heat=True,
                             priority_reason="CHEAP_NO_WINDOW_DATA",
-                            target_temp=self.user_target_temp + 5.0,
-                            max_runtime_minutes=45,
+                            target_temp=self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET,
+                            max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                             abort_conditions=[
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -405,12 +484,14 @@ class IntelligentDHWScheduler:
                 # STEP 3: Check if we're in the optimal window (within 15 min of start)
                 elif optimal_window["hours_until"] <= 0.25:
                     # This is the optimal time!
-                    if thermal_debt_dm > -100:
+                    if self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp):
                         return DHWScheduleDecision(
                             should_heat=True,
                             priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}",
-                            target_temp=min(self.user_target_temp + 5.0, 60.0),
-                            max_runtime_minutes=45,
+                            target_temp=min(
+                                self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0
+                            ),
+                            max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                             abort_conditions=[
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -419,7 +500,7 @@ class IntelligentDHWScheduler:
                         )
 
                 # Wait for better window ahead (if DHW still comfortable)
-                elif current_dhw_temp > 45.0:
+                elif current_dhw_temp > MIN_DHW_TARGET_TEMP:
                     return DHWScheduleDecision(
                         should_heat=False,
                         priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
@@ -431,12 +512,14 @@ class IntelligentDHWScheduler:
 
             # Fallback: No price data, use simple cheap classification
             # Heat now if DHW getting low
-            if current_dhw_temp < 50.0 and thermal_debt_dm > -100:
+            if current_dhw_temp < self.DHW_TARGET_NORMAL and self._has_spare_compressor_capacity(
+                thermal_debt_dm, outdoor_temp
+            ):
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="CHEAP_ELECTRICITY_OPPORTUNITY",
-                    target_temp=min(self.user_target_temp + 5.0, 60.0),
-                    max_runtime_minutes=45,
+                    target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
+                    max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -444,14 +527,14 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
-        # Heat below 45°C during cheap prices (no window check - urgent enough)
-        if current_dhw_temp < 45.0 and price_classification == "cheap":
-            if thermal_debt_dm > -100:
+        # Heat below minimum user target during cheap prices (no window check - urgent enough)
+        if current_dhw_temp < MIN_DHW_TARGET_TEMP and price_classification == "cheap":
+            if self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp):
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="DHW_COMFORT_LOW_CHEAP",
                     target_temp=self.user_target_temp,
-                    max_runtime_minutes=30,
+                    max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
@@ -470,7 +553,7 @@ class IntelligentDHWScheduler:
     def get_lookahead_hours(self, current_time: datetime) -> int:
         """Calculate how far ahead to look for cheap DHW windows.
 
-        Returns until next demand period (capped at 24h), or 24h if no demand period.
+        Returns hours until next demand period (capped at 24h), or 24h if no demand period.
 
         Args:
             current_time: Current datetime
@@ -478,13 +561,17 @@ class IntelligentDHWScheduler:
         Returns:
             Hours to look ahead (max 24h)
         """
+        from ..const import DHW_SCHEDULING_WINDOW_MAX, DHW_SCHEDULING_WINDOW_MIN
+
         next_demand = self._check_upcoming_demand_period(current_time)
 
         if next_demand:
             hours_until = next_demand["hours_until"]
-            return min(int(hours_until), 24)
+            # Return hours until demand, but ensure it's at least 1h and max 24h
+            return max(DHW_SCHEDULING_WINDOW_MIN, min(int(hours_until), DHW_SCHEDULING_WINDOW_MAX))
 
-        return 24
+        # No upcoming demand period - look full 24 hours ahead
+        return DHW_SCHEDULING_WINDOW_MAX
 
     def find_cheapest_dhw_window(
         self,
@@ -495,8 +582,16 @@ class IntelligentDHWScheduler:
     ) -> dict | None:
         """Find cheapest continuous window for DHW heating.
 
-        Uses sliding window algorithm to find absolute cheapest period
-        for DHW heating within the lookahead window.
+        Uses sliding window algorithm to find the absolute cheapest continuous
+        period for DHW heating within the lookahead window. DHW heating is
+        time-shiftable (can wait for cheaper prices) but requires a continuous
+        window since we can't split heating across gaps.
+
+        Implementation:
+        - Typical duration: 45 minutes (3 quarters, faster than space heating)
+        - Shifts window within lookahead period (up to next demand period)
+        - Must be continuous 15-minute periods (no gaps)
+        - Finds absolute cheapest average price (not just "cheap" classification)
 
         Args:
             current_time: Current timestamp
@@ -617,6 +712,8 @@ class IntelligentDHWScheduler:
         Returns:
             Dict with hours_until and target_temp, or None if no upcoming period
         """
+        from ..const import DHW_SCHEDULING_WINDOW_MAX, DHW_SCHEDULING_WINDOW_MIN
+
         for period in self.demand_periods:
             # Calculate hours until period start
             today_start = current_time.replace(
@@ -631,7 +728,7 @@ class IntelligentDHWScheduler:
 
             # Extended window: 24h ahead (DHW tank doesn't cool much in 24h)
             # Minimum: 1h ahead (need some time for optimization)
-            if 1 <= hours_until <= 24:
+            if DHW_SCHEDULING_WINDOW_MIN <= hours_until <= DHW_SCHEDULING_WINDOW_MAX:
                 return {
                     "hours_until": hours_until,  # Keep as float for precise decisions
                     "target_temp": period.target_temp,

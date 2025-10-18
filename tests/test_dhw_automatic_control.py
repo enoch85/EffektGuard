@@ -7,6 +7,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
 
+from custom_components.effektguard.const import DHW_SAFETY_RUNTIME_MINUTES
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
@@ -391,13 +392,17 @@ class TestDHWOptimizerDecisions:
         assert decision.priority_reason == "CRITICAL_THERMAL_DEBT"
 
     def test_heat_dhw_cheap_electricity(self):
-        """Test that cheap electricity triggers DHW heating when safe."""
+        """Test that cheap electricity triggers DHW heating when safe.
+
+        With climate-aware spare capacity check, DM must be above fallback
+        threshold (-80 DM) when no climate detector is available.
+        """
         optimizer = IntelligentDHWScheduler()
 
         decision = optimizer.should_start_dhw(
             current_dhw_temp=42.0,
             space_heating_demand_kw=1.0,
-            thermal_debt_dm=-80.0,  # Safe
+            thermal_debt_dm=-50.0,  # Safe - above fallback threshold
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=10.0,
@@ -425,4 +430,4 @@ class TestDHWOptimizerDecisions:
 
         assert decision.should_heat is True
         assert decision.priority_reason == "DHW_SAFETY_MINIMUM"
-        assert decision.max_runtime_minutes == 30  # Limited runtime
+        assert decision.max_runtime_minutes == DHW_SAFETY_RUNTIME_MINUTES

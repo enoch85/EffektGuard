@@ -243,13 +243,33 @@ DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature
 DHW_MAX_TEMP: Final = 60.0  # °C - Maximum normal DHW temperature (comfort)
 DHW_COMFORT_TEMP: Final = 50.0  # °C - Optimal comfort temperature
 DHW_ECO_TEMP: Final = 45.0  # °C - Economy mode temperature
+DHW_PREHEAT_TARGET_OFFSET: Final = 5.0  # °C - Extra heating above target for optimal windows
 # User-configurable DHW target temperature limits
-MIN_DHW_TARGET_TEMP: Final = 45.0  # °C - Minimum configurable DHW target (safety)
-MAX_DHW_TARGET_TEMP: Final = 60.0  # °C - Maximum configurable DHW target (comfort)
+MIN_DHW_TARGET_TEMP: Final = (
+    45.0  # °C - Minimum configurable DHW target (safety + comfort low threshold)
+)
 DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 1  # Min hours ahead for DHW scheduling
+DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
+
+# DHW thermal debt thresholds (climate-aware via spare capacity calculation)
+# Instead of hardcoded DM thresholds, we calculate spare capacity as percentage
+# above the climate-aware warning threshold for current outdoor temperature
+DHW_SPARE_CAPACITY_PERCENT: Final = (
+    50.0  # Require 50% spare capacity above warning threshold
+)
+# Ensures DHW heating only when heat pump has significant spare capacity
+# Example: Stockholm at -10°C has warning=-700, so require DM > -350 (-700 * 0.5)
+# Example: Kiruna at -30°C has warning=-1200, so require DM > -600 (-1200 * 0.5)
+# This keeps DHW heating within the normal operating range, not near thermal debt warning
+
+# DHW runtime safeguards (monitoring only - NIBE controls actual completion)
+DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
+DHW_NORMAL_RUNTIME_MINUTES: Final = 45  # Normal DHW heating window
+DHW_EXTENDED_RUNTIME_MINUTES: Final = 60  # High demand period heating
+DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
 
 # MyUplink DHW control entities (NIBE parameter IDs)
 NIBE_TEMP_LUX_ENTITY_ID: Final = "switch.temporary_lux_50004"  # Temporary lux boost
