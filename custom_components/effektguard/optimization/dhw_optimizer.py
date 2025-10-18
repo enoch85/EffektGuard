@@ -33,6 +33,7 @@ from ..const import (
     DHW_SPARE_CAPACITY_PERCENT,
     DHW_URGENT_RUNTIME_MINUTES,
     MIN_DHW_TARGET_TEMP,
+    NIBE_DHW_NORMAL_TARGET,
     NIBE_DHW_SAFETY_CRITICAL,
     NIBE_DHW_SAFETY_MIN,
 )
@@ -123,7 +124,7 @@ class IntelligentDHWScheduler:
     DHW_SAFETY_MIN = (
         NIBE_DHW_SAFETY_MIN  # °C - Safety minimum (can defer 30-35°C during expensive periods)
     )
-    DHW_TARGET_NORMAL = 50.0  # °C - comfortable target
+    DHW_TARGET_NORMAL = NIBE_DHW_NORMAL_TARGET  # °C - comfortable target (from const.py)
     DHW_TARGET_HIGH = 55.0  # °C - extra comfort for high demand periods
     DHW_LEGIONELLA_DETECT = 63.0  # °C - threshold to detect NIBE's Legionella boost
 

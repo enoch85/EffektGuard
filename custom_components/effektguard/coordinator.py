@@ -21,6 +21,8 @@ from .const import (
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DOMAIN,
     ESTIMATED_POWER_BASELINE,
+    NIBE_DHW_COOLING_RATE,
+    NIBE_DHW_START_THRESHOLD,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -684,11 +686,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
 
             # Predict next boost time based on temperature drop
-            # Simple prediction: Assume 0.5°C/hour cooling rate (conservative)
-            # NIBE typically starts DHW at ~45°C setpoint
-            if current_dhw_temp >= 45.0:
-                dhw_setpoint = 45.0  # Typical NIBE DHW start threshold
-                cooling_rate = 0.5  # °C per hour (conservative estimate)
+            # Simple prediction: Assume conservative cooling rate from const.py
+            # NIBE typically starts DHW at start threshold from const.py
+            if current_dhw_temp >= NIBE_DHW_START_THRESHOLD:
+                dhw_setpoint = NIBE_DHW_START_THRESHOLD  # From const.py
+                cooling_rate = NIBE_DHW_COOLING_RATE  # From const.py
                 temp_margin = current_dhw_temp - dhw_setpoint
                 hours_until_boost = temp_margin / cooling_rate
 

@@ -239,14 +239,20 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 
 # DHW (Domestic Hot Water) Optimization Constants
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
-DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature
+#
+# Temperature hierarchy:
+# - 30°C (NIBE_DHW_SAFETY_CRITICAL): Emergency override, always heat
+# - 35°C (NIBE_DHW_SAFETY_MIN): Legionella prevention minimum
+# - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
+# - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
+# - 50°C (NIBE_DHW_NORMAL_TARGET): Normal comfort target
+# - 60°C (DHW_MAX_TEMP): Maximum comfort temperature
+#
+DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature (user validation)
 DHW_MAX_TEMP: Final = 60.0  # °C - Maximum normal DHW temperature (comfort)
-DHW_COMFORT_TEMP: Final = 50.0  # °C - Optimal comfort temperature
-DHW_ECO_TEMP: Final = 45.0  # °C - Economy mode temperature
 DHW_PREHEAT_TARGET_OFFSET: Final = 5.0  # °C - Extra heating above target for optimal windows
-# User-configurable DHW target temperature limits
 MIN_DHW_TARGET_TEMP: Final = (
-    45.0  # °C - Minimum configurable DHW target (safety + comfort low threshold)
+    45.0  # °C - Minimum user-configurable DHW target (safety + comfort threshold)
 )
 DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
@@ -283,6 +289,9 @@ NIBE_DHW_SAFETY_CRITICAL: Final = 30.0  # °C - Below this, always heat (safety 
 NIBE_DHW_SAFETY_MIN: Final = (
     35.0  # °C - Safety minimum (can defer if 30-35°C during expensive periods)
 )
+NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
+NIBE_DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
+NIBE_DHW_NORMAL_TARGET: Final = 50.0  # °C - Normal DHW comfort target temperature
 
 # Savings Calculation Constants (Swedish electricity market)
 # Swedish effect tariff - typical cost per kW of monthly peak
