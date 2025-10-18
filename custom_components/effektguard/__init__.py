@@ -276,6 +276,9 @@ async def _create_coordinator(
         entry=entry,
     )
 
+    # Restore peak values from effect manager
+    await coordinator.async_restore_peaks()
+
     # Initialize learning modules (Phase 6)
     await coordinator.async_initialize_learning()
 

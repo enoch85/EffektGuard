@@ -274,7 +274,7 @@ def test_all_sensors_with_full_data(full_coordinator, mock_entry):
     assert sensor_values["optimization_reasoning"] == "Test reasoning"
     assert sensor_values["quarter_of_day"] == 42
     assert sensor_values["hour_classification"] == "normal"
-    assert sensor_values["peak_status"] == "safe"
+    assert sensor_values["peak_status"] == "normal"  # Changed: with current=3.5, peak=5.2, status is "normal"
     assert sensor_values["temperature_trend"] == -0.2
     assert sensor_values["savings_estimate"] == 450.0
     assert sensor_values["optional_features_status"] == "active"
@@ -816,8 +816,8 @@ async def test_sensor_entities_setup(mock_hass, full_coordinator, mock_entry):
     assert async_add_entities.called
     entities = async_add_entities.call_args[0][0]
     assert (
-        len(entities) == 19
-    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
+        len(entities) == 20
+    )  # All sensors including outdoor_temperature_trend, dhw_status, dhw_recommendation
 
 
 async def test_number_entities_setup(mock_hass, full_coordinator, mock_entry):

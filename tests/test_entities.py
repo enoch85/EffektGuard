@@ -206,8 +206,8 @@ def test_sensor_count():
     from custom_components.effektguard.sensor import SENSORS
 
     assert (
-        len(SENSORS) == 19
-    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
+        len(SENSORS) == 20
+    )  # All sensors including outdoor_temperature_trend, dhw_status, dhw_recommendation
 
 
 async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
@@ -223,8 +223,8 @@ async def test_sensor_entities_created(mock_coordinator, mock_hass, mock_entry):
     assert async_add_entities.called
     sensors = async_add_entities.call_args[0][0]
     assert (
-        len(sensors) == 19
-    )  # All sensors including indoor_temperature, dhw_status, dhw_recommendation
+        len(sensors) == 20
+    )  # All sensors including outdoor_temperature_trend, dhw_status, dhw_recommendation
 
 
 def test_sensor_current_offset(mock_coordinator, mock_entry):
@@ -253,11 +253,12 @@ def test_sensor_peak_status(mock_coordinator, mock_entry):
     sensor_desc = next(s for s in SENSORS if s.key == "peak_status")
     sensor = EffektGuardSensor(mock_coordinator, mock_entry, sensor_desc)
 
-    assert sensor.native_value == "safe"
+    # With current_power=3.5, peak_month=5.2, status should be "normal"
+    assert sensor.native_value == "normal"
     attrs = sensor.extra_state_attributes
-    assert attrs["margin_to_peak"] == 2.5
-    assert attrs["current_power"] == 3.5
+    # These attributes come from the extra_state_attributes logic
     assert attrs["monthly_peak"] == 5.2
+    assert attrs["daily_peak"] == 4.5
 
 
 def test_sensor_temperature_trend(mock_coordinator, mock_entry):

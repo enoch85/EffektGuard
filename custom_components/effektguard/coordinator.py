@@ -301,6 +301,27 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
 
+    async def async_restore_peaks(self) -> None:
+        """Restore peak tracking values from effect manager's loaded data.
+
+        Called after effect manager has loaded its persistent state to sync
+        coordinator's peak values with stored data.
+        """
+        try:
+            peak_summary = self.effect.get_monthly_peak_summary()
+            if peak_summary and peak_summary.get("count", 0) > 0:
+                self.peak_this_month = peak_summary["highest"]
+                _LOGGER.info(
+                    "Restored monthly peak: %.2f kW (%d peaks loaded)",
+                    self.peak_this_month,
+                    peak_summary["count"],
+                )
+            else:
+                _LOGGER.info("No monthly peaks to restore - starting fresh")
+        except (AttributeError, KeyError, ValueError) as err:
+            _LOGGER.warning("Failed to restore peaks: %s", err)
+            self.peak_this_month = 0.0
+
     def setup_power_sensor_listener(self) -> None:
         """Set up event listener to detect when external power sensor becomes available.
 
@@ -749,6 +770,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
+        outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
 
         return {
             "nibe": nibe_data,
@@ -756,6 +778,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "weather": weather_data,
             "thermal": self.engine.thermal,  # Thermal model for predictions
             "thermal_trend": temperature_trend_data,  # Temperature trend from predictor
+            "outdoor_trend": outdoor_trend_data,  # Outdoor temperature trend
             "decision": decision,
             "offset": decision.offset,
             "peak_today": self.peak_today,
