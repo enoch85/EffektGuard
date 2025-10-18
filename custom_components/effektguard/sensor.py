@@ -273,6 +273,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=2,  # Display as "0.05 °C/h" for clarity
         value_fn=lambda coordinator: (
             coordinator.data["thermal_trend"]["rate_per_hour"]
             if coordinator.data
@@ -290,6 +291,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         native_unit_of_measurement="°C/h",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=2,  # Display as "0.05 °C/h" for clarity
         value_fn=lambda coordinator: (
             coordinator.data["outdoor_trend"]["rate_per_hour"]
             if coordinator.data

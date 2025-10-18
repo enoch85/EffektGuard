@@ -176,7 +176,9 @@ PUMP_MIN_SPEED_ASHP: Final = 10  # % for ASHP open-loop systems
 PUMP_MIN_SPEED_GSHP: Final = 20  # % for GSHP open-loop systems
 
 # Update intervals
-UPDATE_INTERVAL_MINUTES: Final = 5  # Coordinator update frequency
+UPDATE_INTERVAL_MINUTES: Final = (
+    5  # Coordinator update frequency + thermal predictor save throttle interval
+)
 QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
 
 # Adaptive learning parameters

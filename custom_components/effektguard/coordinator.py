@@ -184,6 +184,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.peak_this_month: float = 0.0
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
+        self._last_predictor_save: datetime | None = None  # Track last thermal predictor save
+        self._predictor_save_interval = timedelta(
+            minutes=UPDATE_INTERVAL_MINUTES
+        )  # Throttle to coordinator update interval
 
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
@@ -2031,6 +2035,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 degree_minutes=nibe_data.degree_minutes,
             )
 
+            # Save thermal predictor state immediately (throttled to UPDATE_INTERVAL_MINUTES)
+            # This ensures temperature trends persist across reboots
+            await self._save_thermal_predictor_immediate()
+
             # Record weather pattern once per day (at midnight or first update of day)
             if weather_data and weather_data.forecast_hours:
                 current_date = now.date()
@@ -2137,3 +2145,46 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (OSError, ValueError, KeyError) as err:
             _LOGGER.warning("Failed to load learned data: %s", err)
             return None
+
+    async def _save_thermal_predictor_immediate(self) -> None:
+        """Save thermal predictor state immediately (throttled to avoid excessive disk writes).
+
+        Called after each temperature trend update to persist state_history across reboots.
+        Uses throttling to limit disk writes to UPDATE_INTERVAL_MINUTES (same as coordinator updates).
+        """
+        now = dt_util.utcnow()
+
+        # Throttle saves to UPDATE_INTERVAL_MINUTES to avoid excessive disk I/O
+        if self._last_predictor_save is not None:
+            time_since_last_save = (now - self._last_predictor_save).total_seconds()
+            if time_since_last_save < self._predictor_save_interval.total_seconds():
+                _LOGGER.debug(
+                    "Skipping thermal predictor save - throttled (%.0fs since last save)",
+                    time_since_last_save,
+                )
+                return
+
+        try:
+            # Load existing learning data to preserve other modules
+            existing_data = await self.learning_store.async_load() or {}
+
+            # Update only thermal predictor data
+            if self.thermal_predictor:
+                existing_data["thermal_predictor"] = self.thermal_predictor.to_dict()
+                existing_data["last_updated"] = now.isoformat()
+                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+
+                await self.learning_store.async_save(existing_data)
+                self._last_predictor_save = now
+
+                _LOGGER.debug(
+                    "Saved thermal predictor state: %d snapshots, %.1f°C/h trend",
+                    len(self.thermal_predictor.state_history),
+                    self.thermal_predictor.get_current_trend().get("rate_per_hour", 0.0),
+                )
+            else:
+                _LOGGER.debug("No thermal predictor to save")
+
+        except (OSError, ValueError, KeyError, AttributeError) as err:
+            _LOGGER.warning("Failed to save thermal predictor state: %s", err)
+            # Don't raise - continue operation even if save fails
