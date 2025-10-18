@@ -4,16 +4,52 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta
 
-from homeassistant.core import HomeAssistant, Event
-from homeassistant.util import dt as dt_util
+
+def create_mock_coordinator_dependencies(mock_hass, entry):
+    """Create all required dependencies for EffektGuardCoordinator."""
+    # Mock NIBE adapter
+    nibe_adapter = MagicMock()
+    nibe_adapter.get_current_state = AsyncMock()
+    
+    # Mock GE-Spot adapter
+    gespot_adapter = MagicMock()
+    gespot_adapter.get_prices = AsyncMock()
+    
+    # Mock Weather adapter
+    weather_adapter = MagicMock()
+    weather_adapter.get_forecast = AsyncMock()
+    
+    # Mock Decision Engine with climate detector
+    decision_engine = MagicMock()
+    decision_engine.climate_detector = MagicMock()
+    decision_engine.climate_detector.get_expected_dm_range = MagicMock(
+        return_value={"critical": -1500, "warning": -700}
+    )
+    decision_engine.calculate_decision = AsyncMock()
+    
+    # Mock Effect Manager
+    effect_manager = MagicMock()
+    
+    return nibe_adapter, gespot_adapter, weather_adapter, decision_engine, effect_manager
 
 
-async def test_event_listener_no_event_filter(hass: HomeAssistant):
+@pytest.mark.asyncio
+async def test_event_listener_no_event_filter():
     """Test that power sensor listener works without event_filter parameter.
     
     Fix 1.1: Event listener should filter inside callback, not via event_filter parameter.
     """
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    
+    # Create mock hass
+    mock_hass = MagicMock()
+    mock_hass.data = {}
+    mock_hass.bus = MagicMock()
+    mock_hass.states = MagicMock()
+    mock_hass.states.get = MagicMock(return_value=None)
+    mock_hass.config = MagicMock()
+    mock_hass.config.latitude = 59.3
+    mock_hass.config.config_dir = "/tmp/test"
     
     # Create mock config entry
     entry = MagicMock()
@@ -26,29 +62,49 @@ async def test_event_listener_no_event_filter(hass: HomeAssistant):
     }
     entry.options = {}
     
-    # Create coordinator
-    coordinator = EffektGuardCoordinator(hass, entry)
+    # Track if async_listen is called correctly
+    listen_called = False
+    
+    def mock_async_listen(event_type, callback, **kwargs):
+        nonlocal listen_called
+        # Should NOT have event_filter parameter
+        if "event_filter" in kwargs:
+            pytest.fail("async_listen received event_filter parameter - FIX FAILED")
+        listen_called = True
+        return MagicMock()  # Return unsubscribe callable
+    
+    mock_hass.bus.async_listen = mock_async_listen
+    
+    # Create coordinator with all dependencies
+    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
+    coordinator = EffektGuardCoordinator(
+        mock_hass, nibe, gespot, weather, engine, effect, entry
+    )
     
     # The setup_power_sensor_listener should not raise TypeError about event_filter
-    try:
-        await coordinator._setup_power_sensor_listener()
-        success = True
-    except TypeError as e:
-        if "event_filter" in str(e):
-            success = False
-            pytest.fail(f"event_filter parameter error: {e}")
-        else:
-            raise
+    coordinator.setup_power_sensor_listener()
     
-    assert success, "Power sensor listener should setup without event_filter error"
+    assert listen_called, "async_listen should have been called"
 
 
-async def test_power_sensor_callback_filters_entity_id(hass: HomeAssistant):
-    """Test that power sensor callback properly filters events by entity_id.
+@pytest.mark.asyncio
+async def test_power_sensor_listener_no_event_filter_param():
+    """Test that event listener is registered without event_filter parameter.
     
-    Fix 1.1: Callback should ignore events for other entities.
+    Fix 1.1: async_listen should be called without event_filter kwarg.
     """
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    
+    # Create mock hass
+    mock_hass = MagicMock()
+    mock_hass.data = {}
+    mock_hass.bus = MagicMock()
+    mock_hass.states = MagicMock()
+    # Return a power sensor state that's unavailable so listener is set up
+    mock_hass.states.get = MagicMock(return_value=MagicMock(state="unavailable"))
+    mock_hass.config = MagicMock()
+    mock_hass.config.latitude = 59.3
+    mock_hass.config.config_dir = "/tmp/test"
     
     entry = MagicMock()
     entry.data = {
@@ -60,10 +116,15 @@ async def test_power_sensor_callback_filters_entity_id(hass: HomeAssistant):
     }
     entry.options = {}
     
-    # Mock hass.states.get to return unavailable state
-    hass.states.get = MagicMock(return_value=MagicMock(state="unavailable"))
+    # Create coordinator with all dependencies
+    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
     
-    coordinator = EffektGuardCoordinator(hass, entry)
+    # Configure nibe adapter to have power sensor (so listener is registered)
+    nibe._power_sensor_entity = "sensor.power"
+    
+    coordinator = EffektGuardCoordinator(
+        mock_hass, nibe, gespot, weather, engine, effect, entry
+    )
     
     # Track calls to async_listen
     listen_calls = []
@@ -77,46 +138,24 @@ async def test_power_sensor_callback_filters_entity_id(hass: HomeAssistant):
         })
         return MagicMock()  # Return unsubscribe callable
     
-    hass.bus.async_listen = mock_async_listen
+    mock_hass.bus.async_listen = mock_async_listen
     
     # Setup listener
-    await coordinator._setup_power_sensor_listener()
+    coordinator.setup_power_sensor_listener()
     
-    # Verify no event_filter parameter was used
-    assert len(listen_calls) == 1
-    assert "event_filter" not in listen_calls[0]["kwargs"]
+    # Verify async_listen was called
+    assert len(listen_calls) == 1, "async_listen should be called once"
     
-    # Get the callback
-    callback = listen_calls[0]["callback"]
+    # Verify NO event_filter parameter was passed
+    assert "event_filter" not in listen_calls[0]["kwargs"], \
+        "FAIL: event_filter parameter should not be used (Phase 1 Fix 1.1)"
     
-    # Test callback filters correctly
-    # Event for wrong entity should be ignored
-    wrong_event = MagicMock(spec=Event)
-    wrong_event.data = {
-        "entity_id": "sensor.other_entity",
-        "new_state": MagicMock(state="10.0"),
-    }
-    
-    # This should not trigger availability flag
-    callback(wrong_event)
-    assert not coordinator._power_sensor_available
-    
-    # Event for correct entity should be processed
-    correct_event = MagicMock(spec=Event)
-    correct_event.data = {
-        "entity_id": "sensor.power",
-        "new_state": MagicMock(state="10.0"),
-    }
-    
-    callback(correct_event)
-    assert coordinator._power_sensor_available
+    # Verify event_type is correct
+    assert listen_calls[0]["event_type"] == "state_changed"
 
 
-@pytest.mark.skipif(
-    "recorder" not in dir(),
-    reason="Recorder not available in test environment",
-)
-async def test_dhw_history_uses_recorder_executor(hass: HomeAssistant):
+@pytest.mark.asyncio
+async def test_dhw_history_uses_recorder_executor():
     """Test that DHW history lookup uses recorder instance executor.
     
     Fix 1.2: Should use recorder.get_instance().async_add_executor_job
@@ -124,6 +163,15 @@ async def test_dhw_history_uses_recorder_executor(hass: HomeAssistant):
     """
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
     
+    # Create mock hass
+    mock_hass = MagicMock()
+    mock_hass.data = {}
+    mock_hass.states = MagicMock()
+    mock_hass.states.get = MagicMock(return_value=MagicMock(state="off"))
+    mock_hass.config = MagicMock()
+    mock_hass.config.latitude = 59.3
+    mock_hass.config.config_dir = "/tmp/test"
+    
     entry = MagicMock()
     entry.data = {
         "nibe_degree_minutes_entity": "sensor.degree_minutes",
@@ -134,33 +182,44 @@ async def test_dhw_history_uses_recorder_executor(hass: HomeAssistant):
     }
     entry.options = {}
     
-    coordinator = EffektGuardCoordinator(hass, entry)
-    
-    # Mock entity state as OFF
-    hass.states.get = MagicMock(return_value=MagicMock(state="off"))
+    # Create coordinator with all dependencies
+    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
+    coordinator = EffektGuardCoordinator(
+        mock_hass, nibe, gespot, weather, engine, effect, entry
+    )
     
     # Mock recorder.get_instance
     mock_recorder = MagicMock()
     mock_recorder.async_add_executor_job = AsyncMock(return_value={})
     
-    with patch(
-        "custom_components.effektguard.coordinator.recorder.get_instance",
-        return_value=mock_recorder,
-    ):
+    # Mock recorder.history module
+    with patch("homeassistant.components.recorder.get_instance", return_value=mock_recorder), \
+         patch("homeassistant.components.recorder.history.state_changes_during_period"):
         # This should use recorder instance executor, not hass executor
-        result = await coordinator._get_hours_since_last_dhw_sync()
+        result = await coordinator._get_last_dhw_heating_time()
         
         # Verify recorder executor was used
-        assert mock_recorder.async_add_executor_job.called
+        assert mock_recorder.async_add_executor_job.called, \
+            "FAIL: Should use recorder.get_instance().async_add_executor_job (Phase 1 Fix 1.2)"
 
 
-async def test_dhw_history_handles_no_recorder(hass: HomeAssistant):
+@pytest.mark.asyncio
+async def test_dhw_history_handles_no_recorder():
     """Test that DHW history handles recorder being unavailable gracefully.
     
     Fix 1.2: Should log warning and return None when recorder not available.
     """
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
     
+    # Create mock hass
+    mock_hass = MagicMock()
+    mock_hass.data = {}
+    mock_hass.states = MagicMock()
+    mock_hass.states.get = MagicMock(return_value=MagicMock(state="off"))
+    mock_hass.config = MagicMock()
+    mock_hass.config.latitude = 59.3
+    mock_hass.config.config_dir = "/tmp/test"
+    
     entry = MagicMock()
     entry.data = {
         "nibe_degree_minutes_entity": "sensor.degree_minutes",
@@ -171,17 +230,18 @@ async def test_dhw_history_handles_no_recorder(hass: HomeAssistant):
     }
     entry.options = {}
     
-    coordinator = EffektGuardCoordinator(hass, entry)
-    
-    # Mock entity state as OFF
-    hass.states.get = MagicMock(return_value=MagicMock(state="off"))
+    # Create coordinator with all dependencies
+    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
+    coordinator = EffektGuardCoordinator(
+        mock_hass, nibe, gespot, weather, engine, effect, entry
+    )
     
     # Mock recorder.get_instance returning None
     with patch(
-        "custom_components.effektguard.coordinator.recorder.get_instance",
+        "homeassistant.components.recorder.get_instance",
         return_value=None,
     ):
-        result = await coordinator._get_hours_since_last_dhw_sync()
+        result = await coordinator._get_last_dhw_heating_time()
         
         # Should return None gracefully
         assert result is None

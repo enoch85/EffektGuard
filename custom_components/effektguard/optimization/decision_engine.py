@@ -1101,6 +1101,7 @@ class DecisionEngine:
                         f"Pre-heat: {temp_drop:.1f}°C in {hours_until_cold}h, "
                         f"{intensity_reason} "
                         f"(lead time: {adjusted_lead_time:.1f}h {timing_note}, "
+                        f"{outdoor_note}, "
                         f"urgency: {urgency_factor:.1f}x)"
                     ),
                 )

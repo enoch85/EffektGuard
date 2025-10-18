@@ -49,6 +49,10 @@ def engine_mock():
     engine.predictor.get_outdoor_trend = MagicMock(
         return_value={"trend": "stable", "rate_per_hour": 0.0, "confidence": 0.8}
     )
+    engine.predictor.get_current_trend = MagicMock(
+        return_value={"trend": "stable", "rate_per_hour": 0.0, "confidence": 0.8, "samples": 8}
+    )
+    engine.predictor.state_history = [MagicMock() for _ in range(10)]  # Enough history
 
     # Mock target temp
     engine.target_temp = 22.0
@@ -58,6 +62,10 @@ def engine_mock():
         engine, DecisionEngine
     )
     engine._get_outdoor_trend = DecisionEngine._get_outdoor_trend.__get__(engine, DecisionEngine)
+    engine._get_thermal_trend = DecisionEngine._get_thermal_trend.__get__(engine, DecisionEngine)
+    engine._calculate_preheat_intensity = DecisionEngine._calculate_preheat_intensity.__get__(
+        engine, DecisionEngine
+    )
     engine._weather_layer = DecisionEngine._weather_layer.__get__(engine, DecisionEngine)
 
     return engine
