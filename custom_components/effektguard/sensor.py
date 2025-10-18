@@ -266,7 +266,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="temperature_trend",
-        name="Temperature Trend",
+        name="Indoor Temperature Trend",
         icon="mdi:trending-up",
         # No device_class - this is a rate of change, not a temperature
         native_unit_of_measurement="°C/h",
