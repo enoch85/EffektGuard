@@ -26,7 +26,7 @@ async def setup_frame_helper():
     """Set up the frame helper for all tests."""
     from homeassistant.helpers import frame
     from homeassistant.core import HomeAssistant
-    
+
     # Create a minimal hass instance for frame setup
     hass = HomeAssistant("/tmp")
     frame.async_setup(hass)  # This is not actually async, just named that way
