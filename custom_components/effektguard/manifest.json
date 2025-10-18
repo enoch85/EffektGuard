@@ -4,7 +4,7 @@
   "codeowners": ["@enoch85"],
   "config_flow": true,
   "dependencies": [],
-  "after_dependencies": ["myuplink", "weather", "ge_spot", "sunspec", "template"],
+  "after_dependencies": ["myuplink", "weather", "ge_spot", "sunspec", "template", "recorder"],
   "documentation": "https://github.com/enoch85/EffektGuard",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/enoch85/EffektGuard/issues",
