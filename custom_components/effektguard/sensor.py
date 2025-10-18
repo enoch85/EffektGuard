@@ -409,10 +409,10 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity):
                 return value
             except (AttributeError, KeyError, TypeError) as err:
                 _LOGGER.warning(
-                    "Error getting value for %s: %s (type: %s)", 
-                    self.entity_description.key, 
+                    "Error getting value for %s: %s (type: %s)",
+                    self.entity_description.key,
                     err,
-                    type(err).__name__
+                    type(err).__name__,
                 )
                 return None
         return None

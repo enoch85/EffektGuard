@@ -158,7 +158,7 @@ class TestDHWDeferralRange:
 
         Logic: can_defer checks:
         - current_dhw_temp >= DHW_SAFETY_CRITICAL (32.0 >= 30.0): True
-        - price expensive/peak: True  
+        - price expensive/peak: True
         - thermal_debt_dm < (dm_block_threshold + 20) - concerning debt
 
         With DM_DHW_BLOCK_FALLBACK, the concerning threshold is DM_CONCERNING_THRESHOLD.
@@ -195,9 +195,10 @@ class TestDHWDeferralRange:
             current_time=datetime.now(),
         )
 
-        # Should defer expensive electricity  
+        # Should defer expensive electricity
         assert decision.should_heat is False
         assert decision.priority_reason == "DHW_SAFETY_DEFERRED_PEAK_PRICE"
+
     def test_no_defer_at_34_degrees_cheap_price(self):
         """Test that DHW at 34°C heats during cheap period (no deferral needed)."""
         scheduler = IntelligentDHWScheduler()

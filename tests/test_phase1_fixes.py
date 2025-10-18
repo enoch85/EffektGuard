@@ -165,8 +165,14 @@ async def test_dhw_history_uses_recorder_executor():
     # Create mock hass
     mock_hass = MagicMock()
     mock_hass.data = {}
+
+    # Mock entity state to be OFF (so history lookup is triggered)
+    mock_entity_state = MagicMock()
+    mock_entity_state.state = "off"
+    mock_entity_state.last_changed = datetime.now()
+
     mock_hass.states = MagicMock()
-    mock_hass.states.get = MagicMock(return_value=MagicMock(state="off"))
+    mock_hass.states.get = MagicMock(return_value=mock_entity_state)
     mock_hass.config = MagicMock()
     mock_hass.config.latitude = 59.3
     mock_hass.config.config_dir = "/tmp/test"
@@ -187,20 +193,22 @@ async def test_dhw_history_uses_recorder_executor():
 
     # Mock recorder module and instance
     mock_recorder_instance = MagicMock()
-    mock_recorder_instance.async_add_executor_job = AsyncMock(return_value={})
+    mock_recorder_instance.async_add_executor_job = AsyncMock(
+        return_value={"binary_sensor.dhw_active": []}
+    )
 
-    mock_recorder_module = MagicMock()
-    mock_recorder_module.get_instance = MagicMock(return_value=mock_recorder_instance)
-    mock_recorder_module.history = MagicMock()
-    mock_recorder_module.history.state_changes_during_period = MagicMock(return_value={})
+    mock_recorder = MagicMock()
+    mock_recorder.get_instance = MagicMock(return_value=mock_recorder_instance)
+    mock_recorder.history = MagicMock()
+    mock_recorder.history.state_changes_during_period = MagicMock(return_value={})
 
-    # Patch the recorder import in coordinator module
-    with patch.dict(
-        "sys.modules",
-        {"homeassistant.components.recorder": mock_recorder_module},
-    ):
+    # Patch recorder import where it's used (inside the function)
+    with patch("homeassistant.components.recorder", mock_recorder):
         # This should use recorder instance executor, not hass executor
         result = await coordinator._get_last_dhw_heating_time()
+
+        # Verify recorder.get_instance was called
+        mock_recorder.get_instance.assert_called_once_with(mock_hass)
 
         # Verify recorder executor was used
         assert (

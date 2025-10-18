@@ -274,7 +274,9 @@ def test_all_sensors_with_full_data(full_coordinator, mock_entry):
     assert sensor_values["optimization_reasoning"] == "Test reasoning"
     assert sensor_values["quarter_of_day"] == 42
     assert sensor_values["hour_classification"] == "normal"
-    assert sensor_values["peak_status"] == "normal"  # Changed: with current=3.5, peak=5.2, status is "normal"
+    assert (
+        sensor_values["peak_status"] == "normal"
+    )  # Changed: with current=3.5, peak=5.2, status is "normal"
     assert sensor_values["temperature_trend"] == -0.2
     assert sensor_values["savings_estimate"] == 450.0
     assert sensor_values["optional_features_status"] == "active"
