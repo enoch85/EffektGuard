@@ -257,9 +257,7 @@ DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfo
 # DHW thermal debt thresholds (climate-aware via spare capacity calculation)
 # Instead of hardcoded DM thresholds, we calculate spare capacity as percentage
 # above the climate-aware warning threshold for current outdoor temperature
-DHW_SPARE_CAPACITY_PERCENT: Final = (
-    50.0  # Require 50% spare capacity above warning threshold
-)
+DHW_SPARE_CAPACITY_PERCENT: Final = 50.0  # Require 50% spare capacity above warning threshold
 # Ensures DHW heating only when heat pump has significant spare capacity
 # Example: Stockholm at -10°C has warning=-700, so require DM > -350 (-700 * 0.5)
 # Example: Kiruna at -30°C has warning=-1200, so require DM > -600 (-1200 * 0.5)

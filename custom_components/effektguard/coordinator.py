@@ -1196,6 +1196,56 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         return None
 
+    def _check_dhw_abort_conditions(
+        self,
+        abort_conditions: list[str],
+        thermal_debt: float,
+        indoor_temp: float,
+        target_indoor: float,
+    ) -> tuple[bool, str | None]:
+        """Check if any DHW abort conditions are triggered.
+
+        Abort conditions are returned by DHW optimizer to monitor during active heating.
+        If triggered, we should stop DHW heating early to prioritize space heating.
+
+        Args:
+            abort_conditions: List of condition strings from DHW decision
+                Examples: ["thermal_debt < -500", "indoor_temp < 21.5"]
+            thermal_debt: Current degree minutes (DM) value
+            indoor_temp: Current indoor temperature
+            target_indoor: Target indoor temperature
+
+        Returns:
+            Tuple of (should_abort, reason_str)
+            - should_abort: True if any condition triggered
+            - reason_str: Human-readable abort reason or None
+        """
+        if not abort_conditions:
+            return False, None
+
+        for condition in abort_conditions:
+            # Parse and evaluate "thermal_debt < THRESHOLD" condition
+            if "thermal_debt <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if thermal_debt < threshold:
+                        return True, f"Thermal debt {thermal_debt:.0f} < {threshold:.0f}"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+            # Parse and evaluate "indoor_temp < THRESHOLD" condition
+            elif "indoor_temp <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if indoor_temp < threshold:
+                        return True, f"Indoor {indoor_temp:.1f}°C < {threshold:.1f}°C"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+        return False, None
+
     async def _calculate_hours_since_last_dhw(self) -> float:
         """Calculate hours since last DHW heating.
 
@@ -1278,6 +1328,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             price_periods=price_periods,
             hours_since_last_dhw=hours_since_last,
         )
+
+        # ABORT MONITORING: If DHW is currently heating, check abort conditions
+        # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
+        if is_lux_on and decision.abort_conditions:
+            should_abort, abort_reason = self._check_dhw_abort_conditions(
+                decision.abort_conditions,
+                thermal_debt,
+                indoor_temp,
+                target_indoor,
+            )
+
+            if should_abort:
+                _LOGGER.warning(
+                    "DHW heating aborted early: %s. Stopping DHW to prioritize space heating.",
+                    abort_reason,
+                )
+                try:
+                    await self.hass.services.async_call(
+                        "switch",
+                        "turn_off",
+                        {"entity_id": temp_lux_entity},
+                        blocking=False,
+                    )
+                    self._last_dhw_control_time = now_time
+                except Exception as err:
+                    _LOGGER.error("Failed to abort DHW heating: %s", err)
+                return  # Exit early - abort handled
 
         # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
         if hasattr(self, "_last_dhw_control_time"):
