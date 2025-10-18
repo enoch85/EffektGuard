@@ -194,7 +194,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
-        
+
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
@@ -298,11 +298,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
     def setup_power_sensor_listener(self) -> None:
         """Set up event listener to detect when external power sensor becomes available.
-        
+
         Uses Home Assistant's event bus to react immediately when the power sensor
         state changes from unknown/unavailable to a valid value. This provides
         instant detection during startup without polling overhead.
-        
+
         The listener automatically unsubscribes after detecting availability,
         so there's no ongoing event processing overhead.
         """
@@ -310,18 +310,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if not hasattr(self.nibe, "_power_sensor_entity") or not self.nibe._power_sensor_entity:
             _LOGGER.debug("No external power sensor configured - skipping availability listener")
             return
-        
+
         power_entity_id = self.nibe._power_sensor_entity
-        
+
         # Check if sensor is already available (immediate check)
         power_state = self.hass.states.get(power_entity_id)
         if power_state and power_state.state not in ["unknown", "unavailable"]:
             self._power_sensor_available = True
             _LOGGER.info("External power sensor %s already available at startup", power_entity_id)
             return
-        
+
         from homeassistant.core import callback
-        
+
         @callback
         def power_sensor_state_changed(event):
             """Handle power sensor state change event."""
@@ -334,23 +334,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         new_state.state,
                     )
                     self._power_sensor_available = True
-                    
+
                     # Unsubscribe - we don't need this listener anymore
                     if self._power_sensor_listener:
                         self._power_sensor_listener()
                         self._power_sensor_listener = None
                         _LOGGER.debug("Power sensor availability listener unsubscribed")
-                    
+
                     # Trigger immediate coordinator refresh to start using the sensor
                     self.hass.async_create_task(self.async_request_refresh())
-        
+
         # Subscribe to state_changed events for this specific entity
         self._power_sensor_listener = self.hass.bus.async_listen(
             "state_changed",
             power_sensor_state_changed,
             event_filter=lambda event: event.data.get("entity_id") == power_entity_id,
         )
-        
+
         _LOGGER.debug(
             "Listening for external power sensor %s availability (current state: %s)",
             power_entity_id,
@@ -374,7 +374,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._power_sensor_listener()
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
-            
+
             # Save learning state
             if self.adaptive_learning or self.thermal_predictor or self.weather_learner:
                 await self._save_learned_data(
@@ -696,7 +696,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Get DHW recommendation from optimizer with detailed planning
             try:
-                dhw_result = self._calculate_dhw_recommendation(
+                dhw_result = await self._calculate_dhw_recommendation(
                     nibe_data, price_data, weather_data, current_dhw_temp, now_time
                 )
                 dhw_recommendation = dhw_result["recommendation"]
@@ -761,7 +761,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_planning": dhw_planning_details,  # Detailed machine-readable data
         }
 
-    def _calculate_dhw_recommendation(
+    async def _calculate_dhw_recommendation(
         self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
     ) -> dict[str, Any]:
         """Calculate DHW heating recommendation with detailed planning.
@@ -847,6 +847,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             }
             climate_zone = None
 
+        # Get hours since last DHW heating for max wait check
+        hours_since_last = await self._calculate_hours_since_last_dhw()
+
+        # Get price periods for window-based scheduling
+        price_periods = []
+        if price_data:
+            price_periods = price_data.today + price_data.tomorrow
+
         # Get recommendation from optimizer
         decision = self.dhw_optimizer.should_start_dhw(
             current_dhw_temp=current_dhw_temp,
@@ -857,6 +865,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             outdoor_temp=outdoor_temp,
             price_classification=price_classification,
             current_time=now_time,
+            price_periods=price_periods,
+            hours_since_last_dhw=hours_since_last,
         )
 
         # Calculate optimal heating windows for today (next 24 hours)
@@ -1103,6 +1113,93 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             margin = thermal_debt - dm_thresholds["block"]
             return f"OK - {margin:.0f} DM safety margin"
 
+    async def _get_last_dhw_heating_time(self) -> datetime | None:
+        """Get timestamp when temporary lux was last activated.
+
+        Reads from MyUplink entity's last_changed attribute (source of truth).
+        Falls back to Home Assistant history API if entity is currently OFF.
+
+        Returns:
+            datetime: Last time DHW heating was activated (UTC)
+            None: If no history available
+        """
+        from homeassistant.const import STATE_ON
+
+        from .const import CONF_NIBE_TEMP_LUX_ENTITY
+
+        temp_lux_entity = self.entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
+        if not temp_lux_entity:
+            _LOGGER.debug("No temporary lux entity configured")
+            return None
+
+        # Try to read from current entity state
+        state = self.hass.states.get(temp_lux_entity)
+        if state:
+            if state.state == STATE_ON:
+                # Currently ON - last_changed is when it turned ON
+                _LOGGER.debug("DHW temp lux currently ON, last_changed: %s", state.last_changed)
+                return state.last_changed
+
+            # Entity is OFF - check history for last ON state
+            try:
+                from homeassistant.components.recorder import history
+
+                # Look back 48 hours
+                start_time = dt_util.utcnow() - timedelta(hours=48)
+                end_time = dt_util.utcnow()
+
+                # Get state history (async)
+                states = await self.hass.async_add_executor_job(
+                    history.state_changes_during_period,
+                    self.hass,
+                    start_time,
+                    end_time,
+                    temp_lux_entity,
+                )
+
+                if temp_lux_entity in states:
+                    entity_states = states[temp_lux_entity]
+
+                    # Find most recent ON state
+                    for state_obj in reversed(entity_states):
+                        if state_obj.state == STATE_ON:
+                            _LOGGER.debug(
+                                "Last DHW heating from history: %s", state_obj.last_changed
+                            )
+                            return state_obj.last_changed
+
+                _LOGGER.debug("No ON state in history for %s", temp_lux_entity)
+
+            except Exception as err:
+                _LOGGER.error("Failed to read DHW heating history: %s", err)
+
+        else:
+            _LOGGER.warning("Temporary lux entity %s not found", temp_lux_entity)
+
+        # Fall back to stored value (if any)
+        if hasattr(self, "_last_dhw_control_time") and self._last_dhw_control_time:
+            _LOGGER.debug("Using fallback stored DHW time: %s", self._last_dhw_control_time)
+            return self._last_dhw_control_time
+
+        return None
+
+    async def _calculate_hours_since_last_dhw(self) -> float:
+        """Calculate hours since last DHW heating.
+
+        Returns:
+            float: Hours since last heating (0.0+), or 24.0 if unknown
+        """
+        last_time = await self._get_last_dhw_heating_time()
+
+        if last_time is None:
+            _LOGGER.debug("Unknown DHW heating history - assuming 24 hours for safety")
+            return 24.0  # Safe assumption
+
+        now = dt_util.utcnow()
+        hours = (now - last_time).total_seconds() / 3600
+
+        return max(0.0, hours)  # Never negative
+
     async def _apply_dhw_control(
         self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
     ) -> None:
@@ -1148,6 +1245,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         price_classification = self.engine.price.get_current_classification(current_quarter)
 
+        # Get hours since last DHW heating for max wait check
+        hours_since_last = await self._calculate_hours_since_last_dhw()
+
+        # Get price periods for window-based scheduling
+        price_periods = []
+        if price_data:
+            price_periods = price_data.today + price_data.tomorrow
+
         decision = self.dhw_optimizer.should_start_dhw(
             current_dhw_temp=current_dhw_temp,
             space_heating_demand_kw=space_heating_demand,
@@ -1157,6 +1262,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             outdoor_temp=outdoor_temp,
             price_classification=price_classification,
             current_time=now_time,
+            price_periods=price_periods,
+            hours_since_last_dhw=hours_since_last,
         )
 
         # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
@@ -1292,7 +1399,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if has_external_power_sensor:
                 power_entity_id = self.nibe._power_sensor_entity
                 power_state = self.hass.states.get(power_entity_id)
-                
+
                 # Only attempt to use external sensor if it's available
                 # Availability is tracked via event listener for fast startup detection
                 if power_state and power_state.state not in ["unknown", "unavailable"]:

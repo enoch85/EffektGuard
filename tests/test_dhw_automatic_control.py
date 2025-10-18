@@ -85,6 +85,9 @@ def coordinator(mock_hass, mock_config_entry):
     coordinator.engine.price.get_current_classification = Mock(return_value="cheap")
     # Mock DHW optimizer
     coordinator.dhw_optimizer = Mock(spec=IntelligentDHWScheduler)
+    # Mock history tracking methods (Phase 5.4)
+    coordinator._get_last_dhw_heating_time = AsyncMock(return_value=None)
+    coordinator._calculate_hours_since_last_dhw = AsyncMock(return_value=24.0)
     return coordinator
 
 

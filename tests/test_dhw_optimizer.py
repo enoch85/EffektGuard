@@ -30,7 +30,7 @@ def test_dhw_smart_scheduling_cheapest_hours():
     # Current time: 5:00 AM (2 hours before demand)
     current_time = datetime(2025, 10, 15, 5, 0, 0)
 
-    # Scenario 1: CHEAP price - should heat
+    # Scenario 1: CHEAP price at 5:00 AM - should heat (window-based scheduling)
     decision = scheduler.should_start_dhw(
         current_dhw_temp=45.0,  # Below target
         space_heating_demand_kw=2.0,  # Low demand
@@ -43,8 +43,9 @@ def test_dhw_smart_scheduling_cheapest_hours():
     )
 
     assert decision.should_heat is True
-    assert "OPTIMAL_PREHEAT_DEMAND_2H_CHEAP" in decision.priority_reason
-    assert decision.target_temp == 55.0
+    # Now uses window-based scheduling, not demand period logic (2h is not urgent enough)
+    assert "CHEAP" in decision.priority_reason.upper()
+    assert decision.target_temp == 60.0  # Extra buffer during cheap period
 
     # Scenario 2: EXPENSIVE price at 5:00 AM - should NOT heat yet
     # DHW at 50°C (5°C below 55°C target) - can wait for cheaper electricity
@@ -169,7 +170,7 @@ def test_dhw_legionella_detection():
     # Detection should have triggered automatically
     assert scheduler.last_legionella_boost is not None
 
-    # Recent boost should prevent unnecessary DHW heating
+    # Recent boost with "normal" price should be blocked (only heat during cheap)
     decision = scheduler.should_start_dhw(
         current_dhw_temp=50.0,  # Normal temp after boost
         space_heating_demand_kw=2.0,
@@ -177,13 +178,13 @@ def test_dhw_legionella_detection():
         indoor_temp=21.0,
         target_indoor_temp=21.0,
         outdoor_temp=5.0,
-        price_classification="normal",
+        price_classification="normal",  # Not cheap - will be blocked
         current_time=now,
     )
 
-    # Should NOT heat - DHW is at adequate temperature after Legionella boost
+    # Should NOT heat - blocked by price classification (not cheap)
     assert decision.should_heat is False
-    assert decision.priority_reason == "DHW_ADEQUATE"
+    assert decision.priority_reason == "BLOCKED_NORMAL_PRICE"
 
 
 def test_dhw_bt7_history_tracking():
@@ -227,6 +228,64 @@ def test_dhw_cheap_electricity_opportunity():
     assert decision.should_heat is True
     assert decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY"
     assert decision.target_temp == 55.0  # Extra buffer during cheap period
+
+
+def test_dhw_heats_when_house_warm():
+    """Test Phase 5.1: DHW can heat when house is warm (spare compressor capacity).
+
+    Warm house = MORE compressor capacity for DHW (not a conflict).
+    DHW and space heating are independent systems.
+    """
+    scheduler = IntelligentDHWScheduler()
+    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+
+    # Scenario 1: House is 3°C OVER target (warm) - should STILL heat DHW
+    # Old logic blocked this (indoor_deficit < 0.3), new logic allows it
+    decision = scheduler.should_start_dhw(
+        current_dhw_temp=48.0,  # Below target
+        space_heating_demand_kw=1.0,  # Low demand
+        thermal_debt_dm=-50,  # Good thermal state
+        indoor_temp=25.0,  # House 3°C over target
+        target_indoor_temp=22.0,
+        outdoor_temp=5.0,
+        price_classification="cheap",
+        current_time=datetime.now(),
+    )
+
+    assert decision.should_heat is True
+    assert "CHEAP" in decision.priority_reason.upper()
+    # Warm house means compressor has spare capacity for DHW
+
+    # Scenario 2: House is comfortable, thermal debt prevents DHW
+    decision_thermal_debt = scheduler.should_start_dhw(
+        current_dhw_temp=48.0,
+        space_heating_demand_kw=1.0,
+        thermal_debt_dm=-110,  # Below -100 threshold
+        indoor_temp=25.0,  # House warm
+        target_indoor_temp=22.0,
+        outdoor_temp=5.0,
+        price_classification="cheap",
+        current_time=datetime.now(),
+    )
+
+    assert decision_thermal_debt.should_heat is False
+    # Thermal debt check prevents conflict (not indoor temp)
+
+    # Scenario 3: House COLD (emergency) still blocks DHW correctly (Rule 2)
+    decision_emergency = scheduler.should_start_dhw(
+        current_dhw_temp=48.0,
+        space_heating_demand_kw=1.0,
+        thermal_debt_dm=-50,
+        indoor_temp=20.0,  # 1.5°C below target
+        target_indoor_temp=21.5,
+        outdoor_temp=-5.0,  # Cold outside
+        price_classification="cheap",
+        current_time=datetime.now(),
+    )
+
+    assert decision_emergency.should_heat is False
+    assert decision_emergency.priority_reason == "SPACE_HEATING_EMERGENCY"
+    # Emergency rule still works correctly
 
 
 if __name__ == "__main__":

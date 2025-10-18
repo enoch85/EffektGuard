@@ -207,6 +207,8 @@ class IntelligentDHWScheduler:
         outdoor_temp: float,
         price_classification: str,  # "cheap", "normal", "expensive", "peak"
         current_time: datetime,
+        price_periods: list | None = None,  # QuarterPeriod list for window scheduling
+        hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
     ) -> DHWScheduleDecision:
         """Decide if DHW heating should start based on priority rules.
 
@@ -221,6 +223,8 @@ class IntelligentDHWScheduler:
             outdoor_temp: Current outdoor temperature (°C)
             price_classification: Current electricity price classification
             current_time: Current datetime
+            price_periods: Optional list of QuarterPeriod for window-based scheduling
+            hours_since_last_dhw: Optional hours since last DHW heating (for max wait check)
 
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
@@ -307,6 +311,24 @@ class IntelligentDHWScheduler:
                 ],
             )
 
+        # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
+        # Must heat every 36 hours (hygiene, comfort)
+        if hours_since_last_dhw and hours_since_last_dhw > 36.0:
+            # Only heat during cheap/normal prices (avoid expensive/peak even with max wait)
+            if price_classification in ["cheap", "normal"]:
+                _LOGGER.warning(
+                    "DHW maximum wait exceeded: %.1f hours (limit 36h)", hours_since_last_dhw
+                )
+                return DHWScheduleDecision(
+                    should_heat=True,
+                    priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=60,
+                    abort_conditions=[
+                        f"thermal_debt < {dm_abort_threshold:.0f}",
+                    ],
+                )
+
         # === RULE 4: HIGH SPACE HEATING DEMAND - DELAY DHW ===
         # NOTE: Legionella prevention is handled by NIBE automatically
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
@@ -322,54 +344,98 @@ class IntelligentDHWScheduler:
 
         # === RULE 5: HIGH DEMAND PERIOD - TARGET TEMP BY START TIME ===
         # Check if we're approaching a user-defined high demand period
-        # SMART SCHEDULING: Heat during cheapest hours before demand, not just last-minute
-        # Extended window: Up to 24h ahead (DHW tank heat-up is fast: 1-2 hours)
+        # URGENT heating overrides price classification (except peak)
         upcoming_demand = self._check_upcoming_demand_period(current_time)
         if upcoming_demand:
             hours_until = upcoming_demand["hours_until"]
             target = upcoming_demand["target_temp"]
 
-            # Determine if we should heat now based on price classification
-            # Strategy: Use cheapest available hours before demand period
-            should_heat_now = False
-            priority_reason = ""
-
-            # IMMEDIATE: Less than 2 hours until demand - heat regardless of price
+            # IMMEDIATE: Less than 2 hours until demand - heat regardless of price (except peak)
             if hours_until < 2 and current_dhw_temp < target:
-                should_heat_now = True
-                priority_reason = f"URGENT_DEMAND_IN_{hours_until:.1f}H"
-
-            # OPTIMAL: 2-24 hours until demand - heat during cheap/normal prices
-            # Note: DHW tank cools slowly, can preheat up to 24h ahead
-            elif 2 <= hours_until <= 24 and current_dhw_temp < target:
-                if price_classification in ["cheap", "normal"]:
-                    should_heat_now = True
-                    priority_reason = (
-                        f"OPTIMAL_PREHEAT_DEMAND_{hours_until:.0f}H_{price_classification.upper()}"
+                if price_classification != "peak":
+                    return DHWScheduleDecision(
+                        should_heat=True,
+                        priority_reason=f"URGENT_DEMAND_IN_{hours_until:.1f}H",
+                        target_temp=target,
+                        max_runtime_minutes=90,  # Longer for high demand
+                        abort_conditions=[
+                            f"thermal_debt < {dm_abort_threshold:.0f}",
+                            f"indoor_temp < {target_indoor_temp - 0.5}",
+                        ],
+                        recommended_start_time=current_time,
                     )
 
-            if should_heat_now:
-                return DHWScheduleDecision(
-                    should_heat=True,
-                    priority_reason=priority_reason,
-                    target_temp=target,
-                    max_runtime_minutes=90,  # Longer for high demand
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
-                    recommended_start_time=current_time,
+        # === RULE 6: SMART WINDOW-BASED SCHEDULING (Option C) ===
+        # STEP 1: Only heat during CHEAP prices (Classification check)
+        if price_classification != "cheap":
+            return DHWScheduleDecision(
+                should_heat=False,
+                priority_reason=f"BLOCKED_{price_classification.upper()}_PRICE",
+                target_temp=0.0,
+                max_runtime_minutes=0,
+                abort_conditions=[],
+            )
+
+        # STEP 2: Price is CHEAP - now find optimal window
+        if current_dhw_temp < (self.user_target_temp + 5.0):
+            # Use window-based scheduling if price data available
+            if price_periods:
+                lookahead_hours = self.get_lookahead_hours(current_time)
+                optimal_window = self.find_cheapest_dhw_window(
+                    current_time=current_time,
+                    lookahead_hours=lookahead_hours,
+                    dhw_duration_minutes=45,
+                    price_periods=price_periods,
                 )
 
-        # === RULE 6: CHEAP ELECTRICITY - OPPORTUNISTIC HEATING ===
-        # Heat to user target + 5°C buffer during cheap electricity
-        if price_classification == "cheap" and current_dhw_temp < (self.user_target_temp + 5.0):
-            # Only if space heating is satisfied
-            if indoor_deficit < 0.3 and thermal_debt_dm > -100:
+                if optimal_window is None:
+                    # No price data - heat now if needed (thermal debt check)
+                    if current_dhw_temp < 50.0 and thermal_debt_dm > -100:
+                        return DHWScheduleDecision(
+                            should_heat=True,
+                            priority_reason="CHEAP_NO_WINDOW_DATA",
+                            target_temp=self.user_target_temp + 5.0,
+                            max_runtime_minutes=45,
+                            abort_conditions=[
+                                f"thermal_debt < {dm_abort_threshold:.0f}",
+                                f"indoor_temp < {target_indoor_temp - 0.5}",
+                            ],
+                        )
+
+                # STEP 3: Check if we're in the optimal window (within 15 min of start)
+                elif optimal_window["hours_until"] <= 0.25:
+                    # This is the optimal time!
+                    if thermal_debt_dm > -100:
+                        return DHWScheduleDecision(
+                            should_heat=True,
+                            priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}",
+                            target_temp=min(self.user_target_temp + 5.0, 60.0),
+                            max_runtime_minutes=45,
+                            abort_conditions=[
+                                f"thermal_debt < {dm_abort_threshold:.0f}",
+                                f"indoor_temp < {target_indoor_temp - 0.5}",
+                            ],
+                            recommended_start_time=optimal_window["start_time"],
+                        )
+
+                # Wait for better window ahead (if DHW still comfortable)
+                elif current_dhw_temp > 45.0:
+                    return DHWScheduleDecision(
+                        should_heat=False,
+                        priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                        target_temp=0.0,
+                        max_runtime_minutes=0,
+                        abort_conditions=[],
+                        recommended_start_time=optimal_window["start_time"],
+                    )
+
+            # Fallback: No price data, use simple cheap classification
+            # Heat now if DHW getting low
+            if current_dhw_temp < 50.0 and thermal_debt_dm > -100:
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="CHEAP_ELECTRICITY_OPPORTUNITY",
-                    target_temp=min(self.user_target_temp + 5.0, 60.0),  # Extra buffer, max 60°C
+                    target_temp=min(self.user_target_temp + 5.0, 60.0),
                     max_runtime_minutes=45,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
@@ -377,13 +443,13 @@ class IntelligentDHWScheduler:
                     ],
                 )
 
-        # === RULE 7: NORMAL DHW HEATING - TEMPERATURE LOW ===
-        if current_dhw_temp < (self.user_target_temp - 5.0):
-            # Only if indoor comfortable and thermal debt OK
-            if indoor_deficit < 0.3 and thermal_debt_dm > -100:
+        # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
+        # Heat below 45°C during cheap prices (no window check - urgent enough)
+        if current_dhw_temp < 45.0 and price_classification == "cheap":
+            if thermal_debt_dm > -100:
                 return DHWScheduleDecision(
                     should_heat=True,
-                    priority_reason="NORMAL_DHW_HEATING",
+                    priority_reason="DHW_COMFORT_LOW_CHEAP",
                     target_temp=self.user_target_temp,
                     max_runtime_minutes=30,
                     abort_conditions=[
@@ -400,6 +466,142 @@ class IntelligentDHWScheduler:
             max_runtime_minutes=0,
             abort_conditions=[],
         )
+
+    def get_lookahead_hours(self, current_time: datetime) -> int:
+        """Calculate how far ahead to look for cheap DHW windows.
+
+        Returns until next demand period (capped at 24h), or 24h if no demand period.
+
+        Args:
+            current_time: Current datetime
+
+        Returns:
+            Hours to look ahead (max 24h)
+        """
+        next_demand = self._check_upcoming_demand_period(current_time)
+
+        if next_demand:
+            hours_until = next_demand["hours_until"]
+            return min(int(hours_until), 24)
+
+        return 24
+
+    def find_cheapest_dhw_window(
+        self,
+        current_time: datetime,
+        lookahead_hours: int,
+        dhw_duration_minutes: int,
+        price_periods: list,
+    ) -> dict | None:
+        """Find cheapest continuous window for DHW heating.
+
+        Uses sliding window algorithm to find absolute cheapest period
+        for DHW heating within the lookahead window.
+
+        Args:
+            current_time: Current timestamp
+            lookahead_hours: How far ahead to search
+            dhw_duration_minutes: DHW heating duration (typically 45 min)
+            price_periods: Combined list of today + tomorrow QuarterPeriod objects
+
+        Returns:
+            {
+                "start_time": datetime,
+                "end_time": datetime,
+                "quarters": [Q30, Q31, Q32],
+                "avg_price": float,
+                "hours_until": float,
+            }
+            or None if insufficient data
+        """
+        from math import ceil
+
+        if not price_periods:
+            _LOGGER.warning("No price data available for DHW window search")
+            return None
+
+        # Convert duration to quarters (45 min = 3 quarters)
+        quarters_needed = ceil(dhw_duration_minutes / 15)
+
+        # Filter to lookahead window
+        end_time = current_time + timedelta(hours=lookahead_hours)
+
+        # Build available quarters from price periods
+        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime
+        available_quarters = []
+        for period in price_periods:
+            # Reconstruct datetime from quarter info
+            # Determine if this is today or tomorrow based on quarter numbering
+            # We need to get the date from price_periods context
+            # For now, approximate based on current time and quarter
+            period_hour = period.hour
+            period_minute = period.minute
+
+            # Try today first
+            period_time = current_time.replace(
+                hour=period_hour, minute=period_minute, second=0, microsecond=0
+            )
+
+            # If period is in the past, it must be tomorrow
+            if period_time < current_time:
+                period_time += timedelta(days=1)
+
+            # Check if within lookahead window
+            if current_time <= period_time < end_time:
+                available_quarters.append(
+                    {
+                        "start": period_time,
+                        "end": period_time + timedelta(minutes=15),
+                        "quarter": period.quarter_of_day,
+                        "price": period.price,
+                    }
+                )
+
+        if len(available_quarters) < quarters_needed:
+            _LOGGER.warning(
+                "Not enough price data for DHW window search: %d quarters available, %d needed",
+                len(available_quarters),
+                quarters_needed,
+            )
+            return None
+
+        # Sliding window to find cheapest continuous period
+        lowest_price = None
+        lowest_index = None
+
+        for i in range(len(available_quarters) - quarters_needed + 1):
+            window = available_quarters[i : i + quarters_needed]
+
+            # Verify continuity (15-min gaps)
+            is_continuous = True
+            for j in range(len(window) - 1):
+                time_gap = (window[j + 1]["start"] - window[j]["end"]).total_seconds()
+                if abs(time_gap) > 1:  # Allow 1 second tolerance
+                    is_continuous = False
+                    break
+
+            if not is_continuous:
+                continue
+
+            window_avg = sum(q["price"] for q in window) / quarters_needed
+
+            if lowest_price is None or window_avg < lowest_price:
+                lowest_price = window_avg
+                lowest_index = i
+
+        if lowest_index is None:
+            _LOGGER.error("Could not find continuous DHW window (unexpected)")
+            return None
+
+        optimal_window = available_quarters[lowest_index : lowest_index + quarters_needed]
+
+        return {
+            "start_time": optimal_window[0]["start"],
+            "end_time": optimal_window[-1]["end"],
+            "quarters": [q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
+            "avg_price": lowest_price,
+            "hours_until": (optimal_window[0]["start"] - current_time).total_seconds() / 3600,
+        }
 
     def _check_upcoming_demand_period(self, current_time: datetime) -> dict[str, Any] | None:
         """Check if approaching a high demand period (up to 24h ahead).
