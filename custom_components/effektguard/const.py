@@ -327,8 +327,24 @@ WEATHER_OUTDOOR_COOLING_MODERATE_MULT: Final = 1.25  # Extend lead time 25%
 # Weather layer indoor trend adjustments (Oct 19, 2025)
 # Adjust pre-heating lead time based on indoor temperature trend
 
-# Weather prediction layer weight (Oct 19, 2025)
-LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.7  # Weather pre-heating layer priority
+# Weather prediction layer - Simplified proactive pre-heating (Oct 20, 2025)
+# Philosophy: "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
+#
+# Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive too late,
+#          resulting in thermal debt spirals (DM -1000) followed by 26°C overshoot.
+#
+# Solution: Simple forecast-based pre-heating scaled by thermal mass:
+#   - Forecast ≥5°C drop in next 12h → +0.6°C gentle pre-heat
+#   - Indoor cooling ≥0.5°C/h → confirms forecast, maintains +0.6°C
+#   - Weight scaled by thermal mass: Concrete 1.28x, Timber 0.85x, Radiator 0.43x
+#   - Let SAFETY, COMFORT, EFFECT layers moderate naturally via weighted aggregation
+#
+# Real-world validation: Prevents 20:00→04:00 emergency cycles and 16:00 overshoot
+WEATHER_FORECAST_DROP_THRESHOLD: Final = -5.0  # °C drop in forecast (increased sensitivity)
+WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
+WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
+WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
+LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)
 
 # Price layer constants (Oct 19, 2025)
 PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-2.0)

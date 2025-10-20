@@ -120,17 +120,10 @@ from ..const import (
     WEATHER_COMP_DEFER_WEIGHT_LIGHT,
     WEATHER_COMP_DEFER_WEIGHT_MODERATE,
     WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
-    WEATHER_INTENSITY_AGGRESSIVE_DEFICIT,
-    WEATHER_INTENSITY_AGGRESSIVE_FACTOR,
-    WEATHER_INTENSITY_GENTLE_FACTOR,
-    WEATHER_INTENSITY_MODERATE_FACTOR,
-    WEATHER_INTENSITY_NORMAL_FACTOR,
-    WEATHER_INTENSITY_STABLE_RATE,
-    WEATHER_PREDICTION_LEAD_TIME_FACTOR,
-    WEATHER_TEMP_DROP_DIVISOR,
-    WEATHER_OUTDOOR_COOLING_RAPID_THRESHOLD,
-    WEATHER_OUTDOOR_COOLING_RAPID_MULT,
-    WEATHER_OUTDOOR_COOLING_MODERATE_MULT,
+    WEATHER_FORECAST_DROP_THRESHOLD,
+    WEATHER_FORECAST_HORIZON,
+    WEATHER_GENTLE_OFFSET,
+    WEATHER_INDOOR_COOLING_CONFIRMATION,
     LAYER_WEIGHT_WEATHER_PREDICTION,
     PRICE_TOLERANCE_DIVISOR,
     COMFORT_DEAD_ZONE,
@@ -1360,134 +1353,97 @@ class DecisionEngine:
             )
 
     def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Weather prediction layer with TIME-AWARE pre-heating.
+        """Simplified weather prediction layer - Pure forecast-based gentle pre-heating.
 
-        CRITICAL FIX: Calculates WHEN cold arrives and ensures we start
-        pre-heating with sufficient lead time for thermal lag.
+        Philosophy (Oct 20, 2025):
+        "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
 
-        Old behavior: Pre-heated when cold detected (too late)
-        New behavior: Pre-heats lead_time hours BEFORE cold arrives
+        Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive
+        too late, resulting in thermal debt spirals (DM -1000 @ 04:00) followed by
+        massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
 
-        Uses dynamic thresholds based on building thermal mass and
-        rate-of-change analysis. Forecast window adapts to UFH type:
-        - Concrete slab: 24 hours (6+ hour thermal lag, needs early pre-heating)
-        - Timber UFH: 12 hours (2-3 hour lag)
-        - Radiators: 6 hours (<1 hour lag)
+        Solution: Simple proactive pre-heating:
+        1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
+        2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
+        3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
+
+        Weight scaling by thermal mass:
+        - Concrete slab (1.5): 0.85 × 1.5 = 1.275 (very high priority, 6h lag)
+        - Timber UFH (1.0): 0.85 × 1.0 = 0.85 (high priority, 2-3h lag)
+        - Radiators (0.5): 0.85 × 0.5 = 0.425 (moderate priority, <1h lag)
+
+        Real-world validation:
+        - Prevents 20:00→04:00 emergency thermal debt cycles
+        - Prevents 16:00 overshoot from overnight heating
+        - No complex calculations - just gentle constant pre-heat
 
         Args:
             nibe_state: Current NIBE state
             weather_data: Weather forecast data
 
         Returns:
-            LayerDecision with pre-heating recommendation
+            LayerDecision with gentle pre-heating recommendation
         """
         if not weather_data or not weather_data.forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
 
-        prediction_horizon = int(self.thermal.get_prediction_horizon())
-        forecast_hours = weather_data.forecast_hours[:prediction_horizon]
+        # Check forecast for significant temperature drop
+        current_outdoor = nibe_state.outdoor_temp
+        forecast_hours = weather_data.forecast_hours[:int(WEATHER_FORECAST_HORIZON)]
 
         if not forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No forecast data")
 
-        current_outdoor = nibe_state.outdoor_temp
-
-        # Find WHEN significant cold arrives (not just IF)
-        cold_threshold = current_outdoor - 2.0  # Significant = 2°C+ drop
-
-        cold_arrival_hour = None
-        min_temp = current_outdoor
-
-        for i, forecast in enumerate(forecast_hours):
-            if forecast.temperature < min_temp:
-                min_temp = forecast.temperature
-            if forecast.temperature < cold_threshold and cold_arrival_hour is None:
-                cold_arrival_hour = i  # First hour cold arrives
-
+        # Find minimum temperature in forecast period
+        min_temp = min(f.temperature for f in forecast_hours)
         temp_drop = min_temp - current_outdoor
 
-        if temp_drop < -3.0:  # Significant cold snap
-            # Find when minimum temp occurs if not found above
-            if cold_arrival_hour is None:
-                cold_arrival_hour = next(
-                    (i for i, f in enumerate(forecast_hours) if f.temperature == min_temp),
-                    len(forecast_hours) - 1,
-                )
+        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
+        forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
 
-            # Calculate required lead time based on heating system
-            lead_time_hours = self._get_preheat_lead_time()
+        # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
+        thermal_trend = self._get_thermal_trend()
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+        trend_confidence = thermal_trend.get("confidence", 0.0)
+        
+        indoor_cooling = (
+            trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
+            and trend_confidence > 0.4  # Sufficient data confidence
+        )
 
-            # ENHANCEMENT: Adjust lead time based on outdoor cooling trend
-            # If outdoor already cooling rapidly, cold may arrive SOONER than forecast
-            outdoor_trend = self._get_outdoor_trend()
-            outdoor_rate = outdoor_trend.get("rate_per_hour", 0.0)
+        if forecast_triggered or indoor_cooling:
+            # Calculate thermal mass-adjusted weight
+            # Concrete slab: 0.85 × 1.5 = 1.275 (beats most layers except SAFETY/EFFECT_CRITICAL)
+            # Timber: 0.85 × 1.0 = 0.85 (beats price, comfort, proactive)
+            # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
+            weather_weight = min(
+                LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal.thermal_mass,
+                0.99,  # Cap below EMERGENCY T3 (0.99)
+            )
 
-            if outdoor_rate < WEATHER_OUTDOOR_COOLING_RAPID_THRESHOLD:
-                # Outdoor cooling rapidly - extend lead time 50%
-                lead_time_hours *= WEATHER_OUTDOOR_COOLING_RAPID_MULT
-                outdoor_note = "outdoor cooling rapidly"
-            elif outdoor_rate < RAPID_COOLING_THRESHOLD:
-                # Outdoor cooling moderately - extend lead time 25%
-                lead_time_hours *= WEATHER_OUTDOOR_COOLING_MODERATE_MULT
-                outdoor_note = "outdoor cooling"
-            elif outdoor_rate > THERMAL_CHANGE_MODERATE:
-                # Outdoor warming - reduce lead time 20%
-                lead_time_hours *= MULTIPLIER_REDUCTION_20_PERCENT
-                outdoor_note = "outdoor warming"
+            # Determine trigger reason
+            if forecast_triggered and indoor_cooling:
+                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
+            elif forecast_triggered:
+                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
             else:
-                outdoor_note = "outdoor stable"
+                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
 
-            # PHASE 3.1: Adjust lead time based on indoor temperature trend
-            # If house already cooling, need MORE lead time to compensate
-            # If house already warming, need LESS lead time (save energy)
-            thermal_trend = self._get_thermal_trend()
-            trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+            return LayerDecision(
+                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
+                weight=weather_weight,
+                reason=(
+                    f"Weather pre-heat: {trigger} → "
+                    f"+{WEATHER_GENTLE_OFFSET:.1f}°C @ weight {weather_weight:.2f} "
+                    f"(base {LAYER_WEIGHT_WEATHER_PREDICTION:.2f} × thermal_mass {self.thermal.thermal_mass:.1f})"
+                ),
+            )
 
-            if trend_rate < RAPID_COOLING_THRESHOLD:
-                # House already cooling - need MORE lead time
-                adjusted_lead_time = lead_time_hours * MULTIPLIER_BOOST_30_PERCENT  # +30%
-                timing_note = "extended: house cooling"
-            elif trend_rate > COMFORT_DEAD_ZONE:
-                # House already warming - need LESS lead time
-                adjusted_lead_time = lead_time_hours * MULTIPLIER_REDUCTION_20_PERCENT  # -20%
-                timing_note = "reduced: house warming"
-            else:
-                adjusted_lead_time = lead_time_hours
-                timing_note = "normal"
-
-            # Check if we need to start pre-heating NOW
-            hours_until_cold = cold_arrival_hour
-
-            if hours_until_cold <= adjusted_lead_time:
-                # Cold arriving within lead time - START PRE-HEATING NOW
-
-                # Calculate urgency: less time = more urgent
-                urgency_factor = 1.0 + (adjusted_lead_time - hours_until_cold) / adjusted_lead_time
-                urgency_factor = min(urgency_factor, 2.0)  # Cap at 2x
-
-                # PHASE 3.3: Calculate adaptive pre-heat intensity
-                indoor_deficit = self.target_temp - nibe_state.indoor_temp
-                offset, intensity_reason = self._calculate_preheat_intensity(
-                    temp_drop, thermal_trend, indoor_deficit
-                )
-
-                # Apply urgency factor
-                offset = offset * urgency_factor
-                offset = min(offset, 3.0)  # Safety cap
-
-                return LayerDecision(
-                    offset=offset,
-                    weight=LAYER_WEIGHT_WEATHER_PREDICTION,
-                    reason=(
-                        f"Pre-heat: {temp_drop:.1f}°C in {hours_until_cold}h, "
-                        f"{intensity_reason} "
-                        f"(lead time: {adjusted_lead_time:.1f}h {timing_note}, "
-                        f"{outdoor_note}, "
-                        f"urgency: {urgency_factor:.1f}x)"
-                    ),
-                )
-
-        return LayerDecision(offset=0.0, weight=0.0, reason="Weather: No pre-heating needed")
+        return LayerDecision(
+            offset=0.0, 
+            weight=0.0, 
+            reason="Weather: No pre-heating needed (forecast stable, indoor stable)"
+        )
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
         """Mathematical weather compensation layer with adaptive climate system.
