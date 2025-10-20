@@ -1,0 +1,90 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Konfigurera NIBE-integration",
+                "description": "Välj din NIBE-värmepump. Hittade {nibe_count} NIBE-enheter.",
+                "data": {"nibe_entity": "NIBE-enhet"}
+            },
+            "gespot": {
+                "title": "Konfigurera GE-Spot-integration",
+                "description": "Konfigurera valfritt GE-Spot för 15-minuters prisoptimering.\n\n{detection_info}\n\n**Rekommenderat:** Använd `current_price`-sensor för prisoptimering i realtid per kvart.",
+                "data": {
+                    "gespot_entity": "GE-Spot Prissensor (Current Price Rekommenderas)",
+                    "enable_price_optimization": "Aktivera prisoptimering"
+                }
+            },
+            "optional": {
+                "title": "Valfria funktioner",
+                "description": "Konfigurera valfria funktioner. Hittade {weather_count} väderenheter.",
+                "data": {
+                    "weather_entity": "Väderenhet",
+                    "enable_peak_protection": "Aktivera effektskydd"
+                }
+            }
+        },
+        "error": {
+            "nibe_entity_not_found": "NIBE-enhet hittades inte",
+            "gespot_entity_not_found": "GE-Spot-enhet hittades inte"
+        },
+        "abort": {
+            "nibe_not_found": "NIBE-integration hittades inte. Installera NIBE Myuplink-integration först."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "EffektGuard-alternativ",
+                "description": "Konfigurera optimeringsbeteende och byggnadsegenskaper.\n\n**Ändringar tillämpas omedelbart** utan omstart. Använd **Omkonfigurera** för att ändra sensorval.",
+                "data": {
+                    "optimization_mode": "Optimeringsläge"
+                },
+                "data_description": {
+                    "optimization_mode": "**Komfort**: Tight temperaturkontroll, minimal prisoptimering, prioriterar stabil värme. **Balanserad**: Måttlig optimering som tillåter små temperaturvariationer för kostnadsbesparingar. **Besparingar**: Maximal prisoptimering med större temperatursvängningar under billiga/dyra perioder"
+                },
+                "sections": {
+                    "comfort_settings": {
+                        "name": "Komfortinställningar",
+                        "description": "Finjustera temperaturkomforttolerans",
+                        "data": {
+                            "tolerance": "Temperaturtolerans"
+                        },
+                        "data_description": {
+                            "tolerance": "Styr tillåten temperaturavvikelse från mål (±0,2°C dödzon bibehålls alltid). Högre värden tillåter mer aggressiv kostnadsoptimering men större temperatursvängningar"
+                        }
+                    },
+                    "dhw_settings": {
+                        "name": "Varmvatteninställningar",
+                        "description": "Schemalägg när varmvatten ska värmas",
+                        "data": {
+                            "dhw_target_temp": "Varmvatten måltemperatur",
+                            "dhw_morning_enabled": "Morgon varmvatten",
+                            "dhw_morning_hour": "Morgon starttid",
+                            "dhw_evening_enabled": "Kväll varmvatten",
+                            "dhw_evening_hour": "Kväll starttid"
+                        },
+                        "data_description": {
+                            "dhw_target_temp": "Måltemperatur för varmvatten (45-60°C)",
+                            "dhw_morning_enabled": "Aktivera uppvärmning av varmvatten på morgonen",
+                            "dhw_morning_hour": "Morgonbehovsperiod starttimme",
+                            "dhw_evening_enabled": "Aktivera uppvärmning av varmvatten på kvällen",
+                            "dhw_evening_hour": "Kvällsbehovsperiod starttimme"
+                        }
+                    },
+                    "building_characteristics": {
+                        "name": "Byggnadsegenskaper",
+                        "description": "Hjälper till att förutsäga ditt hems termiska beteende",
+                        "data": {
+                            "thermal_mass": "Byggnadens termiska massa",
+                            "insulation_quality": "Byggnadens isoleringskvalitet"
+                        },
+                        "data_description": {
+                            "thermal_mass": "Hur snabbt byggnaden reagerar på förändringar (0,5=lätt/trä, 1,0=normal, 2,0=tung/betong)",
+                            "insulation_quality": "Övergripande isoleringsnivå (0,5=dålig, 1,0=normal, 2,0=utmärkt)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

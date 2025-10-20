@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Määritä NIBE-integraatio",
+        "description": "Valitse NIBE lämmityskäyrän säätöyksikkö. Etsitään yksiköitä kuten 'number.*_offset'. Löytyi {nibe_count} yhteensopivaa yksikköä.",
+        "data": {
+          "nibe_entity": "NIBE Lämmityskäyrän säätöyksikkö"
+        },
+        "data_description": {
+          "nibe_entity": "NIBE-yksikkö joka ohjaa lämmityskäyrän säätöä (tyypillisesti number.*_offset)"
+        }
+      },
+      "gespot": {
+        "title": "Määritä GE-Spot-integraatio",
+        "description": "Määritä valinnainen GE-Spot 15 minuutin spot-hintojen optimointiin.\n\n{detection_info}\n\n**Suositus:** Käytä `current_price` sensoria reaaliaikaiseen neljännesvuosihintaan.",
+        "data": {
+          "gespot_entity": "GE-Spot Hintasensori (Current Price Suositeltu)",
+          "enable_price_optimization": "Ota käyttöön hintojen optimointi"
+        }
+      },
+      "optional": {
+        "title": "Valinnaiset ominaisuudet",
+        "description": "Määritä valinnaiset ominaisuudet. Löytyi {weather_count} sääyksikköä.",
+        "data": {
+          "weather_entity": "Sääyksikkö",
+          "enable_peak_protection": "Ota käyttöön tehon suojaus"
+        }
+      }
+    },
+    "error": {
+      "nibe_entity_not_found": "NIBE-yksikköä ei löytynyt",
+      "gespot_entity_not_found": "GE-Spot-yksikköä ei löytynyt"
+    },
+    "abort": {
+      "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ensin NIBE Myuplink-integraatio."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EffektGuard-asetukset",
+        "description": "Määritä optimointikäyttäytyminen ja rakennuksen ominaisuudet.\n\n**Muutokset tulevat voimaan välittömästi** ilman uudelleenkäynnistystä. Käytä **Määritä uudelleen** muuttaaksesi sensoreita.",
+        "data": {
+          "optimization_mode": "Optimointitila"
+        },
+        "data_description": {
+          "optimization_mode": "**Mukavuus**: Tiukka lämpötilan hallinta, minimaalinen hintojen optimointi, priorisoi vakaan lämmityksen. **Tasapainotettu**: Kohtalainen optimointi sallien pieniä lämpötilavaihteluita kustannussäästöjä varten. **Säästöt**: Maksimaalinen hintojen optimointi suuremmilla lämpötilavaihteluilla halpojen/kalliiden jaksojen aikana"
+        },
+        "sections": {
+          "comfort_settings": {
+            "name": "Mukavuusasetukset",
+            "description": "Hienosäädä lämpötilan mukavuustoleranssia",
+            "data": {
+              "tolerance": "Lämpötilatoleranssi"
+            },
+            "data_description": {
+              "tolerance": "Ohjaa sallittua lämpötilapoikkeamaa tavoitteesta (±0,2°C katvealue ylläpidetään aina). Korkeammat arvot sallivat aggressiivisemman kustannusoptimoinnin mutta suuremmat lämpötilavaihtelut"
+            }
+          },
+          "dhw_settings": {
+            "name": "Lämpimän veden asetukset",
+            "description": "Aikatauluta milloin lämmin vesi lämmitetään",
+            "data": {
+              "dhw_target_temp": "Lämpimän veden tavoitelämpötila",
+              "dhw_morning_enabled": "Aamun lämmin vesi",
+              "dhw_morning_hour": "Aamun aloitusaika",
+              "dhw_evening_enabled": "Illan lämmin vesi",
+              "dhw_evening_hour": "Illan aloitusaika"
+            },
+            "data_description": {
+              "dhw_target_temp": "Tavoitelämpötila lämpimälle vedelle (45-60°C)",
+              "dhw_morning_enabled": "Ota käyttöön aamun lämpimän veden lämmitys",
+              "dhw_morning_hour": "Aamun kysyntäjakson aloitusaika",
+              "dhw_evening_enabled": "Ota käyttöön illan lämpimän veden lämmitys",
+              "dhw_evening_hour": "Illan kysyntäjakson aloitusaika"
+            }
+          },
+          "building_characteristics": {
+            "name": "Rakennuksen ominaisuudet",
+            "description": "Auttaa ennustamaan kotisi lämpökäyttäytymistä",
+            "data": {
+              "thermal_mass": "Rakennuksen lämpömassa",
+              "insulation_quality": "Rakennuksen eristyslaatu"
+            },
+            "data_description": {
+              "thermal_mass": "Kuinka nopeasti rakennus reagoi muutoksiin (0,5=kevyt/puu, 1,0=normaali, 2,0=raskas/betoni)",
+              "insulation_quality": "Yleinen eristystaso (0,5=huono, 1,0=normaali, 2,0=erinomainen)"
+            }
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "enable_optimization": {
+        "name": "Ota käyttöön optimointi"
+      },
+      "price_optimization": {
+        "name": "Hintojen optimointi"
+      },
+      "peak_protection": {
+        "name": "Tehon suojaus"
+      },
+      "weather_prediction": {
+        "name": "Sääennuste"
+      },
+      "hot_water_optimization": {
+        "name": "Lämpimän veden optimointi"
+      }
+    }
+  },
+  "services": {
+    "boost_heating": {
+      "name": "Tehosta lämmitystä",
+      "description": "Lisää väliaikaisesti lämmitystä nopeaa mukavuutta varten"
+    },
+    "boost_hot_water": {
+      "name": "Tehosta lämmintä vettä",
+      "description": "Käynnistä välitön lämpimän veden kierros"
+    }
+  }
+}

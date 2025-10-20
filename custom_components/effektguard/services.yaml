@@ -1,0 +1,86 @@
+# Services for EffektGuard
+# Phase 5: Custom services for advanced control and monitoring
+
+force_offset:
+  name: Force heating offset
+  description: Manually override heating curve offset temporarily
+  fields:
+    offset:
+      name: Offset
+      description: Heating curve offset to apply (-10 to +10°C)
+      required: true
+      example: 2.5
+      selector:
+        number:
+          min: -10
+          max: 10
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      description: How long to maintain override (minutes, 0 = until next optimization cycle)
+      required: false
+      default: 60
+      example: 120
+      selector:
+        number:
+          min: 0
+          max: 480
+          step: 15
+          unit_of_measurement: "minutes"
+
+reset_peak_tracking:
+  name: Reset peak tracking
+  description: Reset monthly peak tracking (use at start of new billing period)
+  fields: {}
+
+boost_heating:
+  name: Boost heating
+  description: Temporarily maximize heating regardless of cost (emergency comfort mode)
+  fields:
+    duration:
+      name: Duration
+      description: Boost duration (minutes)
+      required: false
+      default: 120
+      example: 180
+      selector:
+        number:
+          min: 30
+          max: 360
+          step: 30
+          unit_of_measurement: "minutes"
+
+boost_dhw:
+  name: Boost DHW
+  description: Force DHW heating to target temperature (for immediate hot water needs)
+  fields:
+    target_temp:
+      name: Target temperature
+      description: Target DHW temperature (40-70°C)
+      required: false
+      default: 55.0
+      example: 60.0
+      selector:
+        number:
+          min: 40.0
+          max: 70.0
+          step: 1.0
+          unit_of_measurement: "°C"
+    duration:
+      name: Duration
+      description: Maximum heating duration (minutes)
+      required: false
+      default: 90
+      example: 120
+      selector:
+        number:
+          min: 30
+          max: 180
+          step: 15
+          unit_of_measurement: "minutes"
+
+calculate_optimal_schedule:
+  name: Calculate optimal schedule
+  description: Preview optimization schedule for next 24 hours based on current conditions
+  fields: {}

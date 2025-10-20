@@ -1,0 +1,48 @@
+name: Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - initial-implementation
+  push:
+    branches:
+      - main
+      - initial-implementation
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate EffektGuard
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black pytest pytest-homeassistant-custom-component
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f tests/requirements.txt ]; then pip install -r tests/requirements.txt; fi
+
+      - name: Black formatting check
+        run: |
+          black custom_components/effektguard/ --check --line-length 100
+
+      - name: Run pytest
+        run: |
+          pytest tests/ -v --tb=short
+
+      # Commented out until ready for HACS publication
+      # - name: HACS validation
+      #   uses: hacs/action@main
+      #   with:
+      #     category: integration
+
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master

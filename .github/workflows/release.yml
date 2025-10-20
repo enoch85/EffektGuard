@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir release
+          cp -r custom_components/effektguard release/
+          cp README.md release/
+          cp LICENSE release/
+          cp hacs.json release/
+
+      - name: Create ZIP
+        run: |
+          cd release
+          zip -r ../effektguard.zip .
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.ref_name }}
+        run: |
+          if [[ "$tag" == *-alpha* ]] || [[ "$tag" == *-beta* ]]; then
+            gh release create "$tag" \
+                --repo="$GITHUB_REPOSITORY" \
+                --title="EffektGuard $tag" \
+                --generate-notes \
+                --prerelease \
+                effektguard.zip#"EffektGuard $tag"
+          else
+            gh release create "$tag" \
+                --repo="$GITHUB_REPOSITORY" \
+                --title="EffektGuard $tag" \
+                --generate-notes \
+                --latest \
+                effektguard.zip#"EffektGuard $tag"
+          fi

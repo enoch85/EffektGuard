@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Konfigurer NIBE-integrasjon",
+        "description": "Velg din NIBE varmekurvejusteringsenhet. Leter etter enheter som 'number.*_offset'. Fant {nibe_count} kompatible enheter.",
+        "data": {
+          "nibe_entity": "NIBE Varmekurvejusteringsenhet"
+        },
+        "data_description": {
+          "nibe_entity": "NIBE-enheten som kontrollerer varmekurvejustering (vanligvis number.*_offset)"
+        }
+      },
+      "gespot": {
+        "title": "Konfigurer GE-Spot-integrasjon",
+        "description": "Valgfritt konfigurer GE-Spot for 15-minutters spotprisoptimalisering.\n\n{detection_info}\n\n**Anbefalt:** Bruk `current_price` sensor for sanntids kvartersprispriser.",
+        "data": {
+          "gespot_entity": "GE-Spot Prissensor (Current Price Anbefalt)",
+          "enable_price_optimization": "Aktiver prisoptimalisering"
+        }
+      },
+      "optional": {
+        "title": "Valgfrie funksjoner",
+        "description": "Konfigurer valgfrie funksjoner. Fant {weather_count} værenheter.",
+        "data": {
+          "weather_entity": "Værenhet",
+          "enable_peak_protection": "Aktiver effektbeskyttelse"
+        }
+      }
+    },
+    "error": {
+      "nibe_entity_not_found": "NIBE-enhet ikke funnet",
+      "gespot_entity_not_found": "GE-Spot-enhet ikke funnet"
+    },
+    "abort": {
+      "nibe_not_found": "NIBE-integrasjon ikke funnet. Vennligst installer NIBE Myuplink-integrasjon først."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EffektGuard-alternativer",
+        "description": "Konfigurer optimaliseringsadferd og bygningsegenskaper.\n\n**Endringer gjelder umiddelbart** uten omstart. Bruk **Omkonfigurer** for å endre sensorvalg.",
+        "data": {
+          "optimization_mode": "Optimaliseringsmodus"
+        },
+        "data_description": {
+          "optimization_mode": "**Komfort**: Tett temperaturkontroll, minimal prisoptimalisering, prioriterer stabil oppvarming. **Balansert**: Moderat optimalisering som tillater små temperaturvariasjoner for kostnadsbesparelser. **Besparelser**: Maksimal prisoptimalisering med større temperatursvingninger under billige/dyre perioder"
+        },
+        "sections": {
+          "comfort_settings": {
+            "name": "Komfortinnstillinger",
+            "description": "Finjuster temperaturkomforttoleranse",
+            "data": {
+              "tolerance": "Temperaturtoleranse"
+            },
+            "data_description": {
+              "tolerance": "Styrer tillatt temperaturavvik fra mål (±0,2°C dødband opprettholdes alltid). Høyere verdier tillater mer aggressiv kostnadsoptimalisering men større temperatursvingninger"
+            }
+          },
+          "dhw_settings": {
+            "name": "Varmtvannsinnstillinger",
+            "description": "Planlegg når varmtvann skal varmes",
+            "data": {
+              "dhw_target_temp": "Varmtvann måltemperatur",
+              "dhw_morning_enabled": "Morgen varmtvann",
+              "dhw_morning_hour": "Morgen starttid",
+              "dhw_evening_enabled": "Kveld varmtvann",
+              "dhw_evening_hour": "Kveld starttid"
+            },
+            "data_description": {
+              "dhw_target_temp": "Måltemperatur for varmtvann (45-60°C)",
+              "dhw_morning_enabled": "Aktiver morgen varmtvannsoppvarming",
+              "dhw_morning_hour": "Morgenbehovsperiode starttid",
+              "dhw_evening_enabled": "Aktiver kveld varmtvannsoppvarming",
+              "dhw_evening_hour": "Kveldsbehovsperiode starttid"
+            }
+          },
+          "building_characteristics": {
+            "name": "Bygningsegenskaper",
+            "description": "Hjelper med å forutsi hjemmets termiske oppførsel",
+            "data": {
+              "thermal_mass": "Bygningens termiske masse",
+              "insulation_quality": "Bygningens isoleringskvalitet"
+            },
+            "data_description": {
+              "thermal_mass": "Hvor raskt bygningen reagerer på endringer (0,5=lett/tre, 1,0=normal, 2,0=tung/betong)",
+              "insulation_quality": "Samlet isoleringsnivå (0,5=dårlig, 1,0=normal, 2,0=utmerket)"
+            }
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "enable_optimization": {
+        "name": "Aktiver optimalisering"
+      },
+      "price_optimization": {
+        "name": "Prisoptimalisering"
+      },
+      "peak_protection": {
+        "name": "Effektbeskyttelse"
+      },
+      "weather_prediction": {
+        "name": "Værprediksjon"
+      },
+      "hot_water_optimization": {
+        "name": "Varmtvannsoptimalisering"
+      }
+    }
+  },
+  "services": {
+    "boost_heating": {
+      "name": "Boost oppvarming",
+      "description": "Midlertidig øk oppvarming for rask komfort"
+    },
+    "boost_hot_water": {
+      "name": "Boost varmtvann",
+      "description": "Start umiddelbar varmtvannssyklus"
+    }
+  }
+}

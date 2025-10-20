@@ -1,0 +1,13 @@
+{
+  "options": {
+    "step": {
+      "init": {
+        "sections": {
+          "optimization_settings": "mdi:tune",
+          "building_characteristics": "mdi:home-thermometer",
+          "domestic_hot_water": "mdi:water-boiler"
+        }
+      }
+    }
+  }
+}

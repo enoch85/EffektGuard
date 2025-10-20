@@ -1,0 +1,13 @@
+{
+  "domain": "effektguard",
+  "name": "EffektGuard",
+  "after_dependencies": ["ge_spot", "myuplink", "recorder", "sunspec", "template", "weather"],
+  "codeowners": ["@enoch85"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/enoch85/EffektGuard",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/enoch85/EffektGuard/issues",
+  "requirements": ["numpy>=1.21.0"],
+  "version": "v0.0.52-beta4"
+}

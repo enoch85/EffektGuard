@@ -1,0 +1,118 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure NIBE Integration",
+        "description": "Select your NIBE heating curve offset entity (number.* with 'offset' in name). Found {nibe_count} compatible entities.\n\n**Your entity:** `number.f750_cu_3x400v_offset`",
+        "data": {
+          "nibe_entity": "NIBE Heating Curve Offset Entity"
+        },
+        "data_description": {
+          "nibe_entity": "The NIBE entity that controls the heating curve offset (typically number.*_offset)"
+        }
+      },
+      "gespot": {
+        "title": "Configure GE-Spot Integration",
+        "description": "Optionally configure GE-Spot for 15-minute spot price optimization.\n\n{detection_info}\n\n**Recommended:** Use `current_price` sensor for real-time quarter-hour pricing.",
+        "data": {
+          "gespot_entity": "GE-Spot Price Sensor (Current Price Recommended)",
+          "enable_price_optimization": "Enable price optimization"
+        }
+      },
+      "optional": {
+        "title": "Optional Features",
+        "description": "Configure optional features. Found {weather_count} weather entities.",
+        "data": {
+          "weather_entity": "Weather Entity",
+          "enable_peak_protection": "Enable peak protection"
+        }
+      }
+    },
+    "error": {
+      "nibe_entity_not_found": "NIBE entity not found",
+      "gespot_entity_not_found": "GE-Spot entity not found"
+    },
+    "abort": {
+      "nibe_not_found": "NIBE integration not found. Please install NIBE Myuplink integration first."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "EffektGuard Options",
+        "sections": {
+          "optimization_settings": {
+            "name": "Optimization Settings",
+            "description": "Choose optimization mode and temperature tolerance",
+            "data": {
+              "optimization_mode": "Mode",
+              "tolerance": "Temperature Tolerance"
+            },
+            "data_description": {
+              "optimization_mode": "Comfort: Minimal price optimization, prioritizes stable heating and comfort\nBalanced: Moderate optimization with slight temperature variations\nSavings: Maximum cost optimization with wider temperature swings",
+              "tolerance": "How much the indoor temperature can vary from target\n(±0.2°C deadzone always maintained).\n\nLower = more stable\nHigher = more aggressive cost optimization."
+            }
+          },
+          "building_characteristics": {
+            "name": "Building Characteristics",
+            "description": "Physical properties affecting thermal behavior and prediction accuracy",
+            "data": {
+              "thermal_mass": "Thermal Mass",
+              "insulation_quality": "Insulation Quality"
+            },
+            "data_description": {
+              "thermal_mass": "How quickly your building heats and cools.\n\nLower (0.5-0.8) = lightweight construction.\nHigher (1.5-2.0) = heavy materials like concrete.",
+              "insulation_quality": "Overall heat retention quality.\nHigher = better insulation.\n\nModern (1.5-2.0),\nStandard 1990s (0.8-1.2),\nOlder (0.5-0.8)."
+            }
+          },
+          "domestic_hot_water": {
+            "name": "Domestic Hot Water (DHW)",
+            "description": "Hot water scheduling and temperature settings",
+            "data": {
+              "dhw_target_temp": "DHW Target Temperature",
+              "dhw_schedules": "Enable/Disable",
+              "dhw_morning_hour": "Morning start hour",
+              "dhw_evening_hour": "Evening start hour"
+            },
+            "data_description": {
+              "dhw_target_temp": "Target temperature for hot water storage tank (45-60°C).\n\nHigher temperatures = more stored energy but more electricity consumption.",
+              "dhw_schedules": "Select which heating periods to enable. Uncheck to disable heating during that period.",
+              "dhw_morning_hour": "Hour when morning hot water heating should start.",
+              "dhw_evening_hour": "Hour when evening hot water heating should start."
+            }
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "enable_optimization": {
+        "name": "Enable Optimization"
+      },
+      "price_optimization": {
+        "name": "Price Optimization"
+      },
+      "peak_protection": {
+        "name": "Peak Protection"
+      },
+      "weather_prediction": {
+        "name": "Weather Prediction"
+      },
+      "hot_water_optimization": {
+        "name": "Hot Water Optimization"
+      }
+    }
+  },
+  "services": {
+    "boost_heating": {
+      "name": "Boost Heating",
+      "description": "Temporarily increase heating for quick comfort boost"
+    },
+    "boost_hot_water": {
+      "name": "Boost Hot Water",
+      "description": "Start immediate hot water heating cycle"
+    }
+  }
+}
+
