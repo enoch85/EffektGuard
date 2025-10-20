@@ -212,8 +212,8 @@ class TestSensorEntityDefinitions:
 
     def test_sensor_count_matches_expected(self):
         """Verify we have all expected sensors."""
-        # EffektGuard has 20 sensors (as of Oct 2025)
-        assert len(SENSORS) == 22, f"Expected 22 sensors, found {len(SENSORS)}"
+        # EffektGuard has 21 sensors (as of Oct 2025 - removed peak_status)
+        assert len(SENSORS) == 21, f"Expected 21 sensors, found {len(SENSORS)}"
 
     def test_all_sensor_keys_are_unique(self):
         """Verify no duplicate sensor keys."""
@@ -254,7 +254,6 @@ class TestSensorEntityDefinitions:
             "indoor_temperature",
             "nibe_power",
             "quarter_of_day",
-            "peak_status",
             "temperature_trend",
             "outdoor_temperature_trend",
             "optional_features_status",
@@ -665,8 +664,8 @@ class TestEntityIntegration:
             assert switch.unique_id not in unique_ids, f"Duplicate unique_id: {switch.unique_id}"
             unique_ids.add(switch.unique_id)
 
-        # Total entities: 20 sensors + 1 climate + 5 switches = 26 entities
-        assert len(unique_ids) == 28
+        # Total entities: 21 sensors + 1 climate + 5 switches = 27 entities
+        assert len(unique_ids) == 27
 
 
 class TestConfigReloadIntegration:

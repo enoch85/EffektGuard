@@ -418,7 +418,7 @@ class TestCoordinatorIntegration:
             "nibe_state",
             "price_data",
             "weather_data",
-            "peak_status",
+            "peak_tracking",
             "decision",
         ]
 

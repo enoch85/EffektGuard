@@ -32,67 +32,6 @@ from .coordinator import EffektGuardCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
-def _calculate_peak_status(coordinator: EffektGuardCoordinator) -> str:
-    """Calculate peak status from coordinator data.
-
-    Returns status based on current power usage relative to peaks.
-    """
-    if not coordinator.data:
-        return "unknown"
-
-    # Get current power - try multiple sources
-    current_power = 0.0
-
-    # Try 1: NIBE phase currents
-    nibe_data = coordinator.data.get("nibe")
-    if nibe_data:
-        try:
-            phase1 = getattr(nibe_data, "phase1_current", None)
-            if phase1 is not None:
-                phase2 = getattr(nibe_data, "phase2_current", None) or 0
-                phase3 = getattr(nibe_data, "phase3_current", None) or 0
-                current_power = (phase1 + phase2 + phase3) * 0.230
-        except (AttributeError, TypeError):
-            pass
-
-    # Try 2: Decision object (fallback for tests/legacy)
-    if current_power == 0.0:
-        decision = coordinator.data.get("decision")
-        if decision:
-            try:
-                dec_power = getattr(decision, "current_power", None)
-                if dec_power is not None:
-                    current_power = float(dec_power)
-            except (AttributeError, TypeError, ValueError):
-                pass
-
-    # Get peak values safely (handle MagicMock in tests)
-    try:
-        peak_today = float(getattr(coordinator, "peak_today", 0.0) or 0.0)
-        peak_month = float(getattr(coordinator, "peak_this_month", 0.0) or 0.0)
-        current_power = float(current_power)
-    except (TypeError, ValueError):
-        peak_today = 0.0
-        peak_month = 0.0
-        current_power = 0.0
-
-    # Determine status based on current usage vs peaks
-    try:
-        if current_power < 0.5:
-            return "idle"
-        elif peak_month > 0 and current_power >= peak_month * 0.95:
-            return "approaching_peak"
-        elif peak_today > 0 and current_power >= peak_today * 0.90:
-            return "high_usage"
-        elif current_power >= 5.0:  # High absolute usage
-            return "elevated"
-        else:
-            return "normal"
-    except TypeError:
-        # Comparison failed - likely MagicMock issue in tests
-        return "unknown"
-
-
 @dataclass(frozen=True)
 class EffektGuardSensorEntityDescription(SensorEntityDescription):
     """Describes EffektGuard sensor entity."""
@@ -280,15 +219,6 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
             coordinator.data.get("current_classification") if coordinator.data else "unknown"
-        ),
-    ),
-    EffektGuardSensorEntityDescription(
-        key="peak_status",
-        name="Peak Status",
-        icon="mdi:alert-circle-outline",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda coordinator: (
-            _calculate_peak_status(coordinator) if coordinator.data else "unknown"
         ),
     ),
     EffektGuardSensorEntityDescription(
@@ -831,17 +761,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["baseline_cost"] = savings.baseline_cost
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
-
-        elif key == "peak_status":
-            # Show margin to peak and top peaks
-            if "decision" in self.coordinator.data:
-                decision = self.coordinator.data["decision"]
-                if decision and hasattr(decision, "peak_margin"):
-                    attrs["margin_to_peak"] = decision.peak_margin
-                if decision and hasattr(decision, "current_power"):
-                    attrs["current_power"] = decision.current_power
-            attrs["monthly_peak"] = self.coordinator.peak_this_month
-            attrs["daily_peak"] = self.coordinator.peak_today
 
         elif key == "peak_today":
             # Peak tracking metadata - when, how, and context

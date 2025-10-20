@@ -102,7 +102,7 @@ fi
 # Header
 echo ""
 echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║${NC}                ${BOLD}EffektGuard Test Suite${NC}                        ${BOLD}${CYAN}║${NC}"
+echo -e "${BOLD}${CYAN}║${NC}                ${BOLD}EffektGuard Test Suite${NC}                              ${BOLD}${CYAN}║${NC}"
 echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 

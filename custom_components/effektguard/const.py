@@ -168,15 +168,17 @@ DM_THRESHOLD_ABSOLUTE_MAX: Final = -1500  # NEVER EXCEED - hard safety limit
 # - Kiruna (WARNING -1200):   T1=-1200, T2=-1400, T3=-1450 (capped)
 #
 # Prevents false positives in Arctic climates while maintaining safety in mild climates.
-DM_CRITICAL_T1_MARGIN: Final = 0  # Tier 1: At WARNING threshold (climate-aware)
-DM_CRITICAL_T1_OFFSET: Final = 2.0  # Moderate boost
-DM_CRITICAL_T1_WEIGHT: Final = 1.0  # Absolute priority - overrides peak protection
+DM_CRITICAL_T1_MARGIN: Final = (
+    0  # Tier 1: At WARNING threshold (climate-aware) - early aggressive intervention
+)
+DM_CRITICAL_T1_OFFSET: Final = 4.0  # Strong early boost (prevent DM spiral, avoid hours of high Hz)
+DM_CRITICAL_T1_WEIGHT: Final = 0.95  # High priority with temperature awareness
 DM_CRITICAL_T2_MARGIN: Final = 200  # Tier 2: WARNING + 200 DM beyond
-DM_CRITICAL_T2_OFFSET: Final = 2.5  # Strong boost
-DM_CRITICAL_T2_WEIGHT: Final = 1.0  # Absolute priority - overrides peak protection
+DM_CRITICAL_T2_OFFSET: Final = 7.0  # Very strong boost (decisive recovery before T3)
+DM_CRITICAL_T2_WEIGHT: Final = 0.97  # Very high priority with minimal temp awareness
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
-DM_CRITICAL_T3_OFFSET: Final = 3.0  # Emergency boost
-DM_CRITICAL_T3_WEIGHT: Final = 1.0  # Absolute priority - overrides peak protection
+DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
+DM_CRITICAL_T3_WEIGHT: Final = 0.99  # Near-absolute priority (critical situation)
 DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
