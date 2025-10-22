@@ -142,9 +142,9 @@ class TestSafetyRules:
         scheduler = IntelligentDHWScheduler()
 
         decision = scheduler.should_start_dhw(
-            current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # Below safety minimum!
+            current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # 33°C - Below safety minimum!
             space_heating_demand_kw=2.0,
-            thermal_debt_dm=-50,
+            thermal_debt_dm=-325,  # Bad DM: -325 < -320, cannot defer (but not critical)
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -157,15 +157,15 @@ class TestSafetyRules:
         assert decision.max_runtime_minutes == DHW_SAFETY_RUNTIME_MINUTES
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
-        """RULE 3: Safety minimum CAN be deferred if temp safe, DM concerning, and price peak."""
+        """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""
         scheduler = IntelligentDHWScheduler()
 
-        # For defer to work: temp >= 30°C AND price expensive/peak AND DM < block+20
-        # With fallback thresholds: block=-340, so need DM < -320
+        # For defer to work: temp >= 30°C AND price expensive/peak AND DM > block+20
+        # With fallback thresholds: block=-340, so need DM > -320 (healthy)
         decision = scheduler.should_start_dhw(
             current_dhw_temp=32.0,  # Below 35°C but above 30°C critical
             space_heating_demand_kw=2.0,
-            thermal_debt_dm=-330,  # Between -340 and -320 (concerning range)
+            thermal_debt_dm=-300,  # Healthy: -300 > -320, can defer
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,

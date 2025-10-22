@@ -1389,7 +1389,7 @@ class DecisionEngine:
 
         # Check forecast for significant temperature drop
         current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[:int(WEATHER_FORECAST_HORIZON)]
+        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
 
         if not forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No forecast data")
@@ -1405,7 +1405,7 @@ class DecisionEngine:
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
         trend_confidence = thermal_trend.get("confidence", 0.0)
-        
+
         indoor_cooling = (
             trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
             and trend_confidence > 0.4  # Sufficient data confidence
@@ -1440,9 +1440,9 @@ class DecisionEngine:
             )
 
         return LayerDecision(
-            offset=0.0, 
-            weight=0.0, 
-            reason="Weather: No pre-heating needed (forecast stable, indoor stable)"
+            offset=0.0,
+            weight=0.0,
+            reason="Weather: No pre-heating needed (forecast stable, indoor stable)",
         )
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:

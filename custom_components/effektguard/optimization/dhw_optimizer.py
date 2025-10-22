@@ -340,15 +340,15 @@ class IntelligentDHWScheduler:
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
         # Safety minimum: Heat below 35°C BUT defer if:
-        # - Price is expensive/peak AND thermal debt is concerning
-        # - This prevents peak billing hits when DHW can wait
+        # - Price is expensive/peak AND thermal debt is NOT concerning
+        # - This prevents peak billing hits when DHW can wait and space heating is healthy
         if current_dhw_temp < DHW_SAFETY_MIN:
             # Check if we should defer due to peak pricing + thermal debt
             # Only defer if temp is still safe (30-35°C range) and not critically low
             can_defer_for_peak = (
                 current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 30°C)
                 and price_classification in ["expensive", "peak"]  # High cost period
-                and thermal_debt_dm < (dm_block_threshold + 20)  # DM concerning but not critical
+                and thermal_debt_dm > (dm_block_threshold + 20)  # DM healthy enough to defer
             )
 
             if can_defer_for_peak:
