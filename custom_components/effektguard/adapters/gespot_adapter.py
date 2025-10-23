@@ -264,6 +264,8 @@ class GESpotAdapter:
 
         # Fill all 96 quarters
         complete_periods = []
+        base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
         for quarter in range(96):
             if quarter in period_dict:
                 complete_periods.append(period_dict[quarter])
@@ -271,6 +273,7 @@ class GESpotAdapter:
                 # Fill missing with average
                 hour = quarter // 4
                 minute = (quarter % 4) * 15
+                start_time = base_date.replace(hour=hour, minute=minute)
                 complete_periods.append(
                     QuarterPeriod(
                         quarter_of_day=quarter,
@@ -278,6 +281,7 @@ class GESpotAdapter:
                         minute=minute,
                         price=avg_price,
                         is_daytime=(6 <= hour < 22),
+                        start_time=start_time,
                     )
                 )
 

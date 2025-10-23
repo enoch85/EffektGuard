@@ -1593,9 +1593,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Create neutral periods - all classified as "normal"
         fallback_periods = []
+        base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
         for quarter in range(96):  # 96 quarters per day (15-min intervals)
             hour = quarter // 4
             minute = (quarter % 4) * 15
+            start_time = base_date.replace(hour=hour, minute=minute)
             fallback_periods.append(
                 QuarterPeriod(
                     quarter_of_day=quarter,
@@ -1603,6 +1606,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     minute=minute,
                     price=1.0,  # Neutral price
                     is_daytime=(6 <= hour < 22),
+                    start_time=start_time,
                 )
             )
 
