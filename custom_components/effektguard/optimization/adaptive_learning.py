@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 import numpy as np
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     LEARNING_CONFIDENCE_THRESHOLD,
@@ -176,14 +177,14 @@ class AdaptiveThermalModel:
                 heating_efficiency=heating_efficiency,
                 thermal_decay_rate=thermal_decay_rate,
                 ufh_type=ufh_type,
-                last_updated=datetime.now(),
+                last_updated=dt_util.now(),
                 confidence=confidence,
                 observation_count=len(self.observations),
             )
 
             self.ufh_type = ufh_type
             self.thermal_mass = thermal_mass
-            self._last_update = datetime.now()
+            self._last_update = dt_util.now()
 
             _LOGGER.info(
                 "Updated learned parameters: thermal_mass=%.2f, "

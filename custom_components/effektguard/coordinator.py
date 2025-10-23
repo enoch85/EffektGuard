@@ -293,8 +293,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self.last_applied_offset = offset_data.get("value")
                     timestamp_str = offset_data.get("timestamp")
                     if timestamp_str:
-                        from datetime import datetime
-
                         self.last_offset_timestamp = datetime.fromisoformat(timestamp_str)
                     _LOGGER.info(
                         "Restored last offset: %.1f°C from %s",
@@ -705,9 +703,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._learned_data_changed = False
 
         # Get current quarter classification from price analyzer
-        from datetime import datetime
-
-        now_time = datetime.now()
+        # Use Home Assistant timezone-aware helper to avoid naive datetimes
+        now_time = dt_util.now()
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 

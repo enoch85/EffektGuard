@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
+from homeassistant.util import dt as dt_util
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -106,7 +108,7 @@ class CompressorHealthMonitor:
             CompressorStats with current and historical data
         """
         if timestamp is None:
-            timestamp = datetime.now()
+            timestamp = dt_util.now()
 
         # Validate Hz reading
         if hz < 0 or hz > 150:

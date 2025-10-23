@@ -534,9 +534,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
             # Calculate hourly schedule for next 24 hours
             schedule = []
-            from datetime import datetime, timedelta
+            from datetime import timedelta
 
-            current_time = datetime.now()
+            from homeassistant.util import dt as dt_util
+
+            current_time = dt_util.now()
 
             for hour_offset in range(24):
                 forecast_time = current_time + timedelta(hours=hour_offset)

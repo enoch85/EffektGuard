@@ -19,7 +19,6 @@ This adapter:
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -73,9 +72,7 @@ class PriceData:
             return None
 
         # Find current quarter (0-95)
-        from datetime import datetime
-
-        now = datetime.now()
+        now = dt_util.now()
         current_quarter = (now.hour * 4) + (now.minute // 15)
 
         # Find matching quarter period
@@ -93,9 +90,7 @@ class PriceData:
         Returns:
             Quarter number 0-95, or None if not available
         """
-        from datetime import datetime
-
-        now = datetime.now()
+        now = dt_util.now()
         return (now.hour * 4) + (now.minute // 15)
 
 
