@@ -618,24 +618,16 @@ class IntelligentDHWScheduler:
         end_time = current_time + timedelta(hours=lookahead_hours)
 
         # Build available quarters from price periods
-        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime
-        # CRITICAL: price_periods may contain today + tomorrow data
-        # We need to properly handle day boundaries using actual datetime comparison
+        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
+        # Use the actual datetime from GE-Spot (already timezone-aware) instead of reconstructing
         available_quarters = []
 
         for period in price_periods:
-            # Build datetime from quarter info
-            # Try today first
-            period_time = current_time.replace(
-                hour=period.hour, minute=period.minute, second=0, microsecond=0
-            )
-
-            # If this time is in the past, it must be tomorrow
-            if period_time < current_time:
-                period_time += timedelta(days=1)
+            # Use actual datetime from GE-Spot (already handles timezone and date correctly)
+            period_time = period.start_time
 
             # Check if within lookahead window
-            if period_time < end_time:
+            if period_time >= current_time and period_time < end_time:
                 # Calculate quarter ID based on actual datetime to distinguish duplicates
                 days_ahead = (period_time.date() - current_time.date()).days
                 quarter_id = period.quarter_of_day + (days_ahead * 96)

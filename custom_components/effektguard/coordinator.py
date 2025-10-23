@@ -818,17 +818,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if "start_datetime" in next_window:
                         dhw_next_boost = next_window["start_datetime"]
                     elif "start_time" in next_window:
-                        # Fallback: parse time string (HH:MM format)
-                        try:
-                            hour, minute = map(int, next_window["start_time"].split(":"))
-                            dhw_next_boost = now_time.replace(
-                                hour=hour, minute=minute, second=0, microsecond=0
-                            )
-                            # If time is in the past, it's tomorrow
-                            if dhw_next_boost < now_time:
-                                dhw_next_boost += timedelta(days=1)
-                        except (ValueError, AttributeError):
-                            dhw_next_boost = None
+                        # DHW optimizer returns start_time as datetime object
+                        start_time = next_window["start_time"]
+                        if isinstance(start_time, datetime):
+                            # Already a datetime object - use directly
+                            dhw_next_boost = start_time
+                        else:
+                            # Fallback: parse time string (HH:MM format) if it's a string
+                            try:
+                                hour, minute = map(int, str(start_time).split(":"))
+                                dhw_next_boost = now_time.replace(
+                                    hour=hour, minute=minute, second=0, microsecond=0
+                                )
+                                # If time is in the past, it's tomorrow
+                                if dhw_next_boost < now_time:
+                                    dhw_next_boost += timedelta(days=1)
+                            except (ValueError, AttributeError):
+                                dhw_next_boost = None
                 elif current_dhw_temp < DHW_SAFETY_MIN:
                     # Below safety minimum but no window found: boost is imminent
                     dhw_next_boost = now_time + timedelta(minutes=5)
@@ -1192,7 +1198,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Find optimal DHW heating windows in the next 24 hours.
 
         Args:
-            price_data: GE-Spot price data
+            price_data: GE-Spot price data (PriceData with today/tomorrow QuarterPeriods)
             now_time: Current datetime
             thermal_debt: Current thermal debt (DM)
             dm_thresholds: Thermal debt thresholds for climate zone
@@ -1200,53 +1206,53 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Returns:
             List of optimal heating windows with time ranges and reasoning
         """
-        if not price_data or not hasattr(price_data, "quarters_today"):
+        if not price_data or not hasattr(price_data, "today"):
             return []
 
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         windows = []
+        end_time = now_time + timedelta(hours=24)
 
-        # Analyze price periods for next 24 hours (96 quarters)
-        for i in range(current_quarter, current_quarter + 96):
-            # Wrap quarter to 0-95 range for price lookup
-            actual_quarter = i % 96
-            classification = self.engine.price.get_current_classification(actual_quarter)
+        # Combine today and tomorrow periods (use actual datetime from GE-Spot)
+        all_periods = price_data.today + (price_data.tomorrow if price_data.has_tomorrow else [])
+
+        # Analyze price periods for next 24 hours using actual datetimes
+        for period in all_periods:
+            # Use actual datetime from GE-Spot (already timezone-aware)
+            quarter_time = period.start_time
+
+            # Skip if outside 24h window or in the past
+            if quarter_time < now_time or quarter_time >= end_time:
+                continue
+
+            # Get price classification for this quarter
+            classification = self.engine.price.get_current_classification(period.quarter_of_day)
 
             # Consider CHEAP periods as opportunities
             if classification in ["CHEAP", "NORMAL"]:
                 # Check if thermal debt allows DHW heating
                 if thermal_debt > dm_thresholds["block"]:
-                    # Calculate time for this quarter
-                    hour = actual_quarter // 4
-                    minute = (actual_quarter % 4) * 15
-
-                    # Start from now_time, replace time components, add days if wrapped
-                    quarter_time = now_time.replace(
-                        hour=hour, minute=minute, second=0, microsecond=0
-                    )
-
-                    # If quarter wrapped to next day, add 1 day
-                    if i >= 96:
-                        quarter_time += timedelta(days=1)
+                    # Calculate sequential quarter index for grouping
+                    hours_from_now = (quarter_time - now_time).total_seconds() / 3600
+                    quarter_index = int(hours_from_now * 4)
 
                     # Group consecutive cheap quarters into windows
-                    if windows and windows[-1]["end_quarter"] == i - 1:
+                    if windows and windows[-1]["end_quarter"] == quarter_index - 1:
                         # Extend existing window
-                        windows[-1]["end_quarter"] = i
+                        windows[-1]["end_quarter"] = quarter_index
                         windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime(
                             "%H:%M"
                         )
                         windows[-1]["duration_hours"] = (
-                            i - windows[-1]["start_quarter"] + 1
+                            quarter_index - windows[-1]["start_quarter"] + 1
                         ) * 0.25
                     else:
                         # Start new window
                         window = {
-                            "start_quarter": i,
-                            "end_quarter": i,
+                            "start_quarter": quarter_index,
+                            "end_quarter": quarter_index,
                             "start_time": quarter_time.strftime("%H:%M"),
                             "end_time": (quarter_time + timedelta(minutes=15)).strftime("%H:%M"),
-                            "start_datetime": quarter_time,  # Add datetime object for next_boost_time
+                            "start_datetime": quarter_time,  # Use actual datetime from GE-Spot
                             "time_range": f"{quarter_time.strftime('%H:%M')}-{(quarter_time + timedelta(minutes=15)).strftime('%H:%M')}",
                             "price_classification": classification,
                             "duration_hours": 0.25,

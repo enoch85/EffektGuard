@@ -49,6 +49,7 @@ class QuarterPeriod:
     minute: int  # 0, 15, 30, 45
     price: float  # Price in user's configured GE-Spot unit (öre/kWh, SEK/kWh, cents/kWh, EUR/kWh, etc.)
     is_daytime: bool  # True if 06:00-22:00 (full effect tariff weight)
+    start_time: datetime  # Actual datetime from GE-Spot (timezone-aware)
 
 
 @dataclass
@@ -222,6 +223,7 @@ class GESpotAdapter:
                         minute=minute,
                         price=price,
                         is_daytime=is_daytime,
+                        start_time=start,  # Store actual datetime from GE-Spot
                     )
                 )
 
