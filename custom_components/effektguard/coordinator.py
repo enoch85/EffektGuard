@@ -1599,16 +1599,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             hour = quarter // 4
             minute = (quarter % 4) * 15
             start_time = base_date.replace(hour=hour, minute=minute)
-            fallback_periods.append(
-                QuarterPeriod(
-                    quarter_of_day=quarter,
-                    hour=hour,
-                    minute=minute,
-                    price=1.0,  # Neutral price
-                    is_daytime=(6 <= hour < 22),
-                    start_time=start_time,
-                )
-            )
+            fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
 
         return PriceData(
             today=fallback_periods,

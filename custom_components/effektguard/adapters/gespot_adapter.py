@@ -34,22 +34,32 @@ _LOGGER = logging.getLogger(__name__)
 class QuarterPeriod:
     """Single 15-minute period with price data.
 
-    Quarter numbering: 0-95 per day
-    - Quarter 0: 00:00-00:15
-    - Quarter 24: 06:00-06:15 (daytime starts)
-    - Quarter 87: 21:45-22:00 (daytime ends)
-    - Quarter 95: 23:45-00:00
-
-    Note: Prices are in whatever unit the user configured in GE-Spot.
-    GE-Spot handles all conversions, we use values as-is.
+    All time information derived from start_time (timezone-aware datetime from GE-Spot).
+    Prices are in whatever unit the user configured in GE-Spot.
     """
 
-    quarter_of_day: int  # 0-95
-    hour: int  # 0-23
-    minute: int  # 0, 15, 30, 45
-    price: float  # Price in user's configured GE-Spot unit (öre/kWh, SEK/kWh, cents/kWh, EUR/kWh, etc.)
-    is_daytime: bool  # True if 06:00-22:00 (full effect tariff weight)
-    start_time: datetime  # Actual datetime from GE-Spot (timezone-aware)
+    start_time: datetime  # Timezone-aware datetime from GE-Spot
+    price: float  # Price in user's configured GE-Spot unit (öre/kWh, SEK/kWh, etc.)
+
+    @property
+    def quarter_of_day(self) -> int:
+        """Quarter number 0-95 for this period."""
+        return (self.start_time.hour * 4) + (self.start_time.minute // 15)
+
+    @property
+    def hour(self) -> int:
+        """Hour 0-23."""
+        return self.start_time.hour
+
+    @property
+    def minute(self) -> int:
+        """Minute 0, 15, 30, or 45."""
+        return self.start_time.minute
+
+    @property
+    def is_daytime(self) -> bool:
+        """True if 06:00-22:00 (full effect tariff weight)."""
+        return 6 <= self.start_time.hour < 22
 
 
 @dataclass
@@ -196,36 +206,20 @@ class GESpotAdapter:
 
         for item in raw_prices:
             try:
-                # Parse timestamp (GE-Spot uses 'time' key)
+                # Parse timestamp (GE-Spot uses 'time' key with timezone-aware datetime)
                 time_str = item.get("time")
                 if isinstance(time_str, str):
-                    start = dt_util.parse_datetime(time_str)
+                    start_time = dt_util.parse_datetime(time_str)
                 elif isinstance(time_str, datetime):
-                    start = time_str
+                    start_time = time_str
                 else:
                     continue
-
-                # Calculate quarter of day (0-95)
-                hour = start.hour
-                minute = start.minute
-                quarter_of_day = (hour * 4) + (minute // 15)
 
                 # Parse price - use exactly as provided by GE-Spot (no conversion)
                 price = float(item.get("value", 0.0))
 
-                # Determine if daytime (06:00-22:00 = full effect tariff weight)
-                is_daytime = 6 <= hour < 22
-
-                periods.append(
-                    QuarterPeriod(
-                        quarter_of_day=quarter_of_day,
-                        hour=hour,
-                        minute=minute,
-                        price=price,
-                        is_daytime=is_daytime,
-                        start_time=start,  # Store actual datetime from GE-Spot
-                    )
-                )
+                # Create period with just datetime and price (all else derived)
+                periods.append(QuarterPeriod(start_time=start_time, price=price))
 
             except (ValueError, TypeError, KeyError) as err:
                 _LOGGER.warning("Failed to parse price period: %s", err)
@@ -270,19 +264,10 @@ class GESpotAdapter:
             if quarter in period_dict:
                 complete_periods.append(period_dict[quarter])
             else:
-                # Fill missing with average
+                # Fill missing with average price at calculated time
                 hour = quarter // 4
                 minute = (quarter % 4) * 15
                 start_time = base_date.replace(hour=hour, minute=minute)
-                complete_periods.append(
-                    QuarterPeriod(
-                        quarter_of_day=quarter,
-                        hour=hour,
-                        minute=minute,
-                        price=avg_price,
-                        is_daytime=(6 <= hour < 22),
-                        start_time=start_time,
-                    )
-                )
+                complete_periods.append(QuarterPeriod(start_time=start_time, price=avg_price))
 
         return complete_periods
