@@ -1075,24 +1075,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     attrs["current_temperature"] = nibe_data.dhw_top_temp
                     attrs["temperature_unit"] = "°C"
 
-            # Next boost time (when heating is planned)
-            # Always set this attribute, even if None, to prevent template sensor errors
-            if self.coordinator.data and "dhw_next_boost" in self.coordinator.data:
-                next_boost = self.coordinator.data.get("dhw_next_boost")
-                if next_boost:
-                    attrs["next_boost_time"] = (
-                        next_boost.isoformat()
-                        if hasattr(next_boost, "isoformat")
-                        else str(next_boost)
-                    )
-                else:
-                    # Explicitly set to None when no boost is scheduled
-                    # This prevents template sensors from getting "unavailable" string
-                    attrs["next_boost_time"] = None
-            else:
-                # No data available - explicitly set to None
-                attrs["next_boost_time"] = None
-
             # Last heating cycle times (start and end)
             if self.coordinator.data and "dhw_heating_start" in self.coordinator.data:
                 heating_start = self.coordinator.data.get("dhw_heating_start")
