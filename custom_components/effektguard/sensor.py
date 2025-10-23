@@ -311,6 +311,16 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
             else "No recommendation"
         ),
     ),
+    EffektGuardSensorEntityDescription(
+        key="dhw_next_boost_time",
+        name="DHW Next Boost Time",
+        icon="mdi:clock-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data.get("dhw_next_boost") if coordinator.data else None
+        ),
+    ),
 )
 
 
