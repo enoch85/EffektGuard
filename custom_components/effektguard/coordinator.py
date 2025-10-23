@@ -1207,18 +1207,27 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         windows = []
 
         # Analyze price periods for next 24 hours (96 quarters)
-        for i in range(current_quarter, min(current_quarter + 96, 96)):
-            classification = self.engine.price.get_current_classification(i)
+        for i in range(current_quarter, current_quarter + 96):
+            # Wrap quarter to 0-95 range for price lookup
+            actual_quarter = i % 96
+            classification = self.engine.price.get_current_classification(actual_quarter)
 
             # Consider CHEAP periods as opportunities
             if classification in ["CHEAP", "NORMAL"]:
                 # Check if thermal debt allows DHW heating
                 if thermal_debt > dm_thresholds["block"]:
-                    hour = i // 4
-                    minute = (i % 4) * 15
+                    # Calculate time for this quarter
+                    hour = actual_quarter // 4
+                    minute = (actual_quarter % 4) * 15
+
+                    # Start from now_time, replace time components, add days if wrapped
                     quarter_time = now_time.replace(
                         hour=hour, minute=minute, second=0, microsecond=0
                     )
+
+                    # If quarter wrapped to next day, add 1 day
+                    if i >= 96:
+                        quarter_time += timedelta(days=1)
 
                     # Group consecutive cheap quarters into windows
                     if windows and windows[-1]["end_quarter"] == i - 1:
