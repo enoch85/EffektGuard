@@ -2,7 +2,7 @@
 
 Tests that model profiles integrate correctly with:
 - Thermal debt tracking and degree minutes logic
-- André Kühne flow temperature formula
+- Flow temperature formula
 - Decision engine layer system
 - Power validation and diagnostics
 
@@ -178,7 +178,7 @@ class TestModelThermalDebtIntegration:
 
 
 class TestModelFlowTemperatureIntegration:
-    """Test models integrate with André Kühne flow temperature formula."""
+    """Test models integrate with flow temperature formula."""
 
     def test_models_flow_temp_in_realistic_range(self):
         """Test flow temperatures are realistic for UFH and radiators."""
@@ -458,23 +458,23 @@ class TestModelDecisionEngineIntegration:
 
 
 class TestRealWorldIntegrationScenarios:
-    """Test models with realistic scenarios from forum research."""
+    """Test models with realistic production scenarios."""
 
     def test_stevedvo_thermal_debt_scenario(self):
-        """Replicate stevedvo's DM -500 scenario (Forum_Summary.md)."""
+        """Replicate DM -500 thermal debt scenario."""
         from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 
         registry = HeatPumpModelRegistry()
         f2040 = registry.get_model("nibe_f2040")
 
         print("\n" + "=" * 80)
-        print("STEVEDVO THERMAL DEBT SCENARIO REPLICATION")
+        print("THERMAL DEBT SCENARIO REPLICATION (DM -500)")
         print("=" * 80)
         print("Scenario: DM -500 after DHW run, catastrophic recovery")
         print("Expected: 15kW spike, flow 10°K above target")
         print("=" * 80)
 
-        # stevedvo's conditions:
+        # Test conditions:
         # - F2040-12 model
         # - After DHW run, DM hit -500
         # - Flow spiked 10°K above target
@@ -488,7 +488,7 @@ class TestRealWorldIntegrationScenarios:
 
         # Calculate what power draw this represents
         # Power = FlowRate × ΔT × SpecificHeat
-        # Assume flow rate 20 L/min (stevedvo's measured rate)
+        # Assume flow rate 20 L/min (typical measured rate)
         flow_rate_l_min = 20
         specific_heat = 4.186  # kJ/(kg·K)
         power_kw = (flow_rate_l_min * delta_t * specific_heat) / 60
@@ -522,20 +522,20 @@ class TestRealWorldIntegrationScenarios:
         print("\n✓ Model correctly identifies thermal debt recovery pattern")
 
     def test_glyn_hudson_pump_mode_scenario(self):
-        """Replicate glyn.hudson's 8-hour cycle issue (Forum_Summary.md)."""
+        """Replicate 8-hour pump cycle issue."""
         from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 
         registry = HeatPumpModelRegistry()
         f2040 = registry.get_model("nibe_f2040")
 
         print("\n" + "=" * 80)
-        print("GLYN.HUDSON PUMP MODE SCENARIO")
+        print("PUMP MODE SCENARIO (8-hour cycles)")
         print("=" * 80)
         print("Scenario: Open-loop UFH, pump Intermittent → 8hr cycles")
         print("Solution: Pump Auto mode @ 10% idle")
         print("=" * 80)
 
-        # glyn.hudson's system:
+        # Test system configuration:
         # - F2040-12
         # - Open-loop timber UFH (no secondary pumps)
         # - Pump Intermittent = stopped when compressor off

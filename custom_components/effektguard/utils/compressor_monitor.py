@@ -91,12 +91,16 @@ class CompressorHealthMonitor:
             max_samples,
         )
 
-    def update(self, hz: int, timestamp: datetime | None = None) -> CompressorStats:
+    def update(
+        self, hz: int, timestamp: datetime | None = None, heating_mode: str = "space"
+    ) -> CompressorStats:
         """Update monitor with latest Hz reading.
 
         Args:
             hz: Current compressor frequency in Hz
             timestamp: Sample timestamp (defaults to now)
+            heating_mode: "space" for space heating, "dhw" for DHW heating
+                Affects logging behavior (DHW 80Hz is normal, space 80Hz is elevated)
 
         Returns:
             CompressorStats with current and historical data
@@ -137,8 +141,8 @@ class CompressorHealthMonitor:
             samples_count=len(self.hz_history),
         )
 
-        # Log significant events
-        self._log_events(stats)
+        # Log significant events with heating mode context
+        self._log_events(stats, heating_mode)
 
         return stats
 
@@ -218,41 +222,78 @@ class CompressorHealthMonitor:
                 self.very_high_hz_start = None
             return timedelta(0)
 
-    def _log_events(self, stats: CompressorStats) -> None:
-        """Log significant compressor events.
+    def _log_events(self, stats: CompressorStats, heating_mode: str = "space") -> None:
+        """Log significant compressor events with context awareness.
 
         Args:
             stats: Current compressor statistics
+            heating_mode: "space" for space heating, "dhw" for DHW heating
+                Different modes have different normal Hz ranges:
+                - Space heating (25-35°C): 80 Hz elevated
+                - DHW heating (50°C): 80 Hz normal, 95 Hz elevated
         """
-        # Log when crossing into high-stress zones
+        # Normalize mode to lowercase for consistent comparison
+        mode = heating_mode.lower() if heating_mode else "space"
+
+        # Always log >100 Hz (critical regardless of mode)
         if stats.current_hz >= 100 and stats.time_above_100hz == timedelta(0):
             _LOGGER.warning(
-                "Compressor entered VERY HIGH zone: %d Hz (>100 Hz sustained can damage compressor)",
+                "Compressor entered VERY HIGH zone: %d Hz "
+                "(>100 Hz sustained can damage compressor, mode: %s)",
                 stats.current_hz,
+                mode,
             )
-        elif stats.current_hz >= 80 and stats.time_above_80hz == timedelta(0):
-            _LOGGER.info(
-                "Compressor entered HIGH zone: %d Hz (monitor for sustained operation)",
-                stats.current_hz,
-            )
+        # Context-aware logging for elevated operation
+        elif mode == "dhw":
+            # DHW: 80-95 Hz is normal operation, log at DEBUG level
+            if stats.current_hz >= 80 and stats.time_above_80hz == timedelta(0):
+                _LOGGER.debug(
+                    "Compressor at %d Hz for DHW heating (normal operation, target 50°C)",
+                    stats.current_hz,
+                )
+        else:  # space heating
+            # Space heating: 80+ Hz is elevated, log at INFO level
+            if stats.current_hz >= 80 and stats.time_above_80hz == timedelta(0):
+                _LOGGER.info(
+                    "Compressor entered HIGH zone: %d Hz for space heating "
+                    "(monitor for sustained operation)",
+                    stats.current_hz,
+                )
 
-        # Log sustained high-Hz warnings
+        # Sustained warnings - context-aware durations
         if stats.time_above_100hz >= timedelta(minutes=15):
+            # Always critical (any mode)
             minutes = stats.time_above_100hz.total_seconds() / 60
             _LOGGER.error(
-                "COMPRESSOR STRESS CRITICAL: >100 Hz for %.0f minutes (current: %d Hz, 1h avg: %.0f Hz)",
+                "COMPRESSOR STRESS CRITICAL: >100 Hz for %.0f minutes "
+                "(current: %d Hz, mode: %s, 1h avg: %.0f Hz) - REDUCE DEMAND IMMEDIATELY",
                 minutes,
                 stats.current_hz,
+                mode,
                 stats.avg_1h,
             )
-        elif stats.time_above_80hz >= timedelta(hours=2):
-            hours = stats.time_above_80hz.total_seconds() / 3600
-            _LOGGER.warning(
-                "Compressor sustained high operation: >80 Hz for %.1f hours (current: %d Hz, 6h avg: %.0f Hz)",
-                hours,
-                stats.current_hz,
-                stats.avg_6h,
-            )
+        elif mode == "dhw":
+            # DHW: Warn if >95 Hz for >30 minutes (unusual for DHW cycle)
+            if stats.time_above_80hz >= timedelta(minutes=30) and stats.current_hz >= 95:
+                minutes = stats.time_above_80hz.total_seconds() / 60
+                _LOGGER.warning(
+                    "DHW compressor elevated for %.0f minutes: %d Hz "
+                    "(normal cycle <15min, check DHW tank size or sensor)",
+                    minutes,
+                    stats.current_hz,
+                )
+        else:  # space heating
+            # Space: Warn if >80 Hz for >2 hours (system struggling)
+            if stats.time_above_80hz >= timedelta(hours=2):
+                hours = stats.time_above_80hz.total_seconds() / 3600
+                _LOGGER.warning(
+                    "Space heating compressor sustained high operation: "
+                    ">80 Hz for %.1f hours (current: %d Hz, 6h avg: %.0f Hz) "
+                    "- consider increasing insulation or heat pump capacity",
+                    hours,
+                    stats.current_hz,
+                    stats.avg_6h,
+                )
 
     def assess_risk(self, stats: CompressorStats) -> tuple[str, str]:
         """Assess compressor health risk level.

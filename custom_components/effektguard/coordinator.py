@@ -504,9 +504,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
 
             # Update compressor health monitoring (Oct 19, 2025)
+            # Context-aware monitoring (Oct 23, 2025): DHW vs space heating
             if nibe_data.compressor_hz is not None:
+                # Determine heating mode for context-aware compressor monitoring
+                # DHW heating runs at higher Hz (50°C target) than space heating (25-35°C)
+                heating_mode = (
+                    "dhw"
+                    if hasattr(nibe_data, "is_hot_water") and nibe_data.is_hot_water
+                    else "space"
+                )
+
                 self.compressor_stats = self.compressor_monitor.update(
-                    nibe_data.compressor_hz, nibe_data.timestamp
+                    nibe_data.compressor_hz, nibe_data.timestamp, heating_mode
                 )
                 # Log compressor diagnostics at debug level
                 if self.compressor_stats:
@@ -514,10 +523,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         self.compressor_stats
                     )
                     _LOGGER.debug(
-                        "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f) - %s: %s",
+                        "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f, mode: %s) - %s: %s",
                         self.compressor_stats.current_hz,
                         self.compressor_stats.avg_1h,
                         self.compressor_stats.avg_6h,
+                        heating_mode,
                         risk_level,
                         risk_reason,
                     )

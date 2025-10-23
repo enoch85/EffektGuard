@@ -660,7 +660,7 @@ class ScenarioTester:
         indoor = self.config["target_indoor_temp"]
         current_flow = nibe_state.flow_temp
 
-        # André Kühne's formula (simplified)
+        # Universal flow temperature formula (simplified)
         # TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
         heat_loss_coeff = 180.0  # W/°C for typical house
         temp_diff = indoor - outdoor

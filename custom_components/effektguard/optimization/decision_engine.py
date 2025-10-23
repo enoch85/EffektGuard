@@ -4,7 +4,7 @@ Implements layered decision-making architecture that integrates:
 - Safety constraints (temperature limits, thermal debt prevention)
 - Effect tariff protection (15-minute peak avoidance)
 - Weather prediction (pre-heating before cold)
-- Mathematical weather compensation (André Kühne, Timbones) with adaptive climate zones
+- Mathematical weather compensation with adaptive climate zones
 - Spot price optimization (cost reduction)
 - Comfort maintenance (temperature tolerance)
 - Emergency recovery (degree minutes critical threshold)
@@ -39,6 +39,9 @@ from ..const import (
     DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
     DM_CRITICAL_T3_WEIGHT,
     DM_THRESHOLD_ABSOLUTE_MAX,
+    DM_THERMAL_MASS_BUFFER_CONCRETE,
+    DM_THERMAL_MASS_BUFFER_RADIATOR,
+    DM_THERMAL_MASS_BUFFER_TIMBER,
     EFFECT_MARGIN_PREDICTIVE,
     EFFECT_MARGIN_WARNING,
     EFFECT_OFFSET_CRITICAL,
@@ -90,6 +93,12 @@ from ..const import (
     THERMAL_RECOVERY_FORECAST_HORIZON,
     THERMAL_RECOVERY_MIN_CONFIDENCE,
     THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD,
+    THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING,
+    THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD,
+    THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING,
+    THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD,
+    THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING,
+    THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD,
     THERMAL_RECOVERY_RAPID_FACTOR,
     THERMAL_RECOVERY_RAPID_THRESHOLD,
     THERMAL_RECOVERY_T1_MIN_OFFSET,
@@ -127,6 +136,14 @@ from ..const import (
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
+    WEATHER_PREDICTION_LEAD_TIME_FACTOR,
+    WEATHER_TEMP_DROP_DIVISOR,
+    WEATHER_INTENSITY_AGGRESSIVE_DEFICIT,
+    WEATHER_INTENSITY_AGGRESSIVE_FACTOR,
+    WEATHER_INTENSITY_GENTLE_FACTOR,
+    WEATHER_INTENSITY_STABLE_RATE,
+    WEATHER_INTENSITY_NORMAL_FACTOR,
+    WEATHER_INTENSITY_MODERATE_FACTOR,
     LAYER_WEIGHT_WEATHER_PREDICTION,
     PRICE_TOLERANCE_DIVISOR,
     COMFORT_DEAD_ZONE,
@@ -341,39 +358,85 @@ class DecisionEngine:
         min_damped_offset: float,
         weather_data=None,
         current_outdoor_temp: float | None = None,
+        indoor_temp: float | None = None,
+        target_temp: float | None = None,
     ) -> tuple[float, str]:
-        """Apply thermal recovery damping when house warming naturally.
+        """Apply thermal recovery damping when house warming naturally or overshooting.
 
         Prevents concrete slab thermal overshoot during recovery periods.
-        When T1/T2/T3 active AND house warming from solar gain,
+        When T1/T2/T3 active AND (house warming from solar OR already overshooting),
         reduce offset to prevent excessive heat storage in thermal mass.
 
         Args:
             base_offset: Original recovery offset (e.g., 2.5°C for T2)
-            tier_name: Recovery tier name for logging (e.g., "T2")
+            tier_name: Recovery tier name for logging (e.g., "STRONG RECOVERY")
             min_damped_offset: Minimum allowed offset after damping (safety floor)
             weather_data: Weather forecast data (optional, for cold weather check)
             current_outdoor_temp: Current outdoor temperature (°C)
+            indoor_temp: Current indoor temperature (°C) for overshoot detection
+            target_temp: Target indoor temperature (°C) for overshoot detection
 
         Returns:
             Tuple of (damped_offset, damping_reason_string)
             If no damping applied: (base_offset, "")
 
-        Damping Conditions (ALL must be met):
-            1. Indoor warming >= 0.3°C/h (significant solar gain)
-            2. Outdoor not dropping < -0.5°C/h (not fighting cold spell)
-            3. Sufficient trend confidence >= 0.4 (~1 hour data)
-            4. Weather forecast NOT showing significant cold within 6 hours
+        Damping Conditions:
+            Warming-based (original logic):
+                1. Indoor warming >= 0.3°C/h (significant solar gain)
+                2. Outdoor not dropping < -0.5°C/h (not fighting cold spell)
+                3. Sufficient trend confidence >= 0.4 (~1 hour data)
+                4. Weather forecast NOT showing significant cold within 6 hours
+
+            Overshoot-based (NEW - Oct 23, 2025):
+                If indoor_temp > target_temp:
+                    Severe ≥1.5°C: 80% strength (0.8 multiplier)
+                    Moderate ≥1.0°C: 90% strength (0.9 multiplier)
+                    Mild ≥0.5°C: 95% strength (0.95 multiplier)
+                Overshoot damping multiplies with warming damping for compound effect
 
         Example:
             T2 base offset 2.5°C + warming 0.4°C/h + stable forecast → damped to 1.5°C (60%)
-            Prevents concrete slab storing excess heat → prevents +2-3°C overshoot
+            OR: T2 base 2.5°C + 2.0°C overshoot → damped to 2.0°C (80% strength)
+            OR: Both warming + overshoot → compound: 2.5°C × 0.6 × 0.8 = 1.2°C
         """
         thermal_trend = self._get_thermal_trend()
         outdoor_trend = self._get_outdoor_trend()
 
+        # Calculate overshoot damping factor (independent of warming)
+        overshoot_factor = 1.0  # Default: no overshoot penalty
+        overshoot_reason = ""
+
+        if indoor_temp is not None and target_temp is not None:
+            overshoot = indoor_temp - target_temp
+            if overshoot >= THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD:  # ≥1.5°C
+                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING  # 0.8
+                overshoot_reason = f"severe overshoot +{overshoot:.1f}°C"
+            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:  # ≥1.0°C
+                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING  # 0.9
+                overshoot_reason = f"moderate overshoot +{overshoot:.1f}°C"
+            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD:  # ≥0.5°C
+                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING  # 0.95
+                overshoot_reason = f"mild overshoot +{overshoot:.1f}°C"
+
         # Check if we have sufficient trend confidence
         if thermal_trend.get("confidence", 0.0) < THERMAL_RECOVERY_MIN_CONFIDENCE:
+            # Even without trend data, apply overshoot damping if present
+            if overshoot_factor < 1.0:
+                damped_offset = base_offset * overshoot_factor
+                damped_offset = max(damped_offset, min_damped_offset)
+
+                _LOGGER.info(
+                    "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
+                    tier_name,
+                    overshoot_reason,
+                    base_offset,
+                    damped_offset,
+                    overshoot_factor,
+                    min_damped_offset,
+                )
+
+                return damped_offset, overshoot_reason
+
             return base_offset, ""
 
         warming_rate = thermal_trend.get("rate_per_hour", 0.0)
@@ -413,34 +476,56 @@ class DecisionEngine:
         ):
             # Choose damping factor based on warming intensity
             if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD:  # Rapid warming >0.5°C/h
-                damping_factor = THERMAL_RECOVERY_RAPID_FACTOR  # 0.4 = reduce to 40%
-                damping_reason = (
-                    f"rapid warming {warming_rate:.2f}°C/h, "
-                    f"damping to {damping_factor * 100:.0f}%"
-                )
+                warming_factor = THERMAL_RECOVERY_RAPID_FACTOR  # 0.4 = reduce to 40%
+                warming_reason = f"rapid warming {warming_rate:.2f}°C/h"
             else:  # Moderate warming 0.3-0.5°C/h
-                damping_factor = THERMAL_RECOVERY_DAMPING_FACTOR  # 0.6 = reduce to 60%
-                damping_reason = (
-                    f"warming {warming_rate:.2f}°C/h, " f"damping to {damping_factor * 100:.0f}%"
-                )
+                warming_factor = THERMAL_RECOVERY_DAMPING_FACTOR  # 0.6 = reduce to 60%
+                warming_reason = f"warming {warming_rate:.2f}°C/h"
 
-            # Apply damping but maintain safety minimum
-            damped_offset = base_offset * damping_factor
+            # Combine warming and overshoot damping (multiply factors)
+            combined_factor = warming_factor * overshoot_factor
+
+            # Build comprehensive damping reason
+            if overshoot_reason:
+                damping_reason = f"{warming_reason} + {overshoot_reason}"
+            else:
+                damping_reason = warming_reason
+
+            # Apply combined damping but maintain safety minimum
+            damped_offset = base_offset * combined_factor
             damped_offset = max(damped_offset, min_damped_offset)
 
             _LOGGER.info(
-                "%s thermal recovery damping: warming %.2f°C/h, outdoor %.2f°C/h, "
-                "offset %.2f°C → %.2f°C (factor %.1f, min %.1f°C)",
+                "%s thermal recovery damping: %s, "
+                "offset %.2f°C → %.2f°C (warming %.2f × overshoot %.2f = %.2f, min %.1f°C)",
                 tier_name,
-                warming_rate,
-                outdoor_rate,
+                damping_reason,
                 base_offset,
                 damped_offset,
-                damping_factor,
+                warming_factor,
+                overshoot_factor,
+                combined_factor,
                 min_damped_offset,
             )
 
             return damped_offset, damping_reason
+
+        # No warming-based damping, but apply overshoot damping if present
+        if overshoot_factor < 1.0:
+            damped_offset = base_offset * overshoot_factor
+            damped_offset = max(damped_offset, min_damped_offset)
+
+            _LOGGER.info(
+                "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
+                tier_name,
+                overshoot_reason,
+                base_offset,
+                damped_offset,
+                overshoot_factor,
+                min_damped_offset,
+            )
+
+            return damped_offset, overshoot_reason
 
         return base_offset, ""
 
@@ -727,6 +812,8 @@ class DecisionEngine:
         """
         degree_minutes = nibe_state.degree_minutes
         outdoor_temp = nibe_state.outdoor_temp
+        indoor_temp = nibe_state.indoor_temp
+        target_temp = self.target_temp
 
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
         if degree_minutes <= DM_THRESHOLD_ABSOLUTE_MAX:
@@ -741,24 +828,43 @@ class DecisionEngine:
 
         # Calculate context-aware thresholds based on outdoor temperature
         # Colder weather = expect deeper normal DM, so thresholds adapt
-        expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
+        base_expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
+
+        # Apply thermal mass adjustment (Oct 23, 2025)
+        # High thermal mass systems need tighter thresholds to prevent v0.1.0 solar gain problem
+        # Concrete slab: 30% tighter, Timber: 15% tighter, Radiator: standard
+        heating_type = self.config.get("heating_type", "radiator")
+        expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+        adjusted_dm_range = self._get_thermal_mass_adjusted_thresholds(
+            expected_dm_range, heating_type
+        )
+        expected_dm = {
+            "normal": adjusted_dm_range["normal_max"],  # Use deep end of normal range
+            "warning": adjusted_dm_range["warning"],  # Thermal mass adjusted warning threshold
+        }
 
         # Distance from absolute maximum (how much safety margin remains)
         margin_to_limit = degree_minutes - DM_THRESHOLD_ABSOLUTE_MAX  # Positive value
 
         # MULTI-TIER CLIMATE-AWARE CRITICAL INTERVENTION (Oct 19, 2025 redesign)
+        # THERMAL MASS ENHANCEMENT (Oct 23, 2025): Adjusted thresholds based on thermal lag
         # Previous fixed thresholds (-800, -1000, -1200) caused false positives in Arctic climates
         # and inadequate intervention in mild climates. New design calculates tiers dynamically
-        # based on climate-aware WARNING threshold + margin.
+        # based on climate-aware WARNING threshold + margin + thermal mass buffer.
         #
-        # Examples:
+        # Examples (without thermal mass adjustment):
         # - Paris (WARNING -350):     T1=-350,  T2=-550,  T3=-750
         # - Stockholm (WARNING -700): T1=-700,  T2=-900,  T3=-1100
         # - Kiruna (WARNING -1200):   T1=-1200, T2=-1400, T3=-1450 (capped)
         #
-        # Philosophy: Use climate zone knowledge to define what's "critical" for THIS location
+        # Examples (with thermal mass adjustment - concrete slab 1.3×):
+        # - Paris concrete:     T1=-455,  T2=-655,  T3=-855   (30% tighter)
+        # - Stockholm concrete: T1=-910,  T2=-1110, T3=-1310  (30% tighter)
+        # - Kiruna concrete:    T1=-1450, T2=-1450, T3=-1450  (capped at T3 max)
+        #
+        # Philosophy: Use climate zone + thermal mass knowledge to define what's "critical"
 
-        # Calculate climate-aware tier thresholds
+        # Calculate climate-aware + thermal mass aware tier thresholds
         warning_threshold = expected_dm["warning"]
         t1_threshold = warning_threshold - DM_CRITICAL_T1_MARGIN  # At WARNING threshold
         t2_threshold = warning_threshold - DM_CRITICAL_T2_MARGIN  # WARNING + 200 DM
@@ -780,6 +886,8 @@ class DecisionEngine:
                 min_damped_offset=THERMAL_RECOVERY_T3_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
+                indoor_temp=indoor_temp,
+                target_temp=target_temp,
             )
 
             reason_parts = [
@@ -808,6 +916,8 @@ class DecisionEngine:
                 min_damped_offset=THERMAL_RECOVERY_T2_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
+                indoor_temp=indoor_temp,
+                target_temp=target_temp,
             )
 
             reason_parts = [
@@ -836,6 +946,8 @@ class DecisionEngine:
                 min_damped_offset=THERMAL_RECOVERY_T1_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
+                indoor_temp=indoor_temp,
+                target_temp=target_temp,
             )
 
             reason_parts = [
@@ -957,11 +1069,78 @@ class DecisionEngine:
             "warning": dm_range["warning"],  # Warning threshold
         }
 
+    def _get_thermal_mass_adjusted_thresholds(
+        self,
+        base_thresholds: dict,
+        heating_type: str,
+    ) -> dict:
+        """Adjust DM thresholds based on thermal mass (prevents overshoot with lag).
+
+        High thermal mass systems need tighter thresholds because:
+        - Long thermal lag (6+ hours for concrete slab)
+        - Current DM doesn't immediately affect indoor temperature
+        - Solar gain can mask underlying thermal debt accumulation
+        - Need larger buffer to handle sunset/weather changes
+
+        Args:
+            base_thresholds: Climate-aware thresholds from ClimateZoneDetector
+                {"normal_min": -60, "normal_max": -276, "warning": -276, "critical": -1500}
+            heating_type: Heating system type ("concrete_ufh", "timber", "radiator", etc.)
+
+        Returns:
+            Adjusted thresholds with thermal mass buffer applied
+
+        Example:
+            Stockholm at 10°C → base warning -276
+            Concrete slab:      -276 × 1.3 = -359 (tighter)
+            Timber:             -276 × 1.15 = -317 (moderate)
+            Radiator:           -276 × 1.0 = -276 (standard)
+
+        Notes:
+            - Critical threshold (-1500) never adjusted (absolute maximum)
+            - Prevents v0.1.0 failure mode (DM -700 during solar gain)
+            - Maintains thermal buffer for forecast uncertainty
+
+        Research:
+            - v0.1.0 case: DM -700 allowed → 1.5°C drop at sunset
+            - Concrete lag: 6-12 hours observed in production systems
+
+        References:
+            IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
+        """
+        # Get multiplier based on heating type
+        if heating_type in ("concrete_ufh", "concrete_slab"):
+            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE  # 1.3
+        elif heating_type in ("timber", "timber_ufh"):
+            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER  # 1.15
+        else:  # radiator or unknown (conservative default)
+            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR  # 1.0
+
+        # Apply multiplier to thresholds (more negative = tighter)
+        adjusted = {
+            "normal_min": base_thresholds["normal_min"] * multiplier,
+            "normal_max": base_thresholds["normal_max"] * multiplier,
+            "warning": base_thresholds["warning"] * multiplier,
+            "critical": base_thresholds["critical"],  # Never adjust absolute maximum
+        }
+
+        _LOGGER.debug(
+            "Thermal mass adjusted thresholds: heating type '%s' (multiplier %.2f) "
+            "→ warning %.0f (base: %.0f), critical %.0f",
+            heating_type,
+            multiplier,
+            adjusted["warning"],
+            base_thresholds["warning"],
+            adjusted["critical"],
+        )
+
+        return adjusted
+
     def _proactive_debt_prevention_layer(self, nibe_state, weather_data=None) -> LayerDecision:
         """Proactive thermal debt prevention with climate-aware thresholds and trend prediction.
 
-        PHILOSOPHY (from Forum_Summary.md):
-        - "Continuous modulation beats forced cycling" (stevedvo research)
+        PHILOSOPHY:
+        - Continuous modulation beats forced cycling
         - Thermal debt from forced stops worse than running low power
         - Prevent peaks by maintaining gentle background heating
 
@@ -1452,8 +1631,8 @@ class DecisionEngine:
         """Mathematical weather compensation layer with adaptive climate system.
 
         Calculates optimal flow temperature using:
-        - André Kühne's universal formula (validated across manufacturers)
-        - Timbones' heat transfer method (if radiator specs available)
+        - Universal flow temperature formula (validated across manufacturers)
+        - Heat transfer method (if radiator specs available)
         - UFH-specific adjustments (concrete/timber)
         - Adaptive climate zones (latitude-based, globally applicable)
         - Weather learning (unusual pattern detection)
@@ -1485,7 +1664,7 @@ class DecisionEngine:
         flow_calc = self.weather_comp.calculate_optimal_flow_temp(
             indoor_setpoint=self.target_temp,
             outdoor_temp=current_outdoor,
-            prefer_method="auto",  # Combines Kühne + Timbones if available
+            prefer_method="auto",  # Combines universal formula + heat transfer if available
         )
 
         # Adaptive climate system safety adjustments

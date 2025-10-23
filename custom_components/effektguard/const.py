@@ -142,11 +142,9 @@ CLIMATE_ZONE_MODERATE_COLD_WINTER_AVG: Final = -1.0  # SMHI Stockholm Jan-Feb: -
 CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -0.2°C
 
 # Safety thresholds - Degree Minutes (DM) / Gradminuter (GM)
-# Based on Swedish NIBE forum research and real-world validation
-# Source: Forum_Summary.md, Swedish_NIBE_Forum_Findings.md, Swedish_Climate_Adaptations.md
+# Based on real-world validation in Nordic conditions
 #
-# Swedish research shows DM -1500 is safe operating limit across all Nordic conditions.
-# More conservative than UK-based -500 threshold, but appropriate for Nordic climate.
+# DM -1500 is safe operating limit across all Nordic climate zones.
 # Validated in real-world Swedish conditions: -30°C to +5°C temperature range.
 #
 # CLIMATE-AWARE DESIGN:
@@ -233,11 +231,135 @@ THERMAL_RECOVERY_T3_NAME: Final = (
     "EMERGENCY RECOVERY"  # T3: Approaching critical, maximum safe intervention
 )
 
+# Overshoot-Aware Damping (Oct 23, 2025)
+# ============================================================================
+# Context: v0.1.0 showed DM recovery caused indoor 23.6°C vs target 21.5°C
+#          (2.1°C overshoot during STRONG RECOVERY tier)
+#
+# Problem: Traditional damping only considers warming rate, not absolute error
+#          Large overshoot = need stronger damping regardless of warming rate
+#
+# Solution: Overshoot severity multiplies with warming damping
+#          Example: 2.0°C overshoot (severe) + rapid warming (0.4) = 0.8 × 0.4 = 0.32
+#                   Final offset = base_offset × 0.32 (68% reduction for safety)
+#
+# Thresholds:
+#   Severe ≥1.5°C: 80% strength (0.8 multiplier, strong reduction)
+#   Moderate ≥1.0°C: 90% strength (0.9 multiplier, moderate reduction)
+#   Mild ≥0.5°C: 95% strength (0.95 multiplier, gentle reduction)
+#   <0.5°C: 100% strength (no overshoot penalty)
+THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD: Final = 1.5  # °C over target (severe)
+THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD: Final = 1.0  # °C over target (moderate)
+THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD: Final = 0.5  # °C over target (mild)
+THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING: Final = 0.8  # Multiplier for severe overshoot
+THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING: Final = 0.9  # Multiplier for moderate overshoot
+THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING: Final = 0.95  # Multiplier for mild overshoot
+
 # Tier-specific minimum offsets after damping (safety floors)
 # Each tier has appropriate minimum to maintain recovery progress
 THERMAL_RECOVERY_T1_MIN_OFFSET: Final = 1.0  # T1 damped minimum (moderate recovery)
 THERMAL_RECOVERY_T2_MIN_OFFSET: Final = 1.5  # T2 damped minimum (strong recovery)
 THERMAL_RECOVERY_T3_MIN_OFFSET: Final = 2.0  # T3 damped minimum (critical - needs more boost)
+
+# ============================================================================
+# Thermal Mass Buffer Multipliers (DM Threshold Adjustment)
+# ============================================================================
+# Description:
+#   High thermal mass systems need tighter DM thresholds to maintain thermal
+#   buffer for forecast uncertainty. Long thermal lag (6+ hours for concrete)
+#   means current DM doesn't immediately affect indoor temp.
+#
+# Research Context:
+#   - v0.1.0 failure: DM -700 during solar gain → 1.5°C drop at sunset
+#   - Concrete slab thermal lag: 6-12 hours
+#   - Need buffer to handle: sunset, weather changes, forecast errors
+#
+# Multiplier Logic:
+#   Applied to base climate-aware thresholds from ClimateZoneDetector
+#   Example: Stockholm at 10°C → base warning -276
+#            Concrete: -276 × 1.3 = -359 (tighter threshold)
+#            Radiator: -276 × 1.0 = -276 (standard)
+#
+# Example Impact (Stockholm at 10°C):
+#   Base thresholds: normal_max=-276, warning=-276, critical=-1500
+#
+#   Concrete slab (6-12h lag):
+#     normal_max: -276 × 1.3 = -359
+#     warning:    -276 × 1.3 = -359
+#     critical:   -1500 (unchanged, absolute maximum)
+#     → Activates T1 recovery earlier, maintains thermal buffer
+#
+#   Timber UFH (2-4h lag):
+#     normal_max: -276 × 1.15 = -317
+#     warning:    -276 × 1.15 = -317
+#     critical:   -1500 (unchanged)
+#     → Moderate tightening for medium-lag systems
+#
+#   Radiators (<1h lag):
+#     normal_max: -276 × 1.0 = -276
+#     warning:    -276 × 1.0 = -276
+#     critical:   -1500 (unchanged)
+#     → Standard thresholds, fast response allows more latitude
+#
+# Reference:
+#   - COMPLETED/CLIMATE_AWARE_VALIDATION_OCT19.md
+#   - IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
+# ============================================================================
+
+DM_THERMAL_MASS_BUFFER_CONCRETE: Final = 1.3  # 30% tighter threshold (6-12h lag)
+DM_THERMAL_MASS_BUFFER_TIMBER: Final = 1.15  # 15% tighter threshold (2-4h lag)
+DM_THERMAL_MASS_BUFFER_RADIATOR: Final = 1.0  # Standard threshold (<1h lag)
+
+# ============================================================================
+# Compressor Hz Thresholds (Context-Aware)
+# ============================================================================
+# Description:
+#   Compressor frequency thresholds vary by heating mode because DHW target
+#   temperature (50°C) is significantly higher than space heating (25-35°C).
+#   Same compressor Hz at different water temperatures = different stress levels.
+#
+# Context:
+#   Space Heating (25-35°C flow temp):
+#     - 40-60 Hz: Normal operation
+#     - 80 Hz: Elevated stress (monitor)
+#     - 100 Hz: Critical stress (reduce demand)
+#
+#   DHW Heating (50°C target):
+#     - 60-80 Hz: Normal operation (higher temp requires higher Hz)
+#     - 95 Hz: Elevated stress (monitor)
+#     - 100 Hz: Critical stress (reduce demand)
+#
+# Sustained Operation Limits:
+#   - Space heating: >80 Hz for >2 hours = WARNING (system struggling)
+#   - DHW heating: >95 Hz for >30 minutes = WARNING (tank too large or broken)
+#   - Any mode: >100 Hz for >15 minutes = CRITICAL (hardware damage risk)
+#
+# Research:
+#   - NIBE F750 spec: 20-120 Hz range (nominal 40-80 Hz)
+#   - DHW cycles typically 10-15 Hz higher than space heating
+#   - Field observations: 80 Hz DHW normal, 80 Hz space heating elevated
+#
+# Reference:
+#   - IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
+# ============================================================================
+
+# Space Heating Thresholds
+COMPRESSOR_HZ_SPACE_INFO: Final = 80  # Log INFO: Elevated operation
+COMPRESSOR_HZ_SPACE_WARNING: Final = 80  # Sustained >2h = WARNING
+COMPRESSOR_HZ_SPACE_SEVERE: Final = 90  # Sustained >4h = SEVERE
+
+# DHW Heating Thresholds (higher normal due to 50°C target)
+COMPRESSOR_HZ_DHW_INFO: Final = 95  # Log INFO: Elevated operation
+COMPRESSOR_HZ_DHW_WARNING: Final = 95  # Sustained >30min = WARNING
+COMPRESSOR_HZ_DHW_SEVERE: Final = 100  # Immediate WARNING
+
+# Critical Threshold (mode-independent)
+COMPRESSOR_HZ_CRITICAL: Final = 100  # Sustained >15min = CRITICAL (any mode)
+
+# Sustained Duration Thresholds
+COMPRESSOR_HZ_SUSTAINED_SPACE_HOURS: Final = 2.0  # Space heating: 2 hours
+COMPRESSOR_HZ_SUSTAINED_DHW_MINUTES: Final = 30.0  # DHW: 30 minutes (shorter cycles)
+COMPRESSOR_HZ_SUSTAINED_CRITICAL_MINUTES: Final = 15.0  # Critical: 15 minutes (any mode)
 
 # Tolerance range multiplier (Oct 19, 2025)
 # Scales user tolerance setting (1-10) to actual temperature range
@@ -365,7 +487,7 @@ COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
 
 # UFH prediction horizons based on thermal lag research
-# Source: glyn.hudson F2040 case study, enoch85 extreme cold snap feedback
+# Prediction horizons for different UFH types
 UFH_CONCRETE_PREDICTION_HORIZON: Final = (
     24.0  # hours - 6+ hour lag, needs 24h for extreme cold (20°C drops)
 )
@@ -383,21 +505,19 @@ OPTIMAL_FLOW_DELTA_SPF_4: Final = 27.0  # ±3°C for SPF ≥4.0 systems
 OPTIMAL_FLOW_DELTA_SPF_35: Final = 30.0  # ±4°C for SPF ≥3.5 systems
 
 # Weather compensation mathematical constants
-# Source: Mathematical_Enhancement_Summary.md - OpenEnergyMonitor research
-KUEHNE_COEFFICIENT: Final = 2.55  # André Kühne's universal constant
+KUEHNE_COEFFICIENT: Final = 2.55  # Universal coefficient for flow temperature calculation
 KUEHNE_POWER: Final = 0.78  # Power coefficient for heat transfer physics
 RADIATOR_POWER_COEFFICIENT: Final = 1.3  # BS EN442 standard radiator output
 RADIATOR_RATED_DT: Final = 50.0  # Standard test DT (75°C flow, 65°C return, 20°C room)
 
 # UFH flow temperature adjustments
-# Source: Mathematical_Enhancement_Summary.md - Floor heating optimizations
 UFH_FLOW_REDUCTION_CONCRETE: Final = 8.0  # °C reduction for concrete slab UFH
 UFH_FLOW_REDUCTION_TIMBER: Final = 5.0  # °C reduction for timber/lightweight UFH
 UFH_MIN_FLOW_TEMP_CONCRETE: Final = 25.0  # Minimum effective concrete slab temp
 UFH_MIN_FLOW_TEMP_TIMBER: Final = 22.0  # Minimum effective timber UFH temp
 
 # Heat loss coefficient defaults (W/°C)
-# Source: Timbones' heat transfer method - typical house range
+# Heat loss coefficient range (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
 HEAT_LOSS_COEFFICIENT_MIN: Final = 100.0  # W/°C well-insulated house
 HEAT_LOSS_COEFFICIENT_MAX: Final = 300.0  # W/°C poorly-insulated house
@@ -417,7 +537,7 @@ PEAK_RECORDING_MINIMUM: Final = 0.5  # kW - lowered from 1.0 for better learning
 # Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
 
 # Pump configuration - open-loop UFH requirements
-# Source: Forum_Summary.md - glyn.hudson case study (8-hour off periods)
+# Pump speed requirements for open-loop systems
 PUMP_MIN_SPEED_ASHP: Final = 10  # % for ASHP open-loop systems
 PUMP_MIN_SPEED_GSHP: Final = 20  # % for GSHP open-loop systems
 

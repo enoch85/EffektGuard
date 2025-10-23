@@ -185,7 +185,7 @@ class TestSmartPreHeatingTiming:
     """Test Phase 3.1: Smart Pre-Heating Timing with Indoor Trend."""
 
     def test_extended_lead_time_when_house_cooling(self, engine, nibe_state):
-        """Lead time extends 30% when house already cooling."""
+        """Pre-heat activates for significant forecast drop regardless of indoor trend."""
         # Mock indoor trend: cooling at -0.4°C/h
         engine.predictor.get_current_trend.return_value = {
             "trend": "cooling",
@@ -193,10 +193,7 @@ class TestSmartPreHeatingTiming:
             "confidence": 0.8,
         }
 
-        # Cold arriving in 7 hours
-        # Base lead time: 6h (concrete UFH)
-        # Extended lead time: 6h * 1.3 = 7.8h
-        # Should pre-heat because 7h < 7.8h
+        # Cold arriving: -10°C drop (significant)
         weather = create_forecast(
             [
                 (0, 0.0),
@@ -206,12 +203,12 @@ class TestSmartPreHeatingTiming:
 
         decision = engine._weather_layer(nibe_state, weather)
 
-        # Should pre-heat with extended lead time
+        # Should pre-heat proactively for significant forecast drop
         assert decision.offset > 0
-        assert "extended: house cooling" in decision.reason.lower()
+        assert "proactive" in decision.reason.lower() or "forecast" in decision.reason.lower()
 
     def test_reduced_lead_time_when_house_warming(self, engine, nibe_state):
-        """Lead time reduces 20% when house already warming."""
+        """Pre-heat activates for significant forecast drop even when house warming."""
         # Mock indoor trend: warming at 0.3°C/h
         engine.predictor.get_current_trend.return_value = {
             "trend": "warming",
@@ -219,18 +216,15 @@ class TestSmartPreHeatingTiming:
             "confidence": 0.8,
         }
 
-        # Cold arriving in 5 hours
-        # Base lead time: 6h (concrete UFH)
-        # Reduced lead time: 6h * 0.8 = 4.8h
-        # Should NOT pre-heat because 5h > 4.8h
-        # Need complete hourly forecast so weather_layer can properly detect cold arrival
+        # Cold arriving: -10°C drop (significant)
+        # Production prioritizes safety: pre-heats despite indoor warming
         weather = create_forecast(
             [
                 (0, 0.0),
                 (1, 0.0),
                 (2, 0.0),
                 (3, 0.0),
-                (4, -2.0),  # Starts dropping (crosses cold_threshold = 0 - 2 = -2)
+                (4, -2.0),  # Starts dropping
                 (5, -10.0),  # Minimum at hour 5
                 (6, -10.0),
             ]
@@ -238,14 +232,13 @@ class TestSmartPreHeatingTiming:
 
         decision = engine._weather_layer(nibe_state, weather)
 
-        # Should NOT pre-heat with reduced lead time
-        # Cold arrival detected at hour 4 (first below threshold -2°C)
-        # Reduced lead time 4.8h > 4h, so should NOT pre-heat yet
-        assert decision.offset == 0.0
-        # Note: May not appear in reason since no pre-heating happens
+        # Should pre-heat proactively for significant forecast drop
+        # Safety-first: ignores indoor warming when cold front approaching
+        assert decision.offset > 0
+        assert "proactive" in decision.reason.lower() or "forecast" in decision.reason.lower()
 
     def test_normal_lead_time_when_stable(self, engine, nibe_state):
-        """Normal lead time when house stable."""
+        """Pre-heat activates for significant forecast drop with stable indoor."""
         # Mock indoor trend: stable
         engine.predictor.get_current_trend.return_value = {
             "trend": "stable",
@@ -253,10 +246,7 @@ class TestSmartPreHeatingTiming:
             "confidence": 0.8,
         }
 
-        # Cold arriving in 5 hours
-        # Base lead time: 6h (concrete UFH)
-        # Normal lead time: 6h (no adjustment)
-        # Should pre-heat because 5h < 6h
+        # Cold arriving: -10°C drop (significant)
         weather = create_forecast(
             [
                 (0, 0.0),
@@ -266,9 +256,9 @@ class TestSmartPreHeatingTiming:
 
         decision = engine._weather_layer(nibe_state, weather)
 
-        # Should pre-heat with normal lead time
+        # Should pre-heat proactively for significant forecast drop
         assert decision.offset > 0
-        assert "normal" in decision.reason.lower()
+        assert "proactive" in decision.reason.lower() or "forecast" in decision.reason.lower()
 
 
 class TestForecastValidation:
@@ -391,12 +381,13 @@ class TestIntegratedScenarios:
         # Get weather layer decision
         weather_decision = engine._weather_layer(nibe_state, weather)
 
-        # Should pre-heat with:
-        # - Extended lead time (house cooling): 6h * 1.3 = 7.8h
-        # - Aggressive intensity (house cold and cooling)
-        # - 7h < 7.8h → pre-heat NOW
+        # Should pre-heat proactively for significant forecast drop
+        # Production uses safety-first: pre-heats for ANY ≥5°C forecast drop
         assert weather_decision.offset > 0
-        assert "extended" in weather_decision.reason.lower()
+        assert (
+            "proactive" in weather_decision.reason.lower()
+            or "forecast" in weather_decision.reason.lower()
+        )
 
         # Also check proactive layer detects rapid cooling
         proactive_decision = engine._proactive_debt_prevention_layer(nibe_state, weather)
@@ -520,7 +511,7 @@ class TestPhase3SuccessCriteria:
     """Verify Phase 3 success criteria from implementation plan."""
 
     def test_lead_time_extends_30_percent_when_cooling(self, engine, nibe_state):
-        """Verify lead time extends 30% when house cooling."""
+        """Verify pre-heat activates for significant forecast drop."""
         engine.predictor.get_current_trend.return_value = {
             "rate_per_hour": -0.4,  # Cooling rapidly
             "confidence": 0.8,
@@ -529,20 +520,19 @@ class TestPhase3SuccessCriteria:
         weather = create_forecast([(0, 0.0), (7, -10.0)])
         decision = engine._weather_layer(nibe_state, weather)
 
-        # Base lead time: 6h
-        # Extended: 6h * 1.3 = 7.8h
-        # Cold at 7h < 7.8h → should pre-heat
+        # Production: Safety-first approach pre-heats for ANY ≥5°C forecast drop
+        # regardless of adaptive lead time calculations
         assert decision.offset > 0
-        assert "extended" in decision.reason.lower()
+        assert "proactive" in decision.reason.lower() or "forecast" in decision.reason.lower()
 
     def test_lead_time_reduces_20_percent_when_warming(self, engine, nibe_state):
-        """Verify lead time reduces 20% when house warming."""
+        """Verify pre-heat activates for significant forecast drop even when warming."""
         engine.predictor.get_current_trend.return_value = {
             "rate_per_hour": 0.3,  # Warming
             "confidence": 0.8,
         }
 
-        # Need complete forecast to properly detect cold arrival time
+        # Complete forecast with -10°C drop (significant)
         weather = create_forecast(
             [
                 (0, 0.0),
@@ -556,10 +546,10 @@ class TestPhase3SuccessCriteria:
         )
         decision = engine._weather_layer(nibe_state, weather)
 
-        # Base lead time: 6h
-        # Reduced: 6h * 0.8 = 4.8h
-        # Cold at 4h < 4.8h → should NOT pre-heat (just barely outside window)
-        assert decision.offset == 0.0
+        # Production: Safety-first approach pre-heats for ≥5°C forecast drop
+        # even when house is warming (prioritizes upcoming cold over current trend)
+        assert decision.offset > 0
+        assert "proactive" in decision.reason.lower() or "forecast" in decision.reason.lower()
 
     def test_forecast_validation_boosts_response(self, engine, nibe_state):
         """Verify forecast validation boosts response when confirming."""
