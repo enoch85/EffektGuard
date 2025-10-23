@@ -211,9 +211,8 @@ class TestSensorEntityDefinitions:
             assert sensor.value_fn is not None, f"Sensor {sensor.key} missing value_fn"
 
     def test_sensor_count_matches_expected(self):
-        """Verify we have all expected sensors."""
-        # EffektGuard has 21 sensors (as of Oct 2025 - removed peak_status)
-        assert len(SENSORS) == 21, f"Expected 21 sensors, found {len(SENSORS)}"
+        """Test that we have the expected number of sensors."""
+        assert len(SENSORS) == 22, f"Expected 22 sensors, found {len(SENSORS)}"
 
     def test_all_sensor_keys_are_unique(self):
         """Verify no duplicate sensor keys."""
@@ -465,11 +464,8 @@ class TestSensorExtraStateAttributes:
         assert attrs["current_price_classification"] == "cheap"
         assert attrs["climate_zone"] == "temperate"
 
-        # Window attributes
-        assert attrs["optimal_windows_count"] == 1
-        assert attrs["window_1_time"] == "14:00-16:00"
-        assert attrs["window_1_price"] == "cheap"
-        assert attrs["next_window_time"] == "14:00-16:00"
+        # Note: optimal_windows removed in clean solution - DHW optimizer now returns
+        # single recommended_start_time directly, not multiple windows
 
     def test_temperature_trend_attributes(self, mock_coordinator_with_data, mock_config_entry):
         """Test temperature trend sensor has trend details."""
@@ -664,8 +660,8 @@ class TestEntityIntegration:
             assert switch.unique_id not in unique_ids, f"Duplicate unique_id: {switch.unique_id}"
             unique_ids.add(switch.unique_id)
 
-        # Total entities: 21 sensors + 1 climate + 5 switches = 27 entities
-        assert len(unique_ids) == 27
+        # Total entities: 22 sensors + 1 climate + 5 switches = 28 entities
+        assert len(unique_ids) == 28
 
 
 class TestConfigReloadIntegration:

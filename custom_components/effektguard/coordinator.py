@@ -1036,10 +1036,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 recommendation = "Wait - Conditions not optimal"
 
-            # Add next optimal window if available
-            if optimal_windows:
-                next_window = optimal_windows[0]
-                recommendation += f" | Next window: {next_window['time_range']}"
         else:
             # Should heat - give specific recommendation
             if decision.priority_reason == "DHW_SAFETY_MINIMUM":

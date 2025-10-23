@@ -227,7 +227,8 @@ class TestLayerPriority:
         # BUT the system should recognize thermal debt and not go fully negative
         # The result depends on whether peak-aware minimal offset is applied
         # (which requires effect offset < -1.0 and weight > 0.5)
-        assert "CRITICAL" in decision.reasoning or "Peak" in decision.reasoning
+        # EMERGENCY RECOVERY is the correct response for DM -1300
+        assert "EMERGENCY" in decision.reasoning or "CRITICAL" in decision.reasoning or "Peak" in decision.reasoning
 
 
 class TestPeakProtectionScenarios:

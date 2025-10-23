@@ -52,16 +52,19 @@ def create_mock_quarters(base_time: datetime, prices: list[float]) -> list[Quart
     Returns:
         List of QuarterPeriod objects
     """
+    from zoneinfo import ZoneInfo
+    
     quarters = []
     for i, price in enumerate(prices):
         period_time = base_time + timedelta(minutes=i * 15)
+        # Make timezone-aware if not already
+        if period_time.tzinfo is None:
+            period_time = period_time.replace(tzinfo=ZoneInfo("Europe/Stockholm"))
+        
         quarters.append(
             QuarterPeriod(
-                quarter_of_day=(period_time.hour * 4 + period_time.minute // 15) % 96,
-                hour=period_time.hour,
-                minute=period_time.minute,
+                start_time=period_time,
                 price=price,
-                is_daytime=(6 <= period_time.hour < 22),
             )
         )
     return quarters
@@ -343,8 +346,10 @@ class TestWindowBasedScheduling:
 
     def test_finds_cheapest_window_tomorrow(self):
         """Finds tomorrow's cheaper prices across day boundary."""
+        from zoneinfo import ZoneInfo
+        
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 17, 23, 45)
+        current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Today evening: expensive
         today_prices = [63.94] * 4  # Q92-Q95
@@ -370,8 +375,10 @@ class TestWindowBasedScheduling:
 
     def test_waits_for_optimal_window(self):
         """Waits for better window if DHW comfortable."""
+        from zoneinfo import ZoneInfo
+        
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 17, 23, 45)
+        current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Create price data with cheaper window ahead (but not too close)
         # Need to be outside the 0.25h (15 min) optimal window trigger
@@ -399,8 +406,10 @@ class TestWindowBasedScheduling:
 
     def test_heats_in_optimal_window(self):
         """Heats when in the optimal window."""
+        from zoneinfo import ZoneInfo
+        
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 18, 4, 0)
+        current_time = datetime(2025, 10, 18, 4, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Create price data - current time is cheapest
         prices = [30.0, 30.5, 31.0] + [50.0] * 8  # First 3 quarters cheapest
@@ -530,7 +539,9 @@ class TestIntegrationScenarios:
 
     def test_typical_morning_scenario(self, scheduler_with_morning_demand):
         """Typical scenario: finds cheap night price before morning shower."""
-        current_time = datetime(2025, 10, 18, 2, 0)  # 2 AM
+        from zoneinfo import ZoneInfo
+        
+        current_time = datetime(2025, 10, 18, 2, 0, tzinfo=ZoneInfo("Europe/Stockholm"))  # 2 AM
 
         # Create realistic price curve (cheap at night, expensive in morning)
         prices = [30.0] * 12 + [45.0] * 8 + [60.0] * 12  # Night cheap
