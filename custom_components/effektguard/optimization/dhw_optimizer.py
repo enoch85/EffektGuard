@@ -438,6 +438,8 @@ class IntelligentDHWScheduler:
 
         # === RULE 6: SMART WINDOW-BASED SCHEDULING ===
         # Find the absolute cheapest window first, then check if we should heat
+        optimal_window = None  # Initialize to None for fallback logic
+
         if current_dhw_temp < (self.user_target_temp + 5.0):
             # Use window-based scheduling if price data available
             if price_periods:
@@ -497,10 +499,12 @@ class IntelligentDHWScheduler:
                         recommended_start_time=optimal_window["start_time"],
                     )
 
-            # Fallback: No price data, use simple cheap classification
+            # Fallback: No price data AND no optimal window ahead
             # Heat now if DHW getting low and price is cheap
+            # Only use this fallback when we don't have a better window to wait for
             if (
-                price_classification == "cheap"
+                not price_periods  # No price data available
+                and price_classification == "cheap"
                 and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP
                 and self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp)
             ):
