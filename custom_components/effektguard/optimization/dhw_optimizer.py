@@ -476,6 +476,11 @@ class IntelligentDHWScheduler:
                     # This is the optimal time! Heat if we have spare capacity
                     # Trust the window optimizer - it found the absolute cheapest period
                     if self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp):
+                        _LOGGER.info(
+                            "DHW: Heating in optimal window at %s (%.1före/kWh)",
+                            optimal_window["start_time"].strftime("%H:%M"),
+                            optimal_window["avg_price"],
+                        )
                         return DHWScheduleDecision(
                             should_heat=True,
                             priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
@@ -493,6 +498,12 @@ class IntelligentDHWScheduler:
                 # Wait for better window ahead (if DHW still comfortable)
                 # Require window to be at least 10 min away to prevent premature activation
                 elif current_dhw_temp > MIN_DHW_TARGET_TEMP:
+                    _LOGGER.info(
+                        "DHW: Next window at %s (%.1fh, %.1före/kWh)",
+                        optimal_window["start_time"].strftime("%H:%M"),
+                        optimal_window["hours_until"],
+                        optimal_window["avg_price"],
+                    )
                     return DHWScheduleDecision(
                         should_heat=False,
                         priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",

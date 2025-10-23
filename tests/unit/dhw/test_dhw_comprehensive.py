@@ -53,14 +53,14 @@ def create_mock_quarters(base_time: datetime, prices: list[float]) -> list[Quart
         List of QuarterPeriod objects
     """
     from zoneinfo import ZoneInfo
-    
+
     quarters = []
     for i, price in enumerate(prices):
         period_time = base_time + timedelta(minutes=i * 15)
         # Make timezone-aware if not already
         if period_time.tzinfo is None:
             period_time = period_time.replace(tzinfo=ZoneInfo("Europe/Stockholm"))
-        
+
         quarters.append(
             QuarterPeriod(
                 start_time=period_time,
@@ -347,7 +347,7 @@ class TestWindowBasedScheduling:
     def test_finds_cheapest_window_tomorrow(self):
         """Finds tomorrow's cheaper prices across day boundary."""
         from zoneinfo import ZoneInfo
-        
+
         scheduler = IntelligentDHWScheduler()
         current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
@@ -376,7 +376,7 @@ class TestWindowBasedScheduling:
     def test_waits_for_optimal_window(self):
         """Waits for better window if DHW comfortable."""
         from zoneinfo import ZoneInfo
-        
+
         scheduler = IntelligentDHWScheduler()
         current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
@@ -407,7 +407,7 @@ class TestWindowBasedScheduling:
     def test_heats_in_optimal_window(self):
         """Heats when in the optimal window."""
         from zoneinfo import ZoneInfo
-        
+
         scheduler = IntelligentDHWScheduler()
         current_time = datetime(2025, 10, 18, 4, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
 
@@ -540,7 +540,7 @@ class TestIntegrationScenarios:
     def test_typical_morning_scenario(self, scheduler_with_morning_demand):
         """Typical scenario: finds cheap night price before morning shower."""
         from zoneinfo import ZoneInfo
-        
+
         current_time = datetime(2025, 10, 18, 2, 0, tzinfo=ZoneInfo("Europe/Stockholm"))  # 2 AM
 
         # Create realistic price curve (cheap at night, expensive in morning)
