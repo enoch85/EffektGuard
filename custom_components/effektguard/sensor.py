@@ -542,30 +542,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 if "weather_opportunity" in planning:
                     attrs["weather_opportunity"] = planning["weather_opportunity"]
 
-                # Optimal heating windows (next 3 windows)
-                if "optimal_heating_windows" in planning and planning["optimal_heating_windows"]:
-                    windows = planning["optimal_heating_windows"]
-                    attrs["optimal_windows_count"] = len(windows)
-
-                    # Format windows for display
-                    for i, window in enumerate(windows[:3], 1):
-                        prefix = f"window_{i}"
-                        attrs[f"{prefix}_time"] = window.get("time_range", "Unknown")
-                        attrs[f"{prefix}_price"] = window.get("price_classification", "Unknown")
-                        attrs[f"{prefix}_duration_hours"] = window.get("duration_hours", 0)
-                        attrs[f"{prefix}_thermal_debt_ok"] = window.get("thermal_debt_ok", False)
-
-                    # Next optimal window (most important)
-                    if "next_optimal_window" in planning and planning["next_optimal_window"]:
-                        next_window = planning["next_optimal_window"]
-                        attrs["next_window_time"] = next_window.get("time_range", "Unknown")
-                        attrs["next_window_price"] = next_window.get(
-                            "price_classification", "Unknown"
-                        )
-                        attrs["next_window_duration"] = (
-                            f"{next_window.get('duration_hours', 0):.1f}h"
-                        )
-
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
             if "thermal_trend" in self.coordinator.data:

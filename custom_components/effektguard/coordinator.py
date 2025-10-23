@@ -807,46 +807,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
 
-                # Extract next boost time from optimizer decision
-                # This respects the actual optimal window found by the scheduler
-                if dhw_planning_details.get("should_heat"):
-                    # Should heat now
-                    dhw_next_boost = now_time
-                elif dhw_planning_details.get("next_optimal_window"):
-                    # Waiting for optimal window
-                    next_window = dhw_planning_details["next_optimal_window"]
-                    if "start_datetime" in next_window:
-                        dhw_next_boost = next_window["start_datetime"]
-                    elif "start_time" in next_window:
-                        # DHW optimizer returns start_time as datetime object
-                        start_time = next_window["start_time"]
-                        if isinstance(start_time, datetime):
-                            # Already a datetime object - use directly
-                            dhw_next_boost = start_time
-                        else:
-                            # Fallback: parse time string (HH:MM format) if it's a string
-                            try:
-                                hour, minute = map(int, str(start_time).split(":"))
-                                dhw_next_boost = now_time.replace(
-                                    hour=hour, minute=minute, second=0, microsecond=0
-                                )
-                                # If time is in the past, it's tomorrow
-                                if dhw_next_boost < now_time:
-                                    dhw_next_boost += timedelta(days=1)
-                            except (ValueError, AttributeError):
-                                dhw_next_boost = None
-                elif current_dhw_temp < DHW_SAFETY_MIN:
-                    # Below safety minimum but no window found: boost is imminent
-                    dhw_next_boost = now_time + timedelta(minutes=5)
-                else:
-                    # Above safety minimum: calculate cooling time until boost needed
-                    dhw_setpoint = DHW_SAFETY_MIN  # 35°C - actual EffektGuard control threshold
-                    cooling_rate = DHW_COOLING_RATE  # 0.5°C/hour - generic tank cooling rate
-                    temp_margin = current_dhw_temp - dhw_setpoint
-                    hours_until_boost = temp_margin / cooling_rate
-
-                    if hours_until_boost > 0:
-                        dhw_next_boost = now_time + timedelta(hours=hours_until_boost)
+                # Use the optimizer's recommended start time (timezone-aware from GE-Spot)
+                dhw_next_boost = dhw_planning_details.get("recommended_start_time")
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "
@@ -1033,11 +995,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             hours_since_last_dhw=hours_since_last,
         )
 
-        # Calculate optimal heating windows for today (next 24 hours)
-        optimal_windows = self._find_optimal_dhw_windows(
-            price_data, now_time, thermal_debt, dm_thresholds
-        )
-
         # Build detailed planning attributes
         planning_details = {
             "should_heat": decision.should_heat,
@@ -1053,8 +1010,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "outdoor_temperature": outdoor_temp,
             "indoor_temperature": indoor_temp,
             "climate_zone": climate_zone.name if climate_zone else "Unknown",
-            "optimal_heating_windows": optimal_windows,
-            "next_optimal_window": optimal_windows[0] if optimal_windows else None,
+            "recommended_start_time": decision.recommended_start_time,  # From optimizer
         }
 
         # Check for weather opportunity
@@ -1191,81 +1147,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         lines.append(f"Recommendation: {recommendation}")
 
         return "\n".join(lines)
-
-    def _find_optimal_dhw_windows(
-        self, price_data, now_time: datetime, thermal_debt: float, dm_thresholds: dict
-    ) -> list[dict]:
-        """Find optimal DHW heating windows in the next 24 hours.
-
-        Args:
-            price_data: GE-Spot price data (PriceData with today/tomorrow QuarterPeriods)
-            now_time: Current datetime
-            thermal_debt: Current thermal debt (DM)
-            dm_thresholds: Thermal debt thresholds for climate zone
-
-        Returns:
-            List of optimal heating windows with time ranges and reasoning
-        """
-        if not price_data or not hasattr(price_data, "today"):
-            return []
-
-        windows = []
-        end_time = now_time + timedelta(hours=24)
-
-        # Combine today and tomorrow periods (use actual datetime from GE-Spot)
-        all_periods = price_data.today + (price_data.tomorrow if price_data.has_tomorrow else [])
-
-        # Analyze price periods for next 24 hours using actual datetimes
-        for period in all_periods:
-            # Use actual datetime from GE-Spot (already timezone-aware)
-            quarter_time = period.start_time
-
-            # Skip if outside 24h window or in the past
-            if quarter_time < now_time or quarter_time >= end_time:
-                continue
-
-            # Get price classification for this quarter
-            classification = self.engine.price.get_current_classification(period.quarter_of_day)
-
-            # Consider CHEAP periods as opportunities
-            if classification in ["CHEAP", "NORMAL"]:
-                # Check if thermal debt allows DHW heating
-                if thermal_debt > dm_thresholds["block"]:
-                    # Calculate sequential quarter index for grouping
-                    hours_from_now = (quarter_time - now_time).total_seconds() / 3600
-                    quarter_index = int(hours_from_now * 4)
-
-                    # Group consecutive cheap quarters into windows
-                    if windows and windows[-1]["end_quarter"] == quarter_index - 1:
-                        # Extend existing window
-                        windows[-1]["end_quarter"] = quarter_index
-                        windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime(
-                            "%H:%M"
-                        )
-                        windows[-1]["duration_hours"] = (
-                            quarter_index - windows[-1]["start_quarter"] + 1
-                        ) * 0.25
-                    else:
-                        # Start new window
-                        window = {
-                            "start_quarter": quarter_index,
-                            "end_quarter": quarter_index,
-                            "start_time": quarter_time.strftime("%H:%M"),
-                            "end_time": (quarter_time + timedelta(minutes=15)).strftime("%H:%M"),
-                            "start_datetime": quarter_time,  # Use actual datetime from GE-Spot
-                            "time_range": f"{quarter_time.strftime('%H:%M')}-{(quarter_time + timedelta(minutes=15)).strftime('%H:%M')}",
-                            "price_classification": classification,
-                            "duration_hours": 0.25,
-                            "thermal_debt_ok": True,
-                        }
-                        windows.append(window)
-
-        # Update time ranges for windows
-        for window in windows:
-            window["time_range"] = f"{window['start_time']}-{window['end_time']}"
-
-        # Limit to next 3 optimal windows
-        return windows[:3]
 
     def _get_thermal_debt_status(self, thermal_debt: float, dm_thresholds: dict) -> str:
         """Get human-readable thermal debt status.
