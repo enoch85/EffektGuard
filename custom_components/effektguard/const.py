@@ -626,7 +626,7 @@ DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boos
 DHW_TARGET_HIGH_DEMAND: Final = 55.0  # °C - Extra comfort target for high demand periods
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
-DHW_SCHEDULING_WINDOW_MIN: Final = 1  # Min hours ahead for DHW scheduling
+DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
 # DHW thermal debt thresholds (climate-aware via spare capacity calculation)
@@ -649,6 +649,9 @@ DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
 DHW_NORMAL_RUNTIME_MINUTES: Final = 45  # Normal DHW heating window
 DHW_EXTENDED_RUNTIME_MINUTES: Final = 60  # High demand period heating
 DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
+
+# DHW demand period thresholds
+DHW_URGENT_DEMAND_HOURS: Final = 0.5  # Start urgent heating 30 min before demand period
 
 # MyUplink DHW control entities (NIBE parameter IDs)
 NIBE_TEMP_LUX_ENTITY_ID: Final = "switch.temporary_lux_50004"  # Temporary lux boost

@@ -332,6 +332,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         summary.get("total_weeks", 0),
                     )
 
+                # Restore DHW optimizer state (critical for Legionella safety tracking)
+                if "dhw_state" in learned_data and self.dhw_optimizer:
+                    dhw_state = learned_data["dhw_state"]
+                    if "last_legionella_boost" in dhw_state:
+                        self.dhw_optimizer.last_legionella_boost = datetime.fromisoformat(
+                            dhw_state["last_legionella_boost"]
+                        )
+                        _LOGGER.info(
+                            "Restored last Legionella boost: %s",
+                            self.dhw_optimizer.last_legionella_boost,
+                        )
+
                 _LOGGER.info("Learning modules initialized successfully")
             else:
                 _LOGGER.info("No learned data found - starting fresh learning")
@@ -795,8 +807,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Track temperature for trend analysis
             self.last_dhw_temp = current_dhw_temp
 
+            # Track previous Legionella boost time before update
+            previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
+
             # Update DHW optimizer with temperature history
             self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
+
+            # If Legionella boost was newly detected, save state immediately
+            if (
+                self.dhw_optimizer.last_legionella_boost != previous_legionella_boost
+                and self.dhw_optimizer.last_legionella_boost is not None
+            ):
+                _LOGGER.info(
+                    "Legionella boost detected - saving DHW state to persist across reboots"
+                )
+                await self._save_dhw_state_immediate()
 
             # Get DHW recommendation from optimizer with detailed planning
             try:
@@ -2049,6 +2074,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 summary = weather_learner.get_pattern_database_summary()
                 learned_data["weather_summary"] = summary
 
+            # Save DHW optimizer state (critical for Legionella safety and max wait tracking)
+            if self.dhw_optimizer:
+                dhw_state = {}
+                if self.dhw_optimizer.last_legionella_boost:
+                    dhw_state["last_legionella_boost"] = (
+                        self.dhw_optimizer.last_legionella_boost.isoformat()
+                    )
+                # Note: last_dhw_heating_time tracked by thermal debt tracker, not optimizer
+                if dhw_state:
+                    learned_data["dhw_state"] = dhw_state
+
             await self.learning_store.async_save(learned_data)
             _LOGGER.debug("Saved learned data to storage")
 
@@ -2120,4 +2156,35 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.warning("Failed to save thermal predictor state: %s", err)
+            # Don't raise - continue operation even if save fails
+
+    async def _save_dhw_state_immediate(self) -> None:
+        """Save DHW optimizer state immediately (Legionella boost tracking).
+
+        Called when Legionella boost is detected to persist across reboots.
+        Critical for safety - ensures we don't lose track of last boost time.
+        """
+        try:
+            # Load existing learning data to preserve other modules
+            existing_data = await self.learning_store.async_load() or {}
+
+            # Update DHW state
+            if self.dhw_optimizer and self.dhw_optimizer.last_legionella_boost:
+                existing_data["dhw_state"] = {
+                    "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
+                }
+                existing_data["last_updated"] = dt_util.utcnow().isoformat()
+                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+
+                await self.learning_store.async_save(existing_data)
+
+                _LOGGER.debug(
+                    "Saved DHW state: last Legionella boost at %s",
+                    self.dhw_optimizer.last_legionella_boost,
+                )
+            else:
+                _LOGGER.debug("No DHW state to save")
+
+        except (OSError, ValueError, KeyError, AttributeError) as err:
+            _LOGGER.warning("Failed to save DHW state: %s", err)
             # Don't raise - continue operation even if save fails

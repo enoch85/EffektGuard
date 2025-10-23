@@ -297,29 +297,34 @@ class TestMaximumWaitEnforcement:
 class TestDemandPeriodTargeting:
     """Test targeting DHW ready by demand period (e.g., morning shower)."""
 
-    def test_urgent_demand_less_than_2_hours(self, scheduler_with_morning_demand):
-        """RULE 5: Less than 2h until demand = urgent heating."""
-        current_time = datetime(2025, 10, 18, 5, 30)  # 1.5h before 7 AM
+    def test_urgent_demand_within_30_min(self, scheduler_with_morning_demand):
+        """RULE 5: Urgent demand (<30 min) triggers heating during cheap/normal prices."""
+        from zoneinfo import ZoneInfo
+
+        # 6:45 AM, shower at 7:00 AM (15 minutes away = 0.25 hours)
+        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         decision = scheduler_with_morning_demand.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP,  # Below target
+            current_dhw_temp=45.0,  # Below target 55°C
             space_heating_demand_kw=2.0,
             thermal_debt_dm=-50,
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
-            price_classification="normal",  # Not even cheap!
+            price_classification="normal",
             current_time=current_time,
         )
 
+        # Should trigger urgent heating (0.25 hours < 0.5 hours threshold)
         assert decision.should_heat is True
         assert "URGENT_DEMAND" in decision.priority_reason
-        assert "1.5H" in decision.priority_reason
         assert decision.max_runtime_minutes == DHW_URGENT_RUNTIME_MINUTES
 
     def test_urgent_demand_blocks_during_peak(self, scheduler_with_morning_demand):
         """RULE 5: Urgent demand still blocks during peak pricing."""
-        current_time = datetime(2025, 10, 18, 5, 30)
+        from zoneinfo import ZoneInfo
+
+        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         decision = scheduler_with_morning_demand.should_start_dhw(
             current_dhw_temp=45.0,

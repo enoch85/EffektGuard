@@ -39,6 +39,7 @@ from ..const import (
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_SPARE_CAPACITY_PERCENT,
     DHW_TARGET_HIGH_DEMAND,
+    DHW_URGENT_DEMAND_HOURS,
     DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
@@ -421,12 +422,12 @@ class IntelligentDHWScheduler:
             hours_until = upcoming_demand["hours_until"]
             target = upcoming_demand["target_temp"]
 
-            # IMMEDIATE: Less than 2 hours until demand - heat regardless of price (except peak)
-            if hours_until < 2 and current_dhw_temp < target:
+            # IMMEDIATE: Within 30 min of demand - heat regardless of price (except peak)
+            if hours_until < DHW_URGENT_DEMAND_HOURS and current_dhw_temp < target:
                 if price_classification != "peak":
                     return DHWScheduleDecision(
                         should_heat=True,
-                        priority_reason=f"URGENT_DEMAND_IN_{hours_until:.1f}H",
+                        priority_reason=f"URGENT_DEMAND_IN_{hours_until * 60:.0f}MIN",
                         target_temp=target,
                         max_runtime_minutes=DHW_URGENT_RUNTIME_MINUTES,
                         abort_conditions=[
