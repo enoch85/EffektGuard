@@ -266,8 +266,9 @@ class TestTimeAwarePreHeating:
         # Should definitely pre-heat for significant cold within lead time
         assert decision.offset > 0, "Should pre-heat for forecast cold"
         assert decision.weight > 0, "Weather layer should be active"
-        assert any(word in decision.reason.lower() for word in ["forecast", "pre-heat", "drop"]), \
-            f"Reason should mention weather: {decision.reason}"
+        assert any(
+            word in decision.reason.lower() for word in ["forecast", "pre-heat", "drop"]
+        ), f"Reason should mention weather: {decision.reason}"
 
     def test_preheat_urgent_when_cold_imminent(self, engine_mock, nibe_state_mock):
         """Higher urgency when cold arriving sooner."""
@@ -289,8 +290,9 @@ class TestTimeAwarePreHeating:
         assert decision.offset > 0, "Should pre-heat for imminent cold"
         assert decision.weight > 0, "Weather layer should be active"
         # Check for pre-heat mention (case-insensitive)
-        assert "pre-heat" in decision.reason.lower() or "forecast" in decision.reason.lower(), \
-            f"Reason should mention pre-heating: {decision.reason}"
+        assert (
+            "pre-heat" in decision.reason.lower() or "forecast" in decision.reason.lower()
+        ), f"Reason should mention pre-heating: {decision.reason}"
 
     def test_no_preheat_for_small_temp_drop(self, engine_mock, nibe_state_mock):
         """Should NOT pre-heat for minor temperature drops."""
@@ -346,8 +348,9 @@ class TestOutdoorTrendImpact:
         assert decision.offset > 0, "Should pre-heat for forecasted cold"
         assert decision.weight > 0, "Weather layer should be active"
         # Production may mention "forecast" or "pre-heat" rather than specific trend
-        assert any(word in decision.reason.lower() for word in ["forecast", "pre-heat", "cooling", "drop"]), \
-            f"Reason should mention weather: {decision.reason}"
+        assert any(
+            word in decision.reason.lower() for word in ["forecast", "pre-heat", "cooling", "drop"]
+        ), f"Reason should mention weather: {decision.reason}"
 
     def test_outdoor_moderate_cooling_extends_lead_time_25(self, engine_mock, nibe_state_mock):
         """Outdoor cooling moderately should cause pre-heating for significant forecast drops."""
@@ -368,8 +371,9 @@ class TestOutdoorTrendImpact:
         # Should pre-heat for significant forecast temperature drop
         assert decision.offset > 0, "Should pre-heat for forecasted cold"
         assert decision.weight > 0, "Weather layer should be active"
-        assert any(word in decision.reason.lower() for word in ["forecast", "pre-heat", "cooling", "drop"]), \
-            f"Reason should mention weather: {decision.reason}"
+        assert any(
+            word in decision.reason.lower() for word in ["forecast", "pre-heat", "cooling", "drop"]
+        ), f"Reason should mention weather: {decision.reason}"
 
     def test_outdoor_warming_reduces_lead_time(self, engine_mock, nibe_state_mock):
         """Outdoor warming should reduce pre-heating urgency."""
@@ -403,7 +407,7 @@ class TestOutdoorTrendImpact:
             "confidence": 0.8,
         }
 
-        # Cold arriving in 5 hours (within 6h base lead time)  
+        # Cold arriving in 5 hours (within 6h base lead time)
         weather = create_forecast([(0, 0)] + [(i, 0) for i in range(1, 5)] + [(5, -10)])
 
         decision = engine_mock._weather_layer(nibe_state_mock, weather)
@@ -412,8 +416,9 @@ class TestOutdoorTrendImpact:
         assert decision.offset > 0, "Should pre-heat for forecasted cold"
         assert decision.weight > 0, "Weather layer should be active"
         # Reason will mention forecast/pre-heat, not necessarily "outdoor stable"
-        assert any(word in decision.reason.lower() for word in ["forecast", "pre-heat", "drop"]), \
-            f"Reason should mention weather forecast: {decision.reason}"
+        assert any(
+            word in decision.reason.lower() for word in ["forecast", "pre-heat", "drop"]
+        ), f"Reason should mention weather forecast: {decision.reason}"
 
 
 class TestEdgeCases:

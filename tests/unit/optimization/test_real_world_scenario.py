@@ -300,8 +300,10 @@ class TestRealWorldScenario:
         # Weather pre-heat may appear in final reasoning even if not a separate active layer
         # Check both individual layers and final decision reasoning
         all_reasons = " | ".join(layer_reasons) + " | " + decision.reasoning
-        assert any("pre-heat" in r.lower() or "weather" in r.lower() for r in layer_reasons) or "pre-heat" in decision.reasoning.lower(), \
-            f"Weather/preheat should be considered. Layers: {layer_reasons}, Decision: {decision.reasoning}"
+        assert (
+            any("pre-heat" in r.lower() or "weather" in r.lower() for r in layer_reasons)
+            or "pre-heat" in decision.reasoning.lower()
+        ), f"Weather/preheat should be considered. Layers: {layer_reasons}, Decision: {decision.reasoning}"
         assert any(
             "EXPENSIVE" in r or "PEAK" in r for r in layer_reasons
         ), "Price layer should be active"

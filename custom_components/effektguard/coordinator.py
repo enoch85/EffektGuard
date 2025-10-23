@@ -795,23 +795,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
 
-            # Predict next boost time based on temperature
-            # Use DHW_SAFETY_MIN (35°C) as threshold where optimizer would trigger heating
-            # This is the actual control point, not NIBE's default 45°C auto-start
-            if current_dhw_temp < DHW_SAFETY_MIN:
-                # Below safety minimum: boost is imminent (will start soon)
-                # Predict boost within next few minutes (conservative estimate)
-                dhw_next_boost = now_time + timedelta(minutes=5)
-            else:
-                # Above safety minimum: calculate cooling time until boost needed
-                dhw_setpoint = DHW_SAFETY_MIN  # 35°C - actual EffektGuard control threshold
-                cooling_rate = DHW_COOLING_RATE  # 0.5°C/hour - generic tank cooling rate
-                temp_margin = current_dhw_temp - dhw_setpoint
-                hours_until_boost = temp_margin / cooling_rate
-
-                if hours_until_boost > 0:
-                    dhw_next_boost = now_time + timedelta(hours=hours_until_boost)
-
             # Track temperature for trend analysis
             self.last_dhw_temp = current_dhw_temp
 
@@ -826,6 +809,41 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_recommendation = dhw_result["recommendation"]
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
+
+                # Extract next boost time from optimizer decision
+                # This respects the actual optimal window found by the scheduler
+                if dhw_planning_details.get("should_heat"):
+                    # Should heat now
+                    dhw_next_boost = now_time
+                elif dhw_planning_details.get("next_optimal_window"):
+                    # Waiting for optimal window
+                    next_window = dhw_planning_details["next_optimal_window"]
+                    if "start_datetime" in next_window:
+                        dhw_next_boost = next_window["start_datetime"]
+                    elif "start_time" in next_window:
+                        # Fallback: parse time string (HH:MM format)
+                        try:
+                            hour, minute = map(int, next_window["start_time"].split(":"))
+                            dhw_next_boost = now_time.replace(
+                                hour=hour, minute=minute, second=0, microsecond=0
+                            )
+                            # If time is in the past, it's tomorrow
+                            if dhw_next_boost < now_time:
+                                dhw_next_boost += timedelta(days=1)
+                        except (ValueError, AttributeError):
+                            dhw_next_boost = None
+                elif current_dhw_temp < DHW_SAFETY_MIN:
+                    # Below safety minimum but no window found: boost is imminent
+                    dhw_next_boost = now_time + timedelta(minutes=5)
+                else:
+                    # Above safety minimum: calculate cooling time until boost needed
+                    dhw_setpoint = DHW_SAFETY_MIN  # 35°C - actual EffektGuard control threshold
+                    cooling_rate = DHW_COOLING_RATE  # 0.5°C/hour - generic tank cooling rate
+                    temp_margin = current_dhw_temp - dhw_setpoint
+                    hours_until_boost = temp_margin / cooling_rate
+
+                    if hours_until_boost > 0:
+                        dhw_next_boost = now_time + timedelta(hours=hours_until_boost)
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "
@@ -1222,6 +1240,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             "end_quarter": i,
                             "start_time": quarter_time.strftime("%H:%M"),
                             "end_time": (quarter_time + timedelta(minutes=15)).strftime("%H:%M"),
+                            "start_datetime": quarter_time,  # Add datetime object for next_boost_time
                             "time_range": f"{quarter_time.strftime('%H:%M')}-{(quarter_time + timedelta(minutes=15)).strftime('%H:%M')}",
                             "price_classification": classification,
                             "duration_hours": 0.25,

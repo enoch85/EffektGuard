@@ -469,8 +469,10 @@ class IntelligentDHWScheduler:
                             ],
                         )
 
-                # STEP 1: Check if we're in the optimal window (within 15 min of start)
-                elif optimal_window["hours_until"] <= 0.25:
+                # STEP 1: Check if we're in the optimal window (within 10 min of start)
+                # Use 10 min buffer (not 15 min) to prevent edge-case activations
+                # when quarters transition from future to current
+                elif optimal_window["hours_until"] <= 0.17:  # 10 minutes
                     # This is the optimal time! Heat if we have spare capacity
                     # Trust the window optimizer - it found the absolute cheapest period
                     if self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp):
@@ -489,6 +491,7 @@ class IntelligentDHWScheduler:
                         )
 
                 # Wait for better window ahead (if DHW still comfortable)
+                # Require window to be at least 10 min away to prevent premature activation
                 elif current_dhw_temp > MIN_DHW_TARGET_TEMP:
                     return DHWScheduleDecision(
                         should_heat=False,
@@ -616,31 +619,32 @@ class IntelligentDHWScheduler:
 
         # Build available quarters from price periods
         # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime
+        # CRITICAL: price_periods may contain today + tomorrow data
+        # We need to properly handle day boundaries using actual datetime comparison
         available_quarters = []
-        for period in price_periods:
-            # Reconstruct datetime from quarter info
-            # Determine if this is today or tomorrow based on quarter numbering
-            # We need to get the date from price_periods context
-            # For now, approximate based on current time and quarter
-            period_hour = period.hour
-            period_minute = period.minute
 
+        for period in price_periods:
+            # Build datetime from quarter info
             # Try today first
             period_time = current_time.replace(
-                hour=period_hour, minute=period_minute, second=0, microsecond=0
+                hour=period.hour, minute=period.minute, second=0, microsecond=0
             )
 
-            # If period is in the past, it must be tomorrow
+            # If this time is in the past, it must be tomorrow
             if period_time < current_time:
                 period_time += timedelta(days=1)
 
             # Check if within lookahead window
-            if current_time <= period_time < end_time:
+            if period_time < end_time:
+                # Calculate quarter ID based on actual datetime to distinguish duplicates
+                days_ahead = (period_time.date() - current_time.date()).days
+                quarter_id = period.quarter_of_day + (days_ahead * 96)
+
                 available_quarters.append(
                     {
                         "start": period_time,
                         "end": period_time + timedelta(minutes=15),
-                        "quarter": period.quarter_of_day,
+                        "quarter": quarter_id,
                         "price": period.price,
                     }
                 )
@@ -653,9 +657,18 @@ class IntelligentDHWScheduler:
             )
             return None
 
+        _LOGGER.debug(
+            "DHW window search: %d quarters available, need %d quarters (%d min), lookahead %.1fh",
+            len(available_quarters),
+            quarters_needed,
+            dhw_duration_minutes,
+            lookahead_hours,
+        )
+
         # Sliding window to find cheapest continuous period
         lowest_price = None
         lowest_index = None
+        window_candidates = []  # Track all valid windows for debugging
 
         for i in range(len(available_quarters) - quarters_needed + 1):
             window = available_quarters[i : i + quarters_needed]
@@ -673,9 +686,36 @@ class IntelligentDHWScheduler:
 
             window_avg = sum(q["price"] for q in window) / quarters_needed
 
+            # Track this candidate
+            window_candidates.append(
+                {
+                    "start": window[0]["start"],
+                    "avg_price": window_avg,
+                    "hours_until": (window[0]["start"] - current_time).total_seconds() / 3600,
+                }
+            )
+
             if lowest_price is None or window_avg < lowest_price:
                 lowest_price = window_avg
                 lowest_index = i
+
+        # Log all candidates for debugging
+        if window_candidates:
+            _LOGGER.debug(
+                "DHW window candidates found: %d windows evaluated",
+                len(window_candidates),
+            )
+            # Show top 5 cheapest
+            sorted_candidates = sorted(window_candidates, key=lambda x: x["avg_price"])
+            for idx, candidate in enumerate(sorted_candidates[:5], 1):
+                _LOGGER.debug(
+                    "  #%d: %.1före/kWh at %s (%.1fh away)%s",
+                    idx,
+                    candidate["avg_price"],
+                    candidate["start"].strftime("%H:%M"),
+                    candidate["hours_until"],
+                    " ← SELECTED" if idx == 1 else "",
+                )
 
         if lowest_index is None:
             _LOGGER.error("Could not find continuous DHW window (unexpected)")
@@ -683,13 +723,24 @@ class IntelligentDHWScheduler:
 
         optimal_window = available_quarters[lowest_index : lowest_index + quarters_needed]
 
-        return {
+        result = {
             "start_time": optimal_window[0]["start"],
             "end_time": optimal_window[-1]["end"],
             "quarters": [q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
             "avg_price": lowest_price,
             "hours_until": (optimal_window[0]["start"] - current_time).total_seconds() / 3600,
         }
+
+        _LOGGER.info(
+            "DHW optimal window selected: %s (Q%d-Q%d) @ %.1före/kWh, %.1fh away",
+            result["start_time"].strftime("%H:%M"),
+            result["quarters"][0],
+            result["quarters"][-1],
+            result["avg_price"],
+            result["hours_until"],
+        )
+
+        return result
 
     def _check_upcoming_demand_period(self, current_time: datetime) -> dict[str, Any] | None:
         """Check if approaching a high demand period (up to 24h ahead).
