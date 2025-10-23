@@ -1060,7 +1060,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             dm_thresholds=dm_thresholds,
             space_heating_demand=space_heating_demand,
             price_classification=price_classification,
-            optimal_windows=optimal_windows,
             weather_opportunity=planning_details.get("weather_opportunity"),
         )
 
@@ -1080,7 +1079,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         dm_thresholds: dict,
         space_heating_demand: float,
         price_classification: str,
-        optimal_windows: list,
         weather_opportunity: Optional[str],
     ) -> str:
         """Format human-readable DHW planning summary.
@@ -1093,7 +1091,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             dm_thresholds: Thermal debt thresholds
             space_heating_demand: Current heating demand in kW
             price_classification: Current price classification
-            optimal_windows: List of optimal heating windows
             weather_opportunity: Weather opportunity text if any
 
         Returns:
@@ -1125,19 +1122,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Weather opportunity
         if weather_opportunity:
             lines.append(f"Weather: {weather_opportunity}")
-
-        # Next optimal windows
-        if optimal_windows:
-            lines.append("")
-            lines.append("Optimal Heating Windows:")
-            for i, window in enumerate(optimal_windows[:3], 1):
-                duration = window["duration_hours"]
-                price = window["price_classification"]
-                time_range = window["time_range"]
-                lines.append(f"  {i}. {time_range} ({duration:.1f}h, {price})")
-        else:
-            lines.append("")
-            lines.append("No optimal windows found")
 
         lines.append("")
         lines.append(f"Recommendation: {recommendation}")
