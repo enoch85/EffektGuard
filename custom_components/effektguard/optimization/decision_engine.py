@@ -93,8 +93,11 @@ from ..const import (
     THERMAL_RECOVERY_RAPID_FACTOR,
     THERMAL_RECOVERY_RAPID_THRESHOLD,
     THERMAL_RECOVERY_T1_MIN_OFFSET,
+    THERMAL_RECOVERY_T1_NAME,
     THERMAL_RECOVERY_T2_MIN_OFFSET,
+    THERMAL_RECOVERY_T2_NAME,
     THERMAL_RECOVERY_T3_MIN_OFFSET,
+    THERMAL_RECOVERY_T3_NAME,
     THERMAL_RECOVERY_WARMING_THRESHOLD,
     TOLERANCE_RANGE_MULTIPLIER,
     TREND_BOOST_OFFSET_LIMIT,
@@ -770,7 +773,7 @@ class DecisionEngine:
         if degree_minutes <= t3_threshold:
             base_offset = DM_CRITICAL_T3_OFFSET
 
-            # Apply thermal recovery damping (even at critical T3 level)
+            # Apply thermal recovery damping (even at emergency T3 level)
             damped_offset, damping_reason = self._apply_thermal_recovery_damping(
                 base_offset=base_offset,
                 tier_name="T3",
@@ -780,7 +783,7 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"CRITICAL T3: DM {degree_minutes:.0f} near absolute max "
+                f"{THERMAL_RECOVERY_T3_NAME}: DM {degree_minutes:.0f} near absolute max "
                 f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
@@ -792,7 +795,7 @@ class DecisionEngine:
                 reason=" ".join(reason_parts),
             )
 
-        # CRITICAL TIER 2: Severe thermal debt - strong recovery before reaching T3
+        # STRONG RECOVERY TIER 2: Severe thermal debt - strong recovery before reaching T3
         # Thermal Recovery Damping (Oct 20, 2025): Prevent concrete slab overshoot
         # Uses general _apply_thermal_recovery_damping() helper
         if degree_minutes <= t2_threshold:
@@ -808,7 +811,7 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"CRITICAL T2: DM {degree_minutes:.0f} approaching T3 "
+                f"{THERMAL_RECOVERY_T2_NAME}: DM {degree_minutes:.0f} approaching T3 "
                 f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
@@ -820,7 +823,7 @@ class DecisionEngine:
                 reason=" ".join(reason_parts),
             )
 
-        # CRITICAL TIER 1: Serious thermal debt - prevent escalation to T2
+        # MODERATE RECOVERY TIER 1: Serious thermal debt - prevent escalation to T2
         # Triggers at climate-aware WARNING threshold (where thermal debt becomes abnormal)
         # Applies thermal recovery damping to prevent overshoot
         if degree_minutes <= t1_threshold:
@@ -836,7 +839,7 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"CRITICAL T1: DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
+                f"{THERMAL_RECOVERY_T1_NAME}: DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
                 f"(threshold: {t1_threshold:.0f})"
             ]
             if damping_reason:

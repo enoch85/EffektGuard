@@ -412,26 +412,26 @@ class ScenarioTester:
                 "Emergency",
                 offset=DM_CRITICAL_T3_OFFSET,
                 weight=DM_CRITICAL_T3_WEIGHT,
-                reason=f"CRITICAL T3: DM {dm:.0f} near absolute max (threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})",
+                reason=f"EMERGENCY RECOVERY: DM {dm:.0f} near absolute max (threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})",
             )
 
-        # CRITICAL TIER 2: Severe thermal debt - strong recovery before reaching T3
+        # STRONG RECOVERY TIER 2: Severe thermal debt - strong recovery before reaching T3
         if dm <= t2_threshold:
             return LayerVote(
                 "Emergency",
                 offset=DM_CRITICAL_T2_OFFSET,
                 weight=DM_CRITICAL_T2_WEIGHT,
-                reason=f"CRITICAL T2: DM {dm:.0f} approaching T3 (threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})",
+                reason=f"STRONG RECOVERY: DM {dm:.0f} approaching T3 (threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})",
             )
 
-        # CRITICAL TIER 1: Serious thermal debt - prevent escalation to T2
+        # MODERATE RECOVERY TIER 1: Serious thermal debt - prevent escalation to T2
         # Triggers at climate-aware WARNING threshold (where thermal debt becomes abnormal)
         if dm <= t1_threshold:
             return LayerVote(
                 "Emergency",
                 offset=DM_CRITICAL_T1_OFFSET,
                 weight=DM_CRITICAL_T1_WEIGHT,
-                reason=f"CRITICAL T1: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (threshold: {t1_threshold:.0f})",
+                reason=f"MODERATE RECOVERY: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (threshold: {t1_threshold:.0f})",
             )
 
         # WARNING: DM beyond expected range (strengthened Oct 19, 2025)
@@ -606,14 +606,17 @@ class ScenarioTester:
         )
 
     def calculate_weather_layer(
-        self, nibe_state: MockNibeState, weather_data: MockWeatherData, thermal_mass: float = DEFAULT_THERMAL_MASS
+        self,
+        nibe_state: MockNibeState,
+        weather_data: MockWeatherData,
+        thermal_mass: float = DEFAULT_THERMAL_MASS,
     ) -> LayerVote:
         """Calculate simplified weather prediction layer (Oct 20, 2025).
-        
+
         Simple proactive pre-heating using constants from const.py:
         - Forecast ≥WEATHER_FORECAST_DROP_THRESHOLD → +WEATHER_GENTLE_OFFSET
         - Weight scaled by thermal mass (concrete: 1.275x, timber: 0.85x, radiator: 0.425x)
-        
+
         Args:
             nibe_state: Current NIBE state
             weather_data: Weather forecast data
@@ -631,13 +634,12 @@ class ScenarioTester:
         if temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD:
             # Use constant from const.py: WEATHER_GENTLE_OFFSET
             offset = WEATHER_GENTLE_OFFSET
-            
+
             # Weight scaled by thermal mass configuration
             weather_weight = min(
-                LAYER_WEIGHT_WEATHER_PREDICTION * thermal_mass, 
-                0.99  # Cap below EMERGENCY T3
+                LAYER_WEIGHT_WEATHER_PREDICTION * thermal_mass, 0.99  # Cap below EMERGENCY T3
             )
-            
+
             return LayerVote(
                 "Weather",
                 offset=offset,
@@ -646,10 +648,10 @@ class ScenarioTester:
             )
 
         return LayerVote(
-            "Weather", 
-            offset=0.0, 
-            weight=0.0, 
-            reason=f"No pre-heating needed (drop {temp_drop:.1f}°C < {WEATHER_FORECAST_DROP_THRESHOLD:.1f}°C threshold)"
+            "Weather",
+            offset=0.0,
+            weight=0.0,
+            reason=f"No pre-heating needed (drop {temp_drop:.1f}°C < {WEATHER_FORECAST_DROP_THRESHOLD:.1f}°C threshold)",
         )
 
     def calculate_weather_comp_layer(self, nibe_state: MockNibeState) -> LayerVote:
@@ -1003,7 +1005,7 @@ Examples:
     )
     custom_group.add_argument("--current-power", type=float, help="Current power consumption (kW)")
     custom_group.add_argument("--current-peak", type=float, help="Current monthly peak (kW)")
-    
+
     # Weather forecast parameters
     custom_group.add_argument(
         "--forecast-drop",
@@ -1277,7 +1279,7 @@ Examples:
             else:
                 # Calculate from drop: outdoor + drop
                 forecast_min = args.outdoor + args.forecast_drop
-            
+
             # Create 12 hours of forecast showing gradual temperature drop
             forecast_hours = []
             for hour in range(12):
@@ -1289,7 +1291,7 @@ Examples:
                         temperature=temp,
                     )
                 )
-            
+
             weather_data = MockWeatherData(
                 current_temp=args.outdoor,
                 forecast_min=forecast_min,

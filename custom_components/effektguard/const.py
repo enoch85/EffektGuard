@@ -222,6 +222,17 @@ THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD: Final = (
     -2.0  # Temperature drop (°C) that blocks damping (significant cold incoming)
 )
 
+# Thermal Recovery Tier Names (user-friendly, severity-appropriate)
+# Oct 23, 2025: Renamed from "CRITICAL T1/T2/T3" to avoid false alarm fatigue
+# T1: Beyond expected DM range → moderate recovery (gentle correction)
+# T2: Significantly beyond range → strong recovery (stronger intervention)
+# T3: Approaching absolute maximum → emergency recovery (maximum safe action)
+THERMAL_RECOVERY_T1_NAME: Final = "MODERATE RECOVERY"  # T1: Beyond expected, gentle correction
+THERMAL_RECOVERY_T2_NAME: Final = "STRONG RECOVERY"  # T2: Significantly beyond, stronger action
+THERMAL_RECOVERY_T3_NAME: Final = (
+    "EMERGENCY RECOVERY"  # T3: Approaching critical, maximum safe intervention
+)
+
 # Tier-specific minimum offsets after damping (safety floors)
 # Each tier has appropriate minimum to maintain recovery progress
 THERMAL_RECOVERY_T1_MIN_OFFSET: Final = 1.0  # T1 damped minimum (moderate recovery)

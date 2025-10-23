@@ -301,7 +301,7 @@ class TestTierSpecificBehavior:
 
         # Should be >= T1 minimum
         assert decision.offset >= THERMAL_RECOVERY_T1_MIN_OFFSET
-        assert "T1" in decision.reason
+        assert "MODERATE RECOVERY" in decision.reason
 
     def test_t3_respects_minimum(
         self, decision_engine, stable_outdoor_trend, stable_weather_forecast
@@ -331,7 +331,7 @@ class TestTierSpecificBehavior:
 
         # Even with damping, should be >= T3 minimum (2.0°C)
         assert decision.offset >= THERMAL_RECOVERY_T3_MIN_OFFSET
-        assert "T3" in decision.reason
+        assert "EMERGENCY RECOVERY" in decision.reason
 
 
 class TestRealWorldScenario:
