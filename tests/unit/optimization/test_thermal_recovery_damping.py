@@ -136,8 +136,12 @@ class TestDampingConditions:
 
         decision = decision_engine._emergency_layer(state, stable_weather_forecast)
 
-        # 2.5 * 0.4 = 1.0, but clamped to T2 minimum 1.5
-        assert decision.offset == pytest.approx(THERMAL_RECOVERY_T2_MIN_OFFSET, abs=0.01)
+        # DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR = 7.0 * 0.4 = 2.8
+        # Clamped to max(2.8, THERMAL_RECOVERY_T2_MIN_OFFSET=1.5) = 2.8
+        expected_offset = max(
+            DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR, THERMAL_RECOVERY_T2_MIN_OFFSET
+        )
+        assert decision.offset == pytest.approx(expected_offset, abs=0.01)
         assert "rapid warming" in decision.reason.lower()
 
     def test_no_warming_no_damping(
@@ -297,7 +301,7 @@ class TestTierSpecificBehavior:
 
         # Should be >= T1 minimum
         assert decision.offset >= THERMAL_RECOVERY_T1_MIN_OFFSET
-        assert "T1" in decision.reason
+        assert "MODERATE RECOVERY" in decision.reason
 
     def test_t3_respects_minimum(
         self, decision_engine, stable_outdoor_trend, stable_weather_forecast
@@ -327,7 +331,7 @@ class TestTierSpecificBehavior:
 
         # Even with damping, should be >= T3 minimum (2.0°C)
         assert decision.offset >= THERMAL_RECOVERY_T3_MIN_OFFSET
-        assert "T3" in decision.reason
+        assert "EMERGENCY RECOVERY" in decision.reason
 
 
 class TestRealWorldScenario:
@@ -387,9 +391,14 @@ class TestRealWorldScenario:
         morning_decision = decision_engine._emergency_layer(morning_state, stable_weather_forecast)
 
         # Verify transition
+        # Night: Full T2 offset (no damping)
         assert night_decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
+        # Morning: Damped offset (DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR or minimum)
+        expected_morning_offset = max(
+            DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR, THERMAL_RECOVERY_T2_MIN_OFFSET
+        )
         assert morning_decision.offset < night_decision.offset
-        assert morning_decision.offset == pytest.approx(THERMAL_RECOVERY_T2_MIN_OFFSET, abs=0.01)
+        assert morning_decision.offset == pytest.approx(expected_morning_offset, abs=0.01)
 
         print("\n=== Night → Morning Transition ===")
         print(f"Night: {night_decision.offset:.2f}°C (full recovery)")

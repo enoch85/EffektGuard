@@ -32,67 +32,6 @@ from .coordinator import EffektGuardCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
-def _calculate_peak_status(coordinator: EffektGuardCoordinator) -> str:
-    """Calculate peak status from coordinator data.
-
-    Returns status based on current power usage relative to peaks.
-    """
-    if not coordinator.data:
-        return "unknown"
-
-    # Get current power - try multiple sources
-    current_power = 0.0
-
-    # Try 1: NIBE phase currents
-    nibe_data = coordinator.data.get("nibe")
-    if nibe_data:
-        try:
-            phase1 = getattr(nibe_data, "phase1_current", None)
-            if phase1 is not None:
-                phase2 = getattr(nibe_data, "phase2_current", None) or 0
-                phase3 = getattr(nibe_data, "phase3_current", None) or 0
-                current_power = (phase1 + phase2 + phase3) * 0.230
-        except (AttributeError, TypeError):
-            pass
-
-    # Try 2: Decision object (fallback for tests/legacy)
-    if current_power == 0.0:
-        decision = coordinator.data.get("decision")
-        if decision:
-            try:
-                dec_power = getattr(decision, "current_power", None)
-                if dec_power is not None:
-                    current_power = float(dec_power)
-            except (AttributeError, TypeError, ValueError):
-                pass
-
-    # Get peak values safely (handle MagicMock in tests)
-    try:
-        peak_today = float(getattr(coordinator, "peak_today", 0.0) or 0.0)
-        peak_month = float(getattr(coordinator, "peak_this_month", 0.0) or 0.0)
-        current_power = float(current_power)
-    except (TypeError, ValueError):
-        peak_today = 0.0
-        peak_month = 0.0
-        current_power = 0.0
-
-    # Determine status based on current usage vs peaks
-    try:
-        if current_power < 0.5:
-            return "idle"
-        elif peak_month > 0 and current_power >= peak_month * 0.95:
-            return "approaching_peak"
-        elif peak_today > 0 and current_power >= peak_today * 0.90:
-            return "high_usage"
-        elif current_power >= 5.0:  # High absolute usage
-            return "elevated"
-        else:
-            return "normal"
-    except TypeError:
-        # Comparison failed - likely MagicMock issue in tests
-        return "unknown"
-
-
 @dataclass(frozen=True)
 class EffektGuardSensorEntityDescription(SensorEntityDescription):
     """Describes EffektGuard sensor entity."""
@@ -283,15 +222,6 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         ),
     ),
     EffektGuardSensorEntityDescription(
-        key="peak_status",
-        name="Peak Status",
-        icon="mdi:alert-circle-outline",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda coordinator: (
-            _calculate_peak_status(coordinator) if coordinator.data else "unknown"
-        ),
-    ),
-    EffektGuardSensorEntityDescription(
         key="temperature_trend",
         name="Indoor Temperature Trend",
         icon="mdi:trending-up",
@@ -379,6 +309,16 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
             coordinator.data.get("dhw_recommendation", "No recommendation")
             if coordinator.data
             else "No recommendation"
+        ),
+    ),
+    EffektGuardSensorEntityDescription(
+        key="dhw_next_boost_time",
+        name="DHW Next Boost Time",
+        icon="mdi:clock-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data.get("dhw_next_boost") if coordinator.data else None
         ),
     ),
 )
@@ -602,30 +542,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 if "weather_opportunity" in planning:
                     attrs["weather_opportunity"] = planning["weather_opportunity"]
 
-                # Optimal heating windows (next 3 windows)
-                if "optimal_heating_windows" in planning and planning["optimal_heating_windows"]:
-                    windows = planning["optimal_heating_windows"]
-                    attrs["optimal_windows_count"] = len(windows)
-
-                    # Format windows for display
-                    for i, window in enumerate(windows[:3], 1):
-                        prefix = f"window_{i}"
-                        attrs[f"{prefix}_time"] = window.get("time_range", "Unknown")
-                        attrs[f"{prefix}_price"] = window.get("price_classification", "Unknown")
-                        attrs[f"{prefix}_duration_hours"] = window.get("duration_hours", 0)
-                        attrs[f"{prefix}_thermal_debt_ok"] = window.get("thermal_debt_ok", False)
-
-                    # Next optimal window (most important)
-                    if "next_optimal_window" in planning and planning["next_optimal_window"]:
-                        next_window = planning["next_optimal_window"]
-                        attrs["next_window_time"] = next_window.get("time_range", "Unknown")
-                        attrs["next_window_price"] = next_window.get(
-                            "price_classification", "Unknown"
-                        )
-                        attrs["next_window_duration"] = (
-                            f"{next_window.get('duration_hours', 0):.1f}h"
-                        )
-
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
             if "thermal_trend" in self.coordinator.data:
@@ -831,17 +747,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["baseline_cost"] = savings.baseline_cost
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
-
-        elif key == "peak_status":
-            # Show margin to peak and top peaks
-            if "decision" in self.coordinator.data:
-                decision = self.coordinator.data["decision"]
-                if decision and hasattr(decision, "peak_margin"):
-                    attrs["margin_to_peak"] = decision.peak_margin
-                if decision and hasattr(decision, "current_power"):
-                    attrs["current_power"] = decision.current_power
-            attrs["monthly_peak"] = self.coordinator.peak_this_month
-            attrs["daily_peak"] = self.coordinator.peak_today
 
         elif key == "peak_today":
             # Peak tracking metadata - when, how, and context
@@ -1145,24 +1050,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 if nibe_data and hasattr(nibe_data, "dhw_top_temp"):
                     attrs["current_temperature"] = nibe_data.dhw_top_temp
                     attrs["temperature_unit"] = "°C"
-
-            # Next boost time (when heating is planned)
-            # Always set this attribute, even if None, to prevent template sensor errors
-            if self.coordinator.data and "dhw_next_boost" in self.coordinator.data:
-                next_boost = self.coordinator.data.get("dhw_next_boost")
-                if next_boost:
-                    attrs["next_boost_time"] = (
-                        next_boost.isoformat()
-                        if hasattr(next_boost, "isoformat")
-                        else str(next_boost)
-                    )
-                else:
-                    # Explicitly set to None when no boost is scheduled
-                    # This prevents template sensors from getting "unavailable" string
-                    attrs["next_boost_time"] = None
-            else:
-                # No data available - explicitly set to None
-                attrs["next_boost_time"] = None
 
             # Last heating cycle times (start and end)
             if self.coordinator.data and "dhw_heating_start" in self.coordinator.data:

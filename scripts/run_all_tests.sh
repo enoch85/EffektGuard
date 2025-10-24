@@ -2,7 +2,8 @@
 # EffektGuard Comprehensive Test Runner
 # Runs all tests with organized output and reporting
 
-set -e
+# Don't use set -e because we need to capture test failures
+set -o pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -102,7 +103,7 @@ fi
 # Header
 echo ""
 echo -e "${BOLD}${CYAN}╔════════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${CYAN}║${NC}                ${BOLD}EffektGuard Test Suite${NC}                        ${BOLD}${CYAN}║${NC}"
+echo -e "${BOLD}${CYAN}║${NC}                ${BOLD}EffektGuard Test Suite${NC}                              ${BOLD}${CYAN}║${NC}"
 echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -211,13 +212,17 @@ START_TIME=$(date +%s)
 # Build final command with optional tail
 if [ "$VERBOSE" = true ]; then
     # Verbose mode: show all output
+    set +e  # Temporarily disable exit on error
     TEST_OUTPUT=$($PYTEST_CMD $PYTEST_ARGS 2>&1)
     TEST_EXIT=$?
+    set -e  # Re-enable
     echo "$TEST_OUTPUT"
 else
     # Quiet mode: show last N lines (summary)
+    set +e  # Temporarily disable exit on error
     TEST_OUTPUT=$($PYTEST_CMD $PYTEST_ARGS 2>&1)
     TEST_EXIT=$?
+    set -e  # Re-enable
     echo "$TEST_OUTPUT" | tail -n $TAIL_LINES
 fi
 

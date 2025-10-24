@@ -1,7 +1,7 @@
 """Tests for weather compensation mathematical formulas.
 
-Validates André Kühne's formula, Timbones' method, and UFH adjustments
-against real-world examples from OpenEnergyMonitor community research.
+Validates universal flow temperature formula, heat transfer method, and UFH adjustments
+against real-world production data.
 """
 
 import pytest
@@ -21,10 +21,10 @@ from custom_components.effektguard.optimization.weather_compensation import (
 
 
 class TestKuehneFormula:
-    """Test André Kühne's universal weather compensation formula.
+    """Test universal weather compensation formula.
 
     Formula: TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
-    Validated across Vaillant, Daikin, Mitsubishi, NIBE.
+    Validated across multiple manufacturers.
     """
 
     def test_kuehne_formula_basic(self):
@@ -114,7 +114,7 @@ class TestKuehneFormula:
 
 
 class TestTimbonesMethod:
-    """Test Timbones' radiator-based heat transfer method.
+    """Test radiator-based heat transfer method.
 
     Formula:
     1. Heat demand = HC × (Tin - Tout)
@@ -123,8 +123,8 @@ class TestTimbonesMethod:
     """
 
     def test_timbones_basic(self):
-        """Test Timbones method with realistic radiator setup."""
-        # Example from Timbones' spreadsheet:
+        """Test heat transfer method with realistic radiator setup."""
+        # Example radiator configuration:
         # Radiator output at DT50: 18,000W
         # Heat loss coefficient: 260 W/K
         calc = WeatherCompensationCalculator(
@@ -150,7 +150,7 @@ class TestTimbonesMethod:
         assert 38.0 <= flow_temp <= 42.0
 
     def test_timbones_requires_radiator_spec(self):
-        """Test that Timbones method requires radiator output."""
+        """Test that heat transfer method requires radiator output."""
         calc = WeatherCompensationCalculator(
             heat_loss_coefficient=180.0,
             radiator_rated_output=None,  # Not configured

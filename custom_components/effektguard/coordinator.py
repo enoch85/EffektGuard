@@ -293,8 +293,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self.last_applied_offset = offset_data.get("value")
                     timestamp_str = offset_data.get("timestamp")
                     if timestamp_str:
-                        from datetime import datetime
-
                         self.last_offset_timestamp = datetime.fromisoformat(timestamp_str)
                     _LOGGER.info(
                         "Restored last offset: %.1f°C from %s",
@@ -333,6 +331,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         "Restored weather patterns: %d weeks of data",
                         summary.get("total_weeks", 0),
                     )
+
+                # Restore DHW optimizer state (critical for Legionella safety tracking)
+                if "dhw_state" in learned_data and self.dhw_optimizer:
+                    dhw_state = learned_data["dhw_state"]
+                    if "last_legionella_boost" in dhw_state:
+                        self.dhw_optimizer.last_legionella_boost = datetime.fromisoformat(
+                            dhw_state["last_legionella_boost"]
+                        )
+                        _LOGGER.info(
+                            "Restored last Legionella boost: %s",
+                            self.dhw_optimizer.last_legionella_boost,
+                        )
 
                 _LOGGER.info("Learning modules initialized successfully")
             else:
@@ -504,9 +514,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
 
             # Update compressor health monitoring (Oct 19, 2025)
+            # Context-aware monitoring (Oct 23, 2025): DHW vs space heating
             if nibe_data.compressor_hz is not None:
+                # Determine heating mode for context-aware compressor monitoring
+                # DHW heating runs at higher Hz (50°C target) than space heating (25-35°C)
+                heating_mode = (
+                    "dhw"
+                    if hasattr(nibe_data, "is_hot_water") and nibe_data.is_hot_water
+                    else "space"
+                )
+
                 self.compressor_stats = self.compressor_monitor.update(
-                    nibe_data.compressor_hz, nibe_data.timestamp
+                    nibe_data.compressor_hz, nibe_data.timestamp, heating_mode
                 )
                 # Log compressor diagnostics at debug level
                 if self.compressor_stats:
@@ -514,10 +533,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         self.compressor_stats
                     )
                     _LOGGER.debug(
-                        "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f) - %s: %s",
+                        "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f, mode: %s) - %s: %s",
                         self.compressor_stats.current_hz,
                         self.compressor_stats.avg_1h,
                         self.compressor_stats.avg_6h,
+                        heating_mode,
                         risk_level,
                         risk_reason,
                     )
@@ -695,9 +715,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._learned_data_changed = False
 
         # Get current quarter classification from price analyzer
-        from datetime import datetime
-
-        now_time = datetime.now()
+        # Use Home Assistant timezone-aware helper to avoid naive datetimes
+        now_time = dt_util.now()
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
@@ -785,28 +804,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
 
-            # Predict next boost time based on temperature
-            # Use DHW_SAFETY_MIN (35°C) as threshold where optimizer would trigger heating
-            # This is the actual control point, not NIBE's default 45°C auto-start
-            if current_dhw_temp < DHW_SAFETY_MIN:
-                # Below safety minimum: boost is imminent (will start soon)
-                # Predict boost within next few minutes (conservative estimate)
-                dhw_next_boost = now_time + timedelta(minutes=5)
-            else:
-                # Above safety minimum: calculate cooling time until boost needed
-                dhw_setpoint = DHW_SAFETY_MIN  # 35°C - actual EffektGuard control threshold
-                cooling_rate = DHW_COOLING_RATE  # 0.5°C/hour - generic tank cooling rate
-                temp_margin = current_dhw_temp - dhw_setpoint
-                hours_until_boost = temp_margin / cooling_rate
-
-                if hours_until_boost > 0:
-                    dhw_next_boost = now_time + timedelta(hours=hours_until_boost)
-
             # Track temperature for trend analysis
             self.last_dhw_temp = current_dhw_temp
 
+            # Track previous Legionella boost time before update
+            previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
+
             # Update DHW optimizer with temperature history
             self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
+
+            # If Legionella boost was newly detected, save state immediately
+            if (
+                self.dhw_optimizer.last_legionella_boost != previous_legionella_boost
+                and self.dhw_optimizer.last_legionella_boost is not None
+            ):
+                _LOGGER.info(
+                    "Legionella boost detected - saving DHW state to persist across reboots"
+                )
+                await self._save_dhw_state_immediate()
 
             # Get DHW recommendation from optimizer with detailed planning
             try:
@@ -816,6 +831,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_recommendation = dhw_result["recommendation"]
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
+
+                # Use the optimizer's recommended start time (timezone-aware from GE-Spot)
+                dhw_next_boost = dhw_planning_details.get("recommended_start_time")
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "
@@ -1002,11 +1020,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             hours_since_last_dhw=hours_since_last,
         )
 
-        # Calculate optimal heating windows for today (next 24 hours)
-        optimal_windows = self._find_optimal_dhw_windows(
-            price_data, now_time, thermal_debt, dm_thresholds
-        )
-
         # Build detailed planning attributes
         planning_details = {
             "should_heat": decision.should_heat,
@@ -1022,8 +1035,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "outdoor_temperature": outdoor_temp,
             "indoor_temperature": indoor_temp,
             "climate_zone": climate_zone.name if climate_zone else "Unknown",
-            "optimal_heating_windows": optimal_windows,
-            "next_optimal_window": optimal_windows[0] if optimal_windows else None,
+            "recommended_start_time": decision.recommended_start_time,  # From optimizer
         }
 
         # Check for weather opportunity
@@ -1049,10 +1061,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 recommendation = "Wait - Conditions not optimal"
 
-            # Add next optimal window if available
-            if optimal_windows:
-                next_window = optimal_windows[0]
-                recommendation += f" | Next window: {next_window['time_range']}"
         else:
             # Should heat - give specific recommendation
             if decision.priority_reason == "DHW_SAFETY_MINIMUM":
@@ -1077,7 +1085,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             dm_thresholds=dm_thresholds,
             space_heating_demand=space_heating_demand,
             price_classification=price_classification,
-            optimal_windows=optimal_windows,
             weather_opportunity=planning_details.get("weather_opportunity"),
         )
 
@@ -1097,7 +1104,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         dm_thresholds: dict,
         space_heating_demand: float,
         price_classification: str,
-        optimal_windows: list,
         weather_opportunity: Optional[str],
     ) -> str:
         """Format human-readable DHW planning summary.
@@ -1110,7 +1116,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             dm_thresholds: Thermal debt thresholds
             space_heating_demand: Current heating demand in kW
             price_classification: Current price classification
-            optimal_windows: List of optimal heating windows
             weather_opportunity: Weather opportunity text if any
 
         Returns:
@@ -1143,88 +1148,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if weather_opportunity:
             lines.append(f"Weather: {weather_opportunity}")
 
-        # Next optimal windows
-        if optimal_windows:
-            lines.append("")
-            lines.append("Optimal Heating Windows:")
-            for i, window in enumerate(optimal_windows[:3], 1):
-                duration = window["duration_hours"]
-                price = window["price_classification"]
-                time_range = window["time_range"]
-                lines.append(f"  {i}. {time_range} ({duration:.1f}h, {price})")
-        else:
-            lines.append("")
-            lines.append("No optimal windows found")
-
         lines.append("")
         lines.append(f"Recommendation: {recommendation}")
 
         return "\n".join(lines)
-
-    def _find_optimal_dhw_windows(
-        self, price_data, now_time: datetime, thermal_debt: float, dm_thresholds: dict
-    ) -> list[dict]:
-        """Find optimal DHW heating windows in the next 24 hours.
-
-        Args:
-            price_data: GE-Spot price data
-            now_time: Current datetime
-            thermal_debt: Current thermal debt (DM)
-            dm_thresholds: Thermal debt thresholds for climate zone
-
-        Returns:
-            List of optimal heating windows with time ranges and reasoning
-        """
-        if not price_data or not hasattr(price_data, "quarters_today"):
-            return []
-
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
-        windows = []
-
-        # Analyze price periods for next 24 hours (96 quarters)
-        for i in range(current_quarter, min(current_quarter + 96, 96)):
-            classification = self.engine.price.get_current_classification(i)
-
-            # Consider CHEAP periods as opportunities
-            if classification in ["CHEAP", "NORMAL"]:
-                # Check if thermal debt allows DHW heating
-                if thermal_debt > dm_thresholds["block"]:
-                    hour = i // 4
-                    minute = (i % 4) * 15
-                    quarter_time = now_time.replace(
-                        hour=hour, minute=minute, second=0, microsecond=0
-                    )
-
-                    # Group consecutive cheap quarters into windows
-                    if windows and windows[-1]["end_quarter"] == i - 1:
-                        # Extend existing window
-                        windows[-1]["end_quarter"] = i
-                        windows[-1]["end_time"] = (quarter_time + timedelta(minutes=15)).strftime(
-                            "%H:%M"
-                        )
-                        windows[-1]["duration_hours"] = (
-                            i - windows[-1]["start_quarter"] + 1
-                        ) * 0.25
-                    else:
-                        # Start new window
-                        window = {
-                            "start_quarter": i,
-                            "end_quarter": i,
-                            "start_time": quarter_time.strftime("%H:%M"),
-                            "end_time": (quarter_time + timedelta(minutes=15)).strftime("%H:%M"),
-                            "time_range": f"{quarter_time.strftime('%H:%M')}-{(quarter_time + timedelta(minutes=15)).strftime('%H:%M')}",
-                            "price_classification": classification,
-                            "duration_hours": 0.25,
-                            "thermal_debt_ok": True,
-                        }
-                        windows.append(window)
-
-        # Update time ranges for windows
-        for window in windows:
-            window["time_range"] = f"{window['start_time']}-{window['end_time']}"
-
-        # Limit to next 3 optimal windows
-        return windows[:3]
 
     def _get_thermal_debt_status(self, thermal_debt: float, dm_thresholds: dict) -> str:
         """Get human-readable thermal debt status.
@@ -1552,18 +1479,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Create neutral periods - all classified as "normal"
         fallback_periods = []
+        base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
         for quarter in range(96):  # 96 quarters per day (15-min intervals)
             hour = quarter // 4
             minute = (quarter % 4) * 15
-            fallback_periods.append(
-                QuarterPeriod(
-                    quarter_of_day=quarter,
-                    hour=hour,
-                    minute=minute,
-                    price=1.0,  # Neutral price
-                    is_daytime=(6 <= hour < 22),
-                )
-            )
+            start_time = base_date.replace(hour=hour, minute=minute)
+            fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
 
         return PriceData(
             today=fallback_periods,
@@ -2152,6 +2074,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 summary = weather_learner.get_pattern_database_summary()
                 learned_data["weather_summary"] = summary
 
+            # Save DHW optimizer state (critical for Legionella safety and max wait tracking)
+            if self.dhw_optimizer:
+                dhw_state = {}
+                if self.dhw_optimizer.last_legionella_boost:
+                    dhw_state["last_legionella_boost"] = (
+                        self.dhw_optimizer.last_legionella_boost.isoformat()
+                    )
+                # Note: last_dhw_heating_time tracked by thermal debt tracker, not optimizer
+                if dhw_state:
+                    learned_data["dhw_state"] = dhw_state
+
             await self.learning_store.async_save(learned_data)
             _LOGGER.debug("Saved learned data to storage")
 
@@ -2223,4 +2156,35 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.warning("Failed to save thermal predictor state: %s", err)
+            # Don't raise - continue operation even if save fails
+
+    async def _save_dhw_state_immediate(self) -> None:
+        """Save DHW optimizer state immediately (Legionella boost tracking).
+
+        Called when Legionella boost is detected to persist across reboots.
+        Critical for safety - ensures we don't lose track of last boost time.
+        """
+        try:
+            # Load existing learning data to preserve other modules
+            existing_data = await self.learning_store.async_load() or {}
+
+            # Update DHW state
+            if self.dhw_optimizer and self.dhw_optimizer.last_legionella_boost:
+                existing_data["dhw_state"] = {
+                    "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
+                }
+                existing_data["last_updated"] = dt_util.utcnow().isoformat()
+                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+
+                await self.learning_store.async_save(existing_data)
+
+                _LOGGER.debug(
+                    "Saved DHW state: last Legionella boost at %s",
+                    self.dhw_optimizer.last_legionella_boost,
+                )
+            else:
+                _LOGGER.debug("No DHW state to save")
+
+        except (OSError, ValueError, KeyError, AttributeError) as err:
+            _LOGGER.warning("Failed to save DHW state: %s", err)
             # Don't raise - continue operation even if save fails

@@ -111,6 +111,7 @@ from const import (
     DM_CRITICAL_T3_WEIGHT,
     DM_THRESHOLD_ABSOLUTE_MAX,
     DEFAULT_TARGET_TEMP,
+    DEFAULT_THERMAL_MASS,
     EFFECT_MARGIN_PREDICTIVE,
     EFFECT_MARGIN_WARNING,
     EFFECT_MARGIN_WATCH,
@@ -132,6 +133,10 @@ from const import (
     LAYER_WEIGHT_WEATHER_PREDICTION,
     MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
+    WEATHER_FORECAST_DROP_THRESHOLD,
+    WEATHER_FORECAST_HORIZON,
+    WEATHER_GENTLE_OFFSET,
+    WEATHER_INDOOR_COOLING_CONFIRMATION,
     PEAK_AWARE_EFFECT_THRESHOLD,
     PEAK_AWARE_EFFECT_WEIGHT_MIN,
     PROACTIVE_ZONE1_OFFSET,
@@ -244,6 +249,15 @@ class MockPeakData:
     current_peak: float
     current_power: float
     current_quarter: int = 50  # Mid-day quarter
+
+
+@dataclass
+class MockForecastHour:
+    """Mock forecast hour for testing."""
+
+    datetime: Any  # Don't need real datetime for testing
+    temperature: float
+    condition: str = "unknown"
 
 
 @dataclass
@@ -398,26 +412,26 @@ class ScenarioTester:
                 "Emergency",
                 offset=DM_CRITICAL_T3_OFFSET,
                 weight=DM_CRITICAL_T3_WEIGHT,
-                reason=f"CRITICAL T3: DM {dm:.0f} near absolute max (threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})",
+                reason=f"EMERGENCY RECOVERY: DM {dm:.0f} near absolute max (threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})",
             )
 
-        # CRITICAL TIER 2: Severe thermal debt - strong recovery before reaching T3
+        # STRONG RECOVERY TIER 2: Severe thermal debt - strong recovery before reaching T3
         if dm <= t2_threshold:
             return LayerVote(
                 "Emergency",
                 offset=DM_CRITICAL_T2_OFFSET,
                 weight=DM_CRITICAL_T2_WEIGHT,
-                reason=f"CRITICAL T2: DM {dm:.0f} approaching T3 (threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})",
+                reason=f"STRONG RECOVERY: DM {dm:.0f} approaching T3 (threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})",
             )
 
-        # CRITICAL TIER 1: Serious thermal debt - prevent escalation to T2
+        # MODERATE RECOVERY TIER 1: Serious thermal debt - prevent escalation to T2
         # Triggers at climate-aware WARNING threshold (where thermal debt becomes abnormal)
         if dm <= t1_threshold:
             return LayerVote(
                 "Emergency",
                 offset=DM_CRITICAL_T1_OFFSET,
                 weight=DM_CRITICAL_T1_WEIGHT,
-                reason=f"CRITICAL T1: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (threshold: {t1_threshold:.0f})",
+                reason=f"MODERATE RECOVERY: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (threshold: {t1_threshold:.0f})",
             )
 
         # WARNING: DM beyond expected range (strengthened Oct 19, 2025)
@@ -592,31 +606,53 @@ class ScenarioTester:
         )
 
     def calculate_weather_layer(
-        self, nibe_state: MockNibeState, weather_data: MockWeatherData
+        self,
+        nibe_state: MockNibeState,
+        weather_data: MockWeatherData,
+        thermal_mass: float = DEFAULT_THERMAL_MASS,
     ) -> LayerVote:
-        """Calculate weather prediction layer (simple pre-heating)."""
+        """Calculate simplified weather prediction layer (Oct 20, 2025).
+
+        Simple proactive pre-heating using constants from const.py:
+        - Forecast ≥WEATHER_FORECAST_DROP_THRESHOLD → +WEATHER_GENTLE_OFFSET
+        - Weight scaled by thermal mass (concrete: 1.275x, timber: 0.85x, radiator: 0.425x)
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            thermal_mass: Thermal mass setting (0.5=timber, 1.0=normal, 1.5=concrete, 2.0=heavy concrete)
+        """
         if not weather_data or not weather_data.forecast_hours:
             return LayerVote("Weather", offset=0.0, weight=0.0, reason="No forecast")
 
-        # Simple logic: check for significant temperature drop
+        # Find minimum temperature in forecast
         current_outdoor = nibe_state.outdoor_temp
-        min_forecast = (
-            min(weather_data.forecast_hours) if weather_data.forecast_hours else current_outdoor
-        )
+        min_forecast = min(f.temperature for f in weather_data.forecast_hours)
         temp_drop = min_forecast - current_outdoor
 
-        if temp_drop < -3.0:
-            # Significant cold snap coming
-            # Scale offset based on drop magnitude
-            offset = min(abs(temp_drop) / 5.0 * 2.0, 2.5)
+        # Trigger threshold from const.py: WEATHER_FORECAST_DROP_THRESHOLD
+        if temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD:
+            # Use constant from const.py: WEATHER_GENTLE_OFFSET
+            offset = WEATHER_GENTLE_OFFSET
+
+            # Weight scaled by thermal mass configuration
+            weather_weight = min(
+                LAYER_WEIGHT_WEATHER_PREDICTION * thermal_mass, 0.99  # Cap below EMERGENCY T3
+            )
+
             return LayerVote(
                 "Weather",
                 offset=offset,
-                weight=0.7,
-                reason=f"Pre-heat: {temp_drop:.1f}°C drop forecast",
+                weight=weather_weight,
+                reason=f"Pre-heat: {temp_drop:.1f}°C drop forecast → +{offset:.1f}°C @ {weather_weight:.2f} (thermal_mass={thermal_mass:.1f})",
             )
 
-        return LayerVote("Weather", offset=0.0, weight=0.0, reason="No pre-heating needed")
+        return LayerVote(
+            "Weather",
+            offset=0.0,
+            weight=0.0,
+            reason=f"No pre-heating needed (drop {temp_drop:.1f}°C < {WEATHER_FORECAST_DROP_THRESHOLD:.1f}°C threshold)",
+        )
 
     def calculate_weather_comp_layer(self, nibe_state: MockNibeState) -> LayerVote:
         """Calculate weather compensation layer (simplified)."""
@@ -624,7 +660,7 @@ class ScenarioTester:
         indoor = self.config["target_indoor_temp"]
         current_flow = nibe_state.flow_temp
 
-        # André Kühne's formula (simplified)
+        # Universal flow temperature formula (simplified)
         # TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
         heat_loss_coeff = 180.0  # W/°C for typical house
         temp_diff = indoor - outdoor
@@ -798,6 +834,7 @@ class ScenarioTester:
         price_data: MockPriceData,
         peak_data: MockPeakData = None,
         weather_data: MockWeatherData = None,
+        thermal_mass: float = DEFAULT_THERMAL_MASS,
     ) -> dict[str, Any]:
         """Test a specific scenario."""
         print(f"\n{'=' * 80}")
@@ -823,6 +860,13 @@ class ScenarioTester:
             margin = peak_data.current_peak - peak_data.current_power
             print(f"  Peak Margin: {margin:.1f} kW")
 
+        if weather_data and weather_data.forecast_hours:
+            temp_drop = weather_data.forecast_min - nibe_state.outdoor_temp
+            print(
+                f"  Forecast: {temp_drop:+.1f}°C drop to {weather_data.forecast_min:.1f}°C "
+                f"(over {len(weather_data.forecast_hours)}h)"
+            )
+
         # Calculate all layers (in priority order)
         layers = [
             self.calculate_safety_layer(nibe_state),
@@ -839,7 +883,7 @@ class ScenarioTester:
             [
                 self.calculate_prediction_layer(nibe_state),
                 self.calculate_weather_comp_layer(nibe_state),
-                self.calculate_weather_layer(nibe_state, weather_data),
+                self.calculate_weather_layer(nibe_state, weather_data, thermal_mass),
                 self.calculate_price_layer(price_data),
                 self.calculate_comfort_layer(nibe_state),
             ]
@@ -961,6 +1005,24 @@ Examples:
     )
     custom_group.add_argument("--current-power", type=float, help="Current power consumption (kW)")
     custom_group.add_argument("--current-peak", type=float, help="Current monthly peak (kW)")
+
+    # Weather forecast parameters
+    custom_group.add_argument(
+        "--forecast-drop",
+        type=float,
+        help="Temperature drop in forecast (°C, negative value like -6.0)",
+    )
+    custom_group.add_argument(
+        "--forecast-min",
+        type=float,
+        help="Minimum temperature in forecast (°C, alternative to --forecast-drop)",
+    )
+    custom_group.add_argument(
+        "--thermal-mass",
+        type=float,
+        default=DEFAULT_THERMAL_MASS,
+        help=f"Thermal mass setting (default: {DEFAULT_THERMAL_MASS}, 0.5=timber, 1.0=normal, 1.5=concrete, 2.0=heavy concrete)",
+    )
 
     # Layer weight overrides
     weight_group = parser.add_argument_group(
@@ -1208,6 +1270,34 @@ Examples:
                 current_power=args.current_power,
             )
 
+        # Create weather data with forecast if provided
+        weather_data = None
+        if args.forecast_drop is not None or args.forecast_min is not None:
+            # Calculate forecast_min based on provided parameters
+            if args.forecast_min is not None:
+                forecast_min = args.forecast_min
+            else:
+                # Calculate from drop: outdoor + drop
+                forecast_min = args.outdoor + args.forecast_drop
+
+            # Create 12 hours of forecast showing gradual temperature drop
+            forecast_hours = []
+            for hour in range(12):
+                # Linear interpolation from current to minimum
+                temp = args.outdoor + (forecast_min - args.outdoor) * (hour / 12.0)
+                forecast_hours.append(
+                    MockForecastHour(
+                        datetime=hour,  # Just use hour number
+                        temperature=temp,
+                    )
+                )
+
+            weather_data = MockWeatherData(
+                current_temp=args.outdoor,
+                forecast_min=forecast_min,
+                forecast_hours=forecast_hours,
+            )
+
         scenarios["custom"] = tester.test_scenario(
             name="Custom Scenario",
             nibe_state=MockNibeState(
@@ -1222,6 +1312,8 @@ Examples:
                 is_daytime=args.daytime,
             ),
             peak_data=peak_data,
+            weather_data=weather_data,
+            thermal_mass=args.thermal_mass,
         )
 
     # Summary

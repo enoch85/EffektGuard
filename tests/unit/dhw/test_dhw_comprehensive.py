@@ -52,16 +52,19 @@ def create_mock_quarters(base_time: datetime, prices: list[float]) -> list[Quart
     Returns:
         List of QuarterPeriod objects
     """
+    from zoneinfo import ZoneInfo
+
     quarters = []
     for i, price in enumerate(prices):
         period_time = base_time + timedelta(minutes=i * 15)
+        # Make timezone-aware if not already
+        if period_time.tzinfo is None:
+            period_time = period_time.replace(tzinfo=ZoneInfo("Europe/Stockholm"))
+
         quarters.append(
             QuarterPeriod(
-                quarter_of_day=(period_time.hour * 4 + period_time.minute // 15) % 96,
-                hour=period_time.hour,
-                minute=period_time.minute,
+                start_time=period_time,
                 price=price,
-                is_daytime=(6 <= period_time.hour < 22),
             )
         )
     return quarters
@@ -142,9 +145,9 @@ class TestSafetyRules:
         scheduler = IntelligentDHWScheduler()
 
         decision = scheduler.should_start_dhw(
-            current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # Below safety minimum!
+            current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # 33°C - Below safety minimum!
             space_heating_demand_kw=2.0,
-            thermal_debt_dm=-50,
+            thermal_debt_dm=-325,  # Bad DM: -325 < -320, cannot defer (but not critical)
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -157,15 +160,15 @@ class TestSafetyRules:
         assert decision.max_runtime_minutes == DHW_SAFETY_RUNTIME_MINUTES
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
-        """RULE 3: Safety minimum CAN be deferred if temp safe, DM concerning, and price peak."""
+        """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""
         scheduler = IntelligentDHWScheduler()
 
-        # For defer to work: temp >= 30°C AND price expensive/peak AND DM < block+20
-        # With fallback thresholds: block=-340, so need DM < -320
+        # For defer to work: temp >= 30°C AND price expensive/peak AND DM > block+20
+        # With fallback thresholds: block=-340, so need DM > -320 (healthy)
         decision = scheduler.should_start_dhw(
             current_dhw_temp=32.0,  # Below 35°C but above 30°C critical
             space_heating_demand_kw=2.0,
-            thermal_debt_dm=-330,  # Between -340 and -320 (concerning range)
+            thermal_debt_dm=-300,  # Healthy: -300 > -320, can defer
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
@@ -294,29 +297,34 @@ class TestMaximumWaitEnforcement:
 class TestDemandPeriodTargeting:
     """Test targeting DHW ready by demand period (e.g., morning shower)."""
 
-    def test_urgent_demand_less_than_2_hours(self, scheduler_with_morning_demand):
-        """RULE 5: Less than 2h until demand = urgent heating."""
-        current_time = datetime(2025, 10, 18, 5, 30)  # 1.5h before 7 AM
+    def test_urgent_demand_within_30_min(self, scheduler_with_morning_demand):
+        """RULE 5: Urgent demand (<30 min) triggers heating during cheap/normal prices."""
+        from zoneinfo import ZoneInfo
+
+        # 6:45 AM, shower at 7:00 AM (15 minutes away = 0.25 hours)
+        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         decision = scheduler_with_morning_demand.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP,  # Below target
+            current_dhw_temp=45.0,  # Below target 55°C
             space_heating_demand_kw=2.0,
             thermal_debt_dm=-50,
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
-            price_classification="normal",  # Not even cheap!
+            price_classification="normal",
             current_time=current_time,
         )
 
+        # Should trigger urgent heating (0.25 hours < 0.5 hours threshold)
         assert decision.should_heat is True
         assert "URGENT_DEMAND" in decision.priority_reason
-        assert "1.5H" in decision.priority_reason
         assert decision.max_runtime_minutes == DHW_URGENT_RUNTIME_MINUTES
 
     def test_urgent_demand_blocks_during_peak(self, scheduler_with_morning_demand):
         """RULE 5: Urgent demand still blocks during peak pricing."""
-        current_time = datetime(2025, 10, 18, 5, 30)
+        from zoneinfo import ZoneInfo
+
+        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         decision = scheduler_with_morning_demand.should_start_dhw(
             current_dhw_temp=45.0,
@@ -343,8 +351,10 @@ class TestWindowBasedScheduling:
 
     def test_finds_cheapest_window_tomorrow(self):
         """Finds tomorrow's cheaper prices across day boundary."""
+        from zoneinfo import ZoneInfo
+
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 17, 23, 45)
+        current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Today evening: expensive
         today_prices = [63.94] * 4  # Q92-Q95
@@ -370,8 +380,10 @@ class TestWindowBasedScheduling:
 
     def test_waits_for_optimal_window(self):
         """Waits for better window if DHW comfortable."""
+        from zoneinfo import ZoneInfo
+
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 17, 23, 45)
+        current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Create price data with cheaper window ahead (but not too close)
         # Need to be outside the 0.25h (15 min) optimal window trigger
@@ -399,8 +411,10 @@ class TestWindowBasedScheduling:
 
     def test_heats_in_optimal_window(self):
         """Heats when in the optimal window."""
+        from zoneinfo import ZoneInfo
+
         scheduler = IntelligentDHWScheduler()
-        current_time = datetime(2025, 10, 18, 4, 0)
+        current_time = datetime(2025, 10, 18, 4, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Create price data - current time is cheapest
         prices = [30.0, 30.5, 31.0] + [50.0] * 8  # First 3 quarters cheapest
@@ -530,7 +544,9 @@ class TestIntegrationScenarios:
 
     def test_typical_morning_scenario(self, scheduler_with_morning_demand):
         """Typical scenario: finds cheap night price before morning shower."""
-        current_time = datetime(2025, 10, 18, 2, 0)  # 2 AM
+        from zoneinfo import ZoneInfo
+
+        current_time = datetime(2025, 10, 18, 2, 0, tzinfo=ZoneInfo("Europe/Stockholm"))  # 2 AM
 
         # Create realistic price curve (cheap at night, expensive in morning)
         prices = [30.0] * 12 + [45.0] * 8 + [60.0] * 12  # Night cheap

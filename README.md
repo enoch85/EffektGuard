@@ -5,7 +5,7 @@
 <img src="icons/logo.png" alt="EffektGuard Logo" width="200"/>
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.1-beta1-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2025.10%2B-blue)
 
 ---
