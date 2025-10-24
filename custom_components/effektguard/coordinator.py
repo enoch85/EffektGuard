@@ -21,11 +21,13 @@ from .const import (
     DEFAULT_HEAT_PUMP_POWER_KW,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DHW_COOLING_RATE,
+    DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
     DM_THRESHOLD_ABSOLUTE_MAX,
     DOMAIN,
+    MIN_DHW_TARGET_TEMP,
     NIBE_DHW_START_THRESHOLD,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
@@ -795,11 +797,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Track when we're in heating mode
                 self.last_dhw_heated = now_time
                 dhw_last_heated = self.last_dhw_heated
-            elif current_dhw_temp < 35.0:
+            elif current_dhw_temp < DHW_SAFETY_MIN:
                 dhw_status = "low"  # Below safety minimum, waiting to heat
-            elif current_dhw_temp < 45.0:
+            elif current_dhw_temp < MIN_DHW_TARGET_TEMP:
                 dhw_status = "pending"  # Below target, will heat soon
-            elif current_dhw_temp < 52.0:
+            elif current_dhw_temp < DHW_READY_THRESHOLD:
                 dhw_status = "ready"  # At normal target
             else:
                 dhw_status = "hot"  # Above normal (high demand met or Legionella cycle)
@@ -1064,7 +1066,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         else:
             # Should heat - give specific recommendation
             if decision.priority_reason == "DHW_SAFETY_MINIMUM":
-                recommendation = f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < 35°C)"
+                recommendation = (
+                    f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < {DHW_SAFETY_MIN}°C)"
+                )
             elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
                 recommendation = f"Heat now - Cheap electricity ({price_classification})"
             elif decision.priority_reason.startswith("URGENT_DEMAND"):

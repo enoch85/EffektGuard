@@ -609,8 +609,8 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 #
 # Temperature hierarchy:
-# - 30°C (NIBE_DHW_SAFETY_CRITICAL): Emergency override, always heat
-# - 35°C (NIBE_DHW_SAFETY_MIN): Legionella prevention minimum
+# - 10°C (NIBE_DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
+# - 20°C (NIBE_DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
 # - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
 # - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
 # - 50°C (NIBE_DHW_NORMAL_TARGET): Normal comfort target
@@ -618,11 +618,36 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 #
 DHW_MIN_TEMP: Final = 40.0  # °C - Minimum safe DHW temperature (user validation)
 DHW_MAX_TEMP: Final = 60.0  # °C - Maximum normal DHW temperature (comfort)
+DHW_MAX_TEMP_VALIDATION: Final = 65.0  # °C - Absolute maximum for validation (near Legionella temp)
 DHW_PREHEAT_TARGET_OFFSET: Final = 5.0  # °C - Extra heating above target for optimal windows
 MIN_DHW_TARGET_TEMP: Final = (
     45.0  # °C - Minimum user-configurable DHW target (safety + comfort threshold)
 )
-DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost
+DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
+DHW_READY_THRESHOLD: Final = (
+    52.0  # °C - DHW at normal target (50°C + 2°C buffer for "ready" status)
+)
+
+# Legionella Prevention (requires DHW tank immersion heater, Swedish: elpatron)
+# Boverket.se official guidelines:
+# - Legionella bacteria grow at 20-45°C (our new low-temp optimization range!)
+# - Legionella dormant below 20°C
+# - Killed at high temperatures (≥60°C)
+# - Water heaters should maintain ≥60°C to prevent bacterial growth
+#
+# Heat pump limitation:
+# - Compressor can only reach ~50-55°C max (COP/efficiency limits)
+# - NIBE automatically engages DHW tank immersion heater to reach 60°C
+# - This is standard operation for all NIBE Legionella protection
+# - Our hygiene boost schedules this during cheapest electricity periods
+#
+# NOTE: DHW immersion heater (elpatron) is separate from space heating auxiliary heater.
+# They are different electrical heating systems with different purposes.
+DHW_LEGIONELLA_DETECT: Final = 63.0  # °C - BT7 temp indicating Legionella boost complete
+DHW_LEGIONELLA_PREVENT_TEMP: Final = (
+    60.0  # °C - Target temp for hygiene boost (kills bacteria, requires immersion heater)
+)
+DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
 DHW_TARGET_HIGH_DEMAND: Final = 55.0  # °C - Extra comfort target for high demand periods
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
@@ -663,8 +688,8 @@ NIBE_VOLTAGE_PER_PHASE: Final = (
     240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
 )
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
-DHW_SAFETY_CRITICAL: Final = 30.0  # °C - Below this, always heat (safety override)
-DHW_SAFETY_MIN: Final = 35.0  # °C - Safety minimum (can defer if 30-35°C during expensive periods)
+DHW_SAFETY_CRITICAL: Final = 10.0  # °C - Hard floor, always heat below this (emergency)
+DHW_SAFETY_MIN: Final = 20.0  # °C - Safety minimum (can defer if 10-20°C during expensive periods)
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 

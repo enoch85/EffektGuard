@@ -260,6 +260,83 @@ class IntelligentDHWScheduler:
 
 **Note:** We do NOT trigger Legionella ourselves. NIBE's fixed schedule handles it.
 
+### DHW Immersion Heater Requirement for 60°C
+
+**Heat Pump Compressor Limitation:**
+
+Heat pumps (compressor-only operation) can typically only reach **50-55°C** maximum DHW temperature due to COP/efficiency constraints. To reach the 60°C required for Legionella prevention, **a DHW tank immersion heater is required**.
+
+**How NIBE Handles This:**
+
+1. **Compressor heats to ~50-55°C** (efficient operation)
+2. **DHW tank immersion heater completes to 60°C** (final boost)
+3. This is **automatic** in NIBE systems - no special configuration needed
+4. Works even when auxiliary heating is **blocked for space heating** (Menu setting)
+
+**EffektGuard's New Hygiene Boost (v0.1.2+):**
+
+With lowered safety thresholds (10°C/20°C), DHW can sit in the Legionella growth zone (20-45°C) for extended periods. To prevent bacterial growth:
+
+```python
+# RULE 2.3: HYGIENE BOOST
+# If DHW hasn't been above 60°C in past 14 days, heat to 60°C during cheapest period
+if days_since_legionella >= 14 and price_classification == "cheap":
+    # Request 60°C target
+    # NIBE will use compressor + DHW immersion heater automatically
+    # Scheduled during cheap electricity to minimize cost
+    return heat_to_60C()
+```
+
+**Official Guidelines (Boverket.se):**
+
+- Legionella bacteria **grow at 20-45°C** (our optimization range!)
+- Legionella **dormant below 20°C**
+- Legionella **killed at ≥60°C**
+- Water heaters should **maintain ≥60°C** or periodic high-temp cycles
+
+**Cost Optimization:**
+
+By scheduling the 60°C hygiene boost during **cheapest electricity periods**, we minimize the cost of the immersion heater while ensuring bacterial safety.
+
+**Terminology Clarification:**
+
+- **DHW immersion heater** (Swedish: "elpatron") = In-tank electrical heating element for hot water
+- **Auxiliary heating** (Swedish: "tilläggsvärme") = Separate space heating backup system
+- These are **different systems** - DHW immersion heater is built into the hot water tank specifically for high-temperature cycles
+
+**References:**
+- [Boverket: Om legionella](https://www.boverket.se/sv/byggande/halsa-och-inomhusmiljo/om-legionella/)
+- [Värmepumpsforum: F750 DHW temperature discussion](https://www.varmepumpsforum.com/vpforum/index.php?topic=53888.0)
+
+---
+
+## Scheduling Logic
+
+### 24-Hour Forecast Window
+
+**Why 24h?**
+- GE-Spot provides up to 48h price forecast
+- DHW tank cools slowly (can preheat far ahead)
+- Maximizes price optimization opportunities
+- DHW heats fast (1.5h), so timing flexibility is high
+
+**Smart Fallback:**
+```python
+def _check_upcoming_demand_period(self, current_time: datetime) -> dict | None:
+    """Check for demand periods with 24h window and smart fallback.
+    
+    Window: 1-24 hours ahead
+````
+```
+
+**Benefits:**
+- ✅ No duplicate heating (NIBE + EffektGuard)
+- ✅ Automatic detection (no manual tracking needed)
+- ✅ Works with NIBE's fixed schedule
+- ✅ Future-proof for NIBE firmware changes
+
+**Note:** We do NOT trigger Legionella ourselves. NIBE's fixed schedule handles it.
+
 ---
 
 ## Scheduling Logic

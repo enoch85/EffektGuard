@@ -7,7 +7,7 @@ Based on POST_PHASE_5_ROADMAP.md Phase 8 research and Forum_Summary.md findings.
 
 Priority order:
 1. Space heating comfort (indoor temp > target - 0.5°C)
-2. DHW safety minimum (≥35°C for health)
+2. DHW safety minimum (≥20°C for price optimization, ≥10°C critical)
 3. Thermal debt prevention (climate-aware DM thresholds)
 4. Space heating target (±0.3°C)
 5. DHW comfort (50°C normal)
@@ -31,6 +31,9 @@ from ..const import (
     DHW_EXTENDED_RUNTIME_MINUTES,
     DHW_HEATING_TIME_HOURS,
     DHW_LEGIONELLA_DETECT,
+    DHW_LEGIONELLA_MAX_DAYS,
+    DHW_LEGIONELLA_PREVENT_TEMP,
+    DHW_MAX_TEMP_VALIDATION,
     DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_PREHEAT_TARGET_OFFSET,
@@ -108,8 +111,11 @@ class DHWDemandPeriod:
         if not 0 < self.duration_hours <= 24:
             raise ValueError(f"duration_hours must be 1-24, got {self.duration_hours}")
 
-        if self.target_temp < 35.0 or self.target_temp > 65.0:
-            raise ValueError(f"target_temp must be 35-65°C (safety range), got {self.target_temp}")
+        if self.target_temp < DHW_SAFETY_MIN or self.target_temp > DHW_MAX_TEMP_VALIDATION:
+            raise ValueError(
+                f"target_temp must be {DHW_SAFETY_MIN}-{DHW_MAX_TEMP_VALIDATION}°C (safety range), "
+                f"got {self.target_temp}"
+            )
 
 
 class IntelligentDHWScheduler:
@@ -340,14 +346,14 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
-        # Safety minimum: Heat below 35°C BUT defer if:
+        # Safety minimum: Heat below 20°C BUT defer if:
         # - Price is expensive/peak AND thermal debt is NOT concerning
         # - This prevents peak billing hits when DHW can wait and space heating is healthy
         if current_dhw_temp < DHW_SAFETY_MIN:
             # Check if we should defer due to peak pricing + thermal debt
-            # Only defer if temp is still safe (30-35°C range) and not critically low
+            # Only defer if temp is still safe (10-20°C range) and not critically low
             can_defer_for_peak = (
-                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 30°C)
+                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 10°C)
                 and price_classification in ["expensive", "peak"]  # High cost period
                 and thermal_debt_dm > (dm_block_threshold + 20)  # DM healthy enough to defer
             )
@@ -370,11 +376,107 @@ class IntelligentDHWScheduler:
                 )
 
             # Otherwise heat immediately (critically low or good price)
+            # SMART TWO-TIER STRATEGY:
+            # - Emergency heating: Heat to DHW_SAFETY_MIN (20°C) to get safe quickly
+            # - Full heating: Wait for cheap prices to heat to user target
+            # This prevents wasting money heating to full temp during expensive periods
             return DHWScheduleDecision(
                 should_heat=True,
                 priority_reason="DHW_SAFETY_MINIMUM",
-                target_temp=self.user_target_temp,
+                target_temp=DHW_SAFETY_MIN,  # Only heat to safe level, not full target
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
+                abort_conditions=[
+                    f"thermal_debt < {dm_abort_threshold:.0f}",
+                    f"indoor_temp < {target_indoor_temp - 0.5}",
+                ],
+            )
+
+        # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
+        # If DHW hasn't been above 60°C in past 14 days, heat to 60°C during cheapest period
+        # This prevents Legionella bacteria growth in the low-temp range (20-45°C)
+        # with the new lower safety thresholds (10°C/20°C).
+        #
+        # REQUIRES DHW IMMERSION HEATER (Swedish: elpatron):
+        # - Heat pump compressor can only reach ~50-55°C max (COP limitation)
+        # - NIBE automatically engages DHW tank immersion heater to complete 60°C target
+        # - This is normal operation for Legionella prevention in all NIBE systems
+        # - Scheduling during cheap periods minimizes immersion heater cost
+        #
+        # NOTE: This is the DHW tank's built-in immersion heater (elpatron), NOT the
+        # space heating auxiliary heater. They are separate electrical heating systems.
+        #
+        # References:
+        # - Boverket.se: Water heaters should maintain ≥60°C, bacteria killed at high temps
+        # - Swedish forum: "Vp klarar inte 60°C, därför elpatron för legionella"
+        #   (Heat pump can't reach 60°C, therefore immersion heater for Legionella)
+        # - NIBE Menu 4.9.5: Built-in Legionella function uses immersion heater weekly/bi-weekly
+        #
+        # PRIORITY: Higher than emergency completion (bacteria prevention critical)
+        days_since_legionella = None
+        if self.last_legionella_boost:
+            try:
+                days_since_legionella = (
+                    current_time - self.last_legionella_boost
+                ).total_seconds() / 86400.0
+            except TypeError:
+                # Handle timezone mismatch between naive and aware datetimes
+                # Convert both to naive for comparison
+                current_naive = (
+                    current_time.replace(tzinfo=None) if current_time.tzinfo else current_time
+                )
+                last_boost_naive = (
+                    self.last_legionella_boost.replace(tzinfo=None)
+                    if self.last_legionella_boost.tzinfo
+                    else self.last_legionella_boost
+                )
+                days_since_legionella = (current_naive - last_boost_naive).total_seconds() / 86400.0
+
+        if (
+            days_since_legionella is None  # Never had high-temp cycle
+            or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS  # 14+ days
+        ) and price_classification == "cheap":  # Only during cheap periods
+            _LOGGER.warning(
+                "DHW hygiene boost needed: %s days since last high-temp cycle (limit %.0f days). "
+                "Heating to %.0f°C for Legionella prevention (requires DHW immersion heater - "
+                "compressor max ~55°C, NIBE will automatically use immersion heater to complete).",
+                "Never" if days_since_legionella is None else f"{days_since_legionella:.1f}",
+                DHW_LEGIONELLA_MAX_DAYS,
+                DHW_LEGIONELLA_PREVENT_TEMP,
+            )
+            _LOGGER.info(
+                "Hygiene boost scheduled during cheap electricity period to minimize "
+                "immersion heater cost. NIBE will use compressor to ~50-55°C, "
+                "then DHW tank immersion heater to complete 60°C target."
+            )
+            return DHWScheduleDecision(
+                should_heat=True,
+                priority_reason="DHW_HYGIENE_BOOST",
+                target_temp=DHW_LEGIONELLA_PREVENT_TEMP,  # 60°C kills bacteria
+                max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,  # May take longer
+                abort_conditions=[
+                    f"thermal_debt < {dm_abort_threshold:.0f}",
+                    f"indoor_temp < {target_indoor_temp - 0.5}",
+                ],
+            )
+
+        # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
+        # After emergency heating reached DHW_SAFETY_MIN (20°C), complete to comfort level
+        # during cheap prices. This is the second phase of two-tier emergency heating.
+        if (
+            DHW_SAFETY_MIN <= current_dhw_temp < MIN_DHW_TARGET_TEMP  # In 20-45°C range
+            and price_classification == "cheap"  # Wait for cheap prices
+            and self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp)
+        ):
+            _LOGGER.info(
+                "DHW completing emergency heating: %.1f°C → %.1f°C during cheap period",
+                current_dhw_temp,
+                self.user_target_temp,
+            )
+            return DHWScheduleDecision(
+                should_heat=True,
+                priority_reason="DHW_COMPLETE_EMERGENCY_HEATING",
+                target_temp=self.user_target_temp,
+                max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                 abort_conditions=[
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",

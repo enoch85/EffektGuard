@@ -158,15 +158,82 @@ class TestSafetyRules:
         assert decision.should_heat is True
         assert decision.priority_reason == "DHW_SAFETY_MINIMUM"
         assert decision.max_runtime_minutes == DHW_SAFETY_RUNTIME_MINUTES
+        # Two-tier strategy: Emergency heating only heats to DHW_SAFETY_MIN (20°C), not full target
+        assert decision.target_temp == DHW_SAFETY_MIN
+
+    def test_two_tier_emergency_heating_completes_during_cheap(self):
+        """RULE 2.5: Two-tier emergency heating - complete to comfort level during cheap prices.
+
+        Scenario:
+        1. Family showers, DHW drops to 9°C (emergency)
+        2. System heats to DHW_SAFETY_MIN (20°C) immediately
+        3. Waits for cheap price to complete heating to user target (50°C)
+
+        This prevents wasting money heating to full temp during expensive periods.
+        """
+        from datetime import timedelta
+
+        scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 12, 0)
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
+
+        # After emergency heating reached 20°C, now at cheap price
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=DHW_SAFETY_MIN + 2.0,  # Just above safety min (22°C)
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,  # Healthy (above -80 spare capacity threshold)
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="cheap",  # Cheap price - complete heating now!
+            current_time=current_time,
+        )
+
+        assert decision.should_heat is True
+        assert decision.priority_reason == "DHW_COMPLETE_EMERGENCY_HEATING"
+        assert decision.target_temp == 50.0  # Full user target
+
+    def test_two_tier_emergency_heating_waits_during_expensive(self):
+        """RULE 2.5: Two-tier emergency heating - waits for cheap prices if at safe temp.
+
+        After emergency heating to 20°C, should NOT continue heating during expensive prices.
+        Waits for cheaper period to complete to full target.
+        """
+        from datetime import timedelta
+
+        scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
+
+        # At 22°C (safe level), expensive price
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=DHW_SAFETY_MIN + 2.0,  # Just above safety min (22°C)
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,  # Healthy
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="expensive",  # Expensive - wait for cheaper!
+            current_time=current_time,
+        )
+
+        # Should NOT heat during expensive period (temp is safe at 22°C)
+        assert decision.should_heat is False
+        assert decision.priority_reason == "DHW_ADEQUATE"
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
         """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""
         scheduler = IntelligentDHWScheduler()
 
-        # For defer to work: temp >= 30°C AND price expensive/peak AND DM > block+20
+        # For defer to work: temp >= DHW_SAFETY_CRITICAL AND price expensive/peak AND DM > block+20
         # With fallback thresholds: block=-340, so need DM > -320 (healthy)
         decision = scheduler.should_start_dhw(
-            current_dhw_temp=32.0,  # Below 35°C but above 30°C critical
+            current_dhw_temp=DHW_SAFETY_MIN
+            - 3.0,  # Above critical but below safety min (deferral range)
             space_heating_demand_kw=2.0,
             thermal_debt_dm=-300,  # Healthy: -300 > -320, can defer
             indoor_temp=21.0,
@@ -181,7 +248,13 @@ class TestSafetyRules:
 
     def test_high_space_demand_delays_dhw(self):
         """RULE 4: High space heating demand delays DHW."""
+        from datetime import timedelta
+
         scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 12, 0)
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=MIN_DHW_TARGET_TEMP,
@@ -191,11 +264,121 @@ class TestSafetyRules:
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
             price_classification="cheap",
-            current_time=datetime(2025, 10, 18, 12, 0),
+            current_time=current_time,
         )
 
         assert decision.should_heat is False
         assert decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND"
+
+    def test_hygiene_boost_after_14_days(self):
+        """RULE 2.7: Hygiene boost when DHW hasn't been above 60°C in 14 days.
+
+        With new low thresholds (10°C/20°C), bacteria can grow in 20-45°C range.
+        Ensure high-temp cycle (60°C) every 14 days for Legionella prevention.
+        """
+        from datetime import timedelta
+
+        scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 12, 0)
+
+        # Simulate last Legionella boost was 15 days ago
+        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=45.0,  # Normal temp, but needs hygiene boost
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="cheap",  # Only during cheap prices
+            current_time=current_time,
+        )
+
+        assert decision.should_heat is True
+        assert decision.priority_reason == "DHW_HYGIENE_BOOST"
+        assert decision.target_temp == 60.0  # High temp for bacteria kill
+
+    def test_hygiene_boost_never_had_high_temp(self):
+        """RULE 2.7: Hygiene boost when never had high-temp cycle.
+
+        If last_legionella_boost is None (never tracked), trigger hygiene boost.
+        """
+        scheduler = IntelligentDHWScheduler()
+
+        # last_legionella_boost is None (never set)
+        assert scheduler.last_legionella_boost is None
+
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=40.0,
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="cheap",
+            current_time=datetime(2025, 10, 18, 12, 0),
+        )
+
+        assert decision.should_heat is True
+        assert decision.priority_reason == "DHW_HYGIENE_BOOST"
+        assert decision.target_temp == 60.0
+
+    def test_hygiene_boost_waits_for_cheap_prices(self):
+        """RULE 2.7: Hygiene boost only during cheap prices.
+
+        Even if 14+ days since high-temp cycle, wait for cheap electricity.
+        """
+        from datetime import timedelta
+
+        scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
+
+        # 15 days since last boost, but expensive price
+        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=45.0,
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="expensive",  # Wait for cheaper!
+            current_time=current_time,
+        )
+
+        # Should NOT heat during expensive period (wait for cheap)
+        assert decision.should_heat is False
+        assert decision.priority_reason == "DHW_ADEQUATE"
+
+    def test_no_hygiene_boost_within_14_days(self):
+        """RULE 2.7: No hygiene boost if recent high-temp cycle.
+
+        If had high-temp cycle within 14 days, no need for hygiene boost.
+        """
+        from datetime import timedelta
+
+        scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 12, 0)
+
+        # Last boost was only 10 days ago (within 14-day window)
+        scheduler.last_legionella_boost = current_time - timedelta(days=10)
+
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=45.0,
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="cheap",
+            current_time=current_time,
+        )
+
+        # Should heat for comfort, NOT hygiene boost
+        assert decision.should_heat is True
+        assert decision.priority_reason != "DHW_HYGIENE_BOOST"
 
 
 # ==============================================================================
@@ -208,7 +391,13 @@ class TestMaximumWaitEnforcement:
 
     def test_max_wait_forces_dhw_after_36_hours(self):
         """RULE 4: Max 36h wait enforces DHW heating during cheap/normal prices only."""
+        from datetime import timedelta
+
         scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 20, 12, 0)
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
 
         # Test with cheap pricing - should heat
         decision = scheduler.should_start_dhw(
@@ -219,7 +408,7 @@ class TestMaximumWaitEnforcement:
             target_indoor_temp=DEFAULT_INDOOR_TEMP,
             outdoor_temp=0.0,
             price_classification="cheap",
-            current_time=datetime(2025, 10, 20, 12, 0),
+            current_time=current_time,
             hours_since_last_dhw=36.1,
         )
 
@@ -380,10 +569,14 @@ class TestWindowBasedScheduling:
 
     def test_waits_for_optimal_window(self):
         """Waits for better window if DHW comfortable."""
+        from datetime import timedelta
         from zoneinfo import ZoneInfo
 
         scheduler = IntelligentDHWScheduler()
         current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
 
         # Create price data with cheaper window ahead (but not too close)
         # Need to be outside the 0.25h (15 min) optimal window trigger
@@ -411,10 +604,14 @@ class TestWindowBasedScheduling:
 
     def test_heats_in_optimal_window(self):
         """Heats when in the optimal window."""
+        from datetime import timedelta
         from zoneinfo import ZoneInfo
 
         scheduler = IntelligentDHWScheduler()
         current_time = datetime(2025, 10, 18, 4, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
 
         # Create price data - current time is cheapest
         prices = [30.0, 30.5, 31.0] + [50.0] * 8  # First 3 quarters cheapest
@@ -498,22 +695,38 @@ class TestCheapElectricityOpportunities:
     """Test opportunistic heating during cheap periods."""
 
     def test_heats_during_cheap_when_low(self):
-        """RULE 7: Heats below minimum target during cheap prices."""
+        """RULE 7 / RULE 2.5: Heats below minimum target during cheap prices.
+
+        Can be either:
+        - RULE 2.5: DHW_COMPLETE_EMERGENCY_HEATING (20-45°C range, completing emergency heating)
+        - RULE 7: DHW_COMFORT_LOW_CHEAP (below MIN_DHW_TARGET_TEMP)
+        Both are valid for this temperature range during cheap prices.
+        """
+        from datetime import timedelta
+
         scheduler = IntelligentDHWScheduler()
+        current_time = datetime(2025, 10, 18, 12, 0)
+
+        # Set recent Legionella boost so hygiene boost doesn't trigger
+        scheduler.last_legionella_boost = current_time - timedelta(days=7)
 
         decision = scheduler.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP - 3.0,  # Below MIN_DHW_TARGET_TEMP
+            current_dhw_temp=MIN_DHW_TARGET_TEMP - 3.0,  # Below MIN_DHW_TARGET_TEMP (42°C)
             space_heating_demand_kw=2.0,
             thermal_debt_dm=-50,
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
             price_classification="cheap",
-            current_time=datetime(2025, 10, 18, 12, 0),
+            current_time=current_time,
         )
 
         assert decision.should_heat is True
-        assert "CHEAP" in decision.priority_reason.upper()
+        # Can be either completing emergency heating or comfort heating
+        assert (
+            "CHEAP" in decision.priority_reason.upper()
+            or "EMERGENCY" in decision.priority_reason.upper()
+        )
 
     def test_no_heat_when_dhw_adequate(self):
         """RULE 8: No heating when DHW adequate."""
