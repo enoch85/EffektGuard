@@ -246,7 +246,7 @@ class IntelligentDHWScheduler:
         """Detect when NIBE's automatic Legionella boost just completed.
 
         Detection logic:
-        - BT7 peaked at ≥63°C recently
+        - BT7 peaked at ≥56°C recently (real-world max observed with immersion heater)
         - Now cooling down (dropped 3°C from peak)
 
         Returns:
@@ -392,13 +392,14 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
-        # If DHW hasn't been above 60°C in past 14 days, heat to 60°C during cheapest period
+        # If DHW hasn't been above 56°C in past 14 days, heat to 56°C during cheapest period
         # This prevents Legionella bacteria growth in the low-temp range (20-45°C)
         # with the new lower safety thresholds (10°C/20°C).
         #
         # REQUIRES DHW IMMERSION HEATER (Swedish: elpatron):
         # - Heat pump compressor can only reach ~50-55°C max (COP limitation)
-        # - NIBE automatically engages DHW tank immersion heater to complete 60°C target
+        # - NIBE automatically engages DHW tank immersion heater for high-temp cycles
+        # - Real-world observation: Max 56°C achieved with compressor + immersion heater
         # - This is normal operation for Legionella prevention in all NIBE systems
         # - Scheduling during cheap periods minimizes immersion heater cost
         #
@@ -406,7 +407,8 @@ class IntelligentDHWScheduler:
         # space heating auxiliary heater. They are separate electrical heating systems.
         #
         # References:
-        # - Boverket.se: Water heaters should maintain ≥60°C, bacteria killed at high temps
+        # - Boverket.se: Water heaters should maintain ≥60°C (ideal), bacteria killed at high temps
+        # - User observation: System reaches max 56°C with electrical boost (real-world constraint)
         # - Swedish forum: "Vp klarar inte 60°C, därför elpatron för legionella"
         #   (Heat pump can't reach 60°C, therefore immersion heater for Legionella)
         # - NIBE Menu 4.9.5: Built-in Legionella function uses immersion heater weekly/bi-weekly
@@ -438,15 +440,17 @@ class IntelligentDHWScheduler:
             _LOGGER.warning(
                 "DHW hygiene boost needed: %s days since last high-temp cycle (limit %.0f days). "
                 "Heating to %.0f°C for Legionella prevention (requires DHW immersion heater - "
-                "compressor max ~55°C, NIBE will automatically use immersion heater to complete).",
+                "compressor max ~50-55°C, real-world max observed %.0f°C with immersion heater).",
                 "Never" if days_since_legionella is None else f"{days_since_legionella:.1f}",
                 DHW_LEGIONELLA_MAX_DAYS,
                 DHW_LEGIONELLA_PREVENT_TEMP,
+                DHW_LEGIONELLA_DETECT,
             )
             _LOGGER.info(
                 "Hygiene boost scheduled during cheap electricity period to minimize "
                 "immersion heater cost. NIBE will use compressor to ~50-55°C, "
-                "then DHW tank immersion heater to complete 60°C target."
+                "then DHW tank immersion heater to reach %.0f°C target.",
+                DHW_LEGIONELLA_PREVENT_TEMP,
             )
             return DHWScheduleDecision(
                 should_heat=True,
