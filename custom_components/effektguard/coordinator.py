@@ -350,6 +350,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # This checks past 14 days of BT7 data to detect recent Legionella cycles
                 # even if the system was restarted after a high-temp cycle
                 if self.dhw_optimizer and self.nibe:
+                    # Ensure NIBE entities are discovered first
+                    if not self.nibe._entity_cache:
+                        await self.nibe._discover_nibe_entities()
+
                     bt7_entity = self.nibe._entity_cache.get("dhw_top_temp")
                     if bt7_entity:
                         await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)

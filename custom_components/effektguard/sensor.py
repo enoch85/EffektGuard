@@ -1051,6 +1051,11 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     attrs["current_temperature"] = nibe_data.dhw_top_temp
                     attrs["temperature_unit"] = "°C"
 
+            # Last Legionella boost (hygiene cycle at 56°C)
+            if self.coordinator.dhw_optimizer:
+                last_boost = self.coordinator.dhw_optimizer.last_legionella_boost
+                attrs["last_legionella_boost"] = last_boost.isoformat() if last_boost else None
+
             # Last heating cycle times (start and end)
             if self.coordinator.data and "dhw_heating_start" in self.coordinator.data:
                 heating_start = self.coordinator.data.get("dhw_heating_start")
