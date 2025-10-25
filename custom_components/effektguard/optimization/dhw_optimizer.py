@@ -273,6 +273,107 @@ class IntelligentDHWScheduler:
 
         return False
 
+    async def initialize_from_history(self, hass, bt7_entity_id: str) -> None:
+        """Initialize BT7 temperature history from Home Assistant recorder.
+
+        On startup/restart, load past 14 days of BT7 temperature data to:
+        1. Check if a high-temp cycle (≥56°C) occurred recently
+        2. Auto-detect last Legionella boost without manual tracking
+        3. Populate recent bt7_history (last 12h) for real-time detection
+
+        This makes the system resilient to restarts - we don't lose track of
+        Legionella cycles just because Home Assistant rebooted.
+
+        Args:
+            hass: Home Assistant instance
+            bt7_entity_id: Entity ID for BT7 sensor (e.g., sensor.f750_hot_water_top_bt7)
+        """
+        try:
+            from homeassistant.components import recorder
+            from homeassistant.components.recorder import history
+            import homeassistant.util.dt as dt_util
+
+            # Get recorder instance
+            if not recorder.is_entity_recorded(hass, bt7_entity_id):
+                _LOGGER.warning(
+                    "BT7 sensor %s not recorded by Home Assistant - cannot load history",
+                    bt7_entity_id,
+                )
+                return
+
+            # Load past 14 days of BT7 temperature data (Legionella tracking window)
+            end_time = dt_util.utcnow()
+            start_time = end_time - timedelta(days=DHW_LEGIONELLA_MAX_DAYS)
+
+            _LOGGER.debug(
+                "Loading BT7 temperature history from %s to %s (%.0f days)",
+                start_time,
+                end_time,
+                DHW_LEGIONELLA_MAX_DAYS,
+            )
+
+            # Get state history
+            states = await recorder.get_instance(hass).async_add_executor_job(
+                history.state_changes_during_period,
+                hass,
+                start_time,
+                end_time,
+                bt7_entity_id,
+            )
+
+            if not states or bt7_entity_id not in states:
+                _LOGGER.info("No BT7 history available for Legionella detection")
+                return
+
+            # Process states and populate bt7_history
+            state_list = states[bt7_entity_id]
+            max_temp_seen = 0.0
+            max_temp_time = None
+
+            for state in state_list:
+                try:
+                    temp = float(state.state)
+                    timestamp = state.last_changed
+
+                    # Add to recent history for Legionella detection
+                    # (limited to last 48 entries = 12 hours @ 15min for peak detection)
+                    self.bt7_history.append((timestamp, temp))
+
+                    # Track maximum temperature seen
+                    if temp > max_temp_seen:
+                        max_temp_seen = temp
+                        max_temp_time = timestamp
+
+                except (ValueError, TypeError):
+                    continue
+
+            _LOGGER.info(
+                "Loaded %d BT7 temperature readings from past %.0f days (max: %.1f°C at %s)",
+                len(state_list),
+                DHW_LEGIONELLA_MAX_DAYS,
+                max_temp_seen,
+                max_temp_time,
+            )
+
+            # If we saw a high-temp cycle (≥56°C) in the past 14 days, record it
+            if max_temp_seen >= DHW_LEGIONELLA_DETECT and max_temp_time:
+                # Check if this is recent enough (within 14 days tracking window)
+                hours_ago = (end_time - max_temp_time).total_seconds() / 3600.0
+
+                if hours_ago <= 24.0 * DHW_LEGIONELLA_MAX_DAYS:  # Within tracking window
+                    self.last_legionella_boost = max_temp_time
+                    _LOGGER.info(
+                        "Detected previous Legionella boost from history: %.1f°C at %s (%.1f hours ago)",
+                        max_temp_seen,
+                        max_temp_time,
+                        hours_ago,
+                    )
+
+        except Exception as err:
+            _LOGGER.error(
+                "Failed to load BT7 history for Legionella detection: %s", err, exc_info=True
+            )
+
     def should_start_dhw(
         self,
         current_dhw_temp: float,

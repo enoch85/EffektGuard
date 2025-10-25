@@ -30,13 +30,13 @@ prices = {
     0: 23.36,  # 00:00
     1: 21.11,  # 00:15
     2: 13.59,  # 00:30
-    3: 9.84,   # 00:45
+    3: 9.84,  # 00:45
     4: 14.96,  # 01:00
     5: 10.91,  # 01:15
-    6: 9.72,   # 01:30
-    7: 6.91,   # 01:45
+    6: 9.72,  # 01:30
+    7: 6.91,  # 01:45
     8: 10.91,  # 02:00 ← Should be selected (cheapest continuous 3-quarter window)
-    9: 7.49,   # 02:15
+    9: 7.49,  # 02:15
     10: 5.50,  # 02:30
     11: 4.64,  # 02:45
 }
@@ -91,31 +91,31 @@ if decision.recommended_start_time:
     print(f"  Type: {type(rec_time)}")
     print(f"  Formatted: {rec_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"  ISO: {rec_time.isoformat()}")
-    
+
     # Calculate time until
     time_until = rec_time - now
     hours_until = time_until.total_seconds() / 3600
     print(f"  Time until: {hours_until:.2f}h ({int(hours_until * 60)} minutes)")
-    
+
     # Verify it's timezone-aware
     if rec_time.tzinfo is not None:
         print(f"\n✓ CORRECT: Timezone-aware datetime (tzinfo={rec_time.tzinfo})")
     else:
         print(f"\n✗ ERROR: Naive datetime (no timezone info)")
-    
+
     # Verify it matches expected time (around 02:00)
     expected_hour = 2
     if rec_time.hour == expected_hour:
         print(f"✓ CORRECT: Hour is {expected_hour} as expected")
     else:
         print(f"✗ WARNING: Hour is {rec_time.hour}, expected {expected_hour}")
-    
+
     # Verify it's on the correct day (today since it's after 00:37)
     if rec_time.date() == now.date():
         print(f"✓ CORRECT: Same day (2025-10-24)")
     else:
         print(f"✗ ERROR: Wrong day - {rec_time.date()} vs {now.date()}")
-    
+
 else:
     print("\n✗ ERROR: recommended_start_time is None!")
 
@@ -127,12 +127,14 @@ print("=" * 80)
 if decision.recommended_start_time:
     sensor_value = decision.recommended_start_time.isoformat()
     print(f"\nSensor would display: {sensor_value}")
-    print(f"Home Assistant UI would show: {decision.recommended_start_time.strftime('%B %d, %Y at %H:%M')}")
-    
+    print(
+        f"Home Assistant UI would show: {decision.recommended_start_time.strftime('%B %d, %Y at %H:%M')}"
+    )
+
     # This is what the user sees in their screenshot
     expected_display = "October 24, 2025 at 02:00"
     actual_display = decision.recommended_start_time.strftime("%B %d, %Y at %H:%M")
-    
+
     if actual_display == expected_display:
         print(f"\n✓ SUCCESS: Display matches expected!")
         print(f"  Expected: {expected_display}")

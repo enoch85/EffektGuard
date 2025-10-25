@@ -346,6 +346,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             self.dhw_optimizer.last_legionella_boost,
                         )
 
+                # Initialize DHW history from Home Assistant recorder (resilience to restarts)
+                # This checks past 24h of BT7 data to detect recent Legionella cycles
+                # even if the system was restarted after a high-temp cycle
+                if self.dhw_optimizer and self.nibe:
+                    bt7_entity = self.nibe.dhw_top_temp_entity
+                    if bt7_entity:
+                        await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
+                    else:
+                        _LOGGER.debug("BT7 sensor not available - skipping history initialization")
+
                 _LOGGER.info("Learning modules initialized successfully")
             else:
                 _LOGGER.info("No learned data found - starting fresh learning")

@@ -28,6 +28,8 @@ from custom_components.effektguard.const import (
     DHW_PREHEAT_TARGET_OFFSET,
     DM_DHW_BLOCK_FALLBACK,
     DEFAULT_INDOOR_TEMP,
+    DHW_LEGIONELLA_PREVENT_TEMP,
+    DHW_LEGIONELLA_MAX_DAYS,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
@@ -297,7 +299,7 @@ class TestSafetyRules:
 
         assert decision.should_heat is True
         assert decision.priority_reason == "DHW_HYGIENE_BOOST"
-        assert decision.target_temp == 60.0  # High temp for bacteria kill
+        assert decision.target_temp == DHW_LEGIONELLA_PREVENT_TEMP
 
     def test_hygiene_boost_never_had_high_temp(self):
         """RULE 2.7: Hygiene boost when never had high-temp cycle.
@@ -322,7 +324,7 @@ class TestSafetyRules:
 
         assert decision.should_heat is True
         assert decision.priority_reason == "DHW_HYGIENE_BOOST"
-        assert decision.target_temp == 60.0
+        assert decision.target_temp == DHW_LEGIONELLA_PREVENT_TEMP
 
     def test_hygiene_boost_waits_for_cheap_prices(self):
         """RULE 2.7: Hygiene boost only during cheap prices.

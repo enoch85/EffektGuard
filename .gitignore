@@ -57,3 +57,5 @@ COMPLETED/
 # OS
 .DS_Store
 Thumbs.db
+debug.log
+test_results.log

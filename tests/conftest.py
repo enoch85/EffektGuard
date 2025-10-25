@@ -24,15 +24,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="homeassis
 @pytest.fixture(autouse=True)
 async def setup_frame_helper():
     """Set up the frame helper for all tests."""
-    from homeassistant.helpers import frame
-    from homeassistant.core import HomeAssistant
-
-    # Create a minimal hass instance for frame setup
-    hass = HomeAssistant("/tmp")
-    frame.async_setup(hass)  # This is not actually async, just named that way
+    # Frame helper setup is not needed in newer HA versions
+    # The frame module works without explicit setup
     yield
-    # Teardown
-    await hass.async_stop()
 
 
 # Common mock helper functions

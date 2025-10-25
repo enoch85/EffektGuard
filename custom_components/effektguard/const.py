@@ -643,7 +643,9 @@ DHW_READY_THRESHOLD: Final = (
 #
 # NOTE: DHW immersion heater (elpatron) is separate from space heating auxiliary heater.
 # They are different electrical heating systems with different purposes.
-DHW_LEGIONELLA_DETECT: Final = 56.0  # °C - BT7 temp indicating Legionella boost complete (real-world max observed)
+DHW_LEGIONELLA_DETECT: Final = (
+    56.0  # °C - BT7 temp indicating Legionella boost complete (real-world max observed)
+)
 DHW_LEGIONELLA_PREVENT_TEMP: Final = (
     56.0  # °C - Target temp for hygiene boost (kills bacteria, requires immersion heater)
 )
