@@ -347,10 +347,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         )
 
                 # Initialize DHW history from Home Assistant recorder (resilience to restarts)
-                # This checks past 24h of BT7 data to detect recent Legionella cycles
+                # This checks past 14 days of BT7 data to detect recent Legionella cycles
                 # even if the system was restarted after a high-temp cycle
                 if self.dhw_optimizer and self.nibe:
-                    bt7_entity = self.nibe.dhw_top_temp_entity
+                    bt7_entity = self.nibe._entity_cache.get("dhw_top_temp")
                     if bt7_entity:
                         await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
                     else:
