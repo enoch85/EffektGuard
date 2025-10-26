@@ -460,6 +460,55 @@ class IntelligentDHWScheduler:
             )
 
             if can_defer_for_peak:
+                # Find optimal window to heat during cheaper period
+                # This prevents just "waiting and hoping" - actively schedule for best price
+                if price_periods:
+                    lookahead_hours = self.get_lookahead_hours(current_time)
+                    optimal_window = self.find_cheapest_dhw_window(
+                        current_time=current_time,
+                        lookahead_hours=lookahead_hours,
+                        dhw_duration_minutes=45,  # DHW heating takes ~45 min
+                        price_periods=price_periods,
+                    )
+
+                    if optimal_window and optimal_window["hours_until"] <= 0.17:  # Within 10 min
+                        # Optimal window is NOW - heat immediately despite expensive current price
+                        _LOGGER.info(
+                            "DHW safety: In optimal window at %s (%.1före/kWh) - heating now",
+                            optimal_window["start_time"].strftime("%H:%M"),
+                            optimal_window["avg_price"],
+                        )
+                        return DHWScheduleDecision(
+                            should_heat=True,
+                            priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
+                            target_temp=DHW_SAFETY_MIN,
+                            max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
+                            abort_conditions=[
+                                f"thermal_debt < {dm_abort_threshold:.0f}",
+                                f"indoor_temp < {target_indoor_temp - 0.5}",
+                            ],
+                            recommended_start_time=optimal_window["start_time"],
+                        )
+                    elif optimal_window:
+                        # Wait for upcoming cheap window
+                        _LOGGER.info(
+                            "DHW safety defer: temp %.1f°C (safe >= %.1f°C), next window at %s (%.1fh, %.1före/kWh)",
+                            current_dhw_temp,
+                            DHW_SAFETY_CRITICAL,
+                            optimal_window["start_time"].strftime("%H:%M"),
+                            optimal_window["hours_until"],
+                            optimal_window["avg_price"],
+                        )
+                        return DHWScheduleDecision(
+                            should_heat=False,
+                            priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                            target_temp=0.0,
+                            max_runtime_minutes=0,
+                            abort_conditions=[],
+                            recommended_start_time=optimal_window["start_time"],
+                        )
+
+                # No optimal window found - just defer (fallback to old behavior)
                 _LOGGER.info(
                     "DHW safety minimum defer: temp %.1f°C (safe >= %.1f°C), price=%s, DM=%.0f. "
                     "Waiting for better price to avoid peak billing.",
