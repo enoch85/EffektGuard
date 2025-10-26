@@ -7,7 +7,7 @@ Based on POST_PHASE_5_ROADMAP.md Phase 8 research and Forum_Summary.md findings.
 
 Priority order:
 1. Space heating comfort (indoor temp > target - 0.5°C)
-2. DHW safety minimum (≥20°C for price optimization, ≥10°C critical)
+2. DHW safety minimum (≥30°C for price optimization, ≥15°C critical)
 3. Thermal debt prevention (climate-aware DM thresholds)
 4. Space heating target (±0.3°C)
 5. DHW comfort (50°C normal)
@@ -447,14 +447,14 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
-        # Safety minimum: Heat below 20°C BUT defer if:
+        # Safety minimum: Heat below 30°C BUT defer if:
         # - Price is expensive/peak AND thermal debt is NOT concerning
         # - This prevents peak billing hits when DHW can wait and space heating is healthy
         if current_dhw_temp < DHW_SAFETY_MIN:
             # Check if we should defer due to peak pricing + thermal debt
-            # Only defer if temp is still safe (10-20°C range) and not critically low
+            # Only defer if temp is still safe (15-30°C range) and not critically low
             can_defer_for_peak = (
-                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 10°C)
+                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 15°C)
                 and price_classification in ["expensive", "peak"]  # High cost period
                 and thermal_debt_dm > (dm_block_threshold + 20)  # DM healthy enough to defer
             )
@@ -478,7 +478,7 @@ class IntelligentDHWScheduler:
 
             # Otherwise heat immediately (critically low or good price)
             # SMART TWO-TIER STRATEGY:
-            # - Emergency heating: Heat to DHW_SAFETY_MIN (20°C) to get safe quickly
+            # - Emergency heating: Heat to DHW_SAFETY_MIN (30°C) to get safe quickly
             # - Full heating: Wait for cheap prices to heat to user target
             # This prevents wasting money heating to full temp during expensive periods
             return DHWScheduleDecision(
@@ -565,10 +565,10 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
-        # After emergency heating reached DHW_SAFETY_MIN (20°C), complete to comfort level
+        # After emergency heating reached DHW_SAFETY_MIN (30°C), complete to comfort level
         # during cheap prices. This is the second phase of two-tier emergency heating.
         if (
-            DHW_SAFETY_MIN <= current_dhw_temp < MIN_DHW_TARGET_TEMP  # In 20-45°C range
+            DHW_SAFETY_MIN <= current_dhw_temp < MIN_DHW_TARGET_TEMP  # In 30-45°C range
             and price_classification == "cheap"  # Wait for cheap prices
             and self._has_spare_compressor_capacity(thermal_debt_dm, outdoor_temp)
         ):

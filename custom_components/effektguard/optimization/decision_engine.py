@@ -21,6 +21,9 @@ from typing import Any, Optional
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMMON_SENSE_COLD_SNAP_THRESHOLD,
+    COMMON_SENSE_FORECAST_HORIZON,
+    COMMON_SENSE_TEMP_ABOVE_TARGET,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_TOLERANCE,
@@ -1205,6 +1208,31 @@ class DecisionEngine:
 
         # Predict deficit in 1 hour if trend continues
         predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
+
+        # ========================================
+        # COMMON SENSE CHECK: Don't heat if well above target with no cold snap
+        # ========================================
+        # If indoor is significantly above target AND weather is stable/warming,
+        # then thermal debt prevention is not needed - we have plenty of thermal margin.
+        # This prevents unnecessary heating when conditions are actually comfortable.
+        if deficit < -COMMON_SENSE_TEMP_ABOVE_TARGET:  # Above target threshold
+            # Check if weather forecast shows NO significant cooling
+            forecast_stable = True
+            if weather_data and weather_data.forecast_hours:
+                forecast_hours = weather_data.forecast_hours[:COMMON_SENSE_FORECAST_HORIZON]
+                if forecast_hours:
+                    min_forecast_temp = min(h.temperature for h in forecast_hours)
+                    # Cold snap = forecast drops >threshold from current
+                    forecast_stable = (
+                        outdoor_temp - min_forecast_temp
+                    ) < COMMON_SENSE_COLD_SNAP_THRESHOLD
+
+            if forecast_stable:
+                return LayerDecision(
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Common sense: Indoor {indoor_temp:.1f}°C is {abs(deficit):.1f}°C above target, weather stable - no heating needed (DM {degree_minutes:.0f})",
+                )
 
         # ========================================
         # NEW: RAPID COOLING DETECTION (Predictive)

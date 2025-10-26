@@ -11,6 +11,15 @@ NC='\033[0m'
 
 echo -e "${YELLOW}Running EffektGuard test suite...${NC}"
 
+# Clean up cache directories before running tests
+echo -e "${YELLOW}Cleaning cache directories...${NC}"
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
+find . -type f -name "*.pyo" -delete 2>/dev/null || true
+echo -e "${GREEN}✓ Cache cleaned${NC}"
+
 # Check if pytest is installed
 if ! command -v pytest &> /dev/null; then
     echo -e "${RED}ERROR: pytest is not installed${NC}"

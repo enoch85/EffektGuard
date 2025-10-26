@@ -409,6 +409,13 @@ PROACTIVE_ZONE4_WEIGHT: Final = 0.7  # Strong weight
 PROACTIVE_ZONE5_OFFSET: Final = 1.8  # Very strong prevention
 PROACTIVE_ZONE5_WEIGHT: Final = 0.85  # Very strong weight
 
+# Common sense proactive override (Oct 26, 2025)
+# Prevents unnecessary heating when indoor temp is well above target with stable weather
+# This overrides thermal debt prevention when conditions don't warrant it
+COMMON_SENSE_TEMP_ABOVE_TARGET: Final = 1.0  # °C above target to trigger common sense check
+COMMON_SENSE_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
+COMMON_SENSE_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop in forecast that qualifies as cold snap
+
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
 RAPID_COOLING_THRESHOLD: Final = -0.3  # °C/hour for rapid cooling detection
@@ -609,8 +616,8 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 #
 # Temperature hierarchy:
-# - 10°C (NIBE_DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
-# - 20°C (NIBE_DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
+# - 15°C (DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
+# - 30°C (DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
 # - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
 # - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
 # - 50°C (NIBE_DHW_NORMAL_TARGET): Normal comfort target
@@ -690,8 +697,8 @@ NIBE_VOLTAGE_PER_PHASE: Final = (
     240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
 )
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
-DHW_SAFETY_CRITICAL: Final = 10.0  # °C - Hard floor, always heat below this (emergency)
-DHW_SAFETY_MIN: Final = 20.0  # °C - Safety minimum (can defer if 10-20°C during expensive periods)
+DHW_SAFETY_CRITICAL: Final = 15.0  # °C - Hard floor, always heat below this (emergency)
+DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 15-30°C during expensive periods)
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
