@@ -70,7 +70,6 @@ CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
 MIN_OFFSET: Final = -10.0
 MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
-# MAX_TEMP_LIMIT removed in Phase 2 - upper limit now handled dynamically by comfort layer
 
 # Service call rate limiting (boost, DHW, general)
 BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
