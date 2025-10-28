@@ -70,7 +70,7 @@ CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
 MIN_OFFSET: Final = -10.0
 MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
-MAX_TEMP_LIMIT: Final = 24.0
+# MAX_TEMP_LIMIT removed in Phase 2 - upper limit now handled dynamically by comfort layer
 
 # Service call rate limiting (boost, DHW, general)
 BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
@@ -87,7 +87,18 @@ LAYER_WEIGHT_PRICE: Final = 0.75  # Strong influence (increased from 0.6)
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
-LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight
+LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
+
+# Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
+# Provides dynamic response to temperature overshoot severity
+LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-1°C over tolerance
+LAYER_WEIGHT_COMFORT_SEVERE: Final = 0.9  # Very high priority: 1-2°C over tolerance
+LAYER_WEIGHT_COMFORT_CRITICAL: Final = 1.0  # Critical priority: 2°C+ over tolerance (same as safety)
+
+# Graduated comfort layer correction multipliers (Phase 2)
+COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction
+COMFORT_CORRECTION_STRONG: Final = 1.2  # 1-2°C over tolerance: strong correction
+COMFORT_CORRECTION_CRITICAL: Final = 1.5  # 2°C+ over tolerance: emergency correction
 
 # Effect tariff / Peak protection layer weights and offsets
 # Oct 19, 2025: Increased weights to make peak protection more decisive
