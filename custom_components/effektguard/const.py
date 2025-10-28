@@ -92,7 +92,9 @@ LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused
 # Provides dynamic response to temperature overshoot severity
 LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-1°C over tolerance
 LAYER_WEIGHT_COMFORT_SEVERE: Final = 0.9  # Very high priority: 1-2°C over tolerance
-LAYER_WEIGHT_COMFORT_CRITICAL: Final = 1.0  # Critical priority: 2°C+ over tolerance (same as safety)
+LAYER_WEIGHT_COMFORT_CRITICAL: Final = (
+    1.0  # Critical priority: 2°C+ over tolerance (same as safety)
+)
 
 # Graduated comfort layer correction multipliers (Phase 2)
 COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction

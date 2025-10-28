@@ -699,9 +699,7 @@ class IntelligentDHWScheduler:
                     return DHWScheduleDecision(
                         should_heat=True,
                         priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
-                        target_temp=min(
-                            self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0
-                        ),
+                        target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                         abort_conditions=[
                             f"thermal_debt < {dm_abort_threshold:.0f}",

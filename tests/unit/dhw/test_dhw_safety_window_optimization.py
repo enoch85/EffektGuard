@@ -29,31 +29,33 @@ def price_periods_with_cheap_window():
     """Price periods with expensive now but cheap window in 2 hours."""
     base_time = datetime(2025, 10, 26, 20, 0)  # 20:00
     periods = []
-    
+
     # Q0-Q79 (00:00-19:45): Already passed
     for i in range(80):
         start = base_time.replace(hour=0, minute=0) + timedelta(minutes=i * 15)
         periods.append(QuarterPeriod(start_time=start, price=50.0))
-    
+
     # Q80-Q87 (20:00-21:45): EXPENSIVE NOW
     for i in range(80, 88):
         start = base_time.replace(hour=0, minute=0) + timedelta(minutes=i * 15)
         periods.append(QuarterPeriod(start_time=start, price=120.0))  # Expensive
-    
+
     # Q88-Q91 (22:00-22:45): CHEAP WINDOW (4 quarters = 1 hour, enough for 45-min DHW)
     for i in range(88, 92):
         start = base_time.replace(hour=0, minute=0) + timedelta(minutes=i * 15)
         periods.append(QuarterPeriod(start_time=start, price=10.0))  # Cheap!
-    
+
     # Q92-Q95 (23:00-23:45): Back to expensive
     for i in range(92, 96):
         start = base_time.replace(hour=0, minute=0) + timedelta(minutes=i * 15)
         periods.append(QuarterPeriod(start_time=start, price=100.0))
-    
+
     return periods
 
 
-def test_safety_deferral_finds_upcoming_cheap_window(dhw_optimizer, price_periods_with_cheap_window):
+def test_safety_deferral_finds_upcoming_cheap_window(
+    dhw_optimizer, price_periods_with_cheap_window
+):
     """When DHW at 19.6°C during expensive period, should find next cheap window."""
     decision = dhw_optimizer.should_start_dhw(
         current_dhw_temp=19.6,  # In safety deferral range (15-30°C)
@@ -67,19 +69,19 @@ def test_safety_deferral_finds_upcoming_cheap_window(dhw_optimizer, price_period
         price_periods=price_periods_with_cheap_window,
         hours_since_last_dhw=22.0,  # Yesterday
     )
-    
+
     # Should NOT heat now (price expensive)
     assert decision.should_heat is False
-    
+
     # Should have found the cheap window at 22:00
     assert decision.recommended_start_time is not None
     assert decision.recommended_start_time.hour == 22
     assert decision.recommended_start_time.minute == 0
-    
+
     # Reason should indicate waiting for optimal window
     assert "WINDOW" in decision.priority_reason
     assert "@10.0" in decision.priority_reason  # Shows cheap price
-    
+
 
 def test_safety_deferral_heats_when_in_cheap_window(dhw_optimizer, price_periods_with_cheap_window):
     """When DHW at 19.6°C and we're IN the cheap window, should heat immediately."""
@@ -95,10 +97,10 @@ def test_safety_deferral_heats_when_in_cheap_window(dhw_optimizer, price_periods
         price_periods=price_periods_with_cheap_window,
         hours_since_last_dhw=22.0,
     )
-    
+
     # Should heat NOW (we're in the cheap window!)
     assert decision.should_heat is True
-    
+
     # When price_classification is "cheap", system uses DHW_SAFETY_MINIMUM path
     # (not the window path) because the current price IS cheap
     assert "DHW_SAFETY_MINIMUM" in decision.priority_reason
@@ -118,7 +120,7 @@ def test_safety_critical_always_heats_immediately(dhw_optimizer, price_periods_w
         price_periods=price_periods_with_cheap_window,
         hours_since_last_dhw=22.0,
     )
-    
+
     # Should heat immediately at critical temp
     assert decision.should_heat is True
     assert "DHW_SAFETY_MINIMUM" in decision.priority_reason
@@ -132,7 +134,7 @@ def test_no_window_found_falls_back_to_defer(dhw_optimizer):
     for i in range(96):
         start = base_time.replace(hour=0, minute=0) + timedelta(minutes=i * 15)
         expensive_periods.append(QuarterPeriod(start_time=start, price=120.0))
-    
+
     decision = dhw_optimizer.should_start_dhw(
         current_dhw_temp=19.6,
         space_heating_demand_kw=1.5,
@@ -145,7 +147,7 @@ def test_no_window_found_falls_back_to_defer(dhw_optimizer):
         price_periods=expensive_periods,
         hours_since_last_dhw=22.0,
     )
-    
+
     # When all prices are equal, window finder picks first available window (now)
     # System heats immediately at that "optimal" (least bad) window
     assert decision.should_heat is True
@@ -167,7 +169,7 @@ def test_safety_deferral_respects_thermal_debt(dhw_optimizer, price_periods_with
         price_periods=price_periods_with_cheap_window,
         hours_since_last_dhw=22.0,
     )
-    
+
     # Critical thermal debt (DM -450 < -340 block threshold) blocks ALL DHW
     # This is RULE 1: Thermal debt protection overrides even safety minimum
     assert decision.should_heat is False
