@@ -663,20 +663,10 @@ DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
-# DHW thermal debt thresholds (climate-aware via spare capacity calculation)
-# Instead of hardcoded DM thresholds, we calculate spare capacity as percentage
-# above the climate-aware warning threshold for current outdoor temperature
-DHW_SPARE_CAPACITY_PERCENT: Final = 50.0  # Require 50% spare capacity above warning threshold
-# Ensures DHW heating only when heat pump has significant spare capacity
-# Example: Stockholm at -10°C has warning=-700, so require DM > -350 (-700 * 0.5)
-# Example: Kiruna at -30°C has warning=-1200, so require DM > -600 (-1200 * 0.5)
-# This keeps DHW heating within the normal operating range, not near thermal debt warning
-
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
 DM_DHW_ABORT_FALLBACK: Final = -500.0  # Fallback: Abort DHW if reached during run
-DM_DHW_SPARE_CAPACITY_FALLBACK: Final = -80.0  # Fallback: Spare capacity threshold
 
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)
 DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
