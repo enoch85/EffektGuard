@@ -70,7 +70,6 @@ CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
 MIN_OFFSET: Final = -10.0
 MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
-MAX_TEMP_LIMIT: Final = 24.0
 
 # Service call rate limiting (boost, DHW, general)
 BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
@@ -87,7 +86,20 @@ LAYER_WEIGHT_PRICE: Final = 0.75  # Strong influence (increased from 0.6)
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
-LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight
+LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
+
+# Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
+# Provides dynamic response to temperature overshoot severity
+LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-1°C over tolerance
+LAYER_WEIGHT_COMFORT_SEVERE: Final = 0.9  # Very high priority: 1-2°C over tolerance
+LAYER_WEIGHT_COMFORT_CRITICAL: Final = (
+    1.0  # Critical priority: 2°C+ over tolerance (same as safety)
+)
+
+# Graduated comfort layer correction multipliers (Phase 2)
+COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction
+COMFORT_CORRECTION_STRONG: Final = 1.2  # 1-2°C over tolerance: strong correction
+COMFORT_CORRECTION_CRITICAL: Final = 1.5  # 2°C+ over tolerance: emergency correction
 
 # Effect tariff / Peak protection layer weights and offsets
 # Oct 19, 2025: Increased weights to make peak protection more decisive
@@ -663,20 +675,10 @@ DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
-# DHW thermal debt thresholds (climate-aware via spare capacity calculation)
-# Instead of hardcoded DM thresholds, we calculate spare capacity as percentage
-# above the climate-aware warning threshold for current outdoor temperature
-DHW_SPARE_CAPACITY_PERCENT: Final = 50.0  # Require 50% spare capacity above warning threshold
-# Ensures DHW heating only when heat pump has significant spare capacity
-# Example: Stockholm at -10°C has warning=-700, so require DM > -350 (-700 * 0.5)
-# Example: Kiruna at -30°C has warning=-1200, so require DM > -600 (-1200 * 0.5)
-# This keeps DHW heating within the normal operating range, not near thermal debt warning
-
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
 DM_DHW_ABORT_FALLBACK: Final = -500.0  # Fallback: Abort DHW if reached during run
-DM_DHW_SPARE_CAPACITY_FALLBACK: Final = -80.0  # Fallback: Spare capacity threshold
 
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)
 DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)

@@ -61,12 +61,17 @@ from ..const import (
     EFFECT_WEIGHT_WARNING_STABLE,
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
+    LAYER_WEIGHT_COMFORT_HIGH,
+    LAYER_WEIGHT_COMFORT_SEVERE,
+    LAYER_WEIGHT_COMFORT_CRITICAL,
+    COMFORT_CORRECTION_MILD,
+    COMFORT_CORRECTION_STRONG,
+    COMFORT_CORRECTION_CRITICAL,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
     LAYER_WEIGHT_PROACTIVE_MIN,
     LAYER_WEIGHT_SAFETY,
-    MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     PEAK_AWARE_EFFECT_THRESHOLD,
     PEAK_AWARE_EFFECT_WEIGHT_MIN,
@@ -749,9 +754,15 @@ class DecisionEngine:
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
-        """Safety layer: Enforce absolute temperature limits.
+        """Safety layer: Enforce absolute minimum temperature only.
 
-        Hard limits: 18-24°C indoor temperature
+        Phase 2: Upper temperature limit removed - now handled dynamically by comfort layer
+        based on user's target temperature + tolerance setting.
+
+        This ensures temperature control adapts to user preferences rather
+        than using a fixed maximum that may be inappropriate.
+
+        Hard limit: 18°C minimum indoor temperature
         This layer always has maximum weight.
 
         Args:
@@ -770,16 +781,8 @@ class DecisionEngine:
                 weight=LAYER_WEIGHT_SAFETY,
                 reason=f"SAFETY: Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
             )
-        elif indoor_temp > MAX_TEMP_LIMIT:
-            # Too hot - reduce heating
-            offset = -SAFETY_EMERGENCY_OFFSET
-            return LayerDecision(
-                offset=offset,
-                weight=LAYER_WEIGHT_SAFETY,
-                reason=f"SAFETY: Too hot ({indoor_temp:.1f}°C > {MAX_TEMP_LIMIT}°C)",
-            )
         else:
-            # Within safe limits
+            # Within safe limits (no fixed upper limit - comfort layer handles dynamically)
             return LayerDecision(
                 offset=0.0,
                 weight=0.0,
@@ -1910,13 +1913,28 @@ class DecisionEngine:
                 reason=reason,
             )
         elif temp_error > tolerance:
-            # Too warm, reduce heating strongly
-            correction = -(temp_error - tolerance) * 0.5
-            return LayerDecision(
-                offset=correction,
-                weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too warm: {temp_error:.1f}°C over",
-            )
+            # Too warm - graduated response based on severity (Phase 2: Temperature Control Fixes)
+            # This replaces the old fixed 0.5 weight with dynamic scaling
+            overshoot = temp_error - tolerance
+
+            # Graduated weight scaling based on overshoot severity:
+            # - 0-1°C over tolerance: weight 0.7 (high priority, standard correction)
+            # - 1-2°C over tolerance: weight 0.9 (very high priority, strong correction)
+            # - 2°C+ over tolerance: weight 1.0 (CRITICAL - same as safety layer, emergency correction)
+            if overshoot >= 2.0:
+                weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0 - forces cooling, overrides all layers
+                correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x multiplier
+                reason = f"CRITICAL overheat: {temp_error:.1f}°C over target (emergency cooling)"
+            elif overshoot >= 1.0:
+                weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9 - very high priority
+                correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x multiplier
+                reason = f"Severe overheat: {temp_error:.1f}°C over target"
+            else:
+                weight = LAYER_WEIGHT_COMFORT_HIGH  # 0.7 - high priority
+                correction = -overshoot * COMFORT_CORRECTION_MILD  # 1.0x multiplier
+                reason = f"Too warm: {temp_error:.1f}°C over target"
+
+            return LayerDecision(offset=correction, weight=weight, reason=reason)
         else:
             # Too cold, increase heating strongly
             correction = -(temp_error + tolerance) * 0.5
