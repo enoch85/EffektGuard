@@ -48,6 +48,9 @@ home-assistant.log
 # Analysis/Summary/Debug files
 *ANALYSIS*.md
 *SUMMARY*.md
+
+# Implementation plans (internal)
+*IMPLEMENTATION_PLAN*.md
 *DEBUG*.md
 
 # Implementation plan (documentation, not code)
