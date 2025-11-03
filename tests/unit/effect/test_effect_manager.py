@@ -380,7 +380,8 @@ class TestPersistentState:
         """Test loading peaks from storage."""
         manager = EffectManager(hass_mock)
 
-        timestamp = datetime(2025, 10, 14, 12, 0)
+        # Use current month to avoid _clean_old_peaks() removing it
+        timestamp = datetime(2025, 11, 14, 12, 0)
         stored_data = {
             "peaks": [
                 {
@@ -394,7 +395,8 @@ class TestPersistentState:
         }
 
         with patch.object(manager._store, "async_load", return_value=stored_data):
-            await manager.async_load()
+            with patch.object(manager._store, "async_save", return_value=None):
+                await manager.async_load()
 
         assert len(manager._monthly_peaks) == 1
         assert manager._monthly_peaks[0].effective_power == 5.0
