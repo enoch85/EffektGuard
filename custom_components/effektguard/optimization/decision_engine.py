@@ -1836,8 +1836,13 @@ class DecisionEngine:
         )
 
     def _price_layer(self, price_data) -> LayerDecision:
-        """Spot price layer: Base optimization from native 15-minute GE-Spot data.
+        """Spot price layer: Forward-looking optimization from native 15-minute GE-Spot data.
 
+        Enhanced Nov 27, 2025: Added forward-looking price analysis
+        - Looks ahead 4 hours for significant price changes
+        - Reduces heating when much cheaper period coming soon
+        - Pre-heats when much more expensive period approaching
+        
         Args:
             price_data: GE-Spot price data with native 15-min intervals
 
@@ -1859,21 +1864,53 @@ class DecisionEngine:
             )
             current_quarter = min(current_quarter, len(price_data.today) - 1)
 
-        # Get current period classification
+        # Get current period classification and price
         classification = self.price.get_current_classification(current_quarter)
         current_period = price_data.today[current_quarter]
+        current_price = current_period.price
 
-        # DEBUG: Log actual price vs classification for verification
-        _LOGGER.debug(
-            "Price classification Q%d (%02d:%02d): %.2f → %s",
-            current_quarter,
-            now.hour,
-            now.minute,
-            current_period.price,
-            classification.name,
+        # Forward-looking price analysis (4-hour horizon)
+        from ..const import (
+            PRICE_FORECAST_CHEAP_THRESHOLD,
+            PRICE_FORECAST_EXPENSIVE_THRESHOLD,
+            PRICE_FORECAST_HORIZON_QUARTERS,
+            PRICE_FORECAST_PREHEAT_OFFSET,
+            PRICE_FORECAST_REDUCTION_OFFSET,
         )
 
-        # Get base offset for classification
+        lookahead_end = min(current_quarter + PRICE_FORECAST_HORIZON_QUARTERS, 96)
+        upcoming_periods = price_data.today[current_quarter + 1 : lookahead_end]
+
+        # Also check tomorrow's first periods if we're near end of day
+        if price_data.has_tomorrow and lookahead_end >= 96:
+            remaining_quarters = PRICE_FORECAST_HORIZON_QUARTERS - (96 - current_quarter - 1)
+            upcoming_periods.extend(price_data.tomorrow[:remaining_quarters])
+
+        forecast_adjustment = 0.0
+        forecast_reason = ""
+
+        if upcoming_periods and current_price > 0:
+            # Find minimum and maximum prices in lookahead window
+            min_upcoming_price = min(p.price for p in upcoming_periods)
+            max_upcoming_price = max(p.price for p in upcoming_periods)
+
+            # Calculate price ratios
+            min_price_ratio = min_upcoming_price / current_price
+            max_price_ratio = max_upcoming_price / current_price
+
+            # Check for much cheaper period coming (reduce heating now, wait for it)
+            if min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                savings_percent = int((1 - min_price_ratio) * 100)
+                forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
+                forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
+
+            # Check for much more expensive period coming (pre-heat now while cheaper)
+            elif max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                increase_percent = int((max_price_ratio - 1) * 100)
+                forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
+                forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
+
+        # Get base offset for current classification
         base_offset = self.price.get_base_offset(
             current_quarter,
             classification,
@@ -1881,17 +1918,29 @@ class DecisionEngine:
         )
 
         # Adjust for tolerance setting (1-10 scale)
-        # Higher tolerance = more aggressive optimization
         tolerance_factor = self.tolerance / PRICE_TOLERANCE_DIVISOR  # 0.2-2.0
         adjusted_offset = base_offset * tolerance_factor
 
-        # Price layer gets higher priority to encourage heating during cheap periods
-        # BUT effect layer (peak protection) still overrides with weight 0.8+ during peak risk
-        # Philosophy: "Charge heat when cheap, without peaking the peak"
+        # Apply forecast adjustment (additive to base classification)
+        final_offset = adjusted_offset + forecast_adjustment
+
+        # DEBUG: Log price analysis
+        _LOGGER.debug(
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C",
+            current_quarter,
+            now.hour,
+            now.minute,
+            current_price,
+            classification.name,
+            adjusted_offset,
+            forecast_adjustment,
+            final_offset,
+        )
+
         return LayerDecision(
-            offset=adjusted_offset,
-            weight=LAYER_WEIGHT_PRICE,  # Prioritize cheap electricity
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'})",
+            offset=final_offset,
+            weight=LAYER_WEIGHT_PRICE,
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}){forecast_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:

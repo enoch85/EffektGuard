@@ -351,7 +351,11 @@ class TestRealWorldScenario:
         expensive_price_data,
         winter_weather_data,
     ):
-        """Test that daytime multiplier amplifies expensive/peak reductions."""
+        """Test that daytime multiplier amplifies expensive/peak reductions.
+        
+        Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
+        when much cheaper period detected within 4-hour horizon.
+        """
         test_time = datetime(2025, 1, 16, 8, 0)  # Q32
 
         with patch(
@@ -367,15 +371,19 @@ class TestRealWorldScenario:
 
             price_layer = decision.layers[7]
 
-            # Q32 is daytime (08:00)
+            # Q32 is daytime (08:00), price 2.40 öre
             # EXPENSIVE classification: base -1.0°C
             # Daytime multiplier: ×1.5
             # Tolerance: 5/5.0 = 1.0
-            # Expected: -1.0 × 1.5 × 1.0 = -1.5°C
+            # Base: -1.0 × 1.5 × 1.0 = -1.5°C
+            # Forward-looking: Detects cheaper period ahead (Q44-48 @ 0.90 öre = 62% cheaper)
+            # Forecast adjustment: -1.0°C (wait for cheaper period)
+            # Expected: -1.5 + (-1.0) = -2.5°C
 
-            assert price_layer.offset == pytest.approx(-1.5, abs=0.2)
+            assert price_layer.offset == pytest.approx(-2.5, abs=0.2)
             assert price_layer.weight == LAYER_WEIGHT_PRICE
             assert "EXPENSIVE" in price_layer.reason or "day" in price_layer.reason.lower()
+            assert "cheaper" in price_layer.reason.lower()  # Forecast message
 
     @pytest.mark.asyncio
     async def test_nighttime_cheap_period_preheating(
@@ -457,7 +465,11 @@ class TestRealWorldScenario:
         real_world_nibe_state,
         winter_weather_data,
     ):
-        """Test that user tolerance setting scales spot price optimization."""
+        """Test that user tolerance setting scales spot price optimization.
+        
+        Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
+        independent of tolerance setting.
+        """
         test_time = datetime(2025, 1, 16, 8, 0)  # Q32
 
         # Create two engines with different tolerance settings
@@ -497,7 +509,9 @@ class TestRealWorldScenario:
                 # Base: -1.0°C (EXPENSIVE)
                 # Daytime: ×1.5
                 # Tolerance factor: tolerance / 5.0
-                expected_offset = -1.0 * 1.5 * expected_factor
+                # Forward-looking: -1.0°C (cheaper period ahead, independent of tolerance)
+                expected_base = -1.0 * 1.5 * expected_factor
+                expected_offset = expected_base + (-1.0)  # Add forecast adjustment
 
                 print(
                     f"\nTolerance {tolerance_setting}: "

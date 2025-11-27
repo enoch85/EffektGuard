@@ -505,6 +505,14 @@ LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal 
 # Price layer constants (Oct 19, 2025)
 PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-2.0)
 
+# Price forecast lookahead (Nov 27, 2025)
+# Forward-looking price optimization: reduce heating when cheaper period coming soon
+PRICE_FORECAST_HORIZON_QUARTERS: Final = 16  # Quarters (4 hours) - matches thermal lag
+PRICE_FORECAST_CHEAP_THRESHOLD: Final = 0.5  # Price ratio - upcoming < 50% of current = "much cheaper"
+PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = 1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
+PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
+PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
+
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
