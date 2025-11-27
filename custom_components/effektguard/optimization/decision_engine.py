@@ -67,6 +67,7 @@ from ..const import (
     COMFORT_CORRECTION_MILD,
     COMFORT_CORRECTION_STRONG,
     COMFORT_CORRECTION_CRITICAL,
+    COMFORT_DM_COOLING_THRESHOLD,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
@@ -810,6 +811,12 @@ class DecisionEngine:
         Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
         This is the hard safety limit validated by Swedish NIBE forums.
 
+        CRITICAL RULE (Nov 27, 2025):
+        Never heat when indoor temperature exceeds target + tolerance.
+        Thermal debt while overheating means "flow temp was correctly reduced".
+        Let natural cooling bring temp down first, THEN recover DM during cheap periods.
+        This prevents wasteful heating during expensive hours when house is already warm.
+
         Args:
             nibe_state: Current NIBE state
 
@@ -820,6 +827,21 @@ class DecisionEngine:
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
         target_temp = self.target_temp
+
+        # FIRST CHECK: Never apply emergency recovery when already above target
+        # If house is warm and DM is negative, that's EXPECTED (we reduced heating correctly)
+        # Let natural cooling bring temp down, then recover DM during cheap periods
+        temp_error = indoor_temp - target_temp
+        tolerance = self.tolerance_range
+
+        if temp_error > tolerance:
+            # Too warm - emergency heating would be counterproductive
+            # DM will naturally improve as house cools and we maintain target temp later
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason=f"DM {degree_minutes:.0f} BUT indoor {indoor_temp:.1f}°C is {temp_error:.1f}°C over target - let cool naturally first",
+            )
 
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
         if degree_minutes <= DM_THRESHOLD_ABSOLUTE_MAX:
@@ -1916,6 +1938,16 @@ class DecisionEngine:
             # Too warm - graduated response based on severity (Phase 2: Temperature Control Fixes)
             # This replaces the old fixed 0.5 weight with dynamic scaling
             overshoot = temp_error - tolerance
+
+            # SAFETY CHECK: Don't apply cooling if thermal debt accumulating
+            # If DM < -200, heat pump already struggling - cooling would worsen debt
+            # This prevents sensor errors or outliers from creating thermal debt
+            if nibe_state.degree_minutes < COMFORT_DM_COOLING_THRESHOLD:
+                return LayerDecision(
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Overheat detected ({temp_error:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling to prevent thermal debt",
+                )
 
             # Graduated weight scaling based on overshoot severity:
             # - 0-1°C over tolerance: weight 0.7 (high priority, standard correction)

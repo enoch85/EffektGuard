@@ -125,13 +125,21 @@ from const import (
     EFFECT_WEIGHT_WARNING_STABLE,
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
+    LAYER_WEIGHT_COMFORT_HIGH,
+    LAYER_WEIGHT_COMFORT_SEVERE,
+    LAYER_WEIGHT_COMFORT_CRITICAL,
+    COMFORT_CORRECTION_MILD,
+    COMFORT_CORRECTION_STRONG,
+    COMFORT_CORRECTION_CRITICAL,
+    COMFORT_DM_COOLING_THRESHOLD,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
     LAYER_WEIGHT_PROACTIVE_MIN,
     LAYER_WEIGHT_SAFETY,
+    MAX_INDOOR_TEMP,
+    SAFETY_EMERGENCY_OFFSET,
     LAYER_WEIGHT_WEATHER_PREDICTION,
-    MAX_TEMP_LIMIT,
     MIN_TEMP_LIMIT,
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_FORECAST_HORIZON,
@@ -323,7 +331,7 @@ class ScenarioTester:
         """
         self.tolerance = 5  # User-facing 1-10 scale (5 = default balanced)
         self.config = {
-            "target_indoor_temp": 22.0,  # Default to 22°C for testing
+            "target_indoor_temp": DEFAULT_TARGET_TEMP,  # Use production default
             "tolerance": self.tolerance,  # Use proper 1-10 scale
             "enable_weather_compensation": True,
             "weather_compensation_weight": weather_comp_weight,
@@ -357,15 +365,15 @@ class ScenarioTester:
         if nibe_state.indoor_temp < MIN_TEMP_LIMIT:
             return LayerVote(
                 "Safety",
-                offset=5.0,
-                weight=1.0,
+                offset=SAFETY_EMERGENCY_OFFSET,
+                weight=LAYER_WEIGHT_SAFETY,
                 reason=f"SAFETY: Too cold ({nibe_state.indoor_temp:.1f}°C)",
             )
-        elif nibe_state.indoor_temp > MAX_TEMP_LIMIT:
+        elif nibe_state.indoor_temp > MAX_INDOOR_TEMP:
             return LayerVote(
                 "Safety",
-                offset=-5.0,
-                weight=1.0,
+                offset=-SAFETY_EMERGENCY_OFFSET,
+                weight=LAYER_WEIGHT_SAFETY,
                 reason=f"SAFETY: Too hot ({nibe_state.indoor_temp:.1f}°C)",
             )
         return LayerVote("Safety", offset=0.0, weight=0.0, reason="Within safe limits")
@@ -374,17 +382,31 @@ class ScenarioTester:
         """Calculate emergency layer vote (climate-aware).
 
         Mirrors production code from decision_engine.py._emergency_layer()
+        Nov 27, 2025: Added temperature check to prevent heating when already warm.
         """
         dm = nibe_state.degree_minutes
         outdoor = nibe_state.outdoor_temp
+        indoor = nibe_state.indoor_temp
+        target = self.config["target_indoor_temp"]
+        tolerance = self.tolerance_range
+
+        # FIRST CHECK: Never apply emergency recovery when already above target (Nov 27, 2025)
+        temp_error = indoor - target
+        if temp_error > tolerance:
+            return LayerVote(
+                "Emergency",
+                offset=0.0,
+                weight=0.0,
+                reason=f"DM {dm:.0f} BUT indoor {indoor:.1f}°C is {temp_error:.1f}°C over target - let cool first",
+            )
 
         # Absolute maximum (hardcoded in production)
         if dm <= DM_THRESHOLD_ABSOLUTE_MAX:  # -1500
             return LayerVote(
                 "Emergency",
-                offset=5.0,
-                weight=1.0,
-                reason=f"ABSOLUTE MAX: DM {dm:.0f} at safety limit -1500 - EMERGENCY",
+                offset=SAFETY_EMERGENCY_OFFSET,
+                weight=LAYER_WEIGHT_SAFETY,
+                reason=f"ABSOLUTE MAX: DM {dm:.0f} at safety limit {DM_THRESHOLD_ABSOLUTE_MAX:.0f} - EMERGENCY",
             )
 
         # Get climate-aware expected DM ranges for current outdoor temperature
@@ -735,7 +757,7 @@ class ScenarioTester:
         )
 
     def calculate_comfort_layer(self, nibe_state: MockNibeState) -> LayerVote:
-        """Calculate comfort layer vote."""
+        """Calculate comfort layer vote - matches production code (Nov 27, 2025)."""
         temp_error = nibe_state.indoor_temp - self.config["target_indoor_temp"]
         dead_zone = COMFORT_DEAD_ZONE
         tolerance = self.tolerance_range
@@ -748,22 +770,47 @@ class ScenarioTester:
             return LayerVote(
                 "Comfort",
                 offset=offset,
-                weight=self.comfort_weight_min,
+                weight=LAYER_WEIGHT_COMFORT_MIN,
                 reason=f"Gentle steer ({temp_error:+.1f}°C from target)",
             )
         elif temp_error > tolerance:
-            return LayerVote(
-                "Comfort",
-                offset=-1.5,
-                weight=self.comfort_weight_max,
-                reason=f"Too hot ({temp_error:+.1f}°C over)",
-            )
+            # Too warm - graduated response (Phase 2)
+            overshoot = temp_error - tolerance
+            
+            # SAFETY CHECK: Don't cool if thermal debt accumulating (Nov 27, 2025)
+            if nibe_state.degree_minutes < COMFORT_DM_COOLING_THRESHOLD:
+                return LayerVote(
+                    "Comfort",
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Overheat ({temp_error:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling",
+                )
+            
+            # Graduated weight based on severity
+            if overshoot >= 2.0:
+                weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0
+                correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x
+                reason = f"CRITICAL overheat: {temp_error:.1f}°C over target"
+            elif overshoot >= 1.0:
+                weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9
+                correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x
+                reason = f"Severe overheat: {temp_error:.1f}°C over target"
+            else:
+                weight = LAYER_WEIGHT_COMFORT_HIGH  # 0.7
+                correction = -overshoot * COMFORT_CORRECTION_MILD  # 1.0x
+                reason = f"Too warm: {temp_error:.1f}°C over target"
+                
+            return LayerVote("Comfort", offset=correction, weight=weight, reason=reason)
         else:
+            # Too cold - increase heating
+            # temp_error is negative, tolerance is positive
+            # correction should be positive to increase heating
+            correction = -(temp_error + tolerance) * 0.5  # Production formula
             return LayerVote(
                 "Comfort",
-                offset=+1.5,
-                weight=self.comfort_weight_max,
-                reason=f"Too cold ({temp_error:+.1f}°C under)",
+                offset=correction,
+                weight=LAYER_WEIGHT_COMFORT_MAX,
+                reason=f"Too cold: {-temp_error:.1f}°C under",
             )
 
     def aggregate_layers(self, layers: list[LayerVote]) -> tuple[float, list[LayerVote]]:
@@ -892,16 +939,23 @@ class ScenarioTester:
         # Aggregate
         final_offset, active_layers = self.aggregate_layers(layers)
 
-        # Print results
+        # Print results - show ALL layers including blocked ones (weight=0)
         print(f"\n🎯 LAYER VOTES:")
         print(f"{'Layer':<20} {'Offset':>8} {'Weight':>8} {'Weighted':>10} {'Reason':<40}")
         print(f"{'-' * 90}")
 
-        for layer in active_layers:
-            print(
-                f"{layer.name:<20} {layer.offset:>+7.2f}°C {layer.weight:>7.2f} "
-                f"{layer.weighted_value:>+9.3f} {layer.reason:<40}"
-            )
+        # Show all layers to see what's being blocked
+        for layer in layers:
+            if layer.weight > 0:
+                print(
+                    f"{layer.name:<20} {layer.offset:>+7.2f}°C {layer.weight:>7.2f} "
+                    f"{layer.weighted_value:>+9.3f} {layer.reason:<40}"
+                )
+            else:
+                # Show blocked layers in gray/dimmed
+                print(
+                    f"{layer.name:<20} {layer.offset:>+7.2f}°C {'BLOCKED':>8} {'---':>10} {layer.reason:<40}"
+                )
 
         print(f"{'-' * 90}")
         total_weight = sum(l.weight for l in active_layers)
@@ -991,6 +1045,7 @@ Examples:
     # Custom scenario parameters
     custom_group = parser.add_argument_group("Custom Scenario Parameters")
     custom_group.add_argument("--indoor", type=float, help="Indoor temperature (°C)")
+    custom_group.add_argument("--target", type=float, help="Target indoor temperature (°C)")
     custom_group.add_argument("--outdoor", type=float, help="Outdoor temperature (°C)")
     custom_group.add_argument("--dm", type=float, help="Degree minutes (thermal debt)")
     custom_group.add_argument("--flow-temp", type=float, help="Current flow temperature (°C)")
@@ -1167,6 +1222,10 @@ Examples:
         expensive_offset=args.expensive_offset,
         peak_offset=args.peak_offset,
     )
+    
+    # Override target temperature if provided
+    if args.target is not None:
+        tester.config["target_indoor_temp"] = args.target
 
     scenarios = {}
 

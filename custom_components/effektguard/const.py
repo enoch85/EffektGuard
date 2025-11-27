@@ -82,7 +82,7 @@ SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 # Philosophy: "Charge heat when cheap, without peaking the peak"
 LAYER_WEIGHT_SAFETY: Final = 1.0  # Absolute priority (temp limits)
 LAYER_WEIGHT_EMERGENCY: Final = 0.8  # High priority (DM beyond expected)
-LAYER_WEIGHT_PRICE: Final = 0.75  # Strong influence (increased from 0.6)
+LAYER_WEIGHT_PRICE: Final = 0.8  # Strong influence - balanced with other layers (Nov 27, 2025)
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
@@ -182,13 +182,17 @@ DM_CRITICAL_T1_MARGIN: Final = (
     0  # Tier 1: At WARNING threshold (climate-aware) - early aggressive intervention
 )
 DM_CRITICAL_T1_OFFSET: Final = 4.0  # Strong early boost (prevent DM spiral, avoid hours of high Hz)
-DM_CRITICAL_T1_WEIGHT: Final = 0.95  # High priority with temperature awareness
+DM_CRITICAL_T1_WEIGHT: Final = (
+    0.65  # Below price (0.8) - allows price/comfort override (Nov 27, 2025)
+)
 DM_CRITICAL_T2_MARGIN: Final = 200  # Tier 2: WARNING + 200 DM beyond
 DM_CRITICAL_T2_OFFSET: Final = 7.0  # Very strong boost (decisive recovery before T3)
-DM_CRITICAL_T2_WEIGHT: Final = 0.97  # Very high priority with minimal temp awareness
+DM_CRITICAL_T2_WEIGHT: Final = (
+    0.72  # Below price (0.8) - allows price override (Nov 27, 2025)
+)
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
 DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
-DM_CRITICAL_T3_WEIGHT: Final = 0.99  # Near-absolute priority (critical situation)
+DM_CRITICAL_T3_WEIGHT: Final = 0.77  # Below price (0.8) - price wins in expensive hours (Nov 27, 2025)
 DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
@@ -504,6 +508,9 @@ PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
+COMFORT_DM_COOLING_THRESHOLD: Final = (
+    -200  # Block cooling corrections when DM < -200 (thermal debt accumulating)
+)
 
 # UFH prediction horizons based on thermal lag research
 # Prediction horizons for different UFH types
