@@ -22,10 +22,13 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="homeassis
 
 
 @pytest.fixture(autouse=True)
-async def setup_frame_helper():
+def setup_frame_helper(monkeypatch):
     """Set up the frame helper for all tests."""
-    # Frame helper setup is not needed in newer HA versions
-    # The frame module works without explicit setup
+    from homeassistant.helpers import frame
+    
+    # Mock the report_usage function to avoid frame helper errors
+    monkeypatch.setattr(frame, "report_usage", Mock())
+    
     yield
 
 
