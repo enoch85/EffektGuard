@@ -2021,12 +2021,18 @@ class DecisionEngine:
                         if expensive_duration < PRICE_FORECAST_MIN_DURATION:
                             forecast_reason = f" | Forecast: Expensive period too brief ({expensive_duration * 15}min)"
                         elif max_idx < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = f" | Forecast: Expensive period too soon ({max_idx * 15}min)"
+                            forecast_reason = (
+                                f" | Forecast: Expensive period too soon ({max_idx * 15}min)"
+                            )
                     elif min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
                         if cheap_duration < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = f" | Forecast: Cheap period too brief ({cheap_duration * 15}min)"
+                            forecast_reason = (
+                                f" | Forecast: Cheap period too brief ({cheap_duration * 15}min)"
+                            )
                         elif min_idx < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = f" | Forecast: Cheap period too soon ({min_idx * 15}min)"
+                            forecast_reason = (
+                                f" | Forecast: Cheap period too soon ({min_idx * 15}min)"
+                            )
 
         # Get base offset for current classification
         base_offset = self.price.get_base_offset(
