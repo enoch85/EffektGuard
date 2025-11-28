@@ -1545,6 +1545,7 @@ class DecisionEngine:
                 hours_ahead=hours_ahead,
                 future_outdoor_temps=forecast_temps,
                 current_outdoor_temp=nibe_state.outdoor_temp,
+                current_indoor_temp=nibe_state.indoor_temp,
                 thermal_mass=self.thermal.thermal_mass,
                 insulation_quality=self.thermal.insulation_quality,
             )

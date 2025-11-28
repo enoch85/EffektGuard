@@ -182,6 +182,7 @@ class ThermalStatePredictor:
         hours_ahead: int,
         future_outdoor_temps: list[float],
         current_outdoor_temp: float,
+        current_indoor_temp: float,
         thermal_mass: float = 1.0,
         insulation_quality: float = 1.0,
     ) -> PreHeatDecision:
@@ -195,6 +196,7 @@ class ThermalStatePredictor:
             hours_ahead: Hours to look ahead
             future_outdoor_temps: Forecasted outdoor temperatures
             current_outdoor_temp: Current outdoor temperature
+            current_indoor_temp: Current indoor temperature (°C, from nibe_state)
             thermal_mass: Building thermal mass
             insulation_quality: Insulation quality
 
@@ -245,13 +247,9 @@ class ThermalStatePredictor:
 
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
-            if hasattr(self, "state_history") and len(self.state_history) > 0:
-                current_indoor = self.state_history[-1].indoor_temp
-                if current_indoor > target_temp:
-                    overshoot = current_indoor - target_temp
-                    reason += (
-                        f" (thermal storage: +{overshoot:.1f}°C overshoot → coast through cold)"
-                    )
+            if current_indoor_temp > target_temp:
+                overshoot = current_indoor_temp - target_temp
+                reason += f" (thermal storage: +{overshoot:.1f}°C overshoot → coast through cold)"
 
             # Calculate hours until temperature drops below threshold
             hours_until_cold = 0
