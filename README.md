@@ -34,14 +34,15 @@ Currently supports NIBE heat pumps via MyUplink integration, with plans to add s
 ## Key Features
 
 ### 🎯 Multi-Layer Optimization Engine
-8-layer decision system that balances competing priorities:
+9-layer decision system that balances competing priorities:
 - **Safety** (temperature limits) - always enforced
 - **Emergency** (thermal debt prevention) - climate-aware DM thresholds
+- **Proactive debt prevention** - trend-based future DM prediction
 - **Effect tariff** (peak avoidance) - predictive 15-min protection
+- **Prediction/Learning** (self-tuning) - learned thermal model for pre-heating
 - **Weather compensation** (mathematical flow temp) - André Kühne + Timbones formulas
 - **Weather prediction** (pre-heating) - time-aware cold snap protection
 - **Spot price** (cost reduction) - forward-looking optimization with adaptive horizon
-- **Learning** (predictive control) - self-tuning thermal model
 - **Comfort** (tolerance) - reactive temperature correction
 
 ### 🌍 Global Climate Adaptation
@@ -220,9 +221,10 @@ Combined with climate-aware safety margins (0.0-2.5°C by zone).
 ## Documentation
 
 - **[Climate Zones](docs/CLIMATE_ZONES.md)** - Global climate adaptation system
-- **[Architecture](architecture/00_overview.md)** - System design with flow diagrams
+- **[Architecture Overview](docs/architecture/00_overview.md)** - System design with flow diagrams
 - **[DHW Optimization](docs/DHW_OPTIMIZATION.md)** - Hot water scheduling
 - **[Release Process](docs/RELEASE_PROCESS.md)** - Version management
+- **[Development Guide](docs/dev/README.md)** - Contributing and testing guidelines
 
 ## Development Status
 
