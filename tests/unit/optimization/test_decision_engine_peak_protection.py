@@ -364,12 +364,18 @@ class TestReasoningGeneration:
             current_peak=0.0,
         )
 
-        # Count active layers in reasoning (separated by |)
-        if "|" in decision.reasoning:
-            layer_count = len(decision.reasoning.split("|"))
-            active_layers = [l for l in decision.layers if l.weight > 0]
-            # Should match active layer count
-            assert layer_count == len(active_layers)
+        # Verify active layers present in reasoning
+        # Note: Price layer may include horizon calculation with internal '|' separator
+        active_layers = [l for l in decision.layers if l.weight > 0]
+        assert len(active_layers) > 0, "Should have at least one active layer"
+        
+        # Each active layer should have its reason mentioned in the final reasoning
+        for layer in active_layers:
+            # Extract the layer's main reason (before any internal | separators)
+            layer_main_reason = layer.reason.split("|")[0].strip()
+            assert layer_main_reason in decision.reasoning, (
+                f"Layer reason '{layer_main_reason}' not found in decision reasoning"
+            )
 
 
 class TestPowerEstimation:

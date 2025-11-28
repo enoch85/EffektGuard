@@ -1842,7 +1842,7 @@ class DecisionEngine:
         - Looks ahead 4 hours for significant price changes
         - Reduces heating when much cheaper period coming soon
         - Pre-heats when much more expensive period approaching
-        
+
         Args:
             price_data: GE-Spot price data with native 15-min intervals
 
@@ -1869,21 +1869,28 @@ class DecisionEngine:
         current_period = price_data.today[current_quarter]
         current_price = current_period.price
 
-        # Forward-looking price analysis (4-hour horizon)
+        # Forward-looking price analysis - horizon scales with thermal mass
+        # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
         from ..const import (
+            PRICE_FORECAST_BASE_HORIZON,
             PRICE_FORECAST_CHEAP_THRESHOLD,
             PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-            PRICE_FORECAST_HORIZON_QUARTERS,
             PRICE_FORECAST_PREHEAT_OFFSET,
             PRICE_FORECAST_REDUCTION_OFFSET,
         )
 
-        lookahead_end = min(current_quarter + PRICE_FORECAST_HORIZON_QUARTERS, 96)
+        # Calculate horizon based on thermal mass (higher mass = longer lookahead)
+        thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
+        forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
+
+        forecast_quarters = int(forecast_hours * 4)  # Convert hours to 15-min quarters
+
+        lookahead_end = min(current_quarter + forecast_quarters, 96)
         upcoming_periods = price_data.today[current_quarter + 1 : lookahead_end]
 
         # Also check tomorrow's first periods if we're near end of day
         if price_data.has_tomorrow and lookahead_end >= 96:
-            remaining_quarters = PRICE_FORECAST_HORIZON_QUARTERS - (96 - current_quarter - 1)
+            remaining_quarters = forecast_quarters - (96 - current_quarter - 1)
             upcoming_periods.extend(price_data.tomorrow[:remaining_quarters])
 
         forecast_adjustment = 0.0
@@ -1902,9 +1909,9 @@ class DecisionEngine:
             # - When CHEAP now: Prioritize pre-heating before upcoming expensive periods
             # - When EXPENSIVE/PEAK now: Prioritize waiting for upcoming cheap periods
             # - When NORMAL: Check both directions
-            
+
             from ..const import QuarterClassification
-            
+
             if classification == QuarterClassification.CHEAP:
                 # During cheap periods, look for upcoming expensive periods to pre-heat before them
                 # This is the key use case: cheap night → expensive morning
@@ -1913,7 +1920,7 @@ class DecisionEngine:
                     forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
                     forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
                 # Ignore finding even cheaper periods when already cheap (avoid missing expensive spikes)
-                
+
             elif classification in [QuarterClassification.EXPENSIVE, QuarterClassification.PEAK]:
                 # During expensive periods, look for upcoming cheap periods to wait for them
                 if min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
@@ -1921,17 +1928,17 @@ class DecisionEngine:
                     forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
                     forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
                 # Ignore finding even more expensive periods (already expensive enough)
-                
+
             else:  # NORMAL classification
                 # For normal periods, check both directions and take the more significant change
                 expensive_coming = max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
                 cheap_coming = min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                
+
                 if expensive_coming and cheap_coming:
                     # Both detected - choose based on which change is more significant
                     expensive_magnitude = max_price_ratio - 1.0
                     cheap_magnitude = 1.0 - min_price_ratio
-                    
+
                     if expensive_magnitude > cheap_magnitude:
                         increase_percent = int(expensive_magnitude * 100)
                         forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
@@ -1940,12 +1947,12 @@ class DecisionEngine:
                         savings_percent = int(cheap_magnitude * 100)
                         forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
                         forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
-                        
+
                 elif expensive_coming:
                     increase_percent = int((max_price_ratio - 1) * 100)
                     forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
                     forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
-                    
+
                 elif cheap_coming:
                     savings_percent = int((1 - min_price_ratio) * 100)
                     forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
@@ -1965,14 +1972,17 @@ class DecisionEngine:
         # Apply forecast adjustment (additive to base classification)
         final_offset = adjusted_offset + forecast_adjustment
 
-        # DEBUG: Log price analysis
+        # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C",
             current_quarter,
             now.hour,
             now.minute,
             current_price,
             classification.name,
+            forecast_hours,
+            PRICE_FORECAST_BASE_HORIZON,
+            thermal_mass,
             adjusted_offset,
             forecast_adjustment,
             final_offset,
@@ -1981,7 +1991,7 @@ class DecisionEngine:
         return LayerDecision(
             offset=final_offset,
             weight=LAYER_WEIGHT_PRICE,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}){forecast_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:

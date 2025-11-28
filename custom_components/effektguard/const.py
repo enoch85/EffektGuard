@@ -187,12 +187,12 @@ DM_CRITICAL_T1_WEIGHT: Final = (
 )
 DM_CRITICAL_T2_MARGIN: Final = 200  # Tier 2: WARNING + 200 DM beyond
 DM_CRITICAL_T2_OFFSET: Final = 7.0  # Very strong boost (decisive recovery before T3)
-DM_CRITICAL_T2_WEIGHT: Final = (
-    0.72  # Below price (0.8) - allows price override (Nov 27, 2025)
-)
+DM_CRITICAL_T2_WEIGHT: Final = 0.72  # Below price (0.8) - allows price override (Nov 27, 2025)
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
 DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
-DM_CRITICAL_T3_WEIGHT: Final = 0.77  # Below price (0.8) - price wins in expensive hours (Nov 27, 2025)
+DM_CRITICAL_T3_WEIGHT: Final = (
+    0.77  # Below price (0.8) - price wins in expensive hours (Nov 27, 2025)
+)
 DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
@@ -507,9 +507,18 @@ PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-
 
 # Price forecast lookahead (Nov 27, 2025)
 # Forward-looking price optimization: reduce heating when cheaper period coming soon
-PRICE_FORECAST_HORIZON_QUARTERS: Final = 16  # Quarters (4 hours) - matches thermal lag
-PRICE_FORECAST_CHEAP_THRESHOLD: Final = 0.5  # Price ratio - upcoming < 50% of current = "much cheaper"
-PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = 1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
+# Updated Nov 28, 2025: Horizon scales with thermal_mass (configurable 0.5-2.0)
+PRICE_FORECAST_BASE_HORIZON: Final = 4.0  # hours - base value multiplied by thermal_mass
+# Examples of dynamic scaling:
+#   thermal_mass 2.0 (heavy concrete slab): 4.0 × 2.0 = 8.0 hours lookahead
+#   thermal_mass 1.2 (medium timber):       4.0 × 1.2 = 4.8 hours lookahead
+#   thermal_mass 0.8 (light radiator):      4.0 × 0.8 = 3.2 hours lookahead
+PRICE_FORECAST_CHEAP_THRESHOLD: Final = (
+    0.5  # Price ratio - upcoming < 50% of current = "much cheaper"
+)
+PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
+    1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
+)
 PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 

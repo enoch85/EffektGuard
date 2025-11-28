@@ -107,6 +107,21 @@ echo -e "${BOLD}${CYAN}║${NC}                ${BOLD}EffektGuard Test Suite${NC
 echo -e "${BOLD}${CYAN}╚════════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
+# Run Black formatting check first
+echo -e "${BLUE}🎨 Checking Black formatting...${NC}"
+if command -v black &> /dev/null; then
+    if black custom_components/effektguard/ --check --line-length 100 &> /dev/null; then
+        echo -e "${GREEN}✓ Black formatting: PASS${NC}"
+    else
+        echo -e "${YELLOW}⚠ Black formatting issues detected. Running black...${NC}"
+        black custom_components/effektguard/ --line-length 100
+        echo -e "${GREEN}✓ Black formatting: FIXED${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠ Black not installed, skipping formatting check${NC}"
+fi
+echo ""
+
 # Check if pytest is installed
 if ! command -v pytest &> /dev/null; then
     echo -e "${RED}✗ ERROR: pytest is not installed${NC}"
