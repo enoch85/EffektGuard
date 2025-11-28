@@ -18,9 +18,9 @@ flowchart TD
 
     subgraph "Aggregation Logic"
         J{Any Critical Layers?<br/>Weight >= 1.0}
-        K[Take Strongest Critical Vote<br/>Safety/Effect (critical) override]
+        K[Take Strongest Critical Vote<br/>Safety/Effect critical override]
         L[Weighted Average<br/>All layers with weight > 0]
-        M[Formula:<br/>Σ offset × weight / Σ weight]
+        M[Formula:<br/>Sum offset × weight / Sum weight]
     end
 
     subgraph "Example Aggregation"
