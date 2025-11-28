@@ -1036,6 +1036,7 @@ Examples:
             "thermal_debt",
             "mild_weather",
             "expensive_peak",
+            "user_real_data",
             "custom",
         ],
         default="all",
@@ -1302,6 +1303,28 @@ Examples:
             peak_data=MockPeakData(
                 current_peak=7.2,
                 current_power=5.8,
+            ),
+        )
+
+    # Scenario 5: Real User Data - Learning vs Price Conflict (Nov 28, 2025)
+    # Time: 18:30 (Q74), 89% cheaper prices in 7h, but learning predicting 3°C drop
+    if args.scenario in ["all", "user_real_data"]:
+        scenarios["user_real_data"] = tester.test_scenario(
+            name="Real Data: Learning vs Price (18:30, 89% cheaper in 7h)",
+            nibe_state=MockNibeState(
+                indoor_temp=21.9,  # 0.9°C overshoot from target 21.0°C
+                outdoor_temp=3.0,  # Estimated from chart (mild evening)
+                degree_minutes=-396,  # Approaching warning threshold -425
+                flow_temp=32.0,  # Estimated (mild outdoor = moderate flow)
+            ),
+            price_data=MockPriceData(
+                current_price=50.0,  # NORMAL price ~50 öre
+                classification=QuarterClassification.NORMAL,
+                is_daytime=False,  # 18:30 = evening
+            ),
+            peak_data=MockPeakData(
+                current_peak=6.5,
+                current_power=3.5,  # Moderate power (evening)
             ),
         )
 

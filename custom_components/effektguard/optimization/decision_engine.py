@@ -1555,9 +1555,9 @@ class DecisionEngine:
                 # This prevents learning layer from aggressively heating when already above target
                 overshoot = nibe_state.indoor_temp - self.target_temp
                 
-                if overshoot > 0.5:  # Already 0.5°C+ over target
+                if overshoot > THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:
                     # Reduce pre-heat offset by overshoot amount to prevent excessive heating
-                    # Example: 0.9°C overshoot, +3.0°C recommended → adjusted to +2.1°C
+                    # Example: 1.2°C overshoot, +3.0°C recommended → adjusted to +1.8°C
                     adjusted_offset = max(0.0, preheat_decision.recommended_offset - overshoot)
                     
                     return LayerDecision(
