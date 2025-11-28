@@ -712,7 +712,7 @@ class DecisionEngine:
                 nibe_state, weather_data
             ),  # Mathematical WC with Swedish adaptations
             self._weather_layer(nibe_state, weather_data),  # Simple pre-heating logic
-            self._price_layer(price_data),
+            self._price_layer(nibe_state, price_data),
             self._comfort_layer(nibe_state),
         ]
 
@@ -1835,7 +1835,7 @@ class DecisionEngine:
             reason=reasoning,
         )
 
-    def _price_layer(self, price_data) -> LayerDecision:
+    def _price_layer(self, nibe_state, price_data) -> LayerDecision:
         """Spot price layer: Forward-looking optimization from native 15-minute GE-Spot data.
 
         Enhanced Nov 27, 2025: Added forward-looking price analysis
@@ -1844,6 +1844,7 @@ class DecisionEngine:
         - Pre-heats when much more expensive period approaching
 
         Args:
+            nibe_state: Current NIBE state (for strategic overshoot context)
             price_data: GE-Spot price data with native 15-min intervals
 
         Returns:
