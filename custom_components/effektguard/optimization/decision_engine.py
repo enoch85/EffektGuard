@@ -1945,35 +1945,54 @@ class DecisionEngine:
             from ..const import QuarterClassification
 
             if classification == QuarterClassification.CHEAP:
-                # Pre-heat before upcoming expensive periods (if sustained)
+                # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
+                # Only act if expensive period is at least 45min in future (same as duration filter)
                 if (
                     max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
                     and expensive_duration >= PRICE_FORECAST_MIN_DURATION
+                    and max_idx >= PRICE_FORECAST_MIN_DURATION
                 ):
                     increase_percent = int((max_price_ratio - 1) * 100)
                     forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
                     forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
+                elif max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                    # Expensive period exists but doesn't meet criteria - explain why
+                    if expensive_duration < PRICE_FORECAST_MIN_DURATION:
+                        forecast_reason = f" | Forecast: Expensive period too brief ({expensive_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
+                    elif max_idx < PRICE_FORECAST_MIN_DURATION:
+                        forecast_reason = f" | Forecast: Expensive period too soon ({max_idx * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
 
             elif classification in [QuarterClassification.EXPENSIVE, QuarterClassification.PEAK]:
-                # Wait for upcoming cheap periods (if sustained)
+                # Wait for upcoming cheap periods (if sustained AND far enough away)
+                # Only reduce if cheap period is at least 45min in future (same as duration filter)
                 if (
                     min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
                     and cheap_duration >= PRICE_FORECAST_MIN_DURATION
+                    and min_idx >= PRICE_FORECAST_MIN_DURATION
                 ):
                     savings_percent = int((1 - min_price_ratio) * 100)
                     forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
                     forecast_reason = (
                         f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
                     )
+                elif min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                    # Cheap period exists but doesn't meet criteria - explain why
+                    if cheap_duration < PRICE_FORECAST_MIN_DURATION:
+                        forecast_reason = f" | Forecast: Cheap period too brief ({cheap_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
+                    elif min_idx < PRICE_FORECAST_MIN_DURATION:
+                        forecast_reason = f" | Forecast: Cheap period too soon ({min_idx * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
 
             else:  # NORMAL - check both directions, take most significant sustained change
+                # Apply same lookahead requirement: price change must be ≥45min away to act on
                 expensive_valid = (
                     max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
                     and expensive_duration >= PRICE_FORECAST_MIN_DURATION
+                    and max_idx >= PRICE_FORECAST_MIN_DURATION
                 )
                 cheap_valid = (
                     min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
                     and cheap_duration >= PRICE_FORECAST_MIN_DURATION
+                    and min_idx >= PRICE_FORECAST_MIN_DURATION
                 )
 
                 if expensive_valid and cheap_valid:
@@ -1996,6 +2015,18 @@ class DecisionEngine:
                     forecast_reason = (
                         f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
                     )
+                else:
+                    # Check if either direction had potential but didn't meet criteria
+                    if max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                        if expensive_duration < PRICE_FORECAST_MIN_DURATION:
+                            forecast_reason = f" | Forecast: Expensive period too brief ({expensive_duration * 15}min)"
+                        elif max_idx < PRICE_FORECAST_MIN_DURATION:
+                            forecast_reason = f" | Forecast: Expensive period too soon ({max_idx * 15}min)"
+                    elif min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                        if cheap_duration < PRICE_FORECAST_MIN_DURATION:
+                            forecast_reason = f" | Forecast: Cheap period too brief ({cheap_duration * 15}min)"
+                        elif min_idx < PRICE_FORECAST_MIN_DURATION:
+                            forecast_reason = f" | Forecast: Cheap period too soon ({min_idx * 15}min)"
 
         # Get base offset for current classification
         base_offset = self.price.get_base_offset(
