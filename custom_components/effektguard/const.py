@@ -505,6 +505,14 @@ LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal 
 # Price layer constants (Oct 19, 2025)
 PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-2.0)
 
+# Heat pump compressor dynamics (Nov 28, 2025)
+# Based on typical NIBE F-series compressor behavior
+COMPRESSOR_RAMP_UP_MINUTES: Final = 30  # Minutes to reach full speed from idle
+COMPRESSOR_COOL_DOWN_MINUTES: Final = 15  # Minutes for thermal stabilization after reduction
+COMPRESSOR_MIN_CYCLE_MINUTES: Final = (
+    COMPRESSOR_RAMP_UP_MINUTES + COMPRESSOR_COOL_DOWN_MINUTES
+)  # 45min total
+
 # Price forecast lookahead (Nov 27, 2025)
 # Forward-looking price optimization: reduce heating when cheaper period coming soon
 # Updated Nov 28, 2025: Horizon scales with thermal_mass (configurable 0.5-2.0)
@@ -519,6 +527,9 @@ PRICE_FORECAST_CHEAP_THRESHOLD: Final = (
 PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
     1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
 )
+PRICE_FORECAST_MIN_DURATION: Final = (
+    COMPRESSOR_MIN_CYCLE_MINUTES // 15
+)  # quarters - derived from compressor dynamics (45min / 15min = 3)
 PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 

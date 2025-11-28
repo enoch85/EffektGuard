@@ -1875,6 +1875,7 @@ class DecisionEngine:
             PRICE_FORECAST_BASE_HORIZON,
             PRICE_FORECAST_CHEAP_THRESHOLD,
             PRICE_FORECAST_EXPENSIVE_THRESHOLD,
+            PRICE_FORECAST_MIN_DURATION,
             PRICE_FORECAST_PREHEAT_OFFSET,
             PRICE_FORECAST_REDUCTION_OFFSET,
         )
@@ -1897,66 +1898,102 @@ class DecisionEngine:
         forecast_reason = ""
 
         if upcoming_periods and current_price > 0:
-            # Find minimum and maximum prices in lookahead window
-            min_upcoming_price = min(p.price for p in upcoming_periods)
-            max_upcoming_price = max(p.price for p in upcoming_periods)
+            # Find index and count duration of min/max prices
+            min_idx = next(
+                i
+                for i, p in enumerate(upcoming_periods)
+                if p.price == min(p.price for p in upcoming_periods)
+            )
+            max_idx = next(
+                i
+                for i, p in enumerate(upcoming_periods)
+                if p.price == max(p.price for p in upcoming_periods)
+            )
+
+            # Count consecutive quarters around min price meeting CHEAP threshold
+            cheap_duration = 1
+            for i in range(min_idx + 1, len(upcoming_periods)):
+                if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
+                    cheap_duration += 1
+                else:
+                    break
+            for i in range(min_idx - 1, -1, -1):
+                if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
+                    cheap_duration += 1
+                else:
+                    break
+
+            # Count consecutive quarters around max price meeting EXPENSIVE threshold
+            expensive_duration = 1
+            for i in range(max_idx + 1, len(upcoming_periods)):
+                if upcoming_periods[i].price / current_price > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                    expensive_duration += 1
+                else:
+                    break
+            for i in range(max_idx - 1, -1, -1):
+                if upcoming_periods[i].price / current_price > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                    expensive_duration += 1
+                else:
+                    break
 
             # Calculate price ratios
-            min_price_ratio = min_upcoming_price / current_price
-            max_price_ratio = max_upcoming_price / current_price
-
-            # Strategy depends on current classification:
-            # - When CHEAP now: Prioritize pre-heating before upcoming expensive periods
-            # - When EXPENSIVE/PEAK now: Prioritize waiting for upcoming cheap periods
-            # - When NORMAL: Check both directions
+            min_price_ratio = min(p.price for p in upcoming_periods) / current_price
+            max_price_ratio = max(p.price for p in upcoming_periods) / current_price
 
             from ..const import QuarterClassification
 
             if classification == QuarterClassification.CHEAP:
-                # During cheap periods, look for upcoming expensive periods to pre-heat before them
-                # This is the key use case: cheap night → expensive morning
-                if max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                # Pre-heat before upcoming expensive periods (if sustained)
+                if (
+                    max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
+                    and expensive_duration >= PRICE_FORECAST_MIN_DURATION
+                ):
                     increase_percent = int((max_price_ratio - 1) * 100)
                     forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
-                # Ignore finding even cheaper periods when already cheap (avoid missing expensive spikes)
+                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
 
             elif classification in [QuarterClassification.EXPENSIVE, QuarterClassification.PEAK]:
-                # During expensive periods, look for upcoming cheap periods to wait for them
-                if min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                # Wait for upcoming cheap periods (if sustained)
+                if (
+                    min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
+                    and cheap_duration >= PRICE_FORECAST_MIN_DURATION
+                ):
                     savings_percent = int((1 - min_price_ratio) * 100)
                     forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
-                # Ignore finding even more expensive periods (already expensive enough)
+                    forecast_reason = (
+                        f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
+                    )
 
-            else:  # NORMAL classification
-                # For normal periods, check both directions and take the more significant change
-                expensive_coming = max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                cheap_coming = min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
+            else:  # NORMAL - check both directions, take most significant sustained change
+                expensive_valid = (
+                    max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
+                    and expensive_duration >= PRICE_FORECAST_MIN_DURATION
+                )
+                cheap_valid = (
+                    min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
+                    and cheap_duration >= PRICE_FORECAST_MIN_DURATION
+                )
 
-                if expensive_coming and cheap_coming:
-                    # Both detected - choose based on which change is more significant
-                    expensive_magnitude = max_price_ratio - 1.0
-                    cheap_magnitude = 1.0 - min_price_ratio
-
-                    if expensive_magnitude > cheap_magnitude:
-                        increase_percent = int(expensive_magnitude * 100)
+                if expensive_valid and cheap_valid:
+                    # Both valid - choose larger magnitude
+                    if (max_price_ratio - 1.0) > (1.0 - min_price_ratio):
+                        increase_percent = int((max_price_ratio - 1) * 100)
                         forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                        forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
+                        forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
                     else:
-                        savings_percent = int(cheap_magnitude * 100)
+                        savings_percent = int((1 - min_price_ratio) * 100)
                         forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                        forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
-
-                elif expensive_coming:
+                        forecast_reason = f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
+                elif expensive_valid:
                     increase_percent = int((max_price_ratio - 1) * 100)
                     forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {len(upcoming_periods)//4}h - pre-heat now"
-
-                elif cheap_coming:
+                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
+                elif cheap_valid:
                     savings_percent = int((1 - min_price_ratio) * 100)
                     forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = f" | Forecast: {savings_percent}% cheaper in {len(upcoming_periods)//4}h - reduce heating"
+                    forecast_reason = (
+                        f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
+                    )
 
         # Get base offset for current classification
         base_offset = self.price.get_base_offset(
