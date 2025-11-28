@@ -1551,7 +1551,22 @@ class DecisionEngine:
             )
 
             if preheat_decision.should_preheat:
-                # Use learned pre-heating offset
+                # Check if we're already overheating - reduce pre-heat offset accordingly
+                # This prevents learning layer from aggressively heating when already above target
+                overshoot = nibe_state.indoor_temp - self.target_temp
+                
+                if overshoot > 0.5:  # Already 0.5°C+ over target
+                    # Reduce pre-heat offset by overshoot amount to prevent excessive heating
+                    # Example: 0.9°C overshoot, +3.0°C recommended → adjusted to +2.1°C
+                    adjusted_offset = max(0.0, preheat_decision.recommended_offset - overshoot)
+                    
+                    return LayerDecision(
+                        offset=adjusted_offset,
+                        weight=0.65,
+                        reason=f"Learned pre-heat: {preheat_decision.reason} (reduced {overshoot:.1f}°C for overshoot)",
+                    )
+                
+                # Normal pre-heating when not overheating
                 # Weight 0.65 - slightly higher than base price layer (0.6)
                 # but lower than effect/weather layers (0.7-0.8)
                 return LayerDecision(
