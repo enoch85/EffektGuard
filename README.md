@@ -40,7 +40,7 @@ Currently supports NIBE heat pumps via MyUplink integration, with plans to add s
 - **Effect tariff** (peak avoidance) - predictive 15-min protection
 - **Weather compensation** (mathematical flow temp) - André Kühne + Timbones formulas
 - **Weather prediction** (pre-heating) - time-aware cold snap protection
-- **Spot price** (cost reduction) - native GE-Spot 15-min integration
+- **Spot price** (cost reduction) - forward-looking optimization with adaptive horizon
 - **Learning** (predictive control) - self-tuning thermal model
 - **Comfort** (tolerance) - reactive temperature correction
 
@@ -72,6 +72,12 @@ Native 15-minute (quarterly) integration:
 - **Savings calculation** - estimates monthly savings (effect + spot)
 
 Works with any 15-min price source ([GE-Spot](https://github.com/enoch85/ge-spot), Nordpool, Tibber, etc.).
+
+### 💰 Smart Price Forecasting
+Multi-factor forward-looking optimization combining:
+- **Price + thermal state** - considers current indoor temp overshoot for strategic thermal storage
+- **Price + building characteristics** - adaptive horizon scales with thermal mass (2.0-8.0 hours)  
+- **Price + compressor dynamics** - filters brief spikes < 45 min using ramp-up/cool-down constraints
 
 ### 🌡️ Weather Compensation (Mathematical)
 Physics-based flow temperature optimization:
@@ -220,9 +226,8 @@ Combined with climate-aware safety margins (0.0-2.5°C by zone).
 
 ## Development Status
 
-**Current version:** v0.0.23 (pre-release)  
-**Phase 6 complete:** Self-learning capability integrated  
-**Production testing:** Active in Swedish homes
+**Status:** Production-ready but still not perfect
+**Active users:** Running in Swedish homes with real NIBE systems
 
 ## Contributing
 
