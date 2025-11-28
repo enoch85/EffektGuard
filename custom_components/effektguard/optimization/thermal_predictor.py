@@ -243,6 +243,16 @@ class ThermalStatePredictor:
                 recommended_offset = min(temp_deficit * 2.0, 3.0)
                 reason = f"Pre-heating: predicted drop {temp_deficit:.1f}°C"
 
+            # Add strategic context if pre-heating when indoor already above target
+            # This explains thermal storage strategy to user
+            if hasattr(self, "state_history") and len(self.state_history) > 0:
+                current_indoor = self.state_history[-1].indoor_temp
+                if current_indoor > target_temp:
+                    overshoot = current_indoor - target_temp
+                    reason += (
+                        f" (thermal storage: +{overshoot:.1f}°C overshoot → coast through cold)"
+                    )
+
             # Calculate hours until temperature drops below threshold
             hours_until_cold = 0
             for i, temp in enumerate(no_heat_prediction.predicted_temps):

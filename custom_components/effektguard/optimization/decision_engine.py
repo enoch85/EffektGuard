@@ -2009,9 +2009,19 @@ class DecisionEngine:
         # Apply forecast adjustment (additive to base classification)
         final_offset = adjusted_offset + forecast_adjustment
 
+        # Check for strategic overshoot context when pre-heating
+        strategic_context = ""
+        if forecast_adjustment > 0 and nibe_state.indoor_temp > self.target_temp:
+            overshoot = nibe_state.indoor_temp - self.target_temp
+            # Calculate cost savings multiplier from price forecast
+            if upcoming_periods and current_price > 0:
+                max_upcoming = max(p.price for p in upcoming_periods)
+                cost_multiplier = max_upcoming / current_price
+                strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot acceptable for {cost_multiplier:.1f}x cost savings"
+
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2023,12 +2033,13 @@ class DecisionEngine:
             adjusted_offset,
             forecast_adjustment,
             final_offset,
+            strategic_context,
         )
 
         return LayerDecision(
             offset=final_offset,
             weight=LAYER_WEIGHT_PRICE,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:
