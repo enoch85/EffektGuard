@@ -1,88 +1,105 @@
 # Layer Priority and Weight System
 
-**Description**: How the 7-layer decision engine aggregates votes with priorities.
+**Description**: How the 9-layer decision engine aggregates votes with priorities.
 
 ```mermaid
 flowchart TD
     subgraph "Layer Processing Order"
-        A[1. Safety Layer<br/>Weight: 1.0 if violated<br/>Hard limits: 18-24°C]
-        B[2. Emergency Layer<br/>Weight: 1.0 if critical<br/>Context-aware DM thresholds]
-        C[3. Effect Layer<br/>Weight: 1.0 if critical<br/>15-min peak protection]
-        D[4. Prediction Layer<br/>Weight: 0.65<br/>Learned pre-heating]
-        E[5. Weather Layer<br/>Weight: 0.7<br/>Temperature drop prediction]
-        F[6. Price Layer<br/>Weight: 0.6<br/>GE-Spot classification]
-        G[7. Comfort Layer<br/>Weight: 0.2-0.5<br/>Temperature error correction]
+        A[1. Safety Layer<br/>Weight: 1.0 if violated<br/>Hard limit: 18°C min]
+        B[2. Emergency Layer<br/>Weight: 0.8<br/>Context-aware DM thresholds]
+        C[3. Proactive Debt Prevention<br/>Weight: 0.3-0.6<br/>Trend-based DM prediction]
+        D[4. Effect Layer<br/>Weight: 0.65-1.0<br/>15-min peak protection]
+        E[5. Prediction/Learning Layer<br/>Weight: varies<br/>Learned pre-heating]
+        F[6. Weather Compensation<br/>Weight: varies<br/>Mathematical flow temp]
+        G[7. Weather Prediction<br/>Weight: 0.85<br/>Pre-heating before cold]
+        H[8. Price Layer<br/>Weight: 0.8<br/>Forward-looking optimization]
+        I[9. Comfort Layer<br/>Weight: 0.2-1.0<br/>Temperature error correction]
     end
 
     subgraph "Aggregation Logic"
-        H{Any Critical Layers?<br/>Weight = 1.0}
-        I[Take Strongest Critical Vote<br/>Safety/Emergency/Effect override]
-        J[Weighted Average<br/>All layers with weight > 0]
-        K[Formula:<br/>Σ offset × weight / Σ weight]
+        J{Any Critical Layers?<br/>Weight >= 1.0}
+        K[Take Strongest Critical Vote<br/>Safety/Effect (critical) override]
+        L[Weighted Average<br/>All layers with weight > 0]
+        M[Formula:<br/>Σ offset × weight / Σ weight]
     end
 
     subgraph "Example Aggregation"
-        L[Safety: 0.0°C × 0.0<br/>Emergency: 0.0°C × 0.0<br/>Effect: 0.0°C × 0.0<br/>Prediction: +1.0°C × 0.65<br/>Weather: +0.5°C × 0.7<br/>Price: -1.5°C × 0.6<br/>Comfort: -0.2°C × 0.2]
-        M[Total Weight: 2.15<br/>Weighted Sum: -0.19<br/>Final: -0.09°C]
+        N[Safety: 0.0°C × 0.0<br/>Emergency: 0.0°C × 0.0<br/>Proactive: 0.0°C × 0.0<br/>Effect: 0.0°C × 0.0<br/>Prediction: +1.0°C × 0.5<br/>Weather: +0.5°C × 0.85<br/>Price: -1.5°C × 0.8<br/>Comfort: -0.2°C × 0.2]
+        O[Total Weight: 2.35<br/>Weighted Sum: -0.275<br/>Final: -0.12°C]
     end
 
     subgraph "Critical Override Example"
-        N[Safety: +5.0°C × 1.0<br/>Emergency: 0.0°C × 0.0<br/>All others ignored<br/>Final: +5.0°C]
+        P[Safety: +5.0°C × 1.0<br/>All others ignored<br/>Final: +5.0°C]
     end
 
     %% Flow
-    A --> H
-    B --> H
-    C --> H
-    D --> H
-    E --> H
-    F --> H
-    G --> H
+    A --> J
+    B --> J
+    C --> J
+    D --> J
+    E --> J
+    F --> J
+    G --> J
+    H --> J
+    I --> J
     
-    H -->|Yes| I
-    H -->|No| J
-    J --> K
-    
-    K --> L
+    J -->|Yes| K
+    J -->|No| L
     L --> M
     
-    I --> N
+    M --> N
+    N --> O
+    
+    K --> P
 
     %% Styling
     style A fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style B fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style C fill:#333,stroke:#fff,stroke-width:2px,color:#fff
+    style B fill:#666,stroke:#fff,stroke-width:1px,color:#fff
+    style C fill:#666,stroke:#fff,stroke-width:1px,color:#fff
     style D fill:#666,stroke:#fff,stroke-width:1px,color:#fff
     style E fill:#666,stroke:#fff,stroke-width:1px,color:#fff
     style F fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style G fill:#999,stroke:#fff,stroke-width:1px,color:#fff
+    style G fill:#666,stroke:#fff,stroke-width:1px,color:#fff
+    style H fill:#666,stroke:#fff,stroke-width:1px,color:#fff
+    style I fill:#999,stroke:#fff,stroke-width:1px,color:#fff
     
-    style H fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style I fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style J fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style N fill:#333,stroke:#fff,stroke-width:2px,color:#fff
+    style J fill:#000,stroke:#fff,stroke-width:2px,color:#fff
+    style K fill:#333,stroke:#fff,stroke-width:2px,color:#fff
+    style L fill:#666,stroke:#fff,stroke-width:2px,color:#fff
+    style P fill:#333,stroke:#fff,stroke-width:2px,color:#fff
 ```
 
 ## Decision Engine Architecture
 
-### Seven-Layer Hierarchy
+### Nine-Layer Hierarchy
 
 The decision engine processes layers in **strict priority order**:
 
-#### Critical Layers (Weight 1.0)
+#### Critical Layers (Weight >= 1.0)
 These layers can **completely override** all other considerations:
 
-1. **Safety Layer**: Absolute temperature limits (18-24°C indoor)
-2. **Emergency Layer**: Thermal debt prevention (context-aware DM thresholds) 
-3. **Effect Layer**: Peak protection (15-minute effect tariff avoidance)
+1. **Safety Layer (1.0)**: Absolute temperature limits (18°C minimum indoor)
+2. **Effect Layer (1.0)**: Peak protection when critical (already at peak)
 
-#### Advisory Layers (Weight < 1.0)
-These layers **contribute to weighted decisions**:
+#### High-Priority Advisory Layers (Weight 0.8-0.85)
+These layers have **strong influence** on decisions:
 
-4. **Prediction Layer (0.65)**: Learned pre-heating from Phase 6 thermal predictor
-5. **Weather Layer (0.7)**: Weather-based pre-heating before cold periods
-6. **Price Layer (0.6)**: GE-Spot price optimization (base layer)
-7. **Comfort Layer (0.2-0.5)**: Temperature error correction and drift prevention
+3. **Emergency Layer (0.8)**: Thermal debt prevention (context-aware DM thresholds)
+4. **Price Layer (0.8)**: Forward-looking spot price optimization with adaptive horizon
+5. **Weather Prediction (0.85)**: Weather-based pre-heating before cold periods
+
+#### Medium-Priority Layers (Weight 0.3-0.85)
+These layers **contribute based on conditions**:
+
+6. **Effect Layer (0.65-0.85)**: Peak protection when predictive/warning states
+7. **Proactive Debt Prevention (0.3-0.6)**: Trend-based future DM prediction
+8. **Prediction/Learning**: Learned pre-heating using thermal model
+9. **Weather Compensation**: Mathematical flow temperature optimization
+
+#### Reactive Layer (Weight 0.2-1.0)
+Provides **responsive temperature correction**:
+
+10. **Comfort Layer (0.2-1.0)**: Dynamic weight based on temperature error severity
 
 ### Aggregation Algorithm
 
@@ -118,31 +135,31 @@ def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
 ### Layer Weight Rationale
 
 #### Critical Layers (1.0)
-- **Safety**: Human comfort and system protection
-- **Emergency**: Heat pump damage prevention  
-- **Effect**: Financial protection (peak avoidance)
+- **Safety**: Human comfort and system protection (18°C hard minimum)
+- **Effect (Critical)**: Financial protection when already at peak
 
 **Design Philosophy**: These concerns are **non-negotiable** and override all cost optimization.
 
-#### Weather Layer (0.7)
-- **Higher than price optimization** (0.6)
-- **Rationale**: Weather changes are predictable and pre-heating is time-sensitive
-- **Balances**: Immediate weather needs vs. cost considerations
+#### High-Priority Layers (0.8-0.85)
+- **Weather Prediction (0.85)**: Pre-heating is time-sensitive, must act before cold arrives
+- **Emergency (0.8)**: Heat pump damage prevention, balanced with cost optimization
+- **Price (0.8)**: Strong cost optimization with forward-looking and thermal storage awareness
 
-#### Prediction Layer (0.65)  
-- **Between weather and price layers**
-- **Rationale**: Learned behavior is more accurate than generic thermal models
-- **Prevents**: Overruling immediate weather threats while prioritizing over simple price optimization
+**Balances**: Critical operational needs with intelligent cost management
 
-#### Price Layer (0.6)
-- **Base optimization layer**
-- **Foundation**: All other advisory layers build upon price-based decisions
-- **Moderate weight**: Allows other factors to influence but provides consistent base
+#### Effect Layer Dynamic Weighting
+- **Critical (1.0)**: Already at peak - immediate action required
+- **Predictive (0.85)**: Will approach peak soon (<1kW margin) - act now
+- **Warning Rising (0.75)**: Close to peak + demand rising - caution
+- **Warning Stable (0.65)**: Close to peak + demand stable - monitor
 
-#### Comfort Layer (0.2-0.5)
-- **Variable weight** based on temperature error magnitude
-- **Low influence**: Provides gentle steering without overriding optimization
-- **Purpose**: Prevents temperature drift during extended cheap/expensive periods
+#### Comfort Layer Dynamic Weighting
+- **Critical (1.0)**: >2°C beyond tolerance - emergency correction
+- **Severe (0.9)**: 1-2°C beyond tolerance - strong correction
+- **High (0.7)**: 0-1°C beyond tolerance - moderate correction  
+- **Mild (0.2)**: Within tolerance - gentle steering
+
+**Purpose**: Graduated response matching severity while allowing optimization when comfortable
 
 ### Example Scenarios
 
@@ -150,18 +167,19 @@ def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
 ```
 Safety:     0.0°C × 0.0 = 0.00    (within limits)
 Emergency:  0.0°C × 0.0 = 0.00    (DM normal)
+Proactive:  0.0°C × 0.0 = 0.00    (trend normal)
 Effect:     0.0°C × 0.0 = 0.00    (peak safe)
-Prediction: +1.0°C × 0.65 = 0.65  (learned pre-heat)
-Weather:    +0.5°C × 0.7 = 0.35   (mild pre-heat)  
-Price:      -1.5°C × 0.6 = -0.90  (expensive period)
+Prediction: +1.0°C × 0.5 = 0.50   (learned pre-heat)
+Weather:    +0.5°C × 0.85 = 0.43  (mild pre-heat)  
+Price:      -1.5°C × 0.8 = -1.20  (expensive period)
 Comfort:    -0.2°C × 0.2 = -0.04  (slightly warm)
 
-Total Weight: 2.15
-Weighted Sum: 0.65 + 0.35 - 0.90 - 0.04 = 0.06
-Final Decision: 0.06 / 2.15 = +0.03°C
+Total Weight: 2.35
+Weighted Sum: 0.50 + 0.43 - 1.20 - 0.04 = -0.31
+Final Decision: -0.31 / 2.35 = -0.13°C
 ```
 
-**Result**: Very slight increase, **learned pre-heating barely wins** over price reduction.
+**Result**: Slight reduction, **price optimization wins** over pre-heating signals during expensive period.
 
 #### Critical Safety Override
 ```
@@ -175,21 +193,21 @@ Final Decision: +5.0°C
 
 **Result**: **Maximum heating** regardless of cost or other factors.
 
-#### Conflicting Critical Layers
+#### Critical Layer Override
 ```
-Safety:     0.0°C × 0.0 = 0.00    (within limits)
-Emergency:  +3.0°C × 1.0 = 3.00   (critical thermal debt)
-Effect:     -2.0°C × 1.0 = -2.00  (approaching peak)
+Safety:     +5.0°C × 1.0 = 5.00   (too cold: 17°C indoor)
+Emergency:  +2.0°C × 0.8 = 1.60   (moderate thermal debt)
+Effect:     -1.0°C × 0.65 = -0.65 (warning state)
+[All other layers ignored due to critical safety override]
 
-Critical Conflict Resolution:
-- Emergency wants +3.0°C (heat pump protection)
-- Effect wants -2.0°C (financial protection)
-- abs(3.0) > abs(-2.0), so take +3.0°C
+Critical Override:
+- Safety has weight 1.0 (critical)
+- Takes complete precedence
 
-Final Decision: +3.0°C
+Final Decision: +5.0°C
 ```
 
-**Result**: **Heat pump safety prioritized** over effect tariff costs.
+**Result**: **Safety override** - maximum heating regardless of cost or peak risk.
 
 ### Conflict Resolution Strategy
 

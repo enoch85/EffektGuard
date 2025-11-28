@@ -5,10 +5,10 @@ This document provides a high-level overview of the EffektGuard system architect
 ## System Overview
 
 EffektGuard is a sophisticated Swedish heat pump optimization system with these key components:
-- **Multi-layer decision engine** with 7 priority layers
+- **Multi-layer decision engine** with 9 priority layers
 - **Native 15-minute GE-Spot integration** for Swedish Effektavgift
 - **Context-aware thermal debt prevention** (adapts to outdoor temperature)
-- **Phase 6 self-learning capabilities** with thermal prediction
+- **Self-learning capabilities** with thermal prediction
 - **Effect tariff peak protection** (monthly top-3 tracking)
 
 ## Architecture Documents
@@ -38,9 +38,9 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 - Day/night weighting: Full effect 06:00-22:00, 50% weight 22:00-06:00
 
 ### 3. Multi-Layer Decision Engine
-- **7 prioritized decision layers** with weighted aggregation
-- Critical layers (Safety, Emergency, Effect) override others with weight 1.0
-- Non-critical layers use weighted averaging
+- **9 prioritized decision layers** with weighted aggregation
+- Critical layers can override others (Safety 1.0, Effect up to 1.0)
+- Advisory layers use dynamic weighted averaging (Emergency 0.8, Price 0.8, Weather 0.85, etc.)
 
 ### 4. Self-Learning Capabilities (Phase 6)
 - **Thermal state predictor** learns building characteristics
