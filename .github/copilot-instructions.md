@@ -2,6 +2,23 @@
 
 Home Assistant custom integration for intelligent NIBE heat pump control, optimizing for Swedish electricity costs (spot prices and effect tariffs) while maintaining comfort. **Production code affecting real homes, heating comfort, and heat pump health.**
 
+## Development Environment Setup
+
+**On new setups, run the development environment setup script first:**
+```bash
+bash scripts/setup_dev.sh
+```
+
+This will:
+- Install Python 3.13 (required for Home Assistant compatibility)
+- Create a virtual environment in `.venv/`
+- Install all test requirements
+
+After setup, activate the environment with:
+```bash
+source .venv/bin/activate
+```
+
 ## Core Principles
 
 1. **Read entire files before editing** - Never edit based on grep/partial reads

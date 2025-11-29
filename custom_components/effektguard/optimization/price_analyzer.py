@@ -183,6 +183,21 @@ class PriceAnalyzer:
         """
         return self._classifications_today.get(quarter, QuarterClassification.NORMAL)
 
+    def get_tomorrow_classification(self, quarter: int) -> QuarterClassification:
+        """Get classification for tomorrow's quarter.
+
+        Args:
+            quarter: Quarter of day (0-95)
+
+        Returns:
+            Classification for the quarter, or NORMAL if tomorrow not available
+        """
+        return self._classifications_tomorrow.get(quarter, QuarterClassification.NORMAL)
+
+    def has_tomorrow_prices(self) -> bool:
+        """Check if tomorrow's prices are available."""
+        return len(self._classifications_tomorrow) > 0
+
     def get_next_cheap_period(self, current_quarter: int) -> int | None:
         """Find next cheap period after current quarter.
 

@@ -1554,18 +1554,18 @@ class DecisionEngine:
                 # Check if we're already overheating - reduce pre-heat offset accordingly
                 # This prevents learning layer from aggressively heating when already above target
                 overshoot = nibe_state.indoor_temp - self.target_temp
-                
+
                 if overshoot > THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:
                     # Reduce pre-heat offset by overshoot amount to prevent excessive heating
                     # Example: 1.2°C overshoot, +3.0°C recommended → adjusted to +1.8°C
                     adjusted_offset = max(0.0, preheat_decision.recommended_offset - overshoot)
-                    
+
                     return LayerDecision(
                         offset=adjusted_offset,
                         weight=0.65,
                         reason=f"Learned pre-heat: {preheat_decision.reason} (reduced {overshoot:.1f}°C for overshoot)",
                     )
-                
+
                 # Normal pre-heating when not overheating
                 # Weight 0.65 - slightly higher than base price layer (0.6)
                 # but lower than effect/weather layers (0.7-0.8)
@@ -1959,7 +1959,34 @@ class DecisionEngine:
 
             from ..const import QuarterClassification
 
+            # Check if current CHEAP period is too brief for meaningful heating (Nov 29, 2025)
+            # Compressor needs ~45min to efficiently use cheap electricity
+            current_cheap_too_brief = False
+            remaining_cheap_quarters = 0
+
             if classification == QuarterClassification.CHEAP:
+                # Count remaining consecutive CHEAP quarters (including current)
+                remaining_cheap_quarters = 1
+                for q in range(current_quarter + 1, 96):
+                    if self.price.get_current_classification(q) == QuarterClassification.CHEAP:
+                        remaining_cheap_quarters += 1
+                    else:
+                        break
+
+                # Check tomorrow if cheap continues to end of today
+                if (
+                    remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
+                    and current_quarter + remaining_cheap_quarters >= 96
+                    and self.price.has_tomorrow_prices()
+                ):
+                    for q in range(96):
+                        if self.price.get_tomorrow_classification(q) == QuarterClassification.CHEAP:
+                            remaining_cheap_quarters += 1
+                        else:
+                            break
+
+                current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
+
                 # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
                 # Only act if expensive period is at least 45min in future (same as duration filter)
                 if (
@@ -2056,6 +2083,13 @@ class DecisionEngine:
             current_period.is_daytime,
         )
 
+        # Skip heating boost for brief CHEAP periods (Nov 29, 2025)
+        # Compressor needs ~45min to be efficient - don't boost for short dips
+        brief_cheap_reason = ""
+        if current_cheap_too_brief and base_offset > 0:
+            brief_cheap_reason = f" | Current cheap period too brief ({remaining_cheap_quarters * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min) - skipping boost"
+            base_offset = 0.0  # Treat as NORMAL instead of CHEAP
+
         # Adjust for tolerance setting (1-10 scale)
         tolerance_factor = self.tolerance / PRICE_TOLERANCE_DIVISOR  # 0.2-2.0
         adjusted_offset = base_offset * tolerance_factor
@@ -2075,7 +2109,7 @@ class DecisionEngine:
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C%s",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C%s%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2088,12 +2122,13 @@ class DecisionEngine:
             forecast_adjustment,
             final_offset,
             strategic_context,
+            brief_cheap_reason,
         )
 
         return LayerDecision(
             offset=final_offset,
             weight=LAYER_WEIGHT_PRICE,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}{brief_cheap_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:
