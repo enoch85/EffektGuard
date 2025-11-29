@@ -216,6 +216,12 @@ class ThermalStatePredictor:
         min_predicted_temp = min(no_heat_prediction.predicted_temps)
         temp_deficit = target_temp - min_predicted_temp
 
+        # Account for current overshoot as stored thermal energy
+        # If we're 1.9°C above target, that stored heat will help coast through cold
+        # The effective deficit is reduced by the overshoot amount
+        current_overshoot = max(0.0, current_indoor_temp - target_temp)
+        effective_deficit = max(0.0, temp_deficit - current_overshoot)
+
         # Swedish climate-aware comfort thresholds
         # Colder weather = wider tolerance before pre-heating
         if current_outdoor_temp < -15:
@@ -228,28 +234,28 @@ class ThermalStatePredictor:
             # Mild: Strict 0.5°C deficit
             comfort_threshold = 0.5
 
-        if temp_deficit > comfort_threshold:
+        if effective_deficit > comfort_threshold:
             # Pre-heating recommended
             # Calculate required offset to maintain comfort
+            # Use effective_deficit (accounting for current overshoot as thermal storage)
             # More aggressive in extreme cold to compensate for thermal debt risk
             if current_outdoor_temp < -15:
                 # Extreme cold: Conservative pre-heating (risk of DM -1500)
-                recommended_offset = min(temp_deficit * 1.2, 2.0)
+                recommended_offset = min(effective_deficit * 1.2, 2.0)
                 reason = f"Extreme cold pre-heating: predicted drop {temp_deficit:.1f}°C"
             elif current_outdoor_temp < -5:
                 # Cold: Moderate pre-heating
-                recommended_offset = min(temp_deficit * 1.5, 2.5)
+                recommended_offset = min(effective_deficit * 1.5, 2.5)
                 reason = f"Cold spell pre-heating: predicted drop {temp_deficit:.1f}°C"
             else:
                 # Mild: Normal pre-heating
-                recommended_offset = min(temp_deficit * 2.0, 3.0)
+                recommended_offset = min(effective_deficit * 2.0, 3.0)
                 reason = f"Pre-heating: predicted drop {temp_deficit:.1f}°C"
 
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
-            if current_indoor_temp > target_temp:
-                overshoot = current_indoor_temp - target_temp
-                reason += f" (thermal storage: +{overshoot:.1f}°C overshoot → coast through cold)"
+            if current_overshoot > 0.1:
+                reason += f" (thermal storage: +{current_overshoot:.1f}°C overshoot → coast through cold)"
 
             # Calculate hours until temperature drops below threshold
             hours_until_cold = 0
