@@ -40,7 +40,7 @@ class TestModelThermalDebtIntegration:
         from custom_components.effektguard.models.registry import HeatPumpModelRegistry
         from custom_components.effektguard.const import (
             DM_THRESHOLD_START,
-            DM_THRESHOLD_ABSOLUTE_MAX,
+            DM_THRESHOLD_AUX_LIMIT,
         )
 
         # Get all models
@@ -55,7 +55,7 @@ class TestModelThermalDebtIntegration:
         print(f"Testing {len(nibe_models)} NIBE models")
         print(
             f"Key thresholds: start {DM_THRESHOLD_START}, "
-            f"absolute max {DM_THRESHOLD_ABSOLUTE_MAX}"
+            f"absolute max {DM_THRESHOLD_AUX_LIMIT}"
         )
         print("=" * 80)
 

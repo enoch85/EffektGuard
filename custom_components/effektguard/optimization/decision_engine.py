@@ -41,7 +41,7 @@ from ..const import (
     DM_CRITICAL_T3_OFFSET,
     DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
     DM_CRITICAL_T3_WEIGHT,
-    DM_THRESHOLD_ABSOLUTE_MAX,
+    DM_THRESHOLD_AUX_LIMIT,
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_THERMAL_MASS_BUFFER_TIMBER,
@@ -853,7 +853,7 @@ class DecisionEngine:
             )
 
         # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
-        if temp_error >= 0 and degree_minutes > DM_THRESHOLD_ABSOLUTE_MAX:
+        if temp_error >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
             # Check if price is cheap
             is_cheap = False
             if price_data and price_data.today:
@@ -873,14 +873,14 @@ class DecisionEngine:
                 )
 
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
-        if degree_minutes <= DM_THRESHOLD_ABSOLUTE_MAX:
+        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
             # At absolute safety limit - maximum emergency response
             # This applies regardless of outdoor temperature or conditions
             offset = SAFETY_EMERGENCY_OFFSET
             return LayerDecision(
                 offset=offset,
                 weight=1.0,
-                reason=f"ABSOLUTE MAX: DM {degree_minutes:.0f} at safety limit -1500 - EMERGENCY",
+                reason=f"AUX LIMIT: DM {degree_minutes:.0f} at aux limit -1500 - EMERGENCY",
             )
 
         # Calculate context-aware thresholds based on outdoor temperature
@@ -901,7 +901,7 @@ class DecisionEngine:
         }
 
         # Distance from absolute maximum (how much safety margin remains)
-        margin_to_limit = degree_minutes - DM_THRESHOLD_ABSOLUTE_MAX  # Positive value
+        margin_to_limit = degree_minutes - DM_THRESHOLD_AUX_LIMIT  # Positive value
 
         # MULTI-TIER CLIMATE-AWARE CRITICAL INTERVENTION (Oct 19, 2025 redesign)
         # THERMAL MASS ENHANCEMENT (Oct 23, 2025): Adjusted thresholds based on thermal lag

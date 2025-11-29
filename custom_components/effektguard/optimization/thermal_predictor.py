@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from ..const import DM_THRESHOLD_ABSOLUTE_MAX
+from ..const import DM_THRESHOLD_AUX_LIMIT
 from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
 
 _LOGGER = logging.getLogger(__name__)

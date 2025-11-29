@@ -18,7 +18,7 @@ from custom_components.effektguard.const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_TIMBER,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
-    DM_THRESHOLD_ABSOLUTE_MAX,
+    DM_THRESHOLD_AUX_LIMIT,
 )
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
@@ -127,7 +127,7 @@ class TestCriticalThresholdPreservation:
         adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
 
         # Critical should always be -1500
-        assert adjusted["critical"] == DM_THRESHOLD_ABSOLUTE_MAX
+        assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
         assert adjusted["critical"] == -1500
 
     def test_all_types_preserve_critical(self, base_config, mock_dependencies):
@@ -138,7 +138,7 @@ class TestCriticalThresholdPreservation:
             base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=0.0)
             adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, heating_type)
 
-            assert adjusted["critical"] == DM_THRESHOLD_ABSOLUTE_MAX
+            assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
             assert adjusted["critical"] == -1500
 
 

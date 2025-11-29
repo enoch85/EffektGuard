@@ -109,7 +109,7 @@ from const import (
     DM_CRITICAL_T3_OFFSET,
     DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
     DM_CRITICAL_T3_WEIGHT,
-    DM_THRESHOLD_ABSOLUTE_MAX,
+    DM_THRESHOLD_AUX_LIMIT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_THERMAL_MASS,
     EFFECT_MARGIN_PREDICTIVE,
@@ -408,7 +408,7 @@ class ScenarioTester:
 
         # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
         # (Nov 29, 2025 User Request)
-        if temp_error >= 0 and dm > DM_THRESHOLD_ABSOLUTE_MAX:
+        if temp_error >= 0 and dm > DM_THRESHOLD_AUX_LIMIT:
             is_cheap = False
             if price_data and price_data.classification == QuarterClassification.CHEAP:
                 is_cheap = True
@@ -422,12 +422,12 @@ class ScenarioTester:
                 )
 
         # Absolute maximum (hardcoded in production)
-        if dm <= DM_THRESHOLD_ABSOLUTE_MAX:  # -1500
+        if dm <= DM_THRESHOLD_AUX_LIMIT:  # -1500
             return LayerVote(
                 "Emergency",
                 offset=SAFETY_EMERGENCY_OFFSET,
                 weight=LAYER_WEIGHT_SAFETY,
-                reason=f"ABSOLUTE MAX: DM {dm:.0f} at safety limit {DM_THRESHOLD_ABSOLUTE_MAX:.0f} - EMERGENCY",
+                reason=f"AUX LIMIT: DM {dm:.0f} at aux limit {DM_THRESHOLD_AUX_LIMIT:.0f} - EMERGENCY",
             )
 
         # Get climate-aware expected DM ranges for current outdoor temperature
@@ -438,7 +438,7 @@ class ScenarioTester:
         # MULTI-TIER CLIMATE-AWARE CRITICAL INTERVENTION (Oct 19, 2025 redesign)
         # Calculate tier thresholds dynamically based on climate-aware WARNING threshold
         # All values from const.py - single source of truth
-        margin_to_limit = dm - DM_THRESHOLD_ABSOLUTE_MAX
+        margin_to_limit = dm - DM_THRESHOLD_AUX_LIMIT
 
         # Calculate climate-aware tier thresholds
         warning_threshold = expected_warning
@@ -1224,7 +1224,7 @@ Examples:
         print(f"  LAYER_WEIGHT_COMFORT_MAX:   {LAYER_WEIGHT_COMFORT_MAX:.2f}")
         print(f"  LAYER_WEIGHT_COMFORT_MIN:   {LAYER_WEIGHT_COMFORT_MIN:.2f}")
         print("\nCritical Emergency Weights (hardcoded at weight 1.0):")
-        print(f"  DM <= {DM_THRESHOLD_ABSOLUTE_MAX} (absolute max):  offset=+5.0°C, weight=1.0")
+        print(f"  DM <= {DM_THRESHOLD_AUX_LIMIT} (aux limit):  offset=+5.0°C, weight=1.0")
         print(f"  DM margin < 300 (critical):         offset=+3.0°C, weight=1.0")
         print("\nEffect/Peak Protection (from decision_engine._effect_layer):")
         print(f"  CRITICAL (at peak):      -3.0°C @ weight 1.0")

@@ -166,7 +166,7 @@ CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -
 # No hardcoded temperature bands - uses latitude-based climate zones with outdoor temp adjustment.
 #
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
-DM_THRESHOLD_ABSOLUTE_MAX: Final = -1500  # NEVER EXCEED - hard safety limit
+DM_THRESHOLD_AUX_LIMIT: Final = -1500  # Auxiliary heat threshold (prevent expensive elpatron)
 
 # Multi-tier CRITICAL thermal debt intervention (Oct 19, 2025 - Climate-Aware)
 # Philosophy: Progressive escalation based on climate-aware WARNING threshold
@@ -190,7 +190,7 @@ DM_CRITICAL_T2_WEIGHT: Final = 0.85  # Stronger than Price (0.8) but allows mixi
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
 DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
 DM_CRITICAL_T3_WEIGHT: Final = 0.95  # Very strong (dominates Price) but allows weighted average
-DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
+DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from aux limit (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
 # When CRITICAL tiers are active during peak hours, use reduced offsets to prevent

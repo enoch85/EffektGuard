@@ -209,7 +209,7 @@ class TestLayerPriority:
         thermal debt recovery with billing peak prevention.
         """
         # Set critical degree minutes close to absolute max
-        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_ABSOLUTE_MAX (-1500)
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
         mock_nibe_state.outdoor_temp = 5.0
 
         # Set up CRITICAL monthly peak to trigger protection
@@ -317,7 +317,7 @@ class TestOffsetAggregation:
     ):
         """Test critical layer (weight=0.99) has very high priority in aggregation."""
         # Set critical degree minutes close to absolute max
-        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_ABSOLUTE_MAX (-1500)
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
         mock_nibe_state.outdoor_temp = 5.0
         # Ensure we are below target so Smart Debt Recovery doesn't suppress heating
         mock_nibe_state.indoor_temp = 20.5  # Target is 21.0

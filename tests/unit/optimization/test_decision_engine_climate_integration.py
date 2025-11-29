@@ -174,7 +174,7 @@ class TestDMRangeCalculations:
 
     def test_never_exceeds_absolute_maximum(self, hass_mock):
         """DM thresholds should never go beyond -1500 absolute maximum."""
-        from custom_components.effektguard.const import DM_THRESHOLD_ABSOLUTE_MAX
+        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
 
         # Test extreme cold location at extreme temperature
         engine = create_engine_for_location(67.85, hass_mock)
@@ -184,8 +184,8 @@ class TestDMRangeCalculations:
         )
 
         # Should be clamped to absolute maximum
-        assert dm_range["normal"] >= DM_THRESHOLD_ABSOLUTE_MAX
-        assert dm_range["warning"] >= DM_THRESHOLD_ABSOLUTE_MAX
+        assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
 
 class TestArcticScenario:
@@ -346,19 +346,19 @@ class TestSafetyLimits:
 
     def test_never_exceeds_absolute_max_extreme_cold(self, hass_mock):
         """Even in extreme conditions, never exceed -1500 DM."""
-        from custom_components.effektguard.const import DM_THRESHOLD_ABSOLUTE_MAX
+        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
 
         engine = create_engine_for_location(67.85, hass_mock)
 
         # Test extreme temperature
         dm_range = engine._calculate_expected_dm_for_temperature(-50.0)
 
-        assert dm_range["normal"] >= DM_THRESHOLD_ABSOLUTE_MAX
-        assert dm_range["warning"] >= DM_THRESHOLD_ABSOLUTE_MAX
+        assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
     def test_absolute_max_is_hard_limit(self, hass_mock):
-        """DM_THRESHOLD_ABSOLUTE_MAX should be the hardest limit."""
-        from custom_components.effektguard.const import DM_THRESHOLD_ABSOLUTE_MAX
+        """DM_THRESHOLD_AUX_LIMIT should be the hardest limit."""
+        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
 
         # Test all zones at extreme temperatures
         latitudes = [67.85, 65.58, 59.33, 55.68, 48.85]
@@ -368,8 +368,8 @@ class TestSafetyLimits:
             dm_range = engine._calculate_expected_dm_for_temperature(-40.0)
 
             # All zones respect absolute maximum
-            assert dm_range["normal"] >= DM_THRESHOLD_ABSOLUTE_MAX
-            assert dm_range["warning"] >= DM_THRESHOLD_ABSOLUTE_MAX
+            assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+            assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
 
 class TestDMThresholdProgression:

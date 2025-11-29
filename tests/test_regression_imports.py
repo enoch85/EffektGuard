@@ -377,8 +377,8 @@ class TestConstantsAndSharedResources:
             pytest.fail("No DM_* constants found in const.py (thermal debt tracking needs these)")
 
         # Verify absolute max exists (critical safety constant)
-        if not hasattr(const, "DM_THRESHOLD_ABSOLUTE_MAX"):
-            pytest.fail("DM_THRESHOLD_ABSOLUTE_MAX missing (critical safety constant)")
+        if not hasattr(const, "DM_THRESHOLD_AUX_LIMIT"):
+            pytest.fail("DM_THRESHOLD_AUX_LIMIT missing (critical safety constant)")
 
     def test_offset_limits_defined(self):
         """Verify offset limit constants exist."""
