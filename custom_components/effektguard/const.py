@@ -85,6 +85,7 @@ LAYER_WEIGHT_EMERGENCY: Final = 0.8  # High priority (DM beyond expected)
 LAYER_WEIGHT_PRICE: Final = 0.8  # Strong influence - balanced with other layers (Nov 27, 2025)
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
+LAYER_WEIGHT_PREDICTION: Final = 0.65  # Prediction layer weight (Phase 6)
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
 LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
 
@@ -182,17 +183,13 @@ DM_CRITICAL_T1_MARGIN: Final = (
     0  # Tier 1: At WARNING threshold (climate-aware) - early aggressive intervention
 )
 DM_CRITICAL_T1_OFFSET: Final = 4.0  # Strong early boost (prevent DM spiral, avoid hours of high Hz)
-DM_CRITICAL_T1_WEIGHT: Final = (
-    0.65  # Below price (0.8) - allows price/comfort override (Nov 27, 2025)
-)
+DM_CRITICAL_T1_WEIGHT: Final = 0.65  # Below price (0.8) - allows price/comfort override
 DM_CRITICAL_T2_MARGIN: Final = 200  # Tier 2: WARNING + 200 DM beyond
 DM_CRITICAL_T2_OFFSET: Final = 7.0  # Very strong boost (decisive recovery before T3)
-DM_CRITICAL_T2_WEIGHT: Final = 0.72  # Below price (0.8) - allows price override (Nov 27, 2025)
+DM_CRITICAL_T2_WEIGHT: Final = 0.85  # Stronger than Price (0.8) but allows mixing
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
 DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
-DM_CRITICAL_T3_WEIGHT: Final = (
-    0.77  # Below price (0.8) - price wins in expensive hours (Nov 27, 2025)
-)
+DM_CRITICAL_T3_WEIGHT: Final = 0.95  # Very strong (dominates Price) but allows weighted average
 DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
@@ -501,6 +498,7 @@ WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches therma
 WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
 LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)
+WEATHER_WEIGHT_CAP: Final = 0.99  # Cap for weather weight (below Safety 1.0)
 
 # Price layer constants (Oct 19, 2025)
 PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-2.0)
@@ -563,6 +561,7 @@ UFH_RADIATOR_COMFORT_TOLERANCE: Final = 0.2  # ±0.2°C for radiators
 # Source: Mathematical_Enhancement_Summary.md - André Kühne formula validation
 OPTIMAL_FLOW_DELTA_SPF_4: Final = 27.0  # ±3°C for SPF ≥4.0 systems
 OPTIMAL_FLOW_DELTA_SPF_35: Final = 30.0  # ±4°C for SPF ≥3.5 systems
+DEFAULT_CURVE_SENSITIVITY: Final = 1.5  # NIBE curve sensitivity (~1.5°C flow change per 1°C offset)
 
 # Weather compensation mathematical constants
 KUEHNE_COEFFICIENT: Final = 2.55  # Universal coefficient for flow temperature calculation

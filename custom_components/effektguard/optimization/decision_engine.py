@@ -72,6 +72,7 @@ from ..const import (
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
     LAYER_WEIGHT_PROACTIVE_MIN,
+    LAYER_WEIGHT_PREDICTION,
     LAYER_WEIGHT_SAFETY,
     MIN_TEMP_LIMIT,
     PEAK_AWARE_EFFECT_THRESHOLD,
@@ -154,6 +155,7 @@ from ..const import (
     WEATHER_INTENSITY_NORMAL_FACTOR,
     WEATHER_INTENSITY_MODERATE_FACTOR,
     LAYER_WEIGHT_WEATHER_PREDICTION,
+    WEATHER_WEIGHT_CAP,
     PRICE_TOLERANCE_DIVISOR,
     COMFORT_DEAD_ZONE,
     COMFORT_CORRECTION_MULT,
@@ -161,6 +163,7 @@ from ..const import (
     MULTIPLIER_REDUCTION_20_PERCENT,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
+    DEFAULT_CURVE_SENSITIVITY,
 )
 from .climate_zones import ClimateZoneDetector
 from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
@@ -702,7 +705,9 @@ class DecisionEngine:
         # Calculate all layer decisions (ordered by priority)
         layers = [
             self._safety_layer(nibe_state),
-            self._emergency_layer(nibe_state, weather_data),  # Pass weather_data for forecast check
+            self._emergency_layer(
+                nibe_state, weather_data, price_data
+            ),  # Pass price for smart recovery
             self._proactive_debt_prevention_layer(
                 nibe_state, weather_data
             ),  # Phase 3.2: Pass weather_data for forecast validation
@@ -790,7 +795,7 @@ class DecisionEngine:
                 reason="Safety OK",
             )
 
-    def _emergency_layer(self, nibe_state, weather_data=None) -> LayerDecision:
+    def _emergency_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
         """Emergency layer: Smart context-aware thermal debt response.
 
         DESIGN PHILOSOPHY:
@@ -828,12 +833,16 @@ class DecisionEngine:
         indoor_temp = nibe_state.indoor_temp
         target_temp = self.target_temp
 
-        # FIRST CHECK: Never apply emergency recovery when already above target
-        # If house is warm and DM is negative, that's EXPECTED (we reduced heating correctly)
-        # Let natural cooling bring temp down, then recover DM during cheap periods
+        # FIRST CHECK: Smart Debt Recovery (User Request Nov 29, 2025)
+        # 1. If above tolerance: Definitely stop (existing logic)
+        # 2. If at target (>= target) AND Price is NOT CHEAP: Ignore debt
+        #    "Ignore DM if the indoor temp is already at target and price is normal or expensive"
+        #    Exception: Absolute safety limit (-1500) always triggers
+
         temp_error = indoor_temp - target_temp
         tolerance = self.tolerance_range
 
+        # Case 1: Too warm (above tolerance)
         if temp_error > tolerance:
             # Too warm - emergency heating would be counterproductive
             # DM will naturally improve as house cools and we maintain target temp later
@@ -842,6 +851,26 @@ class DecisionEngine:
                 weight=0.0,
                 reason=f"DM {degree_minutes:.0f} BUT indoor {indoor_temp:.1f}°C is {temp_error:.1f}°C over target - let cool naturally first",
             )
+
+        # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
+        if temp_error >= 0 and degree_minutes > DM_THRESHOLD_ABSOLUTE_MAX:
+            # Check if price is cheap
+            is_cheap = False
+            if price_data and price_data.today:
+                now = dt_util.now()
+                current_quarter = (now.hour * 4) + (now.minute // 15)
+                # Safety check for index
+                if current_quarter < len(price_data.today):
+                    classification = self.price.get_current_classification(current_quarter)
+                    if classification == QuarterClassification.CHEAP:
+                        is_cheap = True
+
+            if not is_cheap:
+                return LayerDecision(
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Smart Recovery: At target ({indoor_temp:.1f}°C) & Price not cheap - ignoring DM {degree_minutes:.0f}",
+                )
 
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
         if degree_minutes <= DM_THRESHOLD_ABSOLUTE_MAX:
@@ -1557,7 +1586,7 @@ class DecisionEngine:
                 # but lower than effect/weather layers (0.7-0.8)
                 return LayerDecision(
                     offset=preheat_decision.recommended_offset,
-                    weight=0.65,
+                    weight=LAYER_WEIGHT_PREDICTION,
                     reason=f"Learned pre-heat: {preheat_decision.reason}",
                 )
             else:
@@ -1655,7 +1684,7 @@ class DecisionEngine:
             # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
             weather_weight = min(
                 LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal.thermal_mass,
-                0.99,  # Cap below EMERGENCY T3 (0.99)
+                WEATHER_WEIGHT_CAP,  # Cap below Safety (1.0)
             )
 
             # Determine trigger reason
@@ -1762,7 +1791,7 @@ class DecisionEngine:
 
         # Calculate required offset from current flow temperature
         # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
-        curve_sensitivity = 1.5
+        curve_sensitivity = DEFAULT_CURVE_SENSITIVITY
         required_offset = self.weather_comp.calculate_required_offset(
             optimal_flow_temp=adjusted_flow_temp,
             current_flow_temp=current_flow,
@@ -2273,63 +2302,83 @@ class DecisionEngine:
         When emergency layer is critical AND effect/peak layers are strongly negative,
         apply minimal offset to prevent DM worsening without creating new peaks.
 
+        Nov 29, 2025: Updated for weighted mixing (T3=0.95)
+        Allows Emergency T3 to mix with Price/Weather in normal conditions,
+        but protects it from being overridden by Critical Peak (1.0).
+
         Args:
             layers: List of layer decisions
 
         Returns:
             Final offset value
         """
-        # Separate high-priority layers (weight = 1.0)
+        # 1. Safety Layer (Absolute Priority)
+        # Always enforced if critical (weight >= 1.0)
+        if len(layers) > 0 and layers[0].weight >= 1.0:
+            return layers[0].offset
+
+        # 2. Emergency vs Peak Conflict Resolution
+        # If Emergency is strong (T2=0.85, T3=0.95) AND Peak is Critical (1.0),
+        # we need a compromise. We don't want Peak to crush Emergency (unsafe),
+        # nor Emergency to ignore Peak (expensive).
+        emergency_layer = layers[1] if len(layers) > 1 else None
+        effect_layer = layers[3] if len(layers) > 3 else None
+
+        if (
+            emergency_layer
+            and emergency_layer.weight >= 0.85  # T2 or T3 active
+            and effect_layer
+            and effect_layer.weight >= 1.0  # Peak Critical active
+        ):
+            emergency_offset = emergency_layer.offset
+
+            # Apply Peak-Aware Compromise Logic
+            # Scale minimal offset based on emergency severity
+            if emergency_offset >= DM_CRITICAL_T3_OFFSET:  # T3
+                minimal_offset = DM_CRITICAL_T3_PEAK_AWARE_OFFSET
+            elif emergency_offset >= DM_CRITICAL_T2_OFFSET:  # T2
+                minimal_offset = DM_CRITICAL_T2_PEAK_AWARE_OFFSET
+            else:  # T1
+                minimal_offset = DM_CRITICAL_T1_PEAK_AWARE_OFFSET
+
+            _LOGGER.info(
+                "Peak-aware emergency mode: reducing offset from %.2f to %.2f (Critical Peak protection active)",
+                emergency_offset,
+                minimal_offset,
+            )
+            return minimal_offset
+
+        # 3. Critical Overrides (Standard)
+        # Any remaining layer with weight >= 1.0 overrides weighted average
+        # (e.g., Critical Peak when Emergency is not strong)
         critical_layers = [layer for layer in layers if layer.weight >= 1.0]
 
         if critical_layers:
-            # Safety layer (index 0) always wins if critical
-            if len(layers) > 0 and layers[0].weight >= 1.0:
-                return layers[0].offset
-
-            # Emergency layer (index 1) with peak-aware logic
-            if len(layers) > 1 and layers[1].weight >= 1.0:
-                emergency_offset = layers[1].offset
-
-                # Check if effect/peak layer is strongly negative (peak protection active)
-                # Index 3 is effect layer in standard layer order
-                effect_layer = layers[3] if len(layers) > 3 else None
-
-                if (
-                    effect_layer
-                    and effect_layer.offset < PEAK_AWARE_EFFECT_THRESHOLD
-                    and effect_layer.weight > PEAK_AWARE_EFFECT_WEIGHT_MIN
-                ):
-                    # Peak protection is strongly active - use tier-appropriate minimal offset
-                    # Scale minimal offset based on emergency severity (CRITICAL tier)
-                    if emergency_offset >= DM_CRITICAL_T3_OFFSET:  # T3 (climate + 400 DM)
-                        minimal_offset = DM_CRITICAL_T3_PEAK_AWARE_OFFSET
-                    elif emergency_offset >= DM_CRITICAL_T2_OFFSET:  # T2 (climate + 200 DM)
-                        minimal_offset = DM_CRITICAL_T2_PEAK_AWARE_OFFSET
-                    else:  # T1 (at climate WARNING threshold)
-                        minimal_offset = DM_CRITICAL_T1_PEAK_AWARE_OFFSET
-
-                    _LOGGER.info(
-                        "Peak-aware emergency mode: reducing offset from %.2f to %.2f (peak protection active)",
-                        emergency_offset,
-                        minimal_offset,
-                    )
-                    return minimal_offset
-                else:
-                    # No strong peak protection - apply full emergency offset
-                    return emergency_offset
-
-            # For other critical layers, take the strongest vote
+            # For critical layers, take the strongest vote
             max_offset = max(layer.offset for layer in critical_layers)
             min_offset = min(layer.offset for layer in critical_layers)
 
-            # If conflicting critical votes, take the more conservative
+            # If conflicting critical votes, take the more conservative (lower magnitude? No, safer)
+            # Actually, if we have multiple criticals (e.g. Peak vs Comfort Critical),
+            # we should probably prioritize Safety/Peak.
+            # But Safety is handled in step 1.
+            # So this is likely Peak vs Comfort Critical.
+            # Peak (-3.0) vs Comfort Critical (-3.0). Same.
+            # Peak (-3.0) vs Comfort Critical (+3.0 - too cold).
+            # If too cold (Comfort Critical) and Peak Critical (-3.0).
+            # Comfort Critical is 1.0. Peak is 1.0.
+            # We should probably respect Peak to avoid fees, unless Safety triggers.
+            # Current logic: abs(max) > abs(min).
+            # If max=+3, min=-3. Returns +3.
+            # If max=+1, min=-3. Returns -3.
+            # This logic favors the "stronger" intervention.
             if abs(max_offset) > abs(min_offset):
                 return max_offset
             else:
                 return min_offset
 
-        # Otherwise, weighted average of all layers
+        # 4. Weighted Average
+        # Mixes all layers (including T3=0.95, Price=0.8, Weather=0.85)
         total_weight = sum(layer.weight for layer in layers)
         if total_weight == 0:
             return 0.0

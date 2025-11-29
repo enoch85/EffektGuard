@@ -319,6 +319,8 @@ class TestOffsetAggregation:
         # Set critical degree minutes close to absolute max
         mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_ABSOLUTE_MAX (-1500)
         mock_nibe_state.outdoor_temp = 5.0
+        # Ensure we are below target so Smart Debt Recovery doesn't suppress heating
+        mock_nibe_state.indoor_temp = 20.5  # Target is 21.0
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,
@@ -331,6 +333,33 @@ class TestOffsetAggregation:
         emergency_layer = decision.layers[1]
         assert emergency_layer.weight == DM_CRITICAL_T3_WEIGHT
         assert decision.offset > 0.0  # Force heating
+
+    @pytest.mark.asyncio
+    async def test_smart_debt_recovery_ignores_dm_at_target(
+        self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
+    ):
+        """Test that DM is ignored when at target and price is not cheap (User Request Nov 29)."""
+        # Set critical degree minutes
+        mock_nibe_state.degree_minutes = -1300.0
+        # Set at target
+        mock_nibe_state.indoor_temp = 21.0
+        # Price is Normal (1.0) from fixture
+
+        decision = decision_engine.calculate_decision(
+            nibe_state=mock_nibe_state,
+            price_data=mock_price_data,
+            weather_data=mock_weather_data,
+            current_peak=0.0,
+        )
+
+        # Should NOT force heating
+        # Emergency layer returns 0.0, Price returns 0.0
+        assert decision.offset == 0.0
+        
+        # Check the layer reason directly since weight 0.0 layers are filtered from main reasoning
+        emergency_layer = decision.layers[1]
+        assert "Smart Recovery" in emergency_layer.reason
+        assert "ignoring DM" in emergency_layer.reason
 
 
 class TestReasoningGeneration:

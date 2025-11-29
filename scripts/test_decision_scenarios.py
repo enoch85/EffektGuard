@@ -183,6 +183,9 @@ from const import (
     PRICE_TOLERANCE_DIVISOR,
     COMFORT_DEAD_ZONE,
     COMFORT_CORRECTION_MULT,
+    COMMON_SENSE_TEMP_ABOVE_TARGET,
+    COMMON_SENSE_COLD_SNAP_THRESHOLD,
+    COMMON_SENSE_FORECAST_HORIZON,
 )
 
 # Load climate zone constants that climate_zones.py needs
@@ -378,11 +381,14 @@ class ScenarioTester:
             )
         return LayerVote("Safety", offset=0.0, weight=0.0, reason="Within safe limits")
 
-    def calculate_emergency_layer(self, nibe_state: MockNibeState) -> LayerVote:
+    def calculate_emergency_layer(
+        self, nibe_state: MockNibeState, price_data: MockPriceData = None
+    ) -> LayerVote:
         """Calculate emergency layer vote (climate-aware).
 
         Mirrors production code from decision_engine.py._emergency_layer()
         Nov 27, 2025: Added temperature check to prevent heating when already warm.
+        Nov 29, 2025: Added Smart Debt Recovery (ignore DM if at target & price not cheap).
         """
         dm = nibe_state.degree_minutes
         outdoor = nibe_state.outdoor_temp
@@ -399,6 +405,21 @@ class ScenarioTester:
                 weight=0.0,
                 reason=f"DM {dm:.0f} BUT indoor {indoor:.1f}°C is {temp_error:.1f}°C over target - let cool first",
             )
+
+        # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
+        # (Nov 29, 2025 User Request)
+        if temp_error >= 0 and dm > DM_THRESHOLD_ABSOLUTE_MAX:
+            is_cheap = False
+            if price_data and price_data.classification == QuarterClassification.CHEAP:
+                is_cheap = True
+            
+            if not is_cheap:
+                return LayerVote(
+                    "Emergency",
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Smart Recovery: At target ({indoor:.1f}°C) & Price not cheap - ignoring DM {dm:.0f}",
+                )
 
         # Absolute maximum (hardcoded in production)
         if dm <= DM_THRESHOLD_ABSOLUTE_MAX:  # -1500
@@ -497,10 +518,34 @@ class ScenarioTester:
             reason=f"Thermal debt OK (DM: {dm:.0f} at {outdoor:.1f}°C)",
         )
 
-    def calculate_proactive_layer(self, nibe_state: MockNibeState) -> LayerVote:
+    def calculate_proactive_layer(
+        self, nibe_state: MockNibeState, weather_data: MockWeatherData = None
+    ) -> LayerVote:
         """Calculate proactive debt prevention layer (updated Oct 19, 2025)."""
         dm = nibe_state.degree_minutes
         outdoor = nibe_state.outdoor_temp
+        indoor = nibe_state.indoor_temp
+        target = self.config["target_indoor_temp"]
+
+        # COMMON SENSE CHECK (Oct 26, 2025)
+        # Don't heat if well above target with no cold snap
+        deficit = target - indoor
+        if deficit < -COMMON_SENSE_TEMP_ABOVE_TARGET:
+            # Check forecast if available
+            forecast_stable = True
+            if weather_data and weather_data.forecast_hours:
+                # Simplified check
+                min_forecast = min(f.temperature for f in weather_data.forecast_hours[:COMMON_SENSE_FORECAST_HORIZON])
+                if (outdoor - min_forecast) >= COMMON_SENSE_COLD_SNAP_THRESHOLD:
+                    forecast_stable = False
+            
+            if forecast_stable:
+                return LayerVote(
+                    "Proactive",
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"Common sense: Indoor {indoor:.1f}°C is {abs(deficit):.1f}°C above target, weather stable",
+                )
 
         # Get climate-aware expected DM ranges (same as emergency layer)
         dm_range = self.climate_detector.get_expected_dm_range(outdoor)
@@ -917,8 +962,8 @@ class ScenarioTester:
         # Calculate all layers (in priority order)
         layers = [
             self.calculate_safety_layer(nibe_state),
-            self.calculate_emergency_layer(nibe_state),
-            self.calculate_proactive_layer(nibe_state),
+            self.calculate_emergency_layer(nibe_state, price_data),
+            self.calculate_proactive_layer(nibe_state, weather_data),
         ]
 
         # Add effect layer if peak data provided
@@ -1038,6 +1083,7 @@ Examples:
             "expensive_peak",
             "user_real_data",
             "custom",
+            "user_verification",
         ],
         default="all",
         help="Scenario to test (default: all)",
@@ -1325,6 +1371,54 @@ Examples:
             peak_data=MockPeakData(
                 current_peak=6.5,
                 current_power=3.5,  # Moderate power (evening)
+            ),
+        )
+
+    # Scenario 6: User Verification (Nov 29, 2025)
+    if args.scenario in ["all", "user_verification"]:
+        # Create a tester with lower tolerance to match user's "Severe overheat" result
+        # User has 2.1°C over target. Severe threshold is overshoot >= 1.0.
+        # So 2.1 - tolerance >= 1.0 => tolerance <= 1.1.
+        # Tolerance range = tolerance * 0.4. So tolerance setting <= 2.75.
+        # Let's use tolerance=2 (range 0.8).
+        user_tester = ScenarioTester(
+            price_weight=args.price_weight,
+            weather_comp_weight=args.weather_comp_weight,
+            emergency_weight=args.emergency_weight,
+            proactive_weight_z1=args.proactive_z1_weight,
+            proactive_weight_z2=args.proactive_z2_weight,
+            proactive_weight_z3=args.proactive_z3_weight,
+            comfort_weight_min=args.comfort_weight_min,
+            comfort_weight_max=args.comfort_weight_max,
+            cheap_offset=args.cheap_offset,
+            normal_offset=args.normal_offset,
+            expensive_offset=args.expensive_offset,
+            peak_offset=args.peak_offset,
+        )
+        user_tester.tolerance = 2
+        user_tester.tolerance_range = 2 * TOLERANCE_RANGE_MULTIPLIER # 0.8
+
+        scenarios["user_verification"] = user_tester.test_scenario(
+            name="User Verification: Warm House, Normal Price, DM Debt",
+            nibe_state=MockNibeState(
+                indoor_temp=23.1,
+                outdoor_temp=6.0,  # Estimated to get ~26°C optimal flow
+                degree_minutes=-190,
+                flow_temp=30.2,
+            ),
+            price_data=MockPriceData(
+                current_price=50.0,
+                classification=QuarterClassification.NORMAL,
+                is_daytime=True,
+            ),
+            peak_data=MockPeakData(
+                current_peak=2.0, # Higher peak to ensure "Safe margin"
+                current_power=0.1,
+            ),
+            weather_data=MockWeatherData(
+                current_temp=6.0,
+                forecast_min=6.0, # Stable
+                forecast_hours=[MockForecastHour(i, 6.0) for i in range(12)] # Need hours for common sense check
             ),
         )
 
