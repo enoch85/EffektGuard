@@ -73,12 +73,12 @@ if degree_minutes < -500:  # DANGEROUS - ignores climate context!
 from .const import (
     DM_THRESHOLD_START,              # -60 (normal compressor start)
     DM_THRESHOLD_EXTENDED,           # -240 (extended runs, acceptable)
-    DM_THRESHOLD_ABSOLUTE_MAX,       # -1500 (absolute critical, never exceed)
+    DM_THRESHOLD_AUX_LIMIT,          # -1500 (auxiliary heat limit, avoid exceeding)
 )
 
 # Climate zone system provides context-aware thresholds:
 # - DM_THRESHOLD_WARNING: Climate/temp specific (e.g., -700 for Stockholm at -10°C)
-# - DM_THRESHOLD_CRITICAL: Always -1500 (validated in Swedish forums)
+# - DM_THRESHOLD_AUX_LIMIT: Always -1500 (validated in Swedish forums)
 ```
 
 ### Four-Layer Structure
@@ -729,7 +729,7 @@ def calculate_optimal_flow_temp(
   - Stockholm at -10°C: DM -700 warning threshold
   - Kiruna at -30°C: DM -1200 warning threshold
   - Paris at 5°C: DM -350 warning threshold
-- **ABSOLUTE CRITICAL: DM -1500** (validated in Swedish forums, never exceed)
+- **AUXILIARY LIMIT: DM -1500** (validated in Swedish forums, avoid exceeding to prevent expensive aux heat)
 - Use `ClimateZoneDetector.get_expected_dm_range(outdoor_temp)` for context-aware thresholds
 
 **Pump Configuration:**
@@ -848,7 +848,7 @@ set_optimization_mode:
 - F750/F2040 focus with S-series support
 
 **Known Critical Issues:**
-- Climate-aware thermal debt thresholds (DM -1500 absolute maximum, validated in Swedish forums)
+- Climate-aware thermal debt thresholds (DM -1500 auxiliary limit, validated in Swedish forums)
 - Open-loop pump Intermittent = 8-hour off periods
 - BT50 indoor sensor + UFH = instability (not recommended)
 - DHW during heating demand = thermal debt accumulation
