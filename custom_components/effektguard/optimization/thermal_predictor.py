@@ -255,7 +255,9 @@ class ThermalStatePredictor:
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
             if current_overshoot > 0.1:
-                reason += f" (thermal storage: +{current_overshoot:.1f}°C overshoot → coast through cold)"
+                reason += (
+                    f" (thermal storage: +{current_overshoot:.1f}°C overshoot → coast through cold)"
+                )
 
             # Calculate hours until temperature drops below threshold
             hours_until_cold = 0

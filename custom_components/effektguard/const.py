@@ -533,6 +533,12 @@ PRICE_FORECAST_MIN_DURATION: Final = (
 PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
+# Clustered expensive period detection (Nov 29, 2025)
+# When multiple EXPENSIVE periods occur with brief gaps (<45min) between them,
+# treat the entire block as one sustained reduced-heating period to avoid yo-yo behavior
+PRICE_VOLATILE_SCAN_QUARTERS: Final = 8  # 2 hours lookahead for cluster detection
+PRICE_VOLATILE_REDUCTION_OFFSET: Final = -0.5  # °C - slight reduction during volatile periods
+
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
