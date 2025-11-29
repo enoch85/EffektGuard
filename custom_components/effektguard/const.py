@@ -186,11 +186,11 @@ DM_CRITICAL_T1_OFFSET: Final = 4.0  # Strong early boost (prevent DM spiral, avo
 DM_CRITICAL_T1_WEIGHT: Final = 0.65  # Below price (0.8) - allows price/comfort override
 DM_CRITICAL_T2_MARGIN: Final = 200  # Tier 2: WARNING + 200 DM beyond
 DM_CRITICAL_T2_OFFSET: Final = 7.0  # Very strong boost (decisive recovery before T3)
-DM_CRITICAL_T2_WEIGHT: Final = 0.85  # Stronger than Price (0.8) but allows mixing
+DM_CRITICAL_T2_WEIGHT: Final = 0.81  # Slightly above Price (0.8) - ensures recovery if cold
 DM_CRITICAL_T3_MARGIN: Final = 400  # Tier 3: WARNING + 400 DM beyond (capped at -1450)
 DM_CRITICAL_T3_OFFSET: Final = 8.5  # Maximum emergency boost (prevent hours of full Hz operation)
-DM_CRITICAL_T3_WEIGHT: Final = 0.95  # Very strong (dominates Price) but allows weighted average
-DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from aux limit (-1500)
+DM_CRITICAL_T3_WEIGHT: Final = 0.91  # Strong dominance over Price (0.8)
+DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max (-1500)
 
 # Peak-aware emergency mode minimal offsets (Oct 19, 2025)
 # When CRITICAL tiers are active during peak hours, use reduced offsets to prevent
