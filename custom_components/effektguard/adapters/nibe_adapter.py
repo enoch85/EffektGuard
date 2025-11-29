@@ -337,16 +337,40 @@ class NibeAdapter:
 
         offset_to_apply = integer_part
 
-        # Skip API call if offset rounds to 0 (no actual change)
-        # Only write to NIBE when we have a meaningful integer offset
-        # Fractional changes are accumulated but not applied until threshold reached
+        # Read current NIBE offset to check if we need to actively reset to 0
+        # This fixes the issue where NIBE stays at offset 1 when EffektGuard wants 0
+        current_nibe_offset = None
+        try:
+            current_nibe_offset = float(state.state)
+        except (ValueError, TypeError):
+            _LOGGER.debug("Could not read current NIBE offset, will proceed with write")
+
+        # Skip API call only if:
+        # 1. Calculated offset rounds to 0, AND
+        # 2. Accumulator hasn't reached threshold, AND
+        # 3. NIBE is already at 0 (or we can't read current value safely)
+        #
+        # If NIBE is at a non-zero offset (e.g., 1) and we want 0, we MUST write 0
+        # to actively bring the offset down. Otherwise NIBE keeps its old value.
         if offset_to_apply == 0 and abs(self._fractional_accumulator) < 1.0:
-            _LOGGER.debug(
-                "⏸ Skipping NIBE write: offset rounds to 0°C "
-                "(accumulator: %.2f°C, will apply when ≥±1.0°C)",
-                self._fractional_accumulator,
-            )
-            return False
+            if current_nibe_offset is not None and abs(current_nibe_offset) >= 1.0:
+                # NIBE is at non-zero offset but we want 0 - actively reset it
+                _LOGGER.info(
+                    "→ Resetting NIBE offset from %d°C to 0°C "
+                    "(calculated: %.2f°C, accumulator: %.2f°C)",
+                    int(current_nibe_offset),
+                    original_offset,
+                    self._fractional_accumulator,
+                )
+                # Don't skip - fall through to write offset_to_apply (0)
+            else:
+                _LOGGER.debug(
+                    "⏸ Skipping NIBE write: offset rounds to 0°C and NIBE already at %s "
+                    "(accumulator: %.2f°C, will apply when ≥±1.0°C)",
+                    f"{int(current_nibe_offset)}°C" if current_nibe_offset is not None else "0°C",
+                    self._fractional_accumulator,
+                )
+                return False
 
         # Log accumulator status
         if abs(fractional_part) > 0.01:
