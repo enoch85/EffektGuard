@@ -729,18 +729,33 @@ class DecisionEngine:
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
         if self._is_warming_rapidly(thermal_trend):
-            # House warming rapidly - reduce offset to prevent overshoot
-            damping_factor = TREND_DAMPING_WARMING
-            reason_suffix = f" (damped 25%: warming {trend_rate:.2f}°C/h)"
-        elif self._is_cooling_rapidly(thermal_trend):
-            # House cooling rapidly - boost offset to prevent undershoot
-            # But only if not already at high offset (safety limit)
-            if raw_offset < TREND_BOOST_OFFSET_LIMIT:
-                damping_factor = TREND_DAMPING_COOLING_BOOST
-                reason_suffix = f" (boosted 15%: cooling {trend_rate:.2f}°C/h)"
+            # House warming rapidly
+            if raw_offset > 0:
+                # Heating + Warming -> Damp to prevent overshoot
+                damping_factor = TREND_DAMPING_WARMING
+                reason_suffix = f" (damped 25%: warming {trend_rate:.2f}°C/h)"
             else:
+                # Cooling + Warming -> Maintain full cooling (don't damp)
+                # If we are trying to cool and house is warming, we need full power!
                 damping_factor = TREND_DAMPING_NEUTRAL
-                reason_suffix = " (at safety limit, no boost)"
+                reason_suffix = ""
+
+        elif self._is_cooling_rapidly(thermal_trend):
+            # House cooling rapidly
+            if raw_offset > 0:
+                # Heating + Cooling -> Boost to prevent undershoot
+                # But only if not already at high offset (safety limit)
+                if raw_offset < TREND_BOOST_OFFSET_LIMIT:
+                    damping_factor = TREND_DAMPING_COOLING_BOOST
+                    reason_suffix = f" (boosted 15%: cooling {trend_rate:.2f}°C/h)"
+                else:
+                    damping_factor = TREND_DAMPING_NEUTRAL
+                    reason_suffix = " (at safety limit, no boost)"
+            else:
+                # Cooling + Cooling -> Damp to prevent undershoot (reduce cooling)
+                # If we are trying to cool and house is cooling fast, back off
+                damping_factor = TREND_DAMPING_WARMING  # Reuse 0.75 factor
+                reason_suffix = f" (damped 25%: cooling {trend_rate:.2f}°C/h)"
         else:
             # Normal rate of change
             damping_factor = TREND_DAMPING_NEUTRAL

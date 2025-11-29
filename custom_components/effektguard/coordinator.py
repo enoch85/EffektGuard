@@ -215,6 +215,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
+        self._startup_grace_period = True  # Skip first action to allow sensors to stabilize
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -635,6 +636,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             weather_data = None
 
         # Run optimization decision engine
+        is_grace_period = False
         try:
             decision = await self.hass.async_add_executor_job(
                 self.engine.calculate_decision,
@@ -643,6 +645,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 weather_data,
                 self.peak_today,
             )
+
+            # Startup grace period: Skip first action to allow sensors/trends to stabilize
+            if self._startup_grace_period and self._first_successful_update:
+                is_grace_period = True
+                _LOGGER.info(
+                    "Startup grace period: Observing only. "
+                    "Real decision would have been: %.2f°C (%s)",
+                    decision.offset,
+                    decision.reasoning,
+                )
+                # Don't force offset to 0.0 - let the calculated value stand for reporting
+                decision.reasoning = f"[Startup Grace Period] {decision.reasoning}"
+                self._startup_grace_period = False
+
             _LOGGER.info(
                 "Decision: offset %.2f°C, reasoning: %s",
                 decision.offset,
@@ -661,7 +677,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # This sends the calculated offset to the MyUplink number entity (parameter 47011)
         # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
         # Skip if offset matches last known value (avoids redundant API calls on startup)
-        if (
+        if is_grace_period:
+            _LOGGER.info("Skipping offset application during startup grace period")
+        elif (
             self.last_applied_offset is not None
             and abs(decision.offset - self.last_applied_offset) < 0.01
         ):
