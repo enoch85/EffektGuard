@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -278,6 +279,62 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (AttributeError, KeyError, ValueError) as err:
             _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
             return CLIMATE_CENTRAL_SWEDEN
+
+    async def _align_clock_to_5min_boundary(self) -> None:
+        """Align coordinator updates to 5-minute clock boundaries (:00, :05, :10, etc.).
+
+        This ensures updates happen at predictable times aligned with spot price
+        15-minute intervals and makes logs easier to follow.
+
+        Called once after the first successful update. Calculates time until next
+        5-minute boundary and reschedules the coordinator refresh.
+        """
+        now = dt_util.now()
+        current_minute = now.minute
+        current_second = now.second
+
+        # Calculate minutes until next 5-minute boundary
+        minutes_past_boundary = current_minute % UPDATE_INTERVAL_MINUTES
+        if minutes_past_boundary == 0 and current_second < 5:
+            # Already aligned (within first 5 seconds of a boundary)
+            self._clock_aligned = True
+            _LOGGER.info(
+                "Clock already aligned - updates at :%02d, :%02d, :%02d...",
+                current_minute,
+                (current_minute + 5) % 60,
+                (current_minute + 10) % 60,
+            )
+            return
+
+        # Calculate seconds until next boundary
+        minutes_to_next = UPDATE_INTERVAL_MINUTES - minutes_past_boundary
+        seconds_to_next = (minutes_to_next * 60) - current_second
+
+        # Schedule next update at aligned time
+        next_aligned_time = now + timedelta(seconds=seconds_to_next)
+
+        _LOGGER.info(
+            "Aligning clock: next update in %d seconds at %s (then every %d min at :00, :05, :10...)",
+            seconds_to_next,
+            next_aligned_time.strftime("%H:%M:%S"),
+            UPDATE_INTERVAL_MINUTES,
+        )
+
+        # Cancel current scheduled refresh
+        if self._unsub_refresh:
+            self._unsub_refresh()
+            self._unsub_refresh = None
+
+        # Schedule one-time refresh at aligned time, then resume normal interval
+        @callback
+        def _aligned_refresh(_now: datetime) -> None:
+            """Trigger refresh at aligned time and resume normal schedule."""
+            self._clock_aligned = True
+            self.hass.async_create_task(self.async_request_refresh())
+
+        self._unsub_refresh = async_track_point_in_time(
+            self.hass, _aligned_refresh, next_aligned_time
+        )
 
     async def async_initialize_learning(self) -> None:
         """Initialize learning modules by loading persisted data.
@@ -907,10 +964,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         temperature_trend_data = self.thermal_predictor.get_current_trend()
         outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
 
-        # Clock alignment: Mark aligned when we hit a whole hour (:00-:04)
-        if not self._clock_aligned and dt_util.now().minute < 5:
-            self._clock_aligned = True
-            _LOGGER.info("Clock aligned - updates now at :00, :05, :10...")
+        # Clock alignment: Reschedule to align updates to :00, :05, :10, etc.
+        if not self._clock_aligned:
+            await self._align_clock_to_5min_boundary()
 
         return {
             "nibe": nibe_data,
