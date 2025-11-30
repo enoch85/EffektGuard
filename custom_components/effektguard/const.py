@@ -531,11 +531,15 @@ PRICE_FORECAST_MIN_DURATION: Final = (
 PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
-# Clustered expensive period detection (Nov 29, 2025)
-# When multiple EXPENSIVE periods occur with brief gaps (<45min) between them,
-# treat the entire block as one sustained reduced-heating period to avoid yo-yo behavior
-PRICE_VOLATILE_SCAN_QUARTERS: Final = 8  # 2 hours lookahead for cluster detection
-PRICE_VOLATILE_REDUCTION_OFFSET: Final = -0.5  # °C - slight reduction during volatile periods
+# Volatile price detection (Nov 30, 2025)
+# When prices jump frequently between classifications, hold steady instead of chasing
+# Scan window: 2 hours (8 quarters × 15min)
+PRICE_VOLATILE_SCAN_QUARTERS: Final = 8  # 2 hours lookahead for volatility detection
+PRICE_VOLATILE_MIN_THRESHOLD: Final = 3  # Min non-NORMAL periods to trigger (3 × 15min = 45min)
+PRICE_VOLATILE_MAX_THRESHOLD: Final = 6  # Max before definitely volatile (6 × 15min = 90min)
+PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (
+    0.5  # multiplier - reduce price layer weight during volatility (0.8 → 0.4)
+)
 
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)

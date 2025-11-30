@@ -164,6 +164,16 @@ from ..const import (
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
     DEFAULT_CURVE_SENSITIVITY,
+    PRICE_FORECAST_BASE_HORIZON,
+    PRICE_FORECAST_CHEAP_THRESHOLD,
+    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
+    PRICE_FORECAST_MIN_DURATION,
+    PRICE_FORECAST_PREHEAT_OFFSET,
+    PRICE_FORECAST_REDUCTION_OFFSET,
+    PRICE_VOLATILE_SCAN_QUARTERS,
+    PRICE_VOLATILE_MIN_THRESHOLD,
+    PRICE_VOLATILE_MAX_THRESHOLD,
+    PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
 from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
@@ -698,7 +708,7 @@ class DecisionEngine:
             )
             if validation["warning"]:
                 _LOGGER.log(
-                    logging.WARNING if validation["severity"] == "warning" else logging.INFO,
+                    (logging.WARNING if validation["severity"] == "warning" else logging.INFO),
                     validation["warning"],
                 )
 
@@ -1315,7 +1325,8 @@ class DecisionEngine:
             if outdoor_temp < RAPID_COOLING_OUTDOOR_THRESHOLD and deficit > THERMAL_CHANGE_MODERATE:
                 # Cold outside + already below target + rapid cooling = trouble ahead
                 boost = min(
-                    abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER, RAPID_COOLING_BOOST_MAX
+                    abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER,
+                    RAPID_COOLING_BOOST_MAX,
                 )
 
                 # PHASE 3.2: Validate against weather forecast to reduce false positives
@@ -1918,17 +1929,6 @@ class DecisionEngine:
 
         # Forward-looking price analysis - horizon scales with thermal mass
         # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
-        from ..const import (
-            PRICE_FORECAST_BASE_HORIZON,
-            PRICE_FORECAST_CHEAP_THRESHOLD,
-            PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-            PRICE_FORECAST_MIN_DURATION,
-            PRICE_FORECAST_PREHEAT_OFFSET,
-            PRICE_FORECAST_REDUCTION_OFFSET,
-            PRICE_VOLATILE_SCAN_QUARTERS,
-            PRICE_VOLATILE_REDUCTION_OFFSET,
-        )
-
         # Calculate horizon based on thermal mass (higher mass = longer lookahead)
         thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
         forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
@@ -1989,8 +1989,6 @@ class DecisionEngine:
             min_price_ratio = min(p.price for p in upcoming_periods) / current_price
             max_price_ratio = max(p.price for p in upcoming_periods) / current_price
 
-            from ..const import QuarterClassification
-
             # Check if current CHEAP period is too brief for meaningful heating (Nov 29, 2025)
             # Compressor needs ~45min to efficiently use cheap electricity
             current_cheap_too_brief = False
@@ -2019,57 +2017,72 @@ class DecisionEngine:
 
                 current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
 
-            # Clustered expensive period detection (Nov 29, 2025)
-            # Detect multiple EXPENSIVE periods with brief gaps - treat as one block
-            # This prevents yo-yo offset changes that stress the compressor
-            in_clustered_expensive = False
-            clustered_expensive_reason = ""
+            # Volatile/jumpy price detection (Nov 30, 2025)
+            # Count non-NORMAL periods in scan window to detect price volatility
+            # Logic: If prices keep jumping (CHEAP/NORMAL/EXPENSIVE/PEAK bouncing),
+            # we'll see many non-NORMAL periods → hold steady instead of chasing
+            is_volatile_period = False
+            volatile_reason = ""
 
-            # Scan ahead for clustered expensive periods
+            # Count each classification in scan window
             scan_end = min(current_quarter + PRICE_VOLATILE_SCAN_QUARTERS, 96)
-            expensive_quarters_in_scan = 0
-            expensive_blocks = 0
-            in_expensive_block = False
+            expensive_count = 0
+            cheap_count = 0
+            peak_count = 0
+            normal_count = 0
 
-            for q in range(current_quarter, scan_end):
-                q_class = self.price.get_current_classification(q)
-                is_expensive = q_class in [
-                    QuarterClassification.EXPENSIVE,
-                    QuarterClassification.PEAK,
-                ]
-
-                if is_expensive:
-                    expensive_quarters_in_scan += 1
-                    if not in_expensive_block:
-                        expensive_blocks += 1
-                        in_expensive_block = True
-                else:
-                    in_expensive_block = False
+            for quarter_idx in range(current_quarter, scan_end):
+                quarter_classification = self.price.get_current_classification(quarter_idx)
+                if quarter_classification == QuarterClassification.PEAK:
+                    peak_count += 1
+                elif quarter_classification == QuarterClassification.EXPENSIVE:
+                    expensive_count += 1
+                elif quarter_classification == QuarterClassification.CHEAP:
+                    cheap_count += 1
+                elif quarter_classification == QuarterClassification.NORMAL:
+                    normal_count += 1
 
             # Check tomorrow if scan extends past midnight
             if scan_end >= 96 and self.price.has_tomorrow_prices():
                 remaining_scan = PRICE_VOLATILE_SCAN_QUARTERS - (96 - current_quarter)
-                for q in range(min(remaining_scan, 96)):
-                    q_class = self.price.get_tomorrow_classification(q)
-                    is_expensive = q_class in [
-                        QuarterClassification.EXPENSIVE,
-                        QuarterClassification.PEAK,
-                    ]
+                for quarter_idx in range(min(remaining_scan, 96)):
+                    quarter_classification = self.price.get_tomorrow_classification(quarter_idx)
+                    if quarter_classification == QuarterClassification.PEAK:
+                        peak_count += 1
+                    elif quarter_classification == QuarterClassification.EXPENSIVE:
+                        expensive_count += 1
+                    elif quarter_classification == QuarterClassification.CHEAP:
+                        cheap_count += 1
+                    elif quarter_classification == QuarterClassification.NORMAL:
+                        normal_count += 1
 
-                    if is_expensive:
-                        expensive_quarters_in_scan += 1
-                        if not in_expensive_block:
-                            expensive_blocks += 1
-                            in_expensive_block = True
-                    else:
-                        in_expensive_block = False
+            # Calculate non-NORMAL count (EXPENSIVE + CHEAP + PEAK)
+            non_normal_count = expensive_count + cheap_count + peak_count
+            total_periods = PRICE_VOLATILE_SCAN_QUARTERS
 
-            # Clustered = multiple separate expensive blocks within scan window
-            # Each block individually may be <45min, but together they form a volatile period
-            if expensive_blocks >= 2 and expensive_quarters_in_scan >= PRICE_FORECAST_MIN_DURATION:
-                in_clustered_expensive = True
-                clustered_expensive_reason = f" | Clustered expensive: {expensive_blocks} blocks in {PRICE_VOLATILE_SCAN_QUARTERS * 15}min - holding steady"
+            # Volatile if:
+            # 1. >= 6 non-NORMAL periods (75% of 8 quarters = definitely jumpy)
+            # 2. >= 3 non-NORMAL AND mix of different types (not just all CHEAP or all EXPENSIVE)
+            has_mix = sum([expensive_count > 0, cheap_count > 0, peak_count > 0]) >= 2
 
+            if non_normal_count >= PRICE_VOLATILE_MAX_THRESHOLD:
+                # Definitely volatile - 6+ non-NORMAL in 2h (90min+)
+                is_volatile_period = True
+                volatile_reason = f" | Volatile: {non_normal_count}/{total_periods} non-NORMAL periods in {PRICE_VOLATILE_SCAN_QUARTERS * 15}min - holding steady"
+            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_mix:
+                # Moderately volatile - 3+ non-NORMAL AND mixed types (jumpy)
+                is_volatile_period = True
+                types = []
+                if peak_count > 0:
+                    types.append(f"{peak_count}×PEAK")
+                if expensive_count > 0:
+                    types.append(f"{expensive_count}×EXP")
+                if cheap_count > 0:
+                    types.append(f"{cheap_count}×CHEAP")
+                volatile_reason = f" | Volatile: {' + '.join(types)} mixed in {PRICE_VOLATILE_SCAN_QUARTERS * 15}min - reducing confidence"
+
+            # Apply normal forecast logic regardless of volatility
+            # Volatility will reduce weight, not block smart decisions
             if classification == QuarterClassification.CHEAP:
                 # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
                 # Only act if expensive period is at least 45min in future (same as duration filter)
@@ -2088,7 +2101,10 @@ class DecisionEngine:
                     elif max_idx < PRICE_FORECAST_MIN_DURATION:
                         forecast_reason = f" | Forecast: Expensive period too soon ({max_idx * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
 
-            elif classification in [QuarterClassification.EXPENSIVE, QuarterClassification.PEAK]:
+            elif classification in [
+                QuarterClassification.EXPENSIVE,
+                QuarterClassification.PEAK,
+            ]:
                 # Wait for upcoming cheap periods (if sustained AND far enough away)
                 # Only reduce if cheap period is at least 45min in future (same as duration filter)
                 if (
@@ -2174,11 +2190,6 @@ class DecisionEngine:
             brief_cheap_reason = f" | Current cheap period too brief ({remaining_cheap_quarters * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min) - skipping boost"
             base_offset = 0.0  # Treat as NORMAL instead of CHEAP
 
-        # Apply clustered expensive period handling (Nov 29, 2025)
-        # Hold steady at slight reduction during volatile periods to avoid yo-yo
-        if in_clustered_expensive:
-            base_offset = PRICE_VOLATILE_REDUCTION_OFFSET
-
         # Adjust for tolerance setting (1-10 scale)
         tolerance_factor = self.tolerance / PRICE_TOLERANCE_DIVISOR  # 0.2-2.0
         adjusted_offset = base_offset * tolerance_factor
@@ -2196,9 +2207,16 @@ class DecisionEngine:
                 cost_multiplier = max_upcoming / current_price
                 strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot acceptable for {cost_multiplier:.1f}x cost savings"
 
+        # Apply volatility weight reduction (Nov 30, 2025 fix)
+        # During volatile periods, reduce price layer weight to allow other layers more influence
+        # Strong signals (like +2.0°C pre-heat for 5x spike) still come through, just dampened
+        price_weight = LAYER_WEIGHT_PRICE
+        if is_volatile_period:
+            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.4
+
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C%s%s%s",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2210,15 +2228,16 @@ class DecisionEngine:
             adjusted_offset,
             forecast_adjustment,
             final_offset,
+            price_weight,
+            volatile_reason if is_volatile_period else "",
             strategic_context,
             brief_cheap_reason,
-            clustered_expensive_reason,
         )
 
         return LayerDecision(
             offset=final_offset,
-            weight=LAYER_WEIGHT_PRICE,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}{brief_cheap_reason}{clustered_expensive_reason}",
+            weight=price_weight,
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}{brief_cheap_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:

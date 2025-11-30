@@ -22,7 +22,11 @@ from custom_components.effektguard.optimization.decision_engine import DecisionE
 from custom_components.effektguard.optimization.effect_manager import EffectManager
 from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_model import ThermalModel
-from custom_components.effektguard.const import LAYER_WEIGHT_PRICE, QuarterClassification
+from custom_components.effektguard.const import (
+    LAYER_WEIGHT_PRICE,
+    PRICE_VOLATILE_WEIGHT_REDUCTION,
+    QuarterClassification,
+)
 
 
 @pytest.fixture
@@ -417,7 +421,10 @@ class TestRealWorldScenario:
             # Expected: +2.0°C × 1.0 = +2.0°C
 
             assert price_layer.offset > 0.0, "Should pre-heat during CHEAP period"
-            assert price_layer.weight == LAYER_WEIGHT_PRICE
+            # Weight reduced during volatile period (expensive_price_data has big swings)
+            expected_volatile_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+            assert price_layer.weight == pytest.approx(expected_volatile_weight, abs=0.01), \
+                f"Expected reduced weight ({expected_volatile_weight}) during volatility, got {price_layer.weight}"
 
     @pytest.mark.asyncio
     async def test_evening_peak_aggressive_reduction(
@@ -453,7 +460,10 @@ class TestRealWorldScenario:
             assert (
                 price_layer.offset <= -1.0
             ), f"Should reduce during high-price period, got {price_layer.offset}°C"
-            assert price_layer.weight == LAYER_WEIGHT_PRICE
+            # Weight reduced during volatile period (expensive_price_data has big swings)
+            expected_volatile_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+            assert price_layer.weight == pytest.approx(expected_volatile_weight, abs=0.01), \
+                f"Expected reduced weight ({expected_volatile_weight}) during volatility, got {price_layer.weight}"
             # Check it's recognized as high-price period
             assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
 
