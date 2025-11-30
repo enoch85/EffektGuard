@@ -748,6 +748,21 @@ DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 15-30°C duri
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
+# DHW Recovery Time Estimation
+# DM recovery rates based on heat pump efficiency at different outdoor temperatures
+DM_RECOVERY_RATE_MILD: Final = 40.0  # DM/hour - Mild weather (>5°C), efficient heat pump
+DM_RECOVERY_RATE_COLD: Final = 30.0  # DM/hour - Cold weather (0-5°C), moderate efficiency
+DM_RECOVERY_RATE_VERY_COLD: Final = 20.0  # DM/hour - Very cold (<0°C), reduced efficiency
+DM_RECOVERY_MAX_HOURS: Final = 12.0  # Maximum recovery time estimate (if longer, error condition)
+DM_RECOVERY_SAFETY_BUFFER: Final = 20.0  # DM - Safety buffer above warning threshold
+
+# Indoor temperature recovery estimation
+INDOOR_TEMP_RECOVERY_RATE: Final = 0.7  # °C/hour - Conservative indoor heating rate
+INDOOR_TEMP_RECOVERY_MAX_HOURS: Final = 6.0  # Maximum recovery time
+
+# Space heating demand drop estimation
+SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
+
 # Savings Calculation Constants (Swedish electricity market)
 # Swedish effect tariff - typical cost per kW of monthly peak
 # Based on common Swedish grid operators (Ellevio ~55, Vattenfall/E.ON ~50 SEK/kW/month)

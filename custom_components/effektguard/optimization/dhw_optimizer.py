@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..const import (
+    COMPRESSOR_MIN_CYCLE_MINUTES,
     DEBUG_FORCE_OUTDOOR_TEMP,
     DEFAULT_DHW_TARGET_TEMP,
     DHW_COOLING_RATE,
@@ -40,12 +41,22 @@ from ..const import (
     DHW_SAFETY_CRITICAL,
     DHW_SAFETY_MIN,
     DHW_SAFETY_RUNTIME_MINUTES,
+    DHW_SCHEDULING_WINDOW_MAX,
+    DHW_SCHEDULING_WINDOW_MIN,
     DHW_TARGET_HIGH_DEMAND,
     DHW_URGENT_DEMAND_HOURS,
     DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
+    DM_RECOVERY_MAX_HOURS,
+    DM_RECOVERY_RATE_COLD,
+    DM_RECOVERY_RATE_MILD,
+    DM_RECOVERY_RATE_VERY_COLD,
+    DM_RECOVERY_SAFETY_BUFFER,
+    INDOOR_TEMP_RECOVERY_MAX_HOURS,
+    INDOOR_TEMP_RECOVERY_RATE,
     MIN_DHW_TARGET_TEMP,
+    SPACE_HEATING_DEMAND_DROP_HOURS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -387,22 +398,41 @@ class IntelligentDHWScheduler:
                 self.climate_detector.zone_info.name if self.climate_detector else "unknown",
                 outdoor_temp,
             )
+            # Estimate when DM will recover to safe level
+            estimated_recovery_hours = self._estimate_dm_recovery_time(
+                current_dm=thermal_debt_dm,
+                target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
+                outdoor_temp=outdoor_temp,
+            )
+            recovery_time = current_time + timedelta(hours=estimated_recovery_hours)
+
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="CRITICAL_THERMAL_DEBT",
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
+                recommended_start_time=recovery_time,
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
         if indoor_deficit > 0.5 and outdoor_temp < 0:
+            # Estimate when indoor temp will recover
+            hours_to_recover = indoor_deficit / INDOOR_TEMP_RECOVERY_RATE
+            recovery_time = current_time + timedelta(
+                hours=max(
+                    COMPRESSOR_MIN_CYCLE_MINUTES / 60.0,  # Derived: 45min = 0.75h
+                    min(hours_to_recover, INDOOR_TEMP_RECOVERY_MAX_HOURS),
+                )
+            )
+
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="SPACE_HEATING_EMERGENCY",
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
+                recommended_start_time=recovery_time,
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
@@ -498,6 +528,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
+                recommended_start_time=current_time,  # Heat NOW
             )
 
         # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
@@ -570,6 +601,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
+                recommended_start_time=current_time,
             )
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
@@ -593,6 +625,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
+                recommended_start_time=current_time,
             )
 
         # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
@@ -613,6 +646,7 @@ class IntelligentDHWScheduler:
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                     ],
+                    recommended_start_time=current_time,
                 )
 
         # === RULE 4: HIGH SPACE HEATING DEMAND - DELAY DHW ===
@@ -620,12 +654,16 @@ class IntelligentDHWScheduler:
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
         # to avoid waste (NIBE runs on fixed schedule regardless of our triggers)
         if space_heating_demand_kw > 6.0 and thermal_debt_dm < -60:
+            # Estimate when space heating demand will drop
+            recovery_time = current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
+
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="HIGH_SPACE_HEATING_DEMAND",
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
+                recommended_start_time=recovery_time,
             )
 
         # === RULE 5: HIGH DEMAND PERIOD - TARGET TEMP BY START TIME ===
@@ -681,6 +719,7 @@ class IntelligentDHWScheduler:
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
                             ],
+                            recommended_start_time=current_time,
                         )
 
                 # STEP 1: Check if we're in the optimal window (within 15 min of start)
@@ -745,6 +784,7 @@ class IntelligentDHWScheduler:
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
                     ],
+                    recommended_start_time=current_time,
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
@@ -759,15 +799,24 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
+                recommended_start_time=current_time,
             )
 
         # === RULE 8: ALL CONDITIONS FAIL - DON'T HEAT ===
+        # Estimate when DHW will cool below target (reuse existing constants)
+        temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
+        hours_until_low = temp_margin / DHW_COOLING_RATE
+        next_time = current_time + timedelta(
+            hours=max(DHW_SCHEDULING_WINDOW_MIN, min(hours_until_low, DHW_SCHEDULING_WINDOW_MAX))
+        )
+
         return DHWScheduleDecision(
             should_heat=False,
             priority_reason="DHW_ADEQUATE",
             target_temp=0.0,
             max_runtime_minutes=0,
             abort_conditions=[],
+            recommended_start_time=next_time,
         )
 
     def get_lookahead_hours(self, current_time: datetime) -> int:
@@ -792,6 +841,56 @@ class IntelligentDHWScheduler:
 
         # No upcoming demand period - look full 24 hours ahead
         return DHW_SCHEDULING_WINDOW_MAX
+
+    def _estimate_dm_recovery_time(
+        self, current_dm: float, target_dm: float, outdoor_temp: float
+    ) -> float:
+        """Estimate hours until DM recovers to target level.
+
+        Uses simplified thermal model:
+        - Space heating improves DM at ~20-40 DM/hour (depends on outdoor temp)
+        - Colder outdoor → slower recovery
+
+        Args:
+            current_dm: Current degree minutes value (negative)
+            target_dm: Target DM to reach (less negative)
+            outdoor_temp: Current outdoor temperature for recovery rate
+
+        Returns:
+            Estimated hours until recovery (minimum 0.5h, maximum 12h)
+
+        References:
+            - Thermal debt analysis: DM recovery varies with heating capacity
+            - Conservative estimates prevent false promises to user
+        """
+        dm_deficit = target_dm - current_dm  # e.g., -350 - (-435) = 85
+
+        # Recovery rate depends on outdoor temp (from const.py)
+        if outdoor_temp > 5:
+            recovery_rate = DM_RECOVERY_RATE_MILD
+        elif outdoor_temp > 0:
+            recovery_rate = DM_RECOVERY_RATE_COLD
+        else:
+            recovery_rate = DM_RECOVERY_RATE_VERY_COLD
+
+        hours = dm_deficit / recovery_rate
+
+        # Constrain to reasonable range (from const.py)
+        # Min: DHW_COOLING_RATE (0.5h) - reuse existing constant
+        # Max: DM_RECOVERY_MAX_HOURS (12h)
+        estimated_hours = max(DHW_COOLING_RATE, min(hours, DM_RECOVERY_MAX_HOURS))
+
+        _LOGGER.debug(
+            "DM recovery estimate: %.0f DM deficit / %.0f DM/h = %.1fh "
+            "(outdoor: %.1f°C, constrained: %.1fh)",
+            dm_deficit,
+            recovery_rate,
+            hours,
+            outdoor_temp,
+            estimated_hours,
+        )
+
+        return estimated_hours
 
     def find_cheapest_dhw_window(
         self,
