@@ -398,13 +398,16 @@ class IntelligentDHWScheduler:
                 self.climate_detector.zone_info.name if self.climate_detector else "unknown",
                 outdoor_temp,
             )
-            # Estimate when DM will recover to safe level
-            estimated_recovery_hours = self._estimate_dm_recovery_time(
-                current_dm=thermal_debt_dm,
-                target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
+            # Find next opportunity using centralized logic
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt_dm,
                 outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason="CRITICAL_THERMAL_DEBT",
+                dm_block_threshold=dm_block_threshold,
             )
-            recovery_time = current_time + timedelta(hours=estimated_recovery_hours)
 
             return DHWScheduleDecision(
                 should_heat=False,
@@ -412,18 +415,20 @@ class IntelligentDHWScheduler:
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
-                recommended_start_time=recovery_time,
+                recommended_start_time=next_opportunity,
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
         if indoor_deficit > 0.5 and outdoor_temp < 0:
-            # Estimate when indoor temp will recover
-            hours_to_recover = indoor_deficit / INDOOR_TEMP_RECOVERY_RATE
-            recovery_time = current_time + timedelta(
-                hours=max(
-                    COMPRESSOR_MIN_CYCLE_MINUTES / 60.0,  # Derived: 45min = 0.75h
-                    min(hours_to_recover, INDOOR_TEMP_RECOVERY_MAX_HOURS),
-                )
+            # Find next opportunity using centralized logic
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt_dm,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason="SPACE_HEATING_EMERGENCY",
+                dm_block_threshold=dm_block_threshold,
             )
 
             return DHWScheduleDecision(
@@ -432,7 +437,7 @@ class IntelligentDHWScheduler:
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
-                recommended_start_time=recovery_time,
+                recommended_start_time=next_opportunity,
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
@@ -654,8 +659,16 @@ class IntelligentDHWScheduler:
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
         # to avoid waste (NIBE runs on fixed schedule regardless of our triggers)
         if space_heating_demand_kw > 6.0 and thermal_debt_dm < -60:
-            # Estimate when space heating demand will drop
-            recovery_time = current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
+            # Find next opportunity using centralized logic
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt_dm,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason="HIGH_SPACE_HEATING_DEMAND",
+                dm_block_threshold=dm_block_threshold,
+            )
 
             return DHWScheduleDecision(
                 should_heat=False,
@@ -663,7 +676,7 @@ class IntelligentDHWScheduler:
                 target_temp=0.0,
                 max_runtime_minutes=0,
                 abort_conditions=[],
-                recommended_start_time=recovery_time,
+                recommended_start_time=next_opportunity,
             )
 
         # === RULE 5: HIGH DEMAND PERIOD - TARGET TEMP BY START TIME ===
@@ -803,11 +816,15 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 8: ALL CONDITIONS FAIL - DON'T HEAT ===
-        # Estimate when DHW will cool below target (reuse existing constants)
-        temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
-        hours_until_low = temp_margin / DHW_COOLING_RATE
-        next_time = current_time + timedelta(
-            hours=max(DHW_SCHEDULING_WINDOW_MIN, min(hours_until_low, DHW_SCHEDULING_WINDOW_MAX))
+        # Find next opportunity using centralized logic
+        next_opportunity = self._find_next_dhw_opportunity(
+            current_time=current_time,
+            current_dhw_temp=current_dhw_temp,
+            thermal_debt_dm=thermal_debt_dm,
+            outdoor_temp=outdoor_temp,
+            price_periods=price_periods,
+            blocking_reason="DHW_ADEQUATE",
+            dm_block_threshold=dm_block_threshold,
         )
 
         return DHWScheduleDecision(
@@ -816,7 +833,7 @@ class IntelligentDHWScheduler:
             target_temp=0.0,
             max_runtime_minutes=0,
             abort_conditions=[],
-            recommended_start_time=next_time,
+            recommended_start_time=next_opportunity,
         )
 
     def get_lookahead_hours(self, current_time: datetime) -> int:
@@ -891,6 +908,79 @@ class IntelligentDHWScheduler:
         )
 
         return estimated_hours
+
+    def _find_next_dhw_opportunity(
+        self,
+        current_time: datetime,
+        current_dhw_temp: float,
+        thermal_debt_dm: float,
+        outdoor_temp: float,
+        price_periods: list | None,
+        blocking_reason: str,
+        dm_block_threshold: float,
+    ) -> datetime:
+        """Find next time DHW can safely heat.
+
+        Combines multiple factors to determine earliest safe opportunity:
+        - Thermal debt recovery time
+        - Cheap price windows
+        - Temperature cooling rate
+        - Blocking condition resolution
+
+        Args:
+            current_time: Current datetime
+            current_dhw_temp: Current DHW temperature
+            thermal_debt_dm: Current degree minutes
+            outdoor_temp: Current outdoor temperature
+            price_periods: Price data for window finding
+            blocking_reason: Why DHW is currently blocked
+            dm_block_threshold: DM threshold for DHW blocking
+
+        Returns:
+            Earliest safe opportunity datetime
+        """
+        # Calculate different constraint times
+        opportunities = []
+
+        # 1. Thermal debt recovery time
+        if thermal_debt_dm < dm_block_threshold:
+            recovery_hours = self._estimate_dm_recovery_time(
+                current_dm=thermal_debt_dm,
+                target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
+                outdoor_temp=outdoor_temp,
+            )
+            opportunities.append(current_time + timedelta(hours=recovery_hours))
+
+        # 2. Next cheap price window
+        if price_periods:
+            lookahead_hours = self.get_lookahead_hours(current_time)
+            cheap_window = self.find_cheapest_dhw_window(
+                current_time=current_time,
+                lookahead_hours=lookahead_hours,
+                dhw_duration_minutes=45,
+                price_periods=price_periods,
+            )
+            if cheap_window:
+                opportunities.append(cheap_window["start_time"])
+
+        # 3. Temperature cooling estimate (when will DHW need heating)
+        temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
+        if temp_margin > 0:
+            hours_until_low = temp_margin / DHW_COOLING_RATE
+            opportunities.append(current_time + timedelta(hours=hours_until_low))
+
+        # Return earliest opportunity (or default to 2 hours if no constraints)
+        if opportunities:
+            next_opportunity = min(opportunities)
+            _LOGGER.debug(
+                "Next DHW opportunity for %s: %s (from %d constraints)",
+                blocking_reason,
+                next_opportunity.strftime("%Y-%m-%d %H:%M"),
+                len(opportunities),
+            )
+            return next_opportunity
+        else:
+            return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
 
     def find_cheapest_dhw_window(
         self,
