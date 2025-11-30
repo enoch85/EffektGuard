@@ -943,7 +943,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
             if self.entry.data.get("enable_hot_water_optimization", False):
                 await self._apply_dhw_control(
-                    nibe_data, price_data, weather_data, current_dhw_temp, now_time
+                    dhw_result["decision"],  # Reuse decision from recommendation
+                    current_dhw_temp,
+                    now_time,
                 )
         else:
             # DHW sensor not available - provide basic recommendation
@@ -1192,6 +1194,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "recommendation": recommendation,
             "summary": planning_summary,
             "details": planning_details,
+            "decision": decision,  # Include raw decision for control logic
         }
 
     def _format_dhw_planning_summary(
@@ -1416,17 +1419,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         return max(0.0, hours)  # Never negative
 
     async def _apply_dhw_control(
-        self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
+        self, decision, current_dhw_temp: float, now_time: datetime
     ) -> None:
         """Apply automatic DHW control based on optimizer decision.
 
         Controls NIBE temporary lux switch to heat or block DHW based on
-        thermal debt, electricity prices, and demand periods.
+        pre-calculated decision from optimizer.
 
         Args:
-            nibe_data: Current NIBE state
-            price_data: GE-Spot price data
-            weather_data: Weather forecast
+            decision: DHWScheduleDecision from optimizer (reused from recommendation)
             current_dhw_temp: Current DHW temperature
             now_time: Current datetime
         """
@@ -1448,41 +1449,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         is_lux_on = temp_lux_state.state == "on"
 
-        # Get decision from optimizer
-        indoor_temp = nibe_data.indoor_temp if nibe_data else 21.0
-        target_indoor = self.entry.data.get("target_indoor_temp", 21.0)
-        indoor_deficit = target_indoor - indoor_temp
-        space_heating_demand = max(0, indoor_deficit * 2.0)
-        thermal_debt = nibe_data.degree_minutes if nibe_data else -60.0
-        outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
-
-        # Get current price classification
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
-        price_classification = self.engine.price.get_current_classification(current_quarter)
-
-        # Get hours since last DHW heating for max wait check
-        hours_since_last = await self._calculate_hours_since_last_dhw()
-
-        # Get price periods for window-based scheduling
-        price_periods = []
-        if price_data:
-            price_periods = price_data.today + price_data.tomorrow
-
-        decision = self.dhw_optimizer.should_start_dhw(
-            current_dhw_temp=current_dhw_temp,
-            space_heating_demand_kw=space_heating_demand,
-            thermal_debt_dm=thermal_debt,
-            indoor_temp=indoor_temp,
-            target_indoor_temp=target_indoor,
-            outdoor_temp=outdoor_temp,
-            price_classification=price_classification,
-            current_time=now_time,
-            price_periods=price_periods,
-            hours_since_last_dhw=hours_since_last,
+        # Use pre-calculated decision from _calculate_dhw_recommendation()
+        # This avoids duplicate optimizer calls and log spam
+        # Get thermal_debt and indoor_temp from coordinator data for abort conditions
+        thermal_debt = (
+            self.data.get("dhw_planning_details", {}).get("thermal_debt", 0.0)
+            if self.last_update_success and hasattr(self, "data")
+            else 0.0
         )
+        indoor_temp = (
+            self.data.get("dhw_planning_details", {}).get("indoor_temperature", 21.0)
+            if self.last_update_success and hasattr(self, "data")
+            else 21.0
+        )
+        target_indoor = self.entry.data.get("target_indoor_temp", 21.0)
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
+        # thermal_debt and indoor_temp from coordinator data (same as used in decision calculation)
         if is_lux_on and decision.abort_conditions:
             should_abort, abort_reason = self._check_dhw_abort_conditions(
                 decision.abort_conditions,
