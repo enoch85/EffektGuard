@@ -216,6 +216,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
         self._startup_grace_period = True  # Skip first action to allow sensors to stabilize
+        self._clock_aligned = False  # Wait for whole hour to align updates to :00, :05, :10...
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -904,6 +905,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
         outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
+
+        # Clock alignment: Mark aligned when we hit a whole hour (:00-:04)
+        if not self._clock_aligned and dt_util.now().minute < 5:
+            self._clock_aligned = True
+            _LOGGER.info("Clock aligned - updates now at :00, :05, :10...")
 
         return {
             "nibe": nibe_data,
