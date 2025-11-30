@@ -735,7 +735,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 nibe_data,
                 price_data,
                 weather_data,
-                self.peak_today,
+                self.peak_this_month,  # Monthly peak threshold to protect
+                self.peak_today,  # Current whole-house power consumption
             )
 
             # Startup grace period: Skip first action to allow sensors/trends to stabilize

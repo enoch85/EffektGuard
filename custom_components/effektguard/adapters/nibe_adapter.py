@@ -65,6 +65,7 @@ class NibeState:
     phase2_current: float | None = None  # BE2 - Phase 2 current (43122) - optional
     phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
     compressor_hz: int | None = None  # Compressor frequency - optional
+    power_kw: float | None = None  # Total power consumption in kW - optional
 
     @property
     def flow_temp(self) -> float:
@@ -233,6 +234,11 @@ class NibeAdapter:
                 phase3_current or 0.0,
             )
 
+        # Read actual power consumption (if available)
+        power_kw = await self.get_power_consumption()
+        if power_kw is not None:
+            _LOGGER.debug("Power consumption: %.2f kW", power_kw)
+
         return NibeState(
             outdoor_temp=outdoor_temp,
             indoor_temp=indoor_temp,
@@ -249,6 +255,7 @@ class NibeAdapter:
             phase2_current=phase2_current,
             phase3_current=phase3_current,
             compressor_hz=int(compressor_hz) if compressor_hz else None,
+            power_kw=power_kw,
         )
 
     async def set_curve_offset(self, offset: float) -> bool:

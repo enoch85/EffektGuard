@@ -658,6 +658,7 @@ class DecisionEngine:
         price_data,
         weather_data,
         current_peak: float,
+        current_power: float,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -674,7 +675,8 @@ class DecisionEngine:
             nibe_state: Current NIBE heat pump state
             price_data: GE-Spot price data (native 15-min intervals)
             weather_data: Weather forecast data
-            current_peak: Current monthly peak (kW)
+            current_peak: Current monthly peak threshold (kW) - from peak_this_month sensor
+            current_power: Current whole-house power consumption (kW) - from peak_today sensor
 
         Returns:
             OptimizationDecision with offset, reasoning, and layer votes
@@ -721,7 +723,7 @@ class DecisionEngine:
             self._proactive_debt_prevention_layer(
                 nibe_state, weather_data
             ),  # Phase 3.2: Pass weather_data for forecast validation
-            self._effect_layer(nibe_state, current_peak),
+            self._effect_layer(nibe_state, current_peak, current_power),  # Pass actual whole-house power
             self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
             self._weather_compensation_layer(
                 nibe_state, weather_data
@@ -1445,7 +1447,7 @@ class DecisionEngine:
             reason="Proactive prevention not needed",
         )
 
-    def _effect_layer(self, nibe_state, current_peak: float) -> LayerDecision:
+    def _effect_layer(self, nibe_state, current_peak: float, current_power: float) -> LayerDecision:
         """Effect tariff protection with PREDICTIVE peak avoidance (Phase 4).
 
         Uses indoor temperature trend to predict heating demand in next 15 minutes.
@@ -1458,7 +1460,8 @@ class DecisionEngine:
 
         Args:
             nibe_state: Current NIBE state
-            current_peak: Current monthly peak (kW)
+            current_peak: Current monthly peak (kW) - from peak_this_month sensor
+            current_power: Current whole-house power consumption (kW) - from peak_today sensor
 
         Returns:
             LayerDecision with predictive peak protection
@@ -1466,8 +1469,7 @@ class DecisionEngine:
         References:
             MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
         """
-        # Estimate current power
-        current_power = self._estimate_heat_pump_power(nibe_state)
+        # current_power is always provided from coordinator's peak tracking (actual measurements)
 
         # Get current quarter
         now = dt_util.now()
@@ -2481,14 +2483,27 @@ class DecisionEngine:
         return " | ".join(reasons)
 
     def _estimate_heat_pump_power(self, nibe_state) -> float:
-        """Estimate heat pump power consumption from state.
+        """Get or estimate heat pump power consumption from state.
+
+        Prefers actual power_kw from sensors if available.
+        Falls back to estimation only when actual data unavailable.
 
         Args:
             nibe_state: Current NIBE state
 
         Returns:
-            Estimated power consumption in kW
+            Power consumption in kW (actual or estimated)
         """
+        # Use actual power reading if available (PRIORITY)
+        if hasattr(nibe_state, "power_kw") and nibe_state.power_kw is not None:
+            _LOGGER.debug(
+                "Using actual power consumption: %.2f kW (from sensors)", nibe_state.power_kw
+            )
+            return nibe_state.power_kw
+
+        # Fall back to estimation (less accurate)
+        _LOGGER.debug("Power sensor not available, using estimation")
+
         # Basic estimation based on compressor status and outdoor temp
         if not nibe_state.is_heating:
             return 0.1  # Standby power
