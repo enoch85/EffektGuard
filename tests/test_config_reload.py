@@ -88,6 +88,10 @@ def mock_coordinator(mock_hass, mock_config_entry):
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_update_config = AsyncMock()
 
+    # Peak tracking state (needed for sensor restoration)
+    coordinator.peak_today = 0.0
+    coordinator.peak_this_month = 0.0
+
     # Mock decision engine with cached config values
     coordinator.engine = Mock()
     coordinator.engine.target_temp = 21.0
@@ -417,9 +421,11 @@ class TestSensorStateRestoration:
         # Call async_added_to_hass
         await sensor.async_added_to_hass()
 
-        # Should restore peak value
-        # (Note: actual implementation detail may vary, this tests the concept)
+        # Should restore peak value to both sensor and coordinator
         sensor.async_get_last_state.assert_called_once()
+        # CRITICAL: Coordinator must be updated to prevent new measurements
+        # from overwriting restored value with lower values
+        assert mock_coordinator.peak_today == 5.75
 
 
 class TestRuntimeOptionsCompleteness:

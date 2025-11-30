@@ -381,6 +381,23 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     _LOGGER.debug(
                         "Restored %s: %.2f", self.entity_description.key, self._restored_value
                     )
+
+                    # Also update coordinator to prevent new measurements
+                    # from overwriting restored value with lower values
+                    if self.entity_description.key == "peak_today":
+                        if self._restored_value > self.coordinator.peak_today:
+                            self.coordinator.peak_today = self._restored_value
+                            _LOGGER.info(
+                                "Restored peak_today to coordinator: %.2f kW",
+                                self._restored_value,
+                            )
+                    elif self.entity_description.key == "peak_this_month":
+                        if self._restored_value > self.coordinator.peak_this_month:
+                            self.coordinator.peak_this_month = self._restored_value
+                            _LOGGER.info(
+                                "Restored peak_this_month to coordinator: %.2f kW",
+                                self._restored_value,
+                            )
                 except (ValueError, TypeError):
                     _LOGGER.debug(
                         "Could not restore %s, will use coordinator value",
