@@ -582,9 +582,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 hours_until = time_until.total_seconds() / 3600
                 if hours_until > 0:
                     attrs["hours_until_boost"] = round(hours_until, 1)
-                    attrs["human_readable"] = f"In {hours_until:.1f} hours"
-                else:
-                    attrs["human_readable"] = "Pending"
 
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
