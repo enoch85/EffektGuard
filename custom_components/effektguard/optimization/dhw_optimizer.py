@@ -53,8 +53,10 @@ from ..const import (
     DM_RECOVERY_RATE_MILD,
     DM_RECOVERY_RATE_VERY_COLD,
     DM_RECOVERY_SAFETY_BUFFER,
+    DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
     SPACE_HEATING_DEMAND_DROP_HOURS,
+    SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -685,7 +687,7 @@ class IntelligentDHWScheduler:
         # NOTE: Legionella prevention is handled by NIBE automatically
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
         # to avoid waste (NIBE runs on fixed schedule regardless of our triggers)
-        if space_heating_demand_kw > 6.0 and thermal_debt_dm < -60:
+        if space_heating_demand_kw > SPACE_HEATING_DEMAND_HIGH_THRESHOLD and thermal_debt_dm < DM_THRESHOLD_START:
             # Find next opportunity using centralized logic
             next_opportunity = self._find_next_dhw_opportunity(
                 current_time=current_time,

@@ -28,9 +28,13 @@ from .const import (
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
     DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_START,
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
     NIBE_DHW_START_THRESHOLD,
+    SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
+    SPACE_HEATING_DEMAND_LOW_THRESHOLD,
+    SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -1048,14 +1052,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else "normal"
         )
 
-        # Calculate space heating demand (simplified - from indoor temp deficit)
-        indoor_temp = nibe_data.indoor_temp if nibe_data else DEFAULT_INDOOR_TEMP
-        target_indoor = DEFAULT_INDOOR_TEMP  # Default target
-        indoor_deficit = target_indoor - indoor_temp
-        space_heating_demand = max(0, indoor_deficit * 2.0)  # Rough kW estimate
-
         # Get thermal debt
-        thermal_debt = nibe_data.degree_minutes if nibe_data else -60.0
+        thermal_debt = nibe_data.degree_minutes if nibe_data else DM_THRESHOLD_START
+
+        # Calculate space heating demand - use actual power sensor reading
+        # This is the REAL current heating demand, not an estimate
+        space_heating_demand = nibe_data.power_kw if nibe_data and nibe_data.power_kw else 0.0
 
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
@@ -1269,9 +1271,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         lines.append(f"Thermal Debt: {status_text}")
 
         # Space heating status
-        if space_heating_demand > 2.0:
+        if space_heating_demand > SPACE_HEATING_DEMAND_MODERATE_THRESHOLD:
             lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
-        elif space_heating_demand > 0.5:
+        elif space_heating_demand > SPACE_HEATING_DEMAND_LOW_THRESHOLD:
             lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
         else:
             lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")

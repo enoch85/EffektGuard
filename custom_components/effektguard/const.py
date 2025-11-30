@@ -759,7 +759,12 @@ DM_RECOVERY_SAFETY_BUFFER: Final = 20.0  # DM - Safety buffer above warning thre
 # Indoor temperature recovery estimation (used for test validation bounds)
 INDOOR_TEMP_RECOVERY_MAX_HOURS: Final = 6.0  # Maximum recovery time for validation
 
-# Space heating demand drop estimation
+# Space heating demand estimation (Nov 30, 2025)
+# Used for DHW blocking decisions and heating demand display
+# Uses actual power sensor reading (sensor.effektguard_nibe_power)
+SPACE_HEATING_DEMAND_HIGH_THRESHOLD: Final = 6.0  # kW - DHW blocking threshold
+SPACE_HEATING_DEMAND_MODERATE_THRESHOLD: Final = 2.0  # kW - Display threshold
+SPACE_HEATING_DEMAND_LOW_THRESHOLD: Final = 0.5  # kW - Display threshold
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
 
 # Savings Calculation Constants (Swedish electricity market)
