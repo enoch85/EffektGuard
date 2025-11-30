@@ -487,7 +487,7 @@ def test_decision_engine_calculate_with_manual_override():
     price_data = MagicMock()
     weather_data = MagicMock()
 
-    decision = engine.calculate_decision(nibe_state, price_data, weather_data, 0.0)
+    decision = engine.calculate_decision(nibe_state, price_data, weather_data, 0.0, 0.0)
 
     # Should return manual override
     assert decision.offset == 5.0

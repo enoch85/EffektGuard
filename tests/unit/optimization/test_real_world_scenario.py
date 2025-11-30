@@ -190,6 +190,7 @@ class TestRealWorldScenario:
                 price_data=expensive_price_data,
                 weather_data=winter_weather_data,
                 current_peak=2.8,  # Safe margin from monthly peak 5.2 kW
+                current_power=1.5,
             )
 
             # Debug: Check what quarter we're actually in

@@ -190,6 +190,7 @@ def test_manual_override_applies_immediately():
         price_data=None,
         weather_data=None,
         current_peak=2.0,
+        current_power=1.0,
     )
 
     # Verify offset is exact manual override value (no accumulation)
@@ -238,6 +239,7 @@ def test_manual_override_no_accumulation_between_cycles():
             price_data=None,
             weather_data=None,
             current_peak=2.0,
+            current_power=1.0,
         )
         assert decision.offset == override_offset
 
@@ -283,6 +285,7 @@ def test_manual_override_expires():
         price_data=None,
         weather_data=None,
         current_peak=2.0,
+        current_power=1.0,
     )
 
     # Verify offset is applied

@@ -112,7 +112,7 @@ class TestEffectLayerIntegration:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Should have 9 layers:
@@ -134,7 +134,7 @@ class TestEffectLayerIntegration:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         effect_layer = decision.layers[3]  # Effect is layer 3 (0-indexed)
@@ -159,7 +159,7 @@ class TestEffectLayerIntegration:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=3.0,
+            current_peak=3.0, current_power=2.0,
         )
 
         effect_layer = decision.layers[
@@ -191,7 +191,7 @@ class TestLayerPriority:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=3.0,
+            current_peak=3.0, current_power=2.0,
         )
 
         # Safety should force positive offset (heating) despite peak risk
@@ -228,7 +228,7 @@ class TestLayerPriority:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=3.0,
+            current_peak=3.0, current_power=2.0,
         )
 
         # With indoor temp below target, emergency recovery SHOULD trigger
@@ -264,7 +264,7 @@ class TestPeakProtectionScenarios:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=5.5,
+            current_peak=5.5, current_power=2.0,
         )
 
         # Should include peak protection in reasoning
@@ -287,7 +287,7 @@ class TestPeakProtectionScenarios:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=5.0,
+            current_peak=5.0, current_power=2.0,
         )
 
         # Night time should allow higher actual power (effective = actual * 0.5)
@@ -311,7 +311,7 @@ class TestOffsetAggregation:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Should have reasoning from active layers
@@ -333,7 +333,7 @@ class TestOffsetAggregation:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Emergency layer should have very high weight (use constant)
@@ -356,7 +356,7 @@ class TestOffsetAggregation:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Should NOT force heating
@@ -381,7 +381,7 @@ class TestReasoningGeneration:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Reasoning should be generated
@@ -397,7 +397,7 @@ class TestReasoningGeneration:
             nibe_state=mock_nibe_state,
             price_data=mock_price_data,
             weather_data=mock_weather_data,
-            current_peak=0.0,
+            current_peak=0.0, current_power=2.0,
         )
 
         # Verify active layers present in reasoning

@@ -723,7 +723,9 @@ class DecisionEngine:
             self._proactive_debt_prevention_layer(
                 nibe_state, weather_data
             ),  # Phase 3.2: Pass weather_data for forecast validation
-            self._effect_layer(nibe_state, current_peak, current_power),  # Pass actual whole-house power
+            self._effect_layer(
+                nibe_state, current_peak, current_power
+            ),  # Pass actual whole-house power
             self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
             self._weather_compensation_layer(
                 nibe_state, weather_data

@@ -143,9 +143,10 @@ class TestVolatileWeightReduction:
             price_data=price_data,
             weather_data=base_weather_data,
             current_peak=5.0,
+            current_power=2.0,
         )
         
-        # Verify volatile period detected
+        # Verify volatile flag detected
         # Scan window Q24-Q32: should have mix of CHEAP (Q24-Q31) and previous volatility
         # The forecast logic should detect the 5x spike and pre-heat
         
@@ -209,6 +210,7 @@ class TestVolatileWeightReduction:
             price_data=price_data,
             weather_data=base_weather_data,
             current_peak=5.0,
+            current_power=2.0,
         )
         
         # Verify system holds steady during normal volatility
@@ -287,7 +289,7 @@ class TestVolatileWeightReduction:
         engine.price._current_time_override = datetime(2025, 11, 30, 0, 0)
         
         decision_min = engine.calculate_decision(
-            base_nibe_state, price_data_min, base_weather_data, 5.0
+            base_nibe_state, price_data_min, base_weather_data, 5.0, 2.0
         )
         
         # Should detect volatility (3 non-NORMAL with mix in scan window)
@@ -321,7 +323,7 @@ class TestVolatileWeightReduction:
         price_data_max.has_tomorrow = False
         
         decision_max = engine.calculate_decision(
-            base_nibe_state, price_data_max, base_weather_data, 5.0
+            base_nibe_state, price_data_max, base_weather_data, 5.0, 2.0
         )
         
         # Should definitely detect volatility (6 non-NORMAL = 75% of scan window)
@@ -527,11 +529,12 @@ class TestVolatileWeightReduction:
         # Test at Q7 (01:45) - 8 quarters available (full window)
         engine.price._current_time_override = datetime(2025, 11, 30, 1, 45)
         
-        decision_q7 = engine.calculate_decision(
+        decision_no_tomorrow = engine.calculate_decision(
             nibe_state=base_nibe_state,
             price_data=price_data,
             weather_data=base_weather_data,
             current_peak=5.0,
+            current_power=2.0,
         )
         
         # Should also work fine

@@ -1075,6 +1075,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
 
+        # Get indoor temperature and target
+        indoor_temp = nibe_data.indoor_temp if nibe_data else DEFAULT_INDOOR_TEMP
+        target_indoor = self._entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
+        indoor_deficit = max(0.0, target_indoor - indoor_temp)
+
         # Get indoor temperature trend for predictive DHW blocking
         thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)

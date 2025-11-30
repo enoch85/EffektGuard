@@ -221,7 +221,7 @@ class TestOvershootPrevention:
 
         # Calculate decision with some offset from layers
         decision = engine.calculate_decision(
-            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0
+            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0, current_power=0.0
         )
 
         # Should mention damping in reasoning
@@ -238,7 +238,7 @@ class TestOvershootPrevention:
         }
 
         decision = engine.calculate_decision(
-            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0
+            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0, current_power=0.0
         )
 
         # Should mention boost in reasoning
@@ -255,7 +255,7 @@ class TestOvershootPrevention:
         }
 
         decision = engine.calculate_decision(
-            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0
+            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0, current_power=0.0
         )
 
         # Should not mention damping or boosting
@@ -277,7 +277,7 @@ class TestOvershootPrevention:
         nibe_state_mock.outdoor_temp = -15.0
 
         decision = engine.calculate_decision(
-            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0
+            nibe_state=nibe_state_mock, price_data=None, weather_data=None, current_peak=0.0, current_power=0.0
         )
 
         # Should mention safety limit if offset was capped

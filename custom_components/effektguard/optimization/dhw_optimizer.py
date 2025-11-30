@@ -687,7 +687,10 @@ class IntelligentDHWScheduler:
         # NOTE: Legionella prevention is handled by NIBE automatically
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
         # to avoid waste (NIBE runs on fixed schedule regardless of our triggers)
-        if space_heating_demand_kw > SPACE_HEATING_DEMAND_HIGH_THRESHOLD and thermal_debt_dm < DM_THRESHOLD_START:
+        if (
+            space_heating_demand_kw > SPACE_HEATING_DEMAND_HIGH_THRESHOLD
+            and thermal_debt_dm < DM_THRESHOLD_START
+        ):
             # Find next opportunity using centralized logic
             next_opportunity = self._find_next_dhw_opportunity(
                 current_time=current_time,
