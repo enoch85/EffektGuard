@@ -8,12 +8,13 @@ trigger pre-heating through weighted aggregation.
 import pytest
 from unittest.mock import MagicMock
 from datetime import datetime
+from freezegun import freeze_time
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
     PRICE_VOLATILE_MIN_THRESHOLD,
     PRICE_VOLATILE_MAX_THRESHOLD,
-    PRICE_VOLATILE_SCAN_QUARTERS,
+    PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
@@ -326,17 +327,339 @@ class TestVolatileWeightReduction:
         # Should definitely detect volatility (6 non-NORMAL = 75% of scan window)
         # Decision should reflect reduced price influence
 
+    @freeze_time("2025-11-30 20:17:00")  # Q81 (20:15-20:30)
+    def test_backward_scan_after_ha_restart(self, engine, base_nibe_state, base_weather_data):
+        """Test bidirectional volatile detection after HA restart (real user scenario).
+        
+        Real scenario from user's price graph (Nov 30, 2025):
+        - 00:00-04:00 (Q0-Q16): ~25-30 öre = CHEAP
+        - 04:00-12:00 (Q16-Q48): ~40-50 öre = NORMAL
+        - 12:00-19:00 (Q48-Q76): ~75-80 öre = PEAK (massive spike)
+        - 19:00-21:00 (Q76-Q84): ~60-90 öre = EXPENSIVE/PEAK (volatile drop)
+        - HA restarted at 20:17 (Q81)
+        
+        Bidirectional scan at Q81:
+        - Backward (Q77-Q80): 4 quarters of recent history
+        - Current (Q81): 1 quarter
+        - Forward (Q82-Q85): 4 quarters of near future
+        - Total: 9 quarters (±60min window around current time)
+        
+        Expected with bidirectional scan:
+        - Scan Q77-Q85 (1h back + 1h forward)
+        - Detect mix of PEAK/EXPENSIVE in surrounding window
+        - Reduce weight to 0.4 (stop yo-yo behavior)
+        """
+        # Build realistic price pattern from user's graph
+        # Goal: Make Q74-Q81 scan window show clear volatility (mix of PEAK+EXPENSIVE)
+        price_periods = []
+        
+        # 00:00-04:00 (Q0-Q16): CHEAP ~25-30 öre
+        for q in range(16):
+            period = MagicMock()
+            period.price = 27.0  # Average of 25-30
+            period.is_daytime = False
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        # 04:00-12:00 (Q16-Q48): NORMAL/EXPENSIVE ~40-50 öre
+        for q in range(16, 48):
+            period = MagicMock()
+            period.price = 45.0 if q % 2 == 0 else 50.0  # Mix of NORMAL and EXPENSIVE
+            period.is_daytime = True
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        # 12:00-19:15 (Q48-Q77): PEAK ~75-80 öre (massive spike extends into scan window)
+        # Extend peak so backward scan at Q81 catches PEAK quarters in Q74-Q81 window
+        for q in range(48, 77):
+            period = MagicMock()
+            period.price = 77.0  # Will be ~P90 = PEAK
+            period.is_daytime = True
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        # 19:15-20:30 (Q77-Q82): Volatile drop - mix of PEAK and CHEAP bouncing
+        # Q77-Q85 bidirectional scan window should show clear price volatility
+        for q in range(77, 82):
+            period = MagicMock()
+            # Create yo-yo pattern: PEAK, CHEAP, PEAK, CHEAP, PEAK
+            # This simulates the actual volatile behavior user experienced
+            if q % 2 == 0:
+                period.price = 85.0  # PEAK (>P90=77)
+            else:
+                period.price = 25.0  # CHEAP (<P25=45)
+            period.is_daytime = True
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        # 20:30-24:00 (Q82-Q96): Continuing volatility then stabilizing
+        for q in range(82, 86):
+            period = MagicMock()
+            # More yo-yo: EXPENSIVE, CHEAP pattern
+            if q % 2 == 0:
+                period.price = 80.0  # PEAK
+            else:
+                period.price = 30.0  # CHEAP
+            period.is_daytime = False
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        # Rest stabilizes to NORMAL
+        for q in range(86, 96):
+            period = MagicMock()
+            period.price = 50.0
+            period.is_daytime = False
+            period.quarter_of_day = q
+            price_periods.append(period)
+        
+        price_data = MagicMock()
+        price_data.today = price_periods
+        price_data.tomorrow = []
+        price_data.has_tomorrow = False
+        
+        # Let price analyzer classify the periods normally
+        # This happens automatically in calculate_decision via get_current_classification()
+        # But we need to populate _classifications_today for backward scan to work
+        classifications = engine.price.classify_quarterly_periods(price_periods)
+        engine.price._classifications_today = classifications
+        
+        decision = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+        )
+        
+        # Key assertions for bidirectional scan fix:
+        
+        # 1. Bidirectional scan (Q77-Q85) should detect volatility
+        #    Window includes yo-yo pattern: PEAK/CHEAP/PEAK/CHEAP bouncing
+        #    Mix of classifications → volatile detected → weight reduced to 0.4
+        
+        # 2. System behavior during volatility:
+        #    With 9/9 non-NORMAL in window, price layer weight reduced 0.8 → 0.4
+        #    Price signal less influential, other layers dominate
+        #    Offset should be conservative (not chasing volatile prices)
+        
+        # The volatile detection happens in price layer (see DEBUG log):
+        # "Weight: 0.40 | Volatile: 9/9 non-NORMAL in ±67min window"
+        # But this doesn't propagate to final reasoning (design choice - keep user-facing clean)
+        
+        # Instead, verify the BEHAVIOR: conservative offset during volatility
+        assert abs(decision.offset) <= 1.0, \
+            f"Should be very conservative during extreme volatility (9/9 non-NORMAL), offset: {decision.offset}"
+        
+        # 3. System should NOT aggressively chase the yo-yo prices
+        #    Even though current quarter is CHEAP (25 öre), don't pre-heat aggressively
+        #    The volatility weight reduction prevents overreaction
+        assert decision.offset >= -0.5, \
+            f"Should not reduce heating during volatile CHEAP period, offset: {decision.offset}"
+        
+        # 4. Verify price layer had reduced influence (implicit via conservative offset)
+        #    If price layer was at full weight 0.8, we'd see larger offset swings
+        #    With 0.4 weight, offset should be muted
+        assert abs(decision.offset) < 0.5, \
+            f"Volatile weight reduction (0.4) should produce small offset, got: {decision.offset}"
+
+    def test_early_morning_edge_case(self, engine, base_nibe_state, base_weather_data):
+        """Test backward scan at Q0-Q7 when full 8-quarter history unavailable.
+        
+        Edge case:
+        - Current time: 00:15 (Q1) - only 2 quarters of history
+        - Backward scan should use Q0-Q1 (2 quarters) not fail
+        - scan_start = max(0, 1 - 8 + 1) = max(0, -6) = 0
+        - Scans Q0→Q1 (2 quarters available)
+        
+        Expected:
+        - No crash or error
+        - Uses available quarters (Q0-Q1)
+        - Volatile detection still works with partial window
+        """
+        # Build price data with volatility in first few quarters
+        price_periods = []
+        
+        # Q0: CHEAP
+        period = MagicMock()
+        period.price = 20.0
+        period.is_daytime = False
+        price_periods.append(period)
+        
+        # Q1: PEAK (sudden spike)
+        period = MagicMock()
+        period.price = 90.0
+        period.is_daytime = False
+        price_periods.append(period)
+        
+        # Q2-Q7: EXPENSIVE
+        for _ in range(6):
+            period = MagicMock()
+            period.price = 60.0
+            period.is_daytime = False
+            price_periods.append(period)
+        
+        # Rest of day: NORMAL
+        for i in range(8, 96):
+            period = MagicMock()
+            period.price = 40.0
+            period.is_daytime = i >= 24
+            price_periods.append(period)
+        
+        price_data = MagicMock()
+        price_data.today = price_periods
+        price_data.tomorrow = []
+        price_data.has_tomorrow = False
+        
+        # Test at Q1 (00:15) - only 2 quarters of history
+        engine.price._current_time_override = datetime(2025, 11, 30, 0, 15)
+        
+        # Should not crash
+        decision = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+        )
+        
+        # Should complete successfully
+        assert decision is not None, "Decision should complete even with partial scan window"
+        assert decision.offset is not None, "Should return valid offset"
+        
+        # Test at Q7 (01:45) - 8 quarters available (full window)
+        engine.price._current_time_override = datetime(2025, 11, 30, 1, 45)
+        
+        decision_q7 = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+        )
+        
+        # Should also work fine
+        assert decision_q7 is not None, "Decision should work with full 8-quarter window"
+        
+        # Q0-Q7 has mix (CHEAP, PEAK, EXPENSIVE) so should detect volatility
+        # Can't directly check internal flag, but system should be conservative
+        assert abs(decision_q7.offset) <= 2.0, \
+            f"Should be somewhat conservative with early morning volatility, offset: {decision_q7.offset}"
+
+    @freeze_time("2025-11-30 23:45:00")  # Q95 (23:45-00:00)
+    def test_day_transition_volatile_scan(self, engine, base_nibe_state, base_weather_data):
+        """Test bidirectional scan at day transition (23:45 → 00:00 crossing).
+        
+        Edge case:
+        - Current time: 23:45 (Q95) - last quarter of day
+        - Bidirectional scan: Q91-Q99 (4 back + current + 4 forward)
+        - Q96-Q99 are in tomorrow (need tomorrow prices)
+        
+        Scan window:
+        - Q91-Q95: Today (5 quarters)
+        - Q96-Q99: Tomorrow (4 quarters)
+        - Total: 9 quarters
+        
+        Expected:
+        - If tomorrow available: Scan full 9 quarters, detect volatility
+        - If no tomorrow: Scan only Q91-Q95, partial window
+        """
+        # Build price data with day transition volatility
+        price_periods_today = []
+        
+        # Q0-Q90: NORMAL ~50 öre (stable all day)
+        for q in range(91):
+            period = MagicMock()
+            period.price = 50.0
+            period.is_daytime = (6 * 4 <= q < 22 * 4)  # 06:00-22:00
+            period.quarter_of_day = q
+            price_periods_today.append(period)
+        
+        # Q91-Q95: Volatile spike - PEAK ~80 öre
+        for q in range(91, 96):
+            period = MagicMock()
+            period.price = 85.0  # PEAK
+            period.is_daytime = False
+            period.quarter_of_day = q
+            price_periods_today.append(period)
+        
+        # Tomorrow Q0-Q3: Volatile drop - CHEAP ~20 öre
+        price_periods_tomorrow = []
+        for q in range(4):
+            period = MagicMock()
+            period.price = 20.0  # CHEAP
+            period.is_daytime = False
+            period.quarter_of_day = q
+            price_periods_tomorrow.append(period)
+        
+        # Tomorrow Q4+: Stabilize to NORMAL
+        for q in range(4, 96):
+            period = MagicMock()
+            period.price = 50.0
+            period.is_daytime = (6 * 4 <= q < 22 * 4)
+            period.quarter_of_day = q
+            price_periods_tomorrow.append(period)
+        
+        # Test WITH tomorrow prices
+        price_data_with_tomorrow = MagicMock()
+        price_data_with_tomorrow.today = price_periods_today
+        price_data_with_tomorrow.tomorrow = price_periods_tomorrow
+        price_data_with_tomorrow.has_tomorrow = True
+        
+        # Populate classifications for both days
+        classifications_today = engine.price.classify_quarterly_periods(price_periods_today)
+        classifications_tomorrow = engine.price.classify_quarterly_periods(price_periods_tomorrow)
+        engine.price._classifications_today = classifications_today
+        engine.price._classifications_tomorrow = classifications_tomorrow
+        
+        decision_with_tomorrow = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data_with_tomorrow,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+        )
+        
+        # With tomorrow: Q91-Q95 (PEAK) + Q96-Q99 (CHEAP) = 9 quarters
+        # Mix of PEAK + CHEAP = volatility detected → weight 0.4
+        assert decision_with_tomorrow is not None, "Should handle day transition with tomorrow"
+        assert abs(decision_with_tomorrow.offset) <= 1.0, \
+            f"Should be conservative during day transition volatility, offset: {decision_with_tomorrow.offset}"
+        
+        # Test WITHOUT tomorrow prices (partial scan)
+        price_data_no_tomorrow = MagicMock()
+        price_data_no_tomorrow.today = price_periods_today
+        price_data_no_tomorrow.tomorrow = []
+        price_data_no_tomorrow.has_tomorrow = False
+        
+        # Only today classifications
+        engine.price._classifications_today = classifications_today
+        engine.price._classifications_tomorrow = []
+        
+        decision_no_tomorrow = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data_no_tomorrow,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+        )
+        
+        # Without tomorrow: Only Q91-Q95 (5 quarters of PEAK)
+        # All PEAK = no mix = no volatility by current threshold
+        # System should still work safely
+        assert decision_no_tomorrow is not None, "Should handle day transition without tomorrow"
+        
+        # Both scenarios should produce valid decisions
+        assert decision_with_tomorrow.offset is not None
+        assert decision_no_tomorrow.offset is not None
+
     def test_constants_relationship(self):
         """Verify constants have sensible relationships."""
         # Min threshold should prevent single-dip false positives
         assert PRICE_VOLATILE_MIN_THRESHOLD >= 3, \
             "Min threshold should ignore brief 1-2 period dips"
         
-        # Max threshold should catch clear volatility (~75% of scan)
-        assert PRICE_VOLATILE_MAX_THRESHOLD <= PRICE_VOLATILE_SCAN_QUARTERS, \
-            "Max threshold must be within scan window"
+        # Max threshold should be achievable within bidirectional scan window
+        # Window size = 2 * PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION + 1 (current)
+        scan_window_size = 2 * PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION + 1
+        assert PRICE_VOLATILE_MAX_THRESHOLD <= scan_window_size, \
+            f"Max threshold {PRICE_VOLATILE_MAX_THRESHOLD} must be within scan window {scan_window_size}"
         
-        volatility_ratio = PRICE_VOLATILE_MAX_THRESHOLD / PRICE_VOLATILE_SCAN_QUARTERS
+        volatility_ratio = PRICE_VOLATILE_MAX_THRESHOLD / scan_window_size
         assert 0.6 <= volatility_ratio <= 0.8, \
             f"Max threshold should be 60-80% of scan window, got {volatility_ratio:.1%}"
         

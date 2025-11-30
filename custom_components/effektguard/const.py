@@ -533,8 +533,8 @@ PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive peri
 
 # Volatile price detection (Nov 30, 2025)
 # When prices jump frequently between classifications, hold steady instead of chasing
-# Scan window: 2 hours (8 quarters × 15min)
-PRICE_VOLATILE_SCAN_QUARTERS: Final = 8  # 2 hours lookahead for volatility detection
+# Bidirectional scan: 1h backward + 1h forward = 2h total window
+PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 4  # 1 hour each direction (4 × 15min)
 PRICE_VOLATILE_MIN_THRESHOLD: Final = 3  # Min non-NORMAL periods to trigger (3 × 15min = 45min)
 PRICE_VOLATILE_MAX_THRESHOLD: Final = 6  # Max before definitely volatile (6 × 15min = 90min)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (

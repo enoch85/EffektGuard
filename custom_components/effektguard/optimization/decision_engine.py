@@ -170,7 +170,7 @@ from ..const import (
     PRICE_FORECAST_MIN_DURATION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
-    PRICE_VOLATILE_SCAN_QUARTERS,
+    PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION,
     PRICE_VOLATILE_MIN_THRESHOLD,
     PRICE_VOLATILE_MAX_THRESHOLD,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
@@ -1927,6 +1927,12 @@ class DecisionEngine:
         current_period = price_data.today[current_quarter]
         current_price = current_period.price
 
+        # Initialize variables (moved outside if-block to avoid UnboundLocalError)
+        current_cheap_too_brief = False
+        remaining_cheap_quarters = 0
+        is_volatile_period = False
+        volatile_reason = ""
+
         # Forward-looking price analysis - horizon scales with thermal mass
         # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
         # Calculate horizon based on thermal mass (higher mass = longer lookahead)
@@ -1991,9 +1997,6 @@ class DecisionEngine:
 
             # Check if current CHEAP period is too brief for meaningful heating (Nov 29, 2025)
             # Compressor needs ~45min to efficiently use cheap electricity
-            current_cheap_too_brief = False
-            remaining_cheap_quarters = 0
-
             if classification == QuarterClassification.CHEAP:
                 # Count remaining consecutive CHEAP quarters (including current)
                 remaining_cheap_quarters = 1
@@ -2018,20 +2021,21 @@ class DecisionEngine:
                 current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
 
             # Volatile/jumpy price detection (Nov 30, 2025)
-            # Count non-NORMAL periods in scan window to detect price volatility
-            # Logic: If prices keep jumping (CHEAP/NORMAL/EXPENSIVE/PEAK bouncing),
-            # we'll see many non-NORMAL periods → hold steady instead of chasing
-            is_volatile_period = False
-            volatile_reason = ""
+            # Bidirectional scan: 1h backward + 1h forward (total ~2h window)
+            # Logic: If we're IN THE MIDDLE of volatile period (prices jumping around us),
+            # we see many non-NORMAL periods in both directions → hold steady instead of chasing
 
-            # Count each classification in scan window
-            scan_end = min(current_quarter + PRICE_VOLATILE_SCAN_QUARTERS, 96)
+            # Scan window: N quarters back + current + N forward (N = PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION)
+            scan_start = max(0, current_quarter - PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION)
+            scan_end = min(current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION, 95)
+
             expensive_count = 0
             cheap_count = 0
             peak_count = 0
             normal_count = 0
 
-            for quarter_idx in range(current_quarter, scan_end):
+            # Scan bidirectionally through today
+            for quarter_idx in range(scan_start, scan_end + 1):
                 quarter_classification = self.price.get_current_classification(quarter_idx)
                 if quarter_classification == QuarterClassification.PEAK:
                     peak_count += 1
@@ -2042,9 +2046,15 @@ class DecisionEngine:
                 elif quarter_classification == QuarterClassification.NORMAL:
                     normal_count += 1
 
-            # Check tomorrow if scan extends past midnight
-            if scan_end >= 96 and self.price.has_tomorrow_prices():
-                remaining_scan = PRICE_VOLATILE_SCAN_QUARTERS - (96 - current_quarter)
+            # Check tomorrow if forward scan would extend past midnight
+            if (
+                current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION > 95
+                and price_data.has_tomorrow
+            ):
+                # How many quarters we need from tomorrow
+                remaining_scan = (
+                    current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION
+                ) - 95
                 for quarter_idx in range(min(remaining_scan, 96)):
                     quarter_classification = self.price.get_tomorrow_classification(quarter_idx)
                     if quarter_classification == QuarterClassification.PEAK:
@@ -2058,7 +2068,14 @@ class DecisionEngine:
 
             # Calculate non-NORMAL count (EXPENSIVE + CHEAP + PEAK)
             non_normal_count = expensive_count + cheap_count + peak_count
-            total_periods = PRICE_VOLATILE_SCAN_QUARTERS
+            actual_scan_periods = (scan_end + 1) - scan_start  # Quarters actually scanned today
+            if (
+                current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION > 95
+                and price_data.has_tomorrow
+            ):
+                actual_scan_periods += min(
+                    (current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION) - 95, 96
+                )  # Add tomorrow quarters
 
             # Volatile if:
             # 1. >= 6 non-NORMAL periods (75% of 8 quarters = definitely jumpy)
@@ -2066,9 +2083,9 @@ class DecisionEngine:
             has_mix = sum([expensive_count > 0, cheap_count > 0, peak_count > 0]) >= 2
 
             if non_normal_count >= PRICE_VOLATILE_MAX_THRESHOLD:
-                # Definitely volatile - 6+ non-NORMAL in 2h (90min+)
+                # Definitely volatile - 6+ non-NORMAL in 2h window around current time
                 is_volatile_period = True
-                volatile_reason = f" | Volatile: {non_normal_count}/{total_periods} non-NORMAL periods in {PRICE_VOLATILE_SCAN_QUARTERS * 15}min - holding steady"
+                volatile_reason = f" | Volatile: {non_normal_count}/{actual_scan_periods} non-NORMAL in ±{actual_scan_periods * 15 // 2}min window - holding steady"
             elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_mix:
                 # Moderately volatile - 3+ non-NORMAL AND mixed types (jumpy)
                 is_volatile_period = True
@@ -2079,7 +2096,7 @@ class DecisionEngine:
                     types.append(f"{expensive_count}×EXP")
                 if cheap_count > 0:
                     types.append(f"{cheap_count}×CHEAP")
-                volatile_reason = f" | Volatile: {' + '.join(types)} mixed in {PRICE_VOLATILE_SCAN_QUARTERS * 15}min - reducing confidence"
+                volatile_reason = f" | Volatile: {' + '.join(types)} mixed in ±{actual_scan_periods * 15 // 2}min - reducing confidence"
 
             # Apply normal forecast logic regardless of volatility
             # Volatility will reduce weight, not block smart decisions
