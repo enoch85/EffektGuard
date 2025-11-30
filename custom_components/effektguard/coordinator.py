@@ -730,13 +730,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Run optimization decision engine
         is_grace_period = False
         try:
+            # Validate peak tracking data
+            if self.peak_today is None or self.peak_today < 0:
+                _LOGGER.error(
+                    "Peak tracking error: peak_today is %s (should have actual power measurement). "
+                    "This indicates power sensor is not configured or unavailable. "
+                    "Peak protection will be disabled until sensors are available.",
+                    self.peak_today,
+                )
+                current_power_for_decision = 0.0  # Disable peak protection
+            else:
+                current_power_for_decision = self.peak_today
+
             decision = await self.hass.async_add_executor_job(
                 self.engine.calculate_decision,
                 nibe_data,
                 price_data,
                 weather_data,
                 self.peak_this_month,  # Monthly peak threshold to protect
-                self.peak_today,  # Current whole-house power consumption
+                current_power_for_decision,  # Current whole-house power consumption
             )
 
             # Startup grace period: Skip first action to allow sensors/trends to stabilize

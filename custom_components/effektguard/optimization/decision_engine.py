@@ -2482,44 +2482,6 @@ class DecisionEngine:
 
         return " | ".join(reasons)
 
-    def _estimate_heat_pump_power(self, nibe_state) -> float:
-        """Get or estimate heat pump power consumption from state.
-
-        Prefers actual power_kw from sensors if available.
-        Falls back to estimation only when actual data unavailable.
-
-        Args:
-            nibe_state: Current NIBE state
-
-        Returns:
-            Power consumption in kW (actual or estimated)
-        """
-        # Use actual power reading if available (PRIORITY)
-        if hasattr(nibe_state, "power_kw") and nibe_state.power_kw is not None:
-            _LOGGER.debug(
-                "Using actual power consumption: %.2f kW (from sensors)", nibe_state.power_kw
-            )
-            return nibe_state.power_kw
-
-        # Fall back to estimation (less accurate)
-        _LOGGER.debug("Power sensor not available, using estimation")
-
-        # Basic estimation based on compressor status and outdoor temp
-        if not nibe_state.is_heating:
-            return 0.1  # Standby power
-
-        # Rough estimation: colder outdoor = higher power
-        outdoor_temp = nibe_state.outdoor_temp
-        base_power = 4.0  # kW baseline
-
-        # Adjust for outdoor temperature
-        if outdoor_temp < -10:
-            return base_power * 1.3
-        elif outdoor_temp < 0:
-            return base_power * 1.1
-        else:
-            return base_power
-
     def _validate_power_consumption(
         self,
         current_power_kw: float,
