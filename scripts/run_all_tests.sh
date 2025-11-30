@@ -5,6 +5,15 @@
 # Don't use set -e because we need to capture test failures
 set -o pipefail
 
+# Activate virtual environment if it exists
+if [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+    echo "Virtual environment activated"
+elif [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+    echo "Virtual environment activated"
+fi
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
