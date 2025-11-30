@@ -756,9 +756,8 @@ DM_RECOVERY_RATE_VERY_COLD: Final = 20.0  # DM/hour - Very cold (<0°C), reduced
 DM_RECOVERY_MAX_HOURS: Final = 12.0  # Maximum recovery time estimate (if longer, error condition)
 DM_RECOVERY_SAFETY_BUFFER: Final = 20.0  # DM - Safety buffer above warning threshold
 
-# Indoor temperature recovery estimation
-INDOOR_TEMP_RECOVERY_RATE: Final = 0.7  # °C/hour - Conservative indoor heating rate
-INDOOR_TEMP_RECOVERY_MAX_HOURS: Final = 6.0  # Maximum recovery time
+# Indoor temperature recovery estimation (used for test validation bounds)
+INDOOR_TEMP_RECOVERY_MAX_HOURS: Final = 6.0  # Maximum recovery time for validation
 
 # Space heating demand drop estimation
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
