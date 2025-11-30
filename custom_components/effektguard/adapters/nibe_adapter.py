@@ -34,7 +34,6 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
-    NIBE_OFFSET_HYSTERESIS_MARGIN,
     NIBE_POWER_FACTOR,
     NIBE_VOLTAGE_PER_PHASE,
     TEMP_FACTOR_MAX,
@@ -107,11 +106,8 @@ class NibeAdapter:
         self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
         self._last_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
-        # Accumulator for fractional offset changes (NIBE only accepts integers)
-        self._fractional_accumulator: float = 0.0
-        # Track if we've synced with actual NIBE offset since startup
-        # On restart, accumulator resets but NIBE keeps its value - we need to verify sync
-        self._startup_sync_done: bool = False
+        # Track last integer offset sent to NIBE (to avoid redundant writes)
+        self._last_nibe_offset: int | None = None
 
     async def get_current_state(self) -> NibeState:
         """Read current NIBE heat pump state from entities.
@@ -258,15 +254,17 @@ class NibeAdapter:
     async def set_curve_offset(self, offset: float) -> bool:
         """Set heating curve offset via NIBE entity.
 
+        Simple approach: Only write to NIBE when integer part changes.
+        NIBE only accepts integers, so we round and only send when different.
+
         Args:
-            offset: Offset value in °C (-10 to +10)
+            offset: Offset value in °C (e.g., 2.35)
 
         Returns:
-            True if offset was written to NIBE, False if deferred/accumulated
+            True if offset was written to NIBE, False if unchanged
 
         Note:
             Requires NIBE Myuplink Premium subscription for write access.
-            Implements rate limiting to avoid excessive API calls.
         """
         from datetime import timedelta
 
@@ -282,9 +280,7 @@ class NibeAdapter:
             _LOGGER.error("No offset entity found")
             return False
 
-        # CHECK: Verify entity is available before service call
-        # Prevents "Action number.set_value not found" errors during startup
-        # when MyUplink entities are still initializing
+        # Check entity is available
         state = self.hass.states.get(offset_entity)
         if not state or state.state in ["unavailable", "unknown"]:
             _LOGGER.warning(
@@ -294,224 +290,58 @@ class NibeAdapter:
             )
             return False
 
-        # NIBE offset rounding with fractional accumulation
-        # NIBE MyUplink entities have step=1 (integer only), but optimization
-        # calculates fractional offsets (e.g., 0.35°C for gentle nudges).
-        # Solution: Accumulate fractional parts and apply when they sum to ±1°C
-        # This preserves gentle optimization while respecting NIBE constraints.
+        # Simple: round to nearest integer
+        integer_offset = round(offset)
 
-        original_offset = offset
-
-        # Add fractional part to accumulator
-        integer_part = int(offset)
-        fractional_part = offset - integer_part
-
-        _LOGGER.debug(
-            "Offset calculation: original=%.2f°C, integer=%d°C, fractional=%.2f°C, "
-            "accumulator_before=%.2f°C",
-            original_offset,
-            integer_part,
-            fractional_part,
-            self._fractional_accumulator,
-        )
-
-        self._fractional_accumulator += fractional_part
-
-        # Check if accumulated fractional changes warrant an adjustment
-        if abs(self._fractional_accumulator) >= 1.0:
-            # Apply accumulated change
-            accumulated_adjustment = int(self._fractional_accumulator)
-            integer_part += accumulated_adjustment
-            self._fractional_accumulator -= accumulated_adjustment
-            _LOGGER.info(
-                "✓ Accumulated fractional offset reached threshold: "
-                "applying %+d°C adjustment (accumulator: %.2f°C → %.2f°C)",
-                accumulated_adjustment,
-                self._fractional_accumulator + accumulated_adjustment,
-                self._fractional_accumulator,
-            )
-            _LOGGER.debug(
-                "Accumulator triggered: total_accumulated=%.2f°C, adjustment=%+d°C, "
-                "new_integer=%d°C, remaining=%.2f°C",
-                self._fractional_accumulator + accumulated_adjustment,
-                accumulated_adjustment,
-                integer_part,
-                self._fractional_accumulator,
-            )
-
-        offset_to_apply = integer_part
-
-        # Read current NIBE offset to check if we need to actively reset to 0
-        # This fixes the issue where NIBE stays at offset 1 when EffektGuard wants 0
-        current_nibe_offset = None
-        try:
-            current_nibe_offset = float(state.state)
-        except (ValueError, TypeError):
-            _LOGGER.debug("Could not read current NIBE offset, will proceed with write")
-
-        # STARTUP SYNC CHECK (Nov 30, 2025)
-        # On restart, the fractional accumulator resets to 0 but NIBE keeps its value.
-        # This can cause a mismatch where EffektGuard thinks NIBE is at 0 but it's at ±1.
-        # On first write after restart, verify NIBE matches what we want to apply.
-        if not self._startup_sync_done and current_nibe_offset is not None:
-            self._startup_sync_done = True
-            expected_nibe = offset_to_apply
-            actual_nibe = int(current_nibe_offset)
-
-            if actual_nibe != expected_nibe:
+        # Read current NIBE offset on first call (sync with actual state)
+        if self._last_nibe_offset is None:
+            try:
+                self._last_nibe_offset = int(float(state.state))
                 _LOGGER.info(
-                    "🔄 Startup sync: NIBE offset mismatch detected! "
-                    "NIBE at %d°C but we want %d°C (calculated: %.2f°C). Forcing sync.",
-                    actual_nibe,
-                    expected_nibe,
-                    original_offset,
+                    "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C)",
+                    self._last_nibe_offset,
+                    offset,
                 )
-                # Force write by falling through (don't skip)
-                # Reset accumulator to match actual state we're writing
-                self._fractional_accumulator = original_offset - expected_nibe
-                _LOGGER.debug(
-                    "Startup sync: Reset accumulator to %.2f°C to track remaining fractional",
-                    self._fractional_accumulator,
-                )
-            else:
-                _LOGGER.info(
-                    "✓ Startup sync: NIBE offset verified at %d°C (calculated: %.2f°C)",
-                    actual_nibe,
-                    original_offset,
-                )
-                # Initialize accumulator based on difference between calculated and actual
-                self._fractional_accumulator = original_offset - actual_nibe
-                _LOGGER.debug(
-                    "Startup sync: Initialized accumulator to %.2f°C",
-                    self._fractional_accumulator,
-                )
-                # If NIBE already matches, we can skip this write
-                if abs(self._fractional_accumulator) < 1.0:
-                    return False
+            except (ValueError, TypeError):
+                self._last_nibe_offset = 0
 
-        # Skip API call only if:
-        # 1. Calculated offset rounds to 0, AND
-        # 2. Accumulator hasn't reached threshold, AND
-        # 3. NIBE is already at 0 (or we can't read current value safely)
-        #
-        # HYSTERESIS: To prevent offset oscillation (NIBE flipping 0↔1 repeatedly),
-        # only reset NIBE downward when calculated is CLEARLY below threshold.
-        # - To go from NIBE=1 to NIBE=0: calculated must be <= 0.3 (not just < 0.5)
-        # - This creates a "dead zone" where values 0.3-0.7 don't trigger changes
-        
-        if offset_to_apply == 0 and abs(self._fractional_accumulator) < 1.0:
-            if current_nibe_offset is not None and current_nibe_offset >= 1:
-                # NIBE is at positive offset but we want 0
-                # Only reset if calculated is clearly below (with hysteresis)
-                if original_offset <= NIBE_OFFSET_HYSTERESIS_MARGIN:
-                    _LOGGER.info(
-                        "→ Resetting NIBE offset from %d°C to 0°C "
-                        "(calculated: %.2f°C <= hysteresis %.1f)",
-                        int(current_nibe_offset),
-                        original_offset,
-                        NIBE_OFFSET_HYSTERESIS_MARGIN,
-                    )
-                    # Fall through to write
-                else:
-                    _LOGGER.debug(
-                        "⏸ Skipping reset: calculated %.2f°C > hysteresis %.1f, "
-                        "keeping NIBE at %d°C",
-                        original_offset,
-                        NIBE_OFFSET_HYSTERESIS_MARGIN,
-                        int(current_nibe_offset),
-                    )
-                    return False
-            elif current_nibe_offset is not None and current_nibe_offset <= -1:
-                # NIBE is at negative offset but we want 0
-                # Only reset if calculated is clearly above (with hysteresis)
-                if original_offset >= -NIBE_OFFSET_HYSTERESIS_MARGIN:
-                    _LOGGER.info(
-                        "→ Resetting NIBE offset from %d°C to 0°C "
-                        "(calculated: %.2f°C >= hysteresis %.1f)",
-                        int(current_nibe_offset),
-                        original_offset,
-                        -NIBE_OFFSET_HYSTERESIS_MARGIN,
-                    )
-                    # Fall through to write
-                else:
-                    _LOGGER.debug(
-                        "⏸ Skipping reset: calculated %.2f°C < hysteresis %.1f, "
-                        "keeping NIBE at %d°C",
-                        original_offset,
-                        -NIBE_OFFSET_HYSTERESIS_MARGIN,
-                        int(current_nibe_offset),
-                    )
-                    return False
-            else:
-                _LOGGER.debug(
-                    "⏸ Skipping NIBE write: offset rounds to 0°C and NIBE already at %s "
-                    "(accumulator: %.2f°C, will apply when ≥±1.0°C)",
-                    f"{int(current_nibe_offset)}°C" if current_nibe_offset is not None else "0°C",
-                    self._fractional_accumulator,
-                )
-                return False
-
-        # Log accumulator status
-        if abs(fractional_part) > 0.01:
-            if abs(self._fractional_accumulator) < 1.0:
-                _LOGGER.debug(
-                    "→ Deferring fractional offset %.2f°C → applying %d°C "
-                    "(accumulator: %.2f°C, needs %.2f°C more to trigger)",
-                    original_offset,
-                    offset_to_apply,
-                    self._fractional_accumulator,
-                    1.0 - abs(self._fractional_accumulator),
-                )
-            else:
-                _LOGGER.debug(
-                    "→ Fractional offset %.2f°C → applying %d°C (after accumulator adjustment)",
-                    original_offset,
-                    offset_to_apply,
-                )
-        else:
+        # Only write if integer part changed
+        if integer_offset == self._last_nibe_offset:
             _LOGGER.debug(
-                "→ Integer offset %.2f°C → applying %d°C (no accumulation needed)",
-                original_offset,
-                offset_to_apply,
+                "Offset unchanged: %.2f°C → %d°C (NIBE already at %d°C)",
+                offset,
+                integer_offset,
+                self._last_nibe_offset,
             )
+            return False
 
-        # Set value via number entity service (non-blocking)
+        # Store old value for logging before updating
+        old_offset = self._last_nibe_offset
+
+        # Write to NIBE
         try:
             await self.hass.services.async_call(
                 "number",
                 "set_value",
                 {
                     "entity_id": offset_entity,
-                    "value": offset_to_apply,
+                    "value": integer_offset,
                 },
-                blocking=False,  # Non-blocking to avoid UI delays
+                blocking=False,
             )
             self._last_write = now
+            self._last_nibe_offset = integer_offset
 
-            # Summary logging
-            if abs(original_offset - offset_to_apply) > 0.01:
-                _LOGGER.info(
-                    "Set NIBE offset to %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
-                    offset_to_apply,
-                    original_offset,
-                    self._fractional_accumulator,
-                )
-            else:
-                _LOGGER.info("Set NIBE offset to %d°C", offset_to_apply)
-
-            _LOGGER.debug(
-                "Offset write complete: entity=%s, value=%d°C, "
-                "original=%.2f°C, accumulator=%.2f°C",
-                offset_entity,
-                offset_to_apply,
-                original_offset,
-                self._fractional_accumulator,
+            _LOGGER.info(
+                "Set NIBE offset: %d°C → %d°C (calculated: %.2f°C)",
+                old_offset,
+                integer_offset,
+                offset,
             )
             return True
+
         except (AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
-            # Don't raise - allow system to continue gracefully
-            # Error logged for debugging, but not fatal
             return False
 
     async def _discover_nibe_entities(self) -> None:

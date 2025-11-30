@@ -699,8 +699,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self._learned_data_changed = True  # Trigger save on shutdown
                 else:
                     _LOGGER.debug(
-                        "Offset %.2f°C deferred (accumulating fractional changes or rate limited)",
+                        "Offset %.2f°C unchanged (NIBE already at %d°C)",
                         decision.offset,
+                        round(decision.offset),
                     )
             except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
@@ -1850,7 +1851,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             await self.nibe.set_curve_offset(offset)
             self.current_offset = offset
-            # Track successfully applied offset to avoid redundant API calls on restart
             self.last_applied_offset = offset
             self.last_offset_timestamp = dt_util.utcnow()
             self._learned_data_changed = True  # Trigger save on shutdown
