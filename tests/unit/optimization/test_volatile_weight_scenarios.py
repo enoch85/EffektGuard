@@ -663,9 +663,11 @@ class TestVolatileWeightReduction:
         assert 0.6 <= volatility_ratio <= 0.8, \
             f"Max threshold should be 60-80% of scan window, got {volatility_ratio:.1%}"
         
-        # Weight reduction should be moderate (not kill price signal entirely)
-        assert 0.3 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.7, \
-            f"Weight reduction should be 30-70%, got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
+        # Weight reduction should be very aggressive to prevent chasing volatile prices
+        # Nov 30, 2025: Changed to 0.05-0.15 range (5-15% retention = 85-95% reduction)
+        # This ensures thermal/comfort layers dominate during price chaos
+        assert 0.05 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.15, \
+            f"Weight reduction should be very aggressive (5-15% retention), got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
         
         # Expensive threshold for spikes should require >2x price
         assert PRICE_FORECAST_EXPENSIVE_THRESHOLD >= 1.5, \

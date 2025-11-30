@@ -2226,12 +2226,13 @@ class DecisionEngine:
                 cost_multiplier = max_upcoming / current_price
                 strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot acceptable for {cost_multiplier:.1f}x cost savings"
 
-        # Apply volatility weight reduction (Nov 30, 2025 fix)
-        # During volatile periods, reduce price layer weight to allow other layers more influence
-        # Strong signals (like +2.0°C pre-heat for 5x spike) still come through, just dampened
+        # Apply very aggressive volatility weight reduction (Nov 30, 2025)
+        # During volatile periods, drastically reduce price layer influence
+        # Math: 0.8 × 0.1 = 0.08 (price layer reduced to 10% of normal strength)
+        # Effect: Thermal/comfort/weather layers dominate, preventing chase behavior
         price_weight = LAYER_WEIGHT_PRICE
         if is_volatile_period:
-            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.4
+            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.08
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
@@ -2256,7 +2257,7 @@ class DecisionEngine:
         return LayerDecision(
             offset=final_offset,
             weight=price_weight,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{strategic_context}{brief_cheap_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason if is_volatile_period else ''}{strategic_context}{brief_cheap_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:

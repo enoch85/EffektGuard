@@ -532,13 +532,19 @@ PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
 # Volatile price detection (Nov 30, 2025)
-# When prices jump frequently between classifications, hold steady instead of chasing
+# When prices jump frequently between classifications, drastically reduce price influence
 # Bidirectional scan: 1h backward + 1h forward = 2h total window
+#
+# MULTIPLIER MATH (smaller = more aggressive dampening):
+# - Normal price weight: 0.8
+# - During volatility: 0.8 × 0.1 = 0.08 (price layer reduced to 10% of normal strength)
+# - This lets thermal/comfort/weather layers dominate decision-making
+# - Prevents heat pump from chasing rapid CHEAP↔EXPENSIVE price swings
 PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 4  # 1 hour each direction (4 × 15min)
 PRICE_VOLATILE_MIN_THRESHOLD: Final = 3  # Min non-NORMAL periods to trigger (3 × 15min = 45min)
 PRICE_VOLATILE_MAX_THRESHOLD: Final = 6  # Max before definitely volatile (6 × 15min = 90min)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (
-    0.5  # multiplier - reduce price layer weight during volatility (0.8 → 0.4)
+    0.1  # Very aggressive: reduce price weight to 10% during volatility (0.8 → 0.08)
 )
 
 # Comfort layer constants (Oct 19, 2025)
