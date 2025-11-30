@@ -20,6 +20,7 @@ from .const import (
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_POWER_KW,
+    DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DHW_COOLING_RATE,
     DHW_READY_THRESHOLD,
@@ -1019,8 +1020,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
         # Calculate space heating demand (simplified - from indoor temp deficit)
-        indoor_temp = nibe_data.indoor_temp if nibe_data else 20.0
-        target_indoor = 21.0  # Default target
+        indoor_temp = nibe_data.indoor_temp if nibe_data else DEFAULT_INDOOR_TEMP
+        target_indoor = DEFAULT_INDOOR_TEMP  # Default target
         indoor_deficit = target_indoor - indoor_temp
         space_heating_demand = max(0, indoor_deficit * 2.0)  # Rough kW estimate
 
@@ -1454,15 +1455,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get thermal_debt and indoor_temp from coordinator data for abort conditions
         thermal_debt = (
             self.data.get("dhw_planning_details", {}).get("thermal_debt", 0.0)
-            if self.last_update_success and hasattr(self, "data")
+            if self.last_update_success and hasattr(self, "data") and self.data is not None
             else 0.0
         )
         indoor_temp = (
-            self.data.get("dhw_planning_details", {}).get("indoor_temperature", 21.0)
-            if self.last_update_success and hasattr(self, "data")
-            else 21.0
+            self.data.get("dhw_planning_details", {}).get("indoor_temperature", DEFAULT_INDOOR_TEMP)
+            if self.last_update_success and hasattr(self, "data") and self.data is not None
+            else DEFAULT_INDOOR_TEMP
         )
-        target_indoor = self.entry.data.get("target_indoor_temp", 21.0)
+        target_indoor = self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP)
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
