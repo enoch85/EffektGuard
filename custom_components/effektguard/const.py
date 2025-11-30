@@ -563,6 +563,12 @@ OPTIMAL_FLOW_DELTA_SPF_4: Final = 27.0  # ±3°C for SPF ≥4.0 systems
 OPTIMAL_FLOW_DELTA_SPF_35: Final = 30.0  # ±4°C for SPF ≥3.5 systems
 DEFAULT_CURVE_SENSITIVITY: Final = 1.5  # NIBE curve sensitivity (~1.5°C flow change per 1°C offset)
 
+# NIBE offset hysteresis (prevents offset oscillation)
+# When NIBE is at N and calculated offset rounds to N-1 or N+1, only change if
+# calculated is clearly past the boundary (beyond the hysteresis margin).
+# Example: NIBE=1, margin=0.3 → only reset to 0 if calculated <= 0.3
+NIBE_OFFSET_HYSTERESIS_MARGIN: Final = 0.3
+
 # Weather compensation mathematical constants
 KUEHNE_COEFFICIENT: Final = 2.55  # Universal coefficient for flow temperature calculation
 KUEHNE_POWER: Final = 0.78  # Power coefficient for heat transfer physics

@@ -34,6 +34,7 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
+    NIBE_OFFSET_HYSTERESIS_MARGIN,
     NIBE_POWER_FACTOR,
     NIBE_VOLTAGE_PER_PHASE,
     TEMP_FACTOR_MAX,
@@ -393,19 +394,54 @@ class NibeAdapter:
         # 2. Accumulator hasn't reached threshold, AND
         # 3. NIBE is already at 0 (or we can't read current value safely)
         #
-        # If NIBE is at a non-zero offset (e.g., 1) and we want 0, we MUST write 0
-        # to actively bring the offset down. Otherwise NIBE keeps its old value.
+        # HYSTERESIS: To prevent offset oscillation (NIBE flipping 0↔1 repeatedly),
+        # only reset NIBE downward when calculated is CLEARLY below threshold.
+        # - To go from NIBE=1 to NIBE=0: calculated must be <= 0.3 (not just < 0.5)
+        # - This creates a "dead zone" where values 0.3-0.7 don't trigger changes
+        
         if offset_to_apply == 0 and abs(self._fractional_accumulator) < 1.0:
-            if current_nibe_offset is not None and abs(current_nibe_offset) >= 1.0:
-                # NIBE is at non-zero offset but we want 0 - actively reset it
-                _LOGGER.info(
-                    "→ Resetting NIBE offset from %d°C to 0°C "
-                    "(calculated: %.2f°C, accumulator: %.2f°C)",
-                    int(current_nibe_offset),
-                    original_offset,
-                    self._fractional_accumulator,
-                )
-                # Don't skip - fall through to write offset_to_apply (0)
+            if current_nibe_offset is not None and current_nibe_offset >= 1:
+                # NIBE is at positive offset but we want 0
+                # Only reset if calculated is clearly below (with hysteresis)
+                if original_offset <= NIBE_OFFSET_HYSTERESIS_MARGIN:
+                    _LOGGER.info(
+                        "→ Resetting NIBE offset from %d°C to 0°C "
+                        "(calculated: %.2f°C <= hysteresis %.1f)",
+                        int(current_nibe_offset),
+                        original_offset,
+                        NIBE_OFFSET_HYSTERESIS_MARGIN,
+                    )
+                    # Fall through to write
+                else:
+                    _LOGGER.debug(
+                        "⏸ Skipping reset: calculated %.2f°C > hysteresis %.1f, "
+                        "keeping NIBE at %d°C",
+                        original_offset,
+                        NIBE_OFFSET_HYSTERESIS_MARGIN,
+                        int(current_nibe_offset),
+                    )
+                    return False
+            elif current_nibe_offset is not None and current_nibe_offset <= -1:
+                # NIBE is at negative offset but we want 0
+                # Only reset if calculated is clearly above (with hysteresis)
+                if original_offset >= -NIBE_OFFSET_HYSTERESIS_MARGIN:
+                    _LOGGER.info(
+                        "→ Resetting NIBE offset from %d°C to 0°C "
+                        "(calculated: %.2f°C >= hysteresis %.1f)",
+                        int(current_nibe_offset),
+                        original_offset,
+                        -NIBE_OFFSET_HYSTERESIS_MARGIN,
+                    )
+                    # Fall through to write
+                else:
+                    _LOGGER.debug(
+                        "⏸ Skipping reset: calculated %.2f°C < hysteresis %.1f, "
+                        "keeping NIBE at %d°C",
+                        original_offset,
+                        -NIBE_OFFSET_HYSTERESIS_MARGIN,
+                        int(current_nibe_offset),
+                    )
+                    return False
             else:
                 _LOGGER.debug(
                     "⏸ Skipping NIBE write: offset rounds to 0°C and NIBE already at %s "
