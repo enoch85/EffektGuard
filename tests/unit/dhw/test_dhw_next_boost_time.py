@@ -444,3 +444,72 @@ def test_all_blocking_reasons_have_recommended_time(scheduler_with_climate, curr
                 decision.recommended_start_time is not None
             ), f"Blocking reason '{decision.priority_reason}' missing recommended_start_time!"
             assert decision.recommended_start_time >= current_time
+
+
+# ==============================================================================
+# PHASE 3: DATACLASS VALIDATION TESTS
+# ==============================================================================
+
+
+def test_dataclass_validation_blocks_missing_recommended_time():
+    """Test that DHWScheduleDecision validation catches missing recommended_start_time.
+
+    Phase 3: Prevents regression - ensures new blocking logic can't be added
+    without providing next opportunity timestamp.
+    """
+    from custom_components.effektguard.optimization.dhw_optimizer import DHWScheduleDecision
+
+    # Valid: Blocking decision WITH recommended_start_time
+    valid_decision = DHWScheduleDecision(
+        should_heat=False,
+        priority_reason="TEST_BLOCKING",
+        target_temp=0.0,
+        max_runtime_minutes=0,
+        abort_conditions=[],
+        recommended_start_time=datetime.now() + timedelta(hours=1),
+    )
+    assert valid_decision.recommended_start_time is not None
+
+    # Invalid: Blocking decision WITHOUT recommended_start_time should raise ValueError
+    with pytest.raises(
+        ValueError, match="blocks heating but doesn't provide recommended_start_time"
+    ):
+        DHWScheduleDecision(
+            should_heat=False,
+            priority_reason="TEST_BLOCKING_INVALID",
+            target_temp=0.0,
+            max_runtime_minutes=0,
+            abort_conditions=[],
+            recommended_start_time=None,  # Invalid for blocking decision!
+        )
+
+
+def test_dataclass_validation_allows_heating_without_timestamp():
+    """Test that heating decisions can optionally omit recommended_start_time.
+
+    Heating decisions (should_heat=True) can have None for recommended_start_time
+    since the sensor will show "pending" or the actual heating start time.
+    """
+    from custom_components.effektguard.optimization.dhw_optimizer import DHWScheduleDecision
+
+    # Valid: Heating decision without recommended_start_time
+    heating_decision = DHWScheduleDecision(
+        should_heat=True,
+        priority_reason="TEST_HEATING",
+        target_temp=50.0,
+        max_runtime_minutes=45,
+        abort_conditions=["thermal_debt < -500"],
+        recommended_start_time=None,  # OK for heating decisions
+    )
+    assert heating_decision.should_heat is True
+
+    # Also valid: Heating decision with recommended_start_time
+    heating_with_time = DHWScheduleDecision(
+        should_heat=True,
+        priority_reason="TEST_HEATING_SCHEDULED",
+        target_temp=50.0,
+        max_runtime_minutes=45,
+        abort_conditions=[],
+        recommended_start_time=datetime.now(),
+    )
+    assert heating_with_time.recommended_start_time is not None

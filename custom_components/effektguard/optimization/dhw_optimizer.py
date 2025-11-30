@@ -87,6 +87,23 @@ class DHWScheduleDecision:
     abort_conditions: list[str]  # Monitor these to decide early abort
     recommended_start_time: datetime | None = None
 
+    def __post_init__(self):
+        """Validate decision consistency.
+
+        Ensures user always knows when DHW will be available.
+        Prevents regression to "Unknown" sensor state.
+        """
+        # If not heating, MUST provide next opportunity
+        if not self.should_heat and self.recommended_start_time is None:
+            raise ValueError(
+                f"DHW decision '{self.priority_reason}' blocks heating "
+                f"but doesn't provide recommended_start_time. "
+                f"User needs to know when DHW will resume!"
+            )
+
+        # If heating now, recommended_start_time should be current time or None
+        # (None is acceptable for immediate heating as sensor shows "pending")
+
 
 @dataclass
 class DHWDemandPeriod:
@@ -509,12 +526,24 @@ class IntelligentDHWScheduler:
                     price_classification,
                     thermal_debt_dm,
                 )
+                # Find next opportunity using centralized logic
+                next_opportunity = self._find_next_dhw_opportunity(
+                    current_time=current_time,
+                    current_dhw_temp=current_dhw_temp,
+                    thermal_debt_dm=thermal_debt_dm,
+                    outdoor_temp=outdoor_temp,
+                    price_periods=price_periods,
+                    blocking_reason="DHW_SAFETY_DEFERRED_PEAK_PRICE",
+                    dm_block_threshold=dm_block_threshold,
+                )
+
                 return DHWScheduleDecision(
                     should_heat=False,
                     priority_reason="DHW_SAFETY_DEFERRED_PEAK_PRICE",
                     target_temp=0.0,
                     max_runtime_minutes=0,
                     abort_conditions=[],
+                    recommended_start_time=next_opportunity,
                 )
 
             # Otherwise heat immediately (critically low or good price)
