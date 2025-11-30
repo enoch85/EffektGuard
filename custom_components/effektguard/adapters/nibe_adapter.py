@@ -108,6 +108,9 @@ class NibeAdapter:
         self._entity_cache: dict[str, str] = {}
         # Accumulator for fractional offset changes (NIBE only accepts integers)
         self._fractional_accumulator: float = 0.0
+        # Track if we've synced with actual NIBE offset since startup
+        # On restart, accumulator resets but NIBE keeps its value - we need to verify sync
+        self._startup_sync_done: bool = False
 
     async def get_current_state(self) -> NibeState:
         """Read current NIBE heat pump state from entities.
@@ -344,6 +347,46 @@ class NibeAdapter:
             current_nibe_offset = float(state.state)
         except (ValueError, TypeError):
             _LOGGER.debug("Could not read current NIBE offset, will proceed with write")
+
+        # STARTUP SYNC CHECK (Nov 30, 2025)
+        # On restart, the fractional accumulator resets to 0 but NIBE keeps its value.
+        # This can cause a mismatch where EffektGuard thinks NIBE is at 0 but it's at ±1.
+        # On first write after restart, verify NIBE matches what we want to apply.
+        if not self._startup_sync_done and current_nibe_offset is not None:
+            self._startup_sync_done = True
+            expected_nibe = offset_to_apply
+            actual_nibe = int(current_nibe_offset)
+
+            if actual_nibe != expected_nibe:
+                _LOGGER.info(
+                    "🔄 Startup sync: NIBE offset mismatch detected! "
+                    "NIBE at %d°C but we want %d°C (calculated: %.2f°C). Forcing sync.",
+                    actual_nibe,
+                    expected_nibe,
+                    original_offset,
+                )
+                # Force write by falling through (don't skip)
+                # Reset accumulator to match actual state we're writing
+                self._fractional_accumulator = original_offset - expected_nibe
+                _LOGGER.debug(
+                    "Startup sync: Reset accumulator to %.2f°C to track remaining fractional",
+                    self._fractional_accumulator,
+                )
+            else:
+                _LOGGER.info(
+                    "✓ Startup sync: NIBE offset verified at %d°C (calculated: %.2f°C)",
+                    actual_nibe,
+                    original_offset,
+                )
+                # Initialize accumulator based on difference between calculated and actual
+                self._fractional_accumulator = original_offset - actual_nibe
+                _LOGGER.debug(
+                    "Startup sync: Initialized accumulator to %.2f°C",
+                    self._fractional_accumulator,
+                )
+                # If NIBE already matches, we can skip this write
+                if abs(self._fractional_accumulator) < 1.0:
+                    return False
 
         # Skip API call only if:
         # 1. Calculated offset rounds to 0, AND
