@@ -578,8 +578,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
             # If blocked, show time until boost
             if self.native_value:
-                import homeassistant.util.dt as dt_util
-
                 time_until = self.native_value - dt_util.now()
                 hours_until = time_until.total_seconds() / 3600
                 if hours_until > 0:

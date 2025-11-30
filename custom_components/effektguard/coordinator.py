@@ -375,8 +375,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
                 # Restore thermal predictor (temperature trends)
                 if "thermal_predictor" in learned_data:
-                    from .optimization.thermal_predictor import ThermalStatePredictor
-
                     self.thermal_predictor = ThermalStatePredictor.from_dict(
                         learned_data["thermal_predictor"]
                     )
@@ -472,8 +470,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self._power_sensor_available = True
             _LOGGER.info("External power sensor %s already available at startup", power_entity_id)
             return
-
-        from homeassistant.core import callback
 
         @callback
         def power_sensor_state_changed(event):

@@ -874,8 +874,6 @@ class IntelligentDHWScheduler:
         Returns:
             Hours to look ahead (max 24h)
         """
-        from ..const import DHW_SCHEDULING_WINDOW_MAX, DHW_SCHEDULING_WINDOW_MIN
-
         next_demand = self._check_upcoming_demand_period(current_time)
 
         if next_demand:
@@ -1188,8 +1186,6 @@ class IntelligentDHWScheduler:
         Returns:
             Dict with hours_until and target_temp, or None if no upcoming period
         """
-        from ..const import DHW_SCHEDULING_WINDOW_MAX, DHW_SCHEDULING_WINDOW_MIN
-
         for period in self.demand_periods:
             # Calculate hours until period start
             today_start = current_time.replace(
