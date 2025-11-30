@@ -559,6 +559,35 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 if "weather_opportunity" in planning:
                     attrs["weather_opportunity"] = planning["weather_opportunity"]
 
+        elif key == "dhw_next_boost_time":
+            # Add helpful attributes explaining WHY DHW is scheduled/blocked
+            if "dhw_planning" in self.coordinator.data:
+                planning = self.coordinator.data.get("dhw_planning", {})
+
+                # Add blocking reason if available
+                if "priority_reason" in planning:
+                    attrs["blocking_reason"] = planning["priority_reason"]
+
+                # Add DHW status
+                if "should_heat" in planning:
+                    attrs["dhw_status"] = "heating" if planning["should_heat"] else "blocked"
+
+            # Add human-readable summary
+            if "dhw_planning_summary" in self.coordinator.data:
+                attrs["summary"] = self.coordinator.data["dhw_planning_summary"]
+
+            # If blocked, show time until boost
+            if self.native_value:
+                import homeassistant.util.dt as dt_util
+
+                time_until = self.native_value - dt_util.now()
+                hours_until = time_until.total_seconds() / 3600
+                if hours_until > 0:
+                    attrs["hours_until_boost"] = round(hours_until, 1)
+                    attrs["human_readable"] = f"In {hours_until:.1f} hours"
+                else:
+                    attrs["human_readable"] = "Pending"
+
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
             if "thermal_trend" in self.coordinator.data:
