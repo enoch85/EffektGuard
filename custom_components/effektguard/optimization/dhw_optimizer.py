@@ -429,7 +429,7 @@ class IntelligentDHWScheduler:
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="CRITICAL_THERMAL_DEBT",
-                target_temp=0.0,
+                target_temp=self.user_target_temp,
                 max_runtime_minutes=0,
                 abort_conditions=[],
                 recommended_start_time=next_opportunity,
@@ -451,7 +451,7 @@ class IntelligentDHWScheduler:
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="SPACE_HEATING_EMERGENCY",
-                target_temp=0.0,
+                target_temp=self.user_target_temp,
                 max_runtime_minutes=0,
                 abort_conditions=[],
                 recommended_start_time=next_opportunity,
@@ -513,7 +513,7 @@ class IntelligentDHWScheduler:
                         return DHWScheduleDecision(
                             should_heat=False,
                             priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
-                            target_temp=0.0,
+                            target_temp=self.user_target_temp,
                             max_runtime_minutes=0,
                             abort_conditions=[],
                             recommended_start_time=optimal_window["start_time"],
@@ -542,7 +542,7 @@ class IntelligentDHWScheduler:
                 return DHWScheduleDecision(
                     should_heat=False,
                     priority_reason="DHW_SAFETY_DEFERRED_PEAK_PRICE",
-                    target_temp=0.0,
+                    target_temp=self.user_target_temp,
                     max_runtime_minutes=0,
                     abort_conditions=[],
                     recommended_start_time=next_opportunity,
@@ -705,7 +705,7 @@ class IntelligentDHWScheduler:
             return DHWScheduleDecision(
                 should_heat=False,
                 priority_reason="HIGH_SPACE_HEATING_DEMAND",
-                target_temp=0.0,
+                target_temp=self.user_target_temp,
                 max_runtime_minutes=0,
                 abort_conditions=[],
                 recommended_start_time=next_opportunity,
@@ -806,7 +806,7 @@ class IntelligentDHWScheduler:
                     return DHWScheduleDecision(
                         should_heat=False,
                         priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
-                        target_temp=0.0,
+                        target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
                         recommended_start_time=optimal_window["start_time"],
@@ -862,7 +862,7 @@ class IntelligentDHWScheduler:
         return DHWScheduleDecision(
             should_heat=False,
             priority_reason="DHW_ADEQUATE",
-            target_temp=0.0,
+            target_temp=self.user_target_temp,
             max_runtime_minutes=0,
             abort_conditions=[],
             recommended_start_time=next_opportunity,

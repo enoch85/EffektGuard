@@ -19,6 +19,7 @@ import pytest
 from datetime import datetime, timedelta
 
 from custom_components.effektguard.const import (
+    DEFAULT_DHW_TARGET_TEMP,
     DHW_SAFETY_CRITICAL,
     DHW_SAFETY_MIN,
     DM_DHW_ABORT_FALLBACK,
@@ -696,4 +697,4 @@ class TestDHWHeatingTimeAndPeakAvoidance:
 
         # Verify temperature is safe for 3+ hour wait
         assert current_time.hour + 3 < 24  # Can wait until 20:00
-        assert decision.target_temp == 0.0  # Not heating yet
+        assert decision.target_temp == DEFAULT_DHW_TARGET_TEMP  # Shows user target even when not heating
