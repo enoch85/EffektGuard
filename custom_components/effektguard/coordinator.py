@@ -160,6 +160,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_optimizer = IntelligentDHWScheduler(
             demand_periods=demand_periods,
             climate_detector=decision_engine.climate_detector,
+            user_target_temp=dhw_target_temp,
         )
 
         # Savings calculator

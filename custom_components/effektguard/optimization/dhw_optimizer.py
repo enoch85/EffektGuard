@@ -165,21 +165,25 @@ class IntelligentDHWScheduler:
         self,
         demand_periods: list[DHWDemandPeriod] | None = None,
         climate_detector=None,  # Climate zone detector for dynamic thresholds
+        user_target_temp: float | None = None,  # User-configured DHW target temperature
     ):
         """Initialize DHW scheduler.
 
         Args:
             demand_periods: User-defined high demand periods (e.g., morning showers)
             climate_detector: Optional ClimateZoneDetector for dynamic DM thresholds
+            user_target_temp: User-configured DHW target temperature (°C)
         """
         self.demand_periods = demand_periods or []
         self.climate_detector = climate_detector
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
-        # Extract user-configured target temperature from demand periods
-        # Use first demand period's target, or fall back to const.py constant
-        if self.demand_periods:
+        # Set user target temperature
+        # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
+        if user_target_temp is not None:
+            self.user_target_temp = user_target_temp
+        elif self.demand_periods:
             self.user_target_temp = self.demand_periods[0].target_temp
         else:
             self.user_target_temp = DEFAULT_DHW_TARGET_TEMP
