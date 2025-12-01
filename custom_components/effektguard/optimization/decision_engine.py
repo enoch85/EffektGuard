@@ -2252,13 +2252,14 @@ class DecisionEngine:
                 cost_multiplier = max_upcoming / current_price
                 strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot acceptable for {cost_multiplier:.1f}x cost savings"
 
-        # Apply very aggressive volatility weight reduction (Nov 30, 2025)
-        # During volatile periods, drastically reduce price layer influence
-        # Math: 0.8 × 0.1 = 0.08 (price layer reduced to 10% of normal strength)
-        # Effect: Thermal/comfort/weather layers dominate, preventing chase behavior
+        # Apply moderate volatility weight reduction (Dec 1, 2025)
+        # After int accumulation fix, safe to allow stronger price influence during volatility
+        # Math: 0.8 × 0.3 = 0.24 (price layer reduced to 30% of normal strength)
+        # Was 0.1 (10%) before fix when decimal changes caused API oscillation
+        # Effect: Thermal/comfort/weather layers still dominate, but price has meaningful input
         price_weight = LAYER_WEIGHT_PRICE
         if is_volatile_period:
-            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.08
+            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(

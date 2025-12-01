@@ -247,18 +247,12 @@ class TestVolatileWeightReduction:
         extreme_spike_influence = PRICE_FORECAST_PREHEAT_OFFSET * volatile_weight
         normal_offset_influence = 0.5 * normal_weight  # Example normal cheap boost
         
-        # Verify behavior: with current constants, volatile reduction suppresses price layer
-        # If PRICE_VOLATILE_WEIGHT_REDUCTION >= 0.25, spike would win; < 0.25, it's suppressed
-        if PRICE_VOLATILE_WEIGHT_REDUCTION < 0.25:
-            # Aggressive reduction: price layer suppressed during volatility for stability
-            assert extreme_spike_influence < normal_offset_influence, \
-                f"With reduction {PRICE_VOLATILE_WEIGHT_REDUCTION}, price layer ({extreme_spike_influence}) " \
-                f"should be suppressed vs normal operation ({normal_offset_influence}) for stability"
-        else:
-            # Moderate reduction: extreme spikes still win through weighted aggregation
-            assert extreme_spike_influence > normal_offset_influence, \
-                f"With reduction {PRICE_VOLATILE_WEIGHT_REDUCTION}, extreme spike ({extreme_spike_influence}) " \
-                f"should beat normal offset ({normal_offset_influence})"
+        # Verify behavior: with current constants (0.3 = 30% retention)
+        # Moderate reduction allows price layer to still have meaningful influence
+        # Dec 1, 2025: After int accumulation fix, can safely allow stronger price influence
+        assert extreme_spike_influence > normal_offset_influence, \
+            f"With reduction {PRICE_VOLATILE_WEIGHT_REDUCTION}, extreme spike ({extreme_spike_influence}) " \
+            f"should still beat normal offset ({normal_offset_influence}) through weighted aggregation"
 
     def test_volatile_detection_threshold_logic(self, engine, base_nibe_state, base_weather_data):
         """Test that volatile detection uses correct thresholds.
@@ -682,11 +676,12 @@ class TestVolatileWeightReduction:
         assert 0.6 <= volatility_ratio <= 0.8, \
             f"Max threshold should be 60-80% of scan window, got {volatility_ratio:.1%}"
         
-        # Weight reduction should be very aggressive to prevent chasing volatile prices
-        # Nov 30, 2025: Changed to 0.05-0.15 range (5-15% retention = 85-95% reduction)
-        # This ensures thermal/comfort layers dominate during price chaos
-        assert 0.05 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.15, \
-            f"Weight reduction should be very aggressive (5-15% retention), got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
+        # Weight reduction during volatility - moderate to prevent chasing erratic prices
+        # Dec 1, 2025: Changed to 0.25-0.35 range (25-35% retention) after int accumulation fix
+        # Integer-only NIBE writes prevent oscillation, allowing stronger price influence
+        # Was 0.05-0.15 (5-15%) before fix when decimal changes caused API hammering
+        assert 0.25 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.35, \
+            f"Weight reduction should be moderate (25-35% retention), got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
         
         # Expensive threshold for spikes should require >2x price
         assert PRICE_FORECAST_EXPENSIVE_THRESHOLD >= 1.5, \

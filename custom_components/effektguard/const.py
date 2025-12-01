@@ -544,7 +544,7 @@ PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 4  # 1 hour each direction 
 PRICE_VOLATILE_MIN_THRESHOLD: Final = 3  # Min non-NORMAL periods to trigger (3 × 15min = 45min)
 PRICE_VOLATILE_MAX_THRESHOLD: Final = 6  # Max before definitely volatile (6 × 15min = 90min)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (
-    0.1  # Very aggressive: reduce price weight to 10% during volatility (0.8 → 0.08)
+    0.3  # Moderate reduction: retain 30% during volatility (0.8 → 0.24)
 )
 
 # Comfort layer constants (Oct 19, 2025)
