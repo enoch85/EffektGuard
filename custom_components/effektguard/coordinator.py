@@ -964,6 +964,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self._save_dhw_state_immediate()
 
             # Get DHW recommendation from optimizer with detailed planning
+            # Initialize defaults first to prevent UnboundLocalError if exception occurs
+            dhw_result = {
+                "recommendation": "DHW calculation pending",
+                "summary": "Calculating DHW planning",
+                "details": {},
+                "decision": None,
+            }
+
             try:
                 dhw_result = await self._calculate_dhw_recommendation(
                     nibe_data, price_data, weather_data, current_dhw_temp, now_time
@@ -988,7 +996,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Core heating optimization continues to work
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
-            if self.entry.data.get("enable_hot_water_optimization", False):
+            if self.entry.data.get("enable_hot_water_optimization", False) and dhw_result.get(
+                "decision"
+            ):
                 await self._apply_dhw_control(
                     dhw_result["decision"],  # Reuse decision from recommendation
                     current_dhw_temp,
@@ -1077,7 +1087,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Get indoor temperature and target
         indoor_temp = nibe_data.indoor_temp if nibe_data else DEFAULT_INDOOR_TEMP
-        target_indoor = self._entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
+        target_indoor = self.entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
         indoor_deficit = max(0.0, target_indoor - indoor_temp)
 
         # Get indoor temperature trend for predictive DHW blocking

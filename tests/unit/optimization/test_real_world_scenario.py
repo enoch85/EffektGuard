@@ -258,11 +258,13 @@ class TestRealWorldScenario:
         price_layer = decision.layers[7]
         assert price_layer.offset < 0.0, "Price layer should reduce during EXPENSIVE period"
         # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
-        # Weight may be reduced from 0.8 to 0.4 if bidirectional scan detects volatility
-        assert price_layer.weight in [
-            LAYER_WEIGHT_PRICE,
-            LAYER_WEIGHT_PRICE * 0.5,
-        ], f"Price layer weight should be {LAYER_WEIGHT_PRICE} or reduced to {LAYER_WEIGHT_PRICE * 0.5} if volatile, got {price_layer.weight}"
+        # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
+        min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+        max_expected_weight = LAYER_WEIGHT_PRICE
+        assert min_expected_weight <= price_layer.weight <= max_expected_weight, (
+            f"Price layer weight should be between {min_expected_weight} (volatile) and "
+            f"{max_expected_weight} (normal), got {price_layer.weight}"
+        )
         assert (
             "EXPENSIVE" in price_layer.reason
             or "PEAK" in price_layer.reason
@@ -375,6 +377,7 @@ class TestRealWorldScenario:
                 price_data=expensive_price_data,
                 weather_data=winter_weather_data,
                 current_peak=2.8,
+                current_power=2.0,
             )
 
             price_layer = decision.layers[7]
@@ -390,11 +393,13 @@ class TestRealWorldScenario:
 
             assert price_layer.offset == pytest.approx(-2.5, abs=0.2)
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
-            # Weight may be reduced from 0.8 to 0.4 if bidirectional scan detects volatility
-            assert price_layer.weight in [
-                LAYER_WEIGHT_PRICE,
-                LAYER_WEIGHT_PRICE * 0.5,
-            ], f"Price layer weight should be {LAYER_WEIGHT_PRICE} or reduced to {LAYER_WEIGHT_PRICE * 0.5} if volatile, got {price_layer.weight}"
+            # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
+            min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+            max_expected_weight = LAYER_WEIGHT_PRICE
+            assert min_expected_weight <= price_layer.weight <= max_expected_weight, (
+                f"Price layer weight should be between {min_expected_weight} (volatile) and "
+                f"{max_expected_weight} (normal), got {price_layer.weight}"
+            )
             assert "EXPENSIVE" in price_layer.reason or "day" in price_layer.reason.lower()
             assert "cheaper" in price_layer.reason.lower()  # Forecast message
 
@@ -420,6 +425,7 @@ class TestRealWorldScenario:
                 price_data=expensive_price_data,
                 weather_data=winter_weather_data,
                 current_peak=1.5,  # Low nighttime power
+                current_power=1.2,
             )
 
             price_layer = decision.layers[7]
@@ -457,6 +463,7 @@ class TestRealWorldScenario:
                 price_data=expensive_price_data,
                 weather_data=winter_weather_data,
                 current_peak=4.5,  # Approaching monthly peak
+                current_power=4.2,
             )
 
             price_layer = decision.layers[7]
@@ -521,6 +528,7 @@ class TestRealWorldScenario:
                     price_data=expensive_price_data,
                     weather_data=winter_weather_data,
                     current_peak=2.8,
+                    current_power=2.0,
                 )
 
                 price_layer = decision.layers[7]

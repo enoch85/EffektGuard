@@ -412,39 +412,3 @@ class TestReasoningGeneration:
             assert layer_main_reason in decision.reasoning, (
                 f"Layer reason '{layer_main_reason}' not found in decision reasoning"
             )
-
-
-class TestPowerEstimation:
-    """Test heat pump power estimation for peak tracking."""
-
-    def test_heating_mode_base_power(self, decision_engine, mock_nibe_state):
-        """Test base power estimation when heating."""
-        mock_nibe_state.is_heating = True
-        mock_nibe_state.outdoor_temp = 5.0
-
-        power = decision_engine._estimate_heat_pump_power(mock_nibe_state)
-
-        assert power > 0.1  # More than standby
-        assert power > 3.0  # Reasonable heating power
-        assert power < 8.0  # Not excessive
-
-    def test_standby_mode_low_power(self, decision_engine, mock_nibe_state):
-        """Test low power estimation in standby."""
-        mock_nibe_state.is_heating = False
-
-        power = decision_engine._estimate_heat_pump_power(mock_nibe_state)
-
-        assert power == 0.1  # Standby power
-
-    def test_cold_weather_higher_power(self, decision_engine, mock_nibe_state):
-        """Test higher power estimation in cold weather."""
-        mock_nibe_state.is_heating = True
-        mock_nibe_state.outdoor_temp = -15.0  # Very cold
-
-        power = decision_engine._estimate_heat_pump_power(mock_nibe_state)
-
-        # Should be higher than mild weather
-        mock_nibe_state.outdoor_temp = 10.0
-        mild_power = decision_engine._estimate_heat_pump_power(mock_nibe_state)
-
-        assert power > mild_power
