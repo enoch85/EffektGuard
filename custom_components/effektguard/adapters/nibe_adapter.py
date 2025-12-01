@@ -297,9 +297,6 @@ class NibeAdapter:
             )
             return False
 
-        # Simple: round to nearest integer
-        integer_offset = round(offset)
-
         # Read current NIBE offset on first call (sync with actual state)
         if self._last_nibe_offset is None:
             try:
@@ -312,10 +309,24 @@ class NibeAdapter:
             except (ValueError, TypeError):
                 self._last_nibe_offset = 0
 
-        # Only write if integer part changed
+        # Accumulate fractional offsets, only write when integer part changes
+        # Decision engine provides absolute calculated offset (e.g., 0.5, 0.9, 2.0)
+        # We accumulate the fractional parts and only write to NIBE when crossing integer boundaries
+        #
+        # Example:
+        #   NIBE at 0°C, calculated 0.5°C → int(0.5) = 0, no write
+        #   NIBE at 0°C, calculated 0.9°C → int(0.9) = 0, no write
+        #   NIBE at 0°C, calculated 2.0°C → int(2.0) = 2, write 2°C to NIBE
+        #
+        # Use int() to truncate toward zero (not round()):
+        #   int(0.9) = 0, int(2.0) = 2, int(-1.5) = -1
+
+        integer_offset = int(offset)
+
+        # Only write if integer part changed from last written value
         if integer_offset == self._last_nibe_offset:
             _LOGGER.debug(
-                "Offset unchanged: %.2f°C → %d°C (NIBE already at %d°C)",
+                "Offset unchanged: %.2f°C → int(%d°C) = NIBE already at %d°C",
                 offset,
                 integer_offset,
                 self._last_nibe_offset,

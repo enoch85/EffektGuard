@@ -791,16 +791,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Apply offset to NIBE heat pump via MyUplink integration
         # This sends the calculated offset to the MyUplink number entity (parameter 47011)
         # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
-        # Skip if offset matches last known value (avoids redundant API calls on startup)
+        #
+        # Accumulation logic: We track fractional offsets but only write to NIBE when
+        # the integer part changes. This prevents oscillation when calculated offsets
+        # hover around boundaries (e.g., 0.48 ↔ 0.52 both stay at 0°C in NIBE).
         if is_grace_period:
             _LOGGER.info("Skipping offset application during startup grace period")
-        elif (
-            self.last_applied_offset is not None
-            and abs(decision.offset - self.last_applied_offset) < 0.01
+        elif self.last_applied_offset is not None and int(decision.offset) == int(
+            self.last_applied_offset
         ):
             _LOGGER.debug(
-                "Offset %.2f°C matches last applied value, skipping redundant API call",
+                "Offset %.2f°C → int(%d°C) matches last applied int(%d°C), skipping adapter call",
                 decision.offset,
+                int(decision.offset),
+                int(self.last_applied_offset),
             )
         else:
             try:
@@ -815,7 +819,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug(
                         "Offset %.2f°C unchanged (NIBE already at %d°C)",
                         decision.offset,
-                        round(decision.offset),
+                        int(decision.offset),
                     )
             except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
