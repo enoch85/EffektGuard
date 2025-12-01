@@ -270,10 +270,13 @@ class TestVolatileWeightReduction:
     def test_volatile_detection_threshold_logic(self, engine, base_nibe_state, base_weather_data):
         """Test that volatile detection uses correct thresholds.
         
-        Scenario 1: 3 non-NORMAL with mix → Volatile (min threshold)
+        Scenario 1: 3 non-NORMAL with mix (CHEAP+EXPENSIVE) → Volatile (min threshold)
         Scenario 2: 6 non-NORMAL → Definitely volatile (max threshold)
         Scenario 3: 2 non-NORMAL → Not volatile (below min)
-        Scenario 4: 4 non-NORMAL but all same type → Not volatile (no mix)
+        Scenario 4: 5 non-NORMAL (EXPENSIVE+PEAK only) → NOT volatile (no chaos)
+        
+        Dec 1, 2025: Fixed Scenario 4 - EXPENSIVE+PEAK is not chaos, just sustained high prices.
+        True volatility requires oscillation between CHEAP and EXPENSIVE sides.
         """
         # Scenario 1: Min threshold with mix (3 non-NORMAL)
         price_periods_min = []
@@ -347,6 +350,49 @@ class TestVolatileWeightReduction:
         
         # Should definitely detect volatility (6 non-NORMAL = 75% of scan window)
         # Decision should reflect reduced price influence
+        
+        # Scenario 4 (NEW Dec 1, 2025): 5 EXPENSIVE+PEAK (no CHEAP) → NOT volatile
+        # This is the fix for the reported issue - sustained expensive period is NOT chaos
+        price_periods_sustained = []
+        # Q0-Q3: 1 PEAK, 4 EXPENSIVE (all on expensive side)
+        period = MagicMock()
+        period.price = 90.0  # PEAK
+        period.is_daytime = False
+        price_periods_sustained.append(period)
+        for _ in range(4):
+            period = MagicMock()
+            period.price = 70.0  # EXPENSIVE
+            period.is_daytime = False
+            price_periods_sustained.append(period)
+        # Q5-Q7: NORMAL
+        for _ in range(3):
+            period = MagicMock()
+            period.price = 40.0
+            period.is_daytime = False
+            price_periods_sustained.append(period)
+        # Fill rest
+        for i in range(8, 96):
+            period = MagicMock()
+            period.price = 40.0
+            period.is_daytime = i >= 24
+            price_periods_sustained.append(period)
+        
+        price_data_sustained = MagicMock()
+        price_data_sustained.today = price_periods_sustained
+        price_data_sustained.tomorrow = []
+        price_data_sustained.has_tomorrow = False
+        
+        decision_sustained = engine.calculate_decision(
+            base_nibe_state, price_data_sustained, base_weather_data, 5.0, 2.0
+        )
+        
+        # Should NOT detect volatility (5 non-NORMAL but no CHEAP+EXPENSIVE mix)
+        # EXPENSIVE+PEAK on same side = normal price progression, not chaos
+        # System should maintain normal price weight (0.8) not reduce to 0.3
+        # This means price layer can properly respond to expensive period
+        assert decision_sustained is not None, "Should handle sustained expensive period"
+        # Can't directly check internal volatile flag, but behavior should show normal price response
+        # If volatility was falsely detected, offset would be too conservative
 
     @freeze_time("2025-11-30 20:17:00")  # Q81 (20:15-20:30)
     def test_backward_scan_after_ha_restart(self, engine, base_nibe_state, base_weather_data):

@@ -2107,15 +2107,17 @@ class DecisionEngine:
 
             # Volatile if:
             # 1. >= 6 non-NORMAL periods (75% of 8 quarters = definitely jumpy)
-            # 2. >= 3 non-NORMAL AND mix of different types (not just all CHEAP or all EXPENSIVE)
-            has_mix = sum([expensive_count > 0, cheap_count > 0, peak_count > 0]) >= 2
+            # 2. >= 3 non-NORMAL AND true chaos (CHEAP + (EXPENSIVE or PEAK))
+            #    Note: EXPENSIVE + PEAK is NOT chaos - just a sustained expensive period
+            #    True volatility = oscillating between cheap and expensive sides
+            has_cheap_expensive_mix = cheap_count > 0 and (expensive_count > 0 or peak_count > 0)
 
             if non_normal_count >= PRICE_VOLATILE_MAX_THRESHOLD:
                 # Definitely volatile - 6+ non-NORMAL in 2h window around current time
                 is_volatile_period = True
                 volatile_reason = f" | Volatile: {non_normal_count}/{actual_scan_periods} non-NORMAL in ±{actual_scan_periods * 15 // 2}min window - holding steady"
-            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_mix:
-                # Moderately volatile - 3+ non-NORMAL AND mixed types (jumpy)
+            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_cheap_expensive_mix:
+                # Moderately volatile - 3+ non-NORMAL AND oscillating between cheap/expensive (true chaos)
                 is_volatile_period = True
                 types = []
                 if peak_count > 0:
