@@ -105,17 +105,32 @@ def mock_coordinator_with_data(mock_hass, mock_config_entry):
     ]
 
     # Mock price data
+    # Note: PriceData has .today (list of QuarterPeriod), not .today_prices
+    from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
+    from datetime import datetime
+    from homeassistant.util import dt as dt_util
+    
     price_data = Mock()
     price_data.current_price = 1.25
-    price_data.today_prices = [0.8, 1.0, 1.2, 1.5, 1.8, 2.0]
-    price_data.today_classifications = [
-        "cheap",
-        "normal",
-        "normal",
-        "expensive",
-        "expensive",
-        "peak",
+    
+    # Create mock QuarterPeriod objects with prices
+    now = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    price_data.today = [
+        QuarterPeriod(start_time=now, price=0.8),
+        QuarterPeriod(start_time=now.replace(minute=15), price=1.0),
+        QuarterPeriod(start_time=now.replace(minute=30), price=1.2),
+        QuarterPeriod(start_time=now.replace(minute=45), price=1.5),
+        QuarterPeriod(start_time=now.replace(hour=1, minute=0), price=1.8),
+        QuarterPeriod(start_time=now.replace(hour=1, minute=15), price=2.0),
     ]
+    # Extend to 96 periods (fill rest with average price)
+    avg_price = 1.3
+    for i in range(6, 96):
+        hour = i // 4
+        minute = (i % 4) * 15
+        price_data.today.append(
+            QuarterPeriod(start_time=now.replace(hour=hour, minute=minute), price=avg_price)
+        )
 
     # Mock thermal trend data
     thermal_trend = {
@@ -434,7 +449,8 @@ class TestSensorExtraStateAttributes:
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
 
         attrs = sensor.extra_state_attributes
-        assert "today_classifications" in attrs
+        # Note: today_classifications removed - PriceData only has .today (QuarterPeriod list)
+        # The sensor extracts min/max/average from period.price
         assert "today_min" in attrs
         assert "today_max" in attrs
         assert "today_average" in attrs

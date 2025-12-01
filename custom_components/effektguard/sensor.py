@@ -503,14 +503,13 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             # Show today's full classification
             if "price" in self.coordinator.data:
                 price_data = self.coordinator.data["price"]
-                if price_data and hasattr(price_data, "today_classifications"):
-                    attrs["today_classifications"] = price_data.today_classifications
-                if price_data and hasattr(price_data, "today_prices"):
-                    attrs["today_min"] = min(price_data.today_prices)
-                    attrs["today_max"] = max(price_data.today_prices)
-                    attrs["today_average"] = sum(price_data.today_prices) / len(
-                        price_data.today_prices
-                    )
+                # Note: PriceData has .today (list of QuarterPeriod), not .today_prices
+                # Extract prices from the QuarterPeriod objects
+                if price_data and hasattr(price_data, "today") and price_data.today:
+                    today_prices = [period.price for period in price_data.today]
+                    attrs["today_min"] = min(today_prices)
+                    attrs["today_max"] = max(today_prices)
+                    attrs["today_average"] = sum(today_prices) / len(today_prices)
 
         elif key == "dhw_recommendation":
             # Add human-readable planning summary
@@ -999,13 +998,13 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 price_data = self.coordinator.data["price"]
                 has_tomorrow = (
                     price_data
-                    and hasattr(price_data, "tomorrow_prices")
-                    and price_data.tomorrow_prices
-                    and len(price_data.tomorrow_prices) > 0
+                    and hasattr(price_data, "tomorrow")
+                    and price_data.tomorrow
+                    and len(price_data.tomorrow) > 0
                 )
                 attrs["tomorrow_prices"] = {
                     "status": "available" if has_tomorrow else "today_only",
-                    "count": len(price_data.tomorrow_prices) if has_tomorrow else 0,
+                    "count": len(price_data.tomorrow) if has_tomorrow else 0,
                     "note": (
                         "Can optimize further ahead"
                         if has_tomorrow
