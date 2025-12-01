@@ -274,6 +274,17 @@ async def _create_coordinator(
     config_with_latitude.update(entry.options)  # Overlay runtime options
     config_with_latitude["latitude"] = hass.config.latitude
 
+    # Debug: Log switch states at startup
+    _LOGGER.debug(
+        "DecisionEngine config: enable_optimization=%s, enable_peak_protection=%s, "
+        "enable_price_optimization=%s, enable_weather_prediction=%s, enable_hot_water_optimization=%s",
+        config_with_latitude.get("enable_optimization", True),
+        config_with_latitude.get("enable_peak_protection", True),
+        config_with_latitude.get("enable_price_optimization", True),
+        config_with_latitude.get("enable_weather_prediction", True),
+        config_with_latitude.get("enable_hot_water_optimization", False),
+    )
+
     decision_engine = DecisionEngine(
         price_analyzer=price_analyzer,
         effect_manager=effect_manager,
