@@ -2511,7 +2511,7 @@ class DecisionEngine:
             return {
                 "valid": False,
                 "warning": f"Power {current_power_kw:.1f}kW exceeds {self.heat_pump_model.model_name} max {max_power:.1f}kW (auxiliary heating active?)",
-                "severity": "warning",
+                "severity": "info",
             }
 
         # Check if unusually low (possible sensor issue)
