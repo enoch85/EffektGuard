@@ -436,10 +436,10 @@ class TestRealWorldScenario:
             # Expected: +2.0°C × 1.0 = +2.0°C
 
             assert price_layer.offset > 0.0, "Should pre-heat during CHEAP period"
-            # Weight reduced during volatile period (expensive_price_data has big swings)
-            expected_volatile_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
-            assert price_layer.weight == pytest.approx(expected_volatile_weight, abs=0.01), \
-                f"Expected reduced weight ({expected_volatile_weight}) during volatility, got {price_layer.weight}"
+            # Q10 is in stable VERY_CHEAP region with ±30min window (Q8-Q12 all VERY_CHEAP)
+            # No volatility detected, so expect full weight
+            assert price_layer.weight == pytest.approx(LAYER_WEIGHT_PRICE, abs=0.01), \
+                f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
 
     @pytest.mark.asyncio
     async def test_evening_peak_aggressive_reduction(
@@ -476,10 +476,10 @@ class TestRealWorldScenario:
             assert (
                 price_layer.offset <= -1.0
             ), f"Should reduce during high-price period, got {price_layer.offset}°C"
-            # Weight reduced during volatile period (expensive_price_data has big swings)
-            expected_volatile_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
-            assert price_layer.weight == pytest.approx(expected_volatile_weight, abs=0.01), \
-                f"Expected reduced weight ({expected_volatile_weight}) during volatility, got {price_layer.weight}"
+            # Q72 is in stable PEAK region with ±30min window (Q70-Q74 all PEAK)
+            # No volatility detected, so expect full weight
+            assert price_layer.weight == pytest.approx(LAYER_WEIGHT_PRICE, abs=0.01), \
+                f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
             # Check it's recognized as high-price period
             assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
 

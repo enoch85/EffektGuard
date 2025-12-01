@@ -540,9 +540,13 @@ PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive peri
 # - During volatility: 0.8 × 0.1 = 0.08 (price layer reduced to 10% of normal strength)
 # - This lets thermal/comfort/weather layers dominate decision-making
 # - Prevents heat pump from chasing rapid CHEAP↔EXPENSIVE price swings
-PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 4  # 1 hour each direction (4 × 15min)
-PRICE_VOLATILE_MIN_THRESHOLD: Final = 3  # Min non-NORMAL periods to trigger (3 × 15min = 45min)
-PRICE_VOLATILE_MAX_THRESHOLD: Final = 6  # Max before definitely volatile (6 × 15min = 90min)
+PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 2  # 30 min each direction (2 × 15min)
+PRICE_VOLATILE_MIN_THRESHOLD: Final = (
+    2  # Min brief excursions to trigger volatility (33% of 6-period window)
+)
+PRICE_VOLATILE_MAX_THRESHOLD: Final = (
+    4  # Max brief excursions before definitely volatile (67% of 6-period window)
+)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (
     0.3  # Moderate reduction: retain 30% during volatility (0.8 → 0.24)
 )

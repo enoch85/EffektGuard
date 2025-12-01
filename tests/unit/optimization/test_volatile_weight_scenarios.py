@@ -722,8 +722,9 @@ class TestVolatileWeightReduction:
     def test_constants_relationship(self):
         """Verify constants have sensible relationships."""
         # Min threshold should prevent single-dip false positives
-        assert PRICE_VOLATILE_MIN_THRESHOLD >= 3, \
-            "Min threshold should ignore brief 1-2 period dips"
+        # Scaled to 5-period window (±30min): 2 brief excursions = 40% of window
+        assert PRICE_VOLATILE_MIN_THRESHOLD >= 2, \
+            "Min threshold should ignore single 1-period dips"
         
         # Max threshold should be achievable within bidirectional scan window
         # Window size = 2 * PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION + 1 (current)
@@ -731,6 +732,8 @@ class TestVolatileWeightReduction:
         assert PRICE_VOLATILE_MAX_THRESHOLD <= scan_window_size, \
             f"Max threshold {PRICE_VOLATILE_MAX_THRESHOLD} must be within scan window {scan_window_size}"
         
+        # Scaled to 5-period window: maintain 60-80% volatility ratio
+        # With MIN=2, MAX=4 in 5-period window: 40% and 80% (maintains spread)
         volatility_ratio = PRICE_VOLATILE_MAX_THRESHOLD / scan_window_size
         assert 0.6 <= volatility_ratio <= 0.8, \
             f"Max threshold should be 60-80% of scan window, got {volatility_ratio:.1%}"

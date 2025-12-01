@@ -2048,76 +2048,105 @@ class DecisionEngine:
 
                 current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
 
-            # Volatile/jumpy price detection (Nov 30, 2025)
-            # Bidirectional scan: 1h backward + 1h forward (total ~2h window)
-            # Logic: If we're IN THE MIDDLE of volatile period (prices jumping around us),
-            # we see many non-NORMAL periods in both directions → hold steady instead of chasing
+            # Volatile/jumpy price detection (Dec 1, 2025)
+            # Bidirectional scan: ±30min window around current quarter
+            #
+            # ALGORITHM: Duration-based volatility classification
+            # Distinguishes between sustained price trends and brief noise:
+            #
+            # SUSTAINED PERIODS (≥45 min consecutive):
+            # - Represent actual market trends worth following
+            # - Example: 2-hour expensive period (80-85 öre) → follow the trend
+            # - Action: Full weight optimization, follow price signal
+            #
+            # BRIEF EXCURSIONS (<45 min consecutive):
+            # - Represent market noise or temporary spikes
+            # - Example: 15-30 min spike to PEAK or dip to CHEAP → ignore
+            # - Action: Reduce layer weight to prevent heat pump cycling
+            #
+            # VOLATILITY TRIGGERS (scaled to 5-period window):
+            # - ≥4 brief excursions in scan window → Definitely volatile (hold steady)
+            # - ≥2 brief excursions + price oscillation (CHEAP↔EXPENSIVE) → Moderately volatile
+            #
+            # This prevents inefficient heat pump cycling during jumpy spot markets
+            # while still allowing optimization during sustained price trends.
 
-            # Scan window: N quarters back + current + N forward (N = PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION)
+            # Scan window: N quarters back + current + N forward
             scan_start = max(0, current_quarter - PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION)
             scan_end = min(current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION, 95)
 
-            expensive_count = 0
-            cheap_count = 0
-            peak_count = 0
-            normal_count = 0
+            # Collect all classifications in scan window (today + tomorrow if needed)
+            scan_classifications = []
 
             # Scan bidirectionally through today
             for quarter_idx in range(scan_start, scan_end + 1):
-                quarter_classification = self.price.get_current_classification(quarter_idx)
-                if quarter_classification == QuarterClassification.PEAK:
-                    peak_count += 1
-                elif quarter_classification == QuarterClassification.EXPENSIVE:
-                    expensive_count += 1
-                elif quarter_classification == QuarterClassification.CHEAP:
-                    cheap_count += 1
-                elif quarter_classification == QuarterClassification.NORMAL:
-                    normal_count += 1
+                classification = self.price.get_current_classification(quarter_idx)
+                scan_classifications.append(classification)
 
-            # Check tomorrow if forward scan would extend past midnight
+            # Check tomorrow if forward scan extends past midnight
             if (
                 current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION > 95
                 and price_data.has_tomorrow
             ):
-                # How many quarters we need from tomorrow
                 remaining_scan = (
                     current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION
                 ) - 95
                 for quarter_idx in range(min(remaining_scan, 96)):
-                    quarter_classification = self.price.get_tomorrow_classification(quarter_idx)
-                    if quarter_classification == QuarterClassification.PEAK:
-                        peak_count += 1
-                    elif quarter_classification == QuarterClassification.EXPENSIVE:
-                        expensive_count += 1
-                    elif quarter_classification == QuarterClassification.CHEAP:
-                        cheap_count += 1
-                    elif quarter_classification == QuarterClassification.NORMAL:
-                        normal_count += 1
+                    classification = self.price.get_tomorrow_classification(quarter_idx)
+                    scan_classifications.append(classification)
 
-            # Calculate non-NORMAL count (EXPENSIVE + CHEAP + PEAK)
+            # Count brief (non-sustained) periods as volatility indicators
+            # Brief = runs of < 3 consecutive quarters (same as PRICE_FORECAST_MIN_DURATION)
+            # Sustained runs (≥3 quarters) are trends to follow, not volatility
+            cheap_count = 0
+            expensive_count = 0
+            peak_count = 0
+
+            i = 0
+            while i < len(scan_classifications):
+                current_class = scan_classifications[i]
+
+                # Skip NORMAL periods
+                if current_class == QuarterClassification.NORMAL:
+                    i += 1
+                    continue
+
+                # Count consecutive quarters of same classification
+                run_length = 1
+                while (
+                    i + run_length < len(scan_classifications)
+                    and scan_classifications[i + run_length] == current_class
+                ):
+                    run_length += 1
+
+                # Only count brief runs (< 3 quarters) as volatility
+                # Sustained periods (≥ 3 quarters) are trends, not noise
+                if run_length < PRICE_FORECAST_MIN_DURATION:
+                    if current_class == QuarterClassification.CHEAP:
+                        cheap_count += run_length
+                    elif current_class == QuarterClassification.EXPENSIVE:
+                        expensive_count += run_length
+                    elif current_class == QuarterClassification.PEAK:
+                        peak_count += run_length
+
+                i += run_length
+
+            # Calculate non-NORMAL brief periods (EXPENSIVE + CHEAP + PEAK)
             non_normal_count = expensive_count + cheap_count + peak_count
-            actual_scan_periods = (scan_end + 1) - scan_start  # Quarters actually scanned today
-            if (
-                current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION > 95
-                and price_data.has_tomorrow
-            ):
-                actual_scan_periods += min(
-                    (current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION) - 95, 96
-                )  # Add tomorrow quarters
 
-            # Volatile if:
-            # 1. >= 6 non-NORMAL periods (75% of 8 quarters = definitely jumpy)
-            # 2. >= 3 non-NORMAL AND true chaos (CHEAP + (EXPENSIVE or PEAK))
-            #    Note: EXPENSIVE + PEAK is NOT chaos - just a sustained expensive period
-            #    True volatility = oscillating between cheap and expensive sides
-            has_cheap_expensive_mix = cheap_count > 0 and (expensive_count > 0 or peak_count > 0)
+            # True volatility = oscillating between cheap and expensive sides
+            # EXPENSIVE + PEAK are both "high price" - combine them
+            high_price_count = expensive_count + peak_count
+            has_cheap_expensive_mix = cheap_count > 0 and high_price_count > 0
+
+            actual_scan_periods = len(scan_classifications)
 
             if non_normal_count >= PRICE_VOLATILE_MAX_THRESHOLD:
-                # Definitely volatile - 6+ non-NORMAL in 2h window around current time
+                # Definitely volatile - 4+ brief excursions
                 is_volatile_period = True
-                volatile_reason = f" | Volatile: {non_normal_count}/{actual_scan_periods} non-NORMAL in ±{actual_scan_periods * 15 // 2}min window - holding steady"
+                volatile_reason = f" | Volatile: {non_normal_count} brief excursions in ±{actual_scan_periods * 15 // 2}min - holding steady"
             elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_cheap_expensive_mix:
-                # Moderately volatile - 3+ non-NORMAL AND oscillating between cheap/expensive (true chaos)
+                # Moderately volatile - 2+ brief excursions AND oscillating
                 is_volatile_period = True
                 types = []
                 if peak_count > 0:
@@ -2126,7 +2155,7 @@ class DecisionEngine:
                     types.append(f"{expensive_count}×EXP")
                 if cheap_count > 0:
                     types.append(f"{cheap_count}×CHEAP")
-                volatile_reason = f" | Volatile: {' + '.join(types)} mixed in ±{actual_scan_periods * 15 // 2}min - reducing confidence"
+                volatile_reason = f" | Volatile: {' + '.join(types)} brief in ±{actual_scan_periods * 15 // 2}min - reducing confidence"
 
             # Apply normal forecast logic regardless of volatility
             # Volatility will reduce weight, not block smart decisions
