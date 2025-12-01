@@ -205,11 +205,26 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         "peak_protection_margin",  # FIX: Added to prevent unnecessary reload
     }
 
-    # Check if only runtime options changed
+    # Switch settings that DON'T require reload (can be hot-reloaded)
+    switch_options = {
+        "enable_optimization",
+        "enable_peak_protection",
+        "enable_price_optimization",
+        "enable_weather_prediction",
+        "enable_hot_water_optimization",
+    }
+
+    # Check if only runtime options or switches changed
     options_keys = set(entry.options.keys())
-    if options_keys and options_keys.issubset(runtime_options):
+    data_keys = set(entry.data.keys())
+
+    # Merge both for checking (entry.data has switches, entry.options has runtime)
+    merged_config = dict(entry.data)
+    merged_config.update(entry.options)
+
+    if options_keys.issubset(runtime_options) or data_keys.issubset(switch_options):
         _LOGGER.info("Runtime options changed, updating coordinator without reload")
-        await coordinator.async_update_config(entry.options)
+        await coordinator.async_update_config(merged_config)
         return
 
     # Entity selections or critical settings changed - full reload needed
@@ -254,7 +269,9 @@ async def _create_coordinator(
 
     # Create decision engine with all dependencies
     # Add latitude from Home Assistant config for climate zone detection
-    config_with_latitude = dict(entry.options)
+    # CRITICAL: Merge entry.data (switch states) and entry.options (runtime settings)
+    config_with_latitude = dict(entry.data)  # Start with switch states
+    config_with_latitude.update(entry.options)  # Overlay runtime options
     config_with_latitude["latitude"] = hass.config.latitude
 
     decision_engine = DecisionEngine(

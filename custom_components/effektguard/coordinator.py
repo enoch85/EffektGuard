@@ -2032,6 +2032,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.engine.config["control_priority"] = new_options["control_priority"]
             _LOGGER.debug("Updated control priority: %s", new_options["control_priority"])
 
+        # Update switch states (stored in config dict, checked by layers)
+        switch_keys = {
+            "enable_optimization",
+            "enable_peak_protection",
+            "enable_price_optimization",
+            "enable_weather_prediction",
+            "enable_hot_water_optimization",
+        }
+        for key in switch_keys:
+            if key in new_options:
+                self.engine.config[key] = new_options[key]
+                _LOGGER.debug("Updated switch %s: %s", key, new_options[key])
+
         # Update peak protection margin (note: stored in config dict, not cached)
         if "peak_protection_margin" in new_options:
             self.engine.config["peak_protection_margin"] = new_options["peak_protection_margin"]

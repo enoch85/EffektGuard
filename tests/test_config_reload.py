@@ -133,7 +133,10 @@ class TestUpdateListenerSmartReload:
         await async_reload_entry(mock_hass, mock_config_entry)
 
         # Should call async_update_config (hot reload)
-        mock_coordinator.async_update_config.assert_called_once_with(mock_config_entry.options)
+        # FIX: Now passes merged config (entry.data + entry.options) for switch support
+        expected_config = dict(mock_config_entry.data)
+        expected_config.update(mock_config_entry.options)
+        mock_coordinator.async_update_config.assert_called_once_with(expected_config)
 
         # Should NOT call async_reload (full reload)
         mock_hass.config_entries.async_reload.assert_not_called()
