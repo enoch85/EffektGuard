@@ -1094,7 +1094,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Calculate space heating demand - use actual power sensor reading
         # This is the REAL current heating demand, not an estimate
-        space_heating_demand = nibe_data.power_kw if nibe_data and nibe_data.power_kw else 0.0
+        space_heating_demand = (
+            nibe_data.power_kw if nibe_data and nibe_data.power_kw is not None else 0.0
+        )
 
         # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
