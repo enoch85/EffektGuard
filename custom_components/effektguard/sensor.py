@@ -214,8 +214,8 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         ),
     ),
     EffektGuardSensorEntityDescription(
-        key="hour_classification",
-        name="Hour Classification",
+        key="price_period_classification",
+        name="Price Period Classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
             coordinator.data.get("current_classification") if coordinator.data else "unknown"
@@ -499,7 +499,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         for layer in decision.layers
                     ]
 
-        elif key == "hour_classification":
+        elif key == "price_period_classification":
             # Show today's full classification
             if "price" in self.coordinator.data:
                 price_data = self.coordinator.data["price"]

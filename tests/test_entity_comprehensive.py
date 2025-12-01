@@ -443,9 +443,9 @@ class TestSensorExtraStateAttributes:
         assert attrs["layer_votes"][0]["weight"] == 0.5
         assert attrs["layer_votes"][0]["reason"] == "Price optimization"
 
-    def test_hour_classification_attributes(self, mock_coordinator_with_data, mock_config_entry):
-        """Test hour_classification sensor has price data."""
-        sensor_desc = next(s for s in SENSORS if s.key == "hour_classification")
+    def test_price_period_classification_attributes(self, mock_coordinator_with_data, mock_config_entry):
+        """Test price period classification sensor has price data."""
+        sensor_desc = next(s for s in SENSORS if s.key == "price_period_classification")
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
 
         attrs = sensor.extra_state_attributes

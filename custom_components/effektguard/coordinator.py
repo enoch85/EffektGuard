@@ -302,7 +302,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         - Update completes at 20:00:12 → next at 20:05:12
         - Update completes at 20:05:14 → next at 20:10:14
         - After several hours → update at 20:47:57
-        - Hour classification changes at :00:10 are missed!
+        - Price period classification changes at :00:10, :15:10, :30:10, :45:10 are missed!
         """
         now = dt_util.now()
         current_minute = now.minute
