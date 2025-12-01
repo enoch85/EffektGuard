@@ -2100,6 +2100,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
             self.dhw_optimizer.demand_periods = demand_periods
+            # Update user_target_temp to match the new configuration
+            self.dhw_optimizer.user_target_temp = dhw_target
             _LOGGER.debug(
                 "Updated DHW demand periods: %d periods (target: %.1f°C)",
                 len(demand_periods),
