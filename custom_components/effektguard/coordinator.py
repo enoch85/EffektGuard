@@ -729,50 +729,60 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Run optimization decision engine
         is_grace_period = False
-        try:
-            # Validate peak tracking data
-            if self.peak_today is None or self.peak_today < 0:
-                _LOGGER.error(
-                    "Peak tracking error: peak_today is %s (should have actual power measurement). "
-                    "This indicates power sensor is not configured or unavailable. "
-                    "Peak protection will be disabled until sensors are available.",
-                    self.peak_today,
-                )
-                current_power_for_decision = 0.0  # Disable peak protection
-            else:
-                current_power_for_decision = self.peak_today
 
-            decision = await self.hass.async_add_executor_job(
-                self.engine.calculate_decision,
-                nibe_data,
-                price_data,
-                weather_data,
-                self.peak_this_month,  # Monthly peak threshold to protect
-                current_power_for_decision,  # Current whole-house power consumption
+        # Check if optimization is enabled (master switch)
+        if not self._entry.data.get("enable_optimization", True):
+            _LOGGER.info("Optimization disabled by user - maintaining neutral offset")
+            decision = OptimizationDecision(
+                offset=0.0,
+                reasoning="Optimization disabled by user",
+                layers=[],
             )
+        else:
+            try:
+                # Validate peak tracking data
+                if self.peak_today is None or self.peak_today < 0:
+                    _LOGGER.error(
+                        "Peak tracking error: peak_today is %s (should have actual power measurement). "
+                        "This indicates power sensor is not configured or unavailable. "
+                        "Peak protection will be disabled until sensors are available.",
+                        self.peak_today,
+                    )
+                    current_power_for_decision = 0.0  # Disable peak protection
+                else:
+                    current_power_for_decision = self.peak_today
 
-            # Startup grace period: Skip first action to allow sensors/trends to stabilize
-            if self._startup_grace_period and self._first_successful_update:
-                is_grace_period = True
+                decision = await self.hass.async_add_executor_job(
+                    self.engine.calculate_decision,
+                    nibe_data,
+                    price_data,
+                    weather_data,
+                    self.peak_this_month,  # Monthly peak threshold to protect
+                    current_power_for_decision,  # Current whole-house power consumption
+                )
+
+                # Startup grace period: Skip first action to allow sensors/trends to stabilize
+                if self._startup_grace_period and self._first_successful_update:
+                    is_grace_period = True
+                    _LOGGER.info(
+                        "Startup grace period: Observing only. "
+                        "Real decision would have been: %.2f°C (%s)",
+                        decision.offset,
+                        decision.reasoning,
+                    )
+                    # Don't force offset to 0.0 - let the calculated value stand for reporting
+                    decision.reasoning = f"[Startup Grace Period] {decision.reasoning}"
+                    self._startup_grace_period = False
+
                 _LOGGER.info(
-                    "Startup grace period: Observing only. "
-                    "Real decision would have been: %.2f°C (%s)",
+                    "Decision: offset %.2f°C, reasoning: %s",
                     decision.offset,
                     decision.reasoning,
                 )
-                # Don't force offset to 0.0 - let the calculated value stand for reporting
-                decision.reasoning = f"[Startup Grace Period] {decision.reasoning}"
-                self._startup_grace_period = False
-
-            _LOGGER.info(
-                "Decision: offset %.2f°C, reasoning: %s",
-                decision.offset,
-                decision.reasoning,
-            )
-        except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as err:
-            _LOGGER.error("Optimization failed: %s", err)
-            # Fall back to safe operation (no offset)
-            decision = self._get_safe_default_decision()
+            except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as err:
+                _LOGGER.error("Optimization failed: %s", err)
+                # Fall back to safe operation (no offset)
+                decision = self._get_safe_default_decision()
 
         # Update current state
         self.current_offset = decision.offset

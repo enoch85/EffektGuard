@@ -57,6 +57,13 @@ def engine_mock():
     # Mock target temp
     engine.target_temp = 22.0
 
+    # Mock config (for switch checks)
+    engine.config = {
+        "enable_weather_prediction": True,
+        "enable_price_optimization": True,
+        "enable_peak_protection": True,
+    }
+
     # Bind methods to instance
     engine._get_preheat_lead_time = DecisionEngine._get_preheat_lead_time.__get__(
         engine, DecisionEngine
