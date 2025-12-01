@@ -731,7 +731,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         is_grace_period = False
 
         # Check if optimization is enabled (master switch)
-        if not self._entry.data.get("enable_optimization", True):
+        if not self.entry.data.get("enable_optimization", True):
             _LOGGER.info("Optimization disabled by user - maintaining neutral offset")
             decision = OptimizationDecision(
                 offset=0.0,

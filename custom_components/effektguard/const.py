@@ -380,7 +380,7 @@ TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # Scale: 1-10 -> 0.4-4.0°C
 
 # Safety layer emergency offsets (Oct 19, 2025)
 # Used for extreme temperature deviations and absolute DM maximum
-SAFETY_EMERGENCY_OFFSET: Final = 5.0  # Emergency temperature correction (too cold/hot)
+SAFETY_EMERGENCY_OFFSET: Final = 10.0  # Emergency temperature correction (too cold/hot)
 
 # WARNING layer dynamic offsets (Oct 19, 2025)
 # Progressive offset calculation based on DM deviation severity
