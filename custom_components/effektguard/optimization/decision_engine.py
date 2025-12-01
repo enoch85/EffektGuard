@@ -1471,6 +1471,14 @@ class DecisionEngine:
         References:
             MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
         """
+        # Check if peak protection is enabled
+        if not self.config.get("enable_peak_protection", True):
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason="Peak: Disabled by user",
+            )
+
         # current_power is always provided from coordinator's peak tracking (actual measurements)
 
         # Get current quarter
@@ -1680,6 +1688,14 @@ class DecisionEngine:
         Returns:
             LayerDecision with gentle pre-heating recommendation
         """
+        # Check if weather prediction is enabled
+        if not self.config.get("enable_weather_prediction", True):
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason="Weather: Disabled by user",
+            )
+
         if not weather_data or not weather_data.forecast_hours:
             return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
 
@@ -1911,6 +1927,14 @@ class DecisionEngine:
         Returns:
             LayerDecision with price-based offset
         """
+        # Check if price optimization is enabled
+        if not self.config.get("enable_price_optimization", True):
+            return LayerDecision(
+                offset=0.0,
+                weight=0.0,
+                reason="Price: Disabled by user",
+            )
+
         if not price_data or not price_data.today:
             return LayerDecision(offset=0.0, weight=0.0, reason="No price data")
 
