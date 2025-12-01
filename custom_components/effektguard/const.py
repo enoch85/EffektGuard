@@ -754,6 +754,12 @@ DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 15-30°C duri
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
+# NIBE Adapter Constants
+NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
+NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
+    1.0  # °C - Write to NIBE when accumulator crosses ±1.0
+)
+
 # DHW Recovery Time Estimation
 # DM recovery rates based on heat pump efficiency at different outdoor temperatures
 DM_RECOVERY_RATE_MILD: Final = 40.0  # DM/hour - Mild weather (>5°C), efficient heat pump

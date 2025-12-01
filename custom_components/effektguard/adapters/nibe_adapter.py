@@ -34,8 +34,11 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
+    NIBE_DEFAULT_SUPPLY_TEMP,
+    NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD,
     NIBE_POWER_FACTOR,
     NIBE_VOLTAGE_PER_PHASE,
+    SERVICE_RATE_LIMIT_MINUTES,
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
@@ -107,6 +110,10 @@ class NibeAdapter:
         self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
         self._last_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
+        # Fractional accumulator for precise offset tracking
+        # NIBE only accepts integers, so we accumulate fractional parts
+        # and apply them when they sum to ±1°C
+        self._fractional_accumulator: float = 0.0
         # Track last integer offset sent to NIBE (to avoid redundant writes)
         self._last_nibe_offset: int | None = None
 
@@ -149,7 +156,7 @@ class NibeAdapter:
             indoor_temp = await self._calculate_multi_sensor_temperature(indoor_temp)
 
         supply_temp = await self._read_entity_float(
-            self._entity_cache.get("supply_temp"), default=35.0
+            self._entity_cache.get("supply_temp"), default=NIBE_DEFAULT_SUPPLY_TEMP
         )
         return_temp = await self._read_entity_float(
             self._entity_cache.get("return_temp"), default=None
@@ -259,25 +266,37 @@ class NibeAdapter:
         )
 
     async def set_curve_offset(self, offset: float) -> bool:
-        """Set heating curve offset via NIBE entity.
+        """Set heating curve offset via NIBE entity with fractional accumulation.
 
-        Simple approach: Only write to NIBE when integer part changes.
-        NIBE only accepts integers, so we round and only send when different.
+        NIBE MyUplink entities have step=1 (integer only), but the optimization
+        engine calculates precise fractional offsets (e.g., 0.35°C, -1.24°C).
+
+        Solution: Accumulate fractional parts and apply when they sum to ±1°C.
+        This preserves the precision of gentle optimization while respecting
+        NIBE's integer-only constraint.
+
+        Example:
+            Cycle 1: Calculate 0.35°C → Send 0, accumulate +0.35
+            Cycle 2: Calculate 0.42°C → Delta +0.07, accumulator = +0.42
+            Cycle 3: Calculate 0.89°C → Delta +0.47, accumulator = +0.89
+            Cycle 4: Calculate 1.12°C → Delta +0.23, accumulator = +1.12 → Send +1
 
         Args:
-            offset: Offset value in °C (e.g., 2.35)
+            offset: Calculated offset value in °C (e.g., -1.24, +0.87)
 
         Returns:
-            True if offset was written to NIBE, False if unchanged
+            True if offset was written to NIBE, False if deferred/accumulated
 
         Note:
             Requires NIBE Myuplink Premium subscription for write access.
         """
         from datetime import timedelta
 
-        # Rate limiting - minimum 5 minutes between writes
+        # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if self._last_write and now - self._last_write < timedelta(minutes=5):
+        if self._last_write and now - self._last_write < timedelta(
+            minutes=SERVICE_RATE_LIMIT_MINUTES
+        ):
             _LOGGER.debug("Skipping offset write, too soon since last write")
             return False
 
@@ -301,35 +320,61 @@ class NibeAdapter:
         if self._last_nibe_offset is None:
             try:
                 self._last_nibe_offset = int(float(state.state))
+                # Initialize accumulator based on difference between calculated and actual
+                self._fractional_accumulator = offset - self._last_nibe_offset
                 _LOGGER.info(
-                    "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C)",
+                    "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
                     self._last_nibe_offset,
                     offset,
+                    self._fractional_accumulator,
                 )
             except (ValueError, TypeError):
                 self._last_nibe_offset = 0
+                self._fractional_accumulator = offset
 
-        # Accumulate fractional offsets, only write when integer part changes
-        # Decision engine provides absolute calculated offset (e.g., 0.5, 0.9, 2.0)
-        # We accumulate the fractional parts and only write to NIBE when crossing integer boundaries
-        #
-        # Example:
-        #   NIBE at 0°C, calculated 0.5°C → int(0.5) = 0, no write
-        #   NIBE at 0°C, calculated 0.9°C → int(0.9) = 0, no write
-        #   NIBE at 0°C, calculated 2.0°C → int(2.0) = 2, write 2°C to NIBE
-        #
-        # Use int() to truncate toward zero (not round()):
-        #   int(0.9) = 0, int(2.0) = 2, int(-1.5) = -1
+        # Fractional accumulation logic
+        # The accumulator tracks the total difference between what we've calculated
+        # and what NIBE actually has.
+        self._fractional_accumulator = offset - self._last_nibe_offset
 
-        integer_offset = int(offset)
+        _LOGGER.debug(
+            "Offset calculation: calculated=%.2f°C, NIBE_current=%d°C, " "accumulator=%.2f°C",
+            offset,
+            self._last_nibe_offset,
+            self._fractional_accumulator,
+        )
+
+        # Determine what integer value to apply to NIBE
+        # Only write when accumulator crosses threshold
+        offset_to_apply = self._last_nibe_offset  # Start with current NIBE value
+
+        if abs(self._fractional_accumulator) >= NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD:
+            # Accumulator has crossed threshold, apply the integer part
+            accumulated_adjustment = int(self._fractional_accumulator)
+            offset_to_apply = self._last_nibe_offset + accumulated_adjustment
+            _LOGGER.info(
+                "✓ Accumulated fractional offset reached threshold: "
+                "applying %+d°C adjustment (accumulator: %.2f°C, new_offset: %d°C)",
+                accumulated_adjustment,
+                self._fractional_accumulator,
+                offset_to_apply,
+            )
+        else:
+            # Accumulator hasn't crossed threshold, keep current NIBE offset
+            _LOGGER.debug(
+                "Accumulator below threshold (%.2f°C), keeping NIBE at %d°C",
+                self._fractional_accumulator,
+                offset_to_apply,
+            )
 
         # Only write if integer part changed from last written value
-        if integer_offset == self._last_nibe_offset:
+        if offset_to_apply == self._last_nibe_offset:
             _LOGGER.debug(
-                "Offset unchanged: %.2f°C → int(%d°C) = NIBE already at %d°C",
+                "Offset unchanged: %.2f°C → int(%d°C) = NIBE already at %d°C (accumulator: %.2f°C)",
                 offset,
-                integer_offset,
+                offset_to_apply,
                 self._last_nibe_offset,
+                self._fractional_accumulator,
             )
             return False
 
@@ -343,18 +388,19 @@ class NibeAdapter:
                 "set_value",
                 {
                     "entity_id": offset_entity,
-                    "value": integer_offset,
+                    "value": offset_to_apply,
                 },
                 blocking=False,
             )
             self._last_write = now
-            self._last_nibe_offset = integer_offset
+            self._last_nibe_offset = offset_to_apply
 
             _LOGGER.info(
-                "Set NIBE offset: %d°C → %d°C (calculated: %.2f°C)",
+                "✓ Applied offset to NIBE: %d°C → %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
                 old_offset,
-                integer_offset,
+                offset_to_apply,
                 offset,
+                self._fractional_accumulator,
             )
             return True
 
