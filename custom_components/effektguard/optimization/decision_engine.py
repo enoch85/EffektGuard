@@ -59,14 +59,8 @@ from ..const import (
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
     LAYER_WEIGHT_COMFORT_HIGH,
-    LAYER_WEIGHT_COMFORT_SEVERE,
     LAYER_WEIGHT_COMFORT_CRITICAL,
     COMFORT_CORRECTION_MILD,
-    COMFORT_CORRECTION_STRONG,
-    COMFORT_CORRECTION_CRITICAL,
-    COMFORT_DM_COOLING_THRESHOLD,
-    COMFORT_OVERSHOOT_CRITICAL,
-    COMFORT_OVERSHOOT_SEVERE,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
@@ -74,14 +68,10 @@ from ..const import (
     LAYER_WEIGHT_PREDICTION,
     LAYER_WEIGHT_SAFETY,
     MIN_TEMP_LIMIT,
-    OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD,
-    OVERSHOOT_PROTECTION_FORECAST_HORIZON,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
     OVERSHOOT_PROTECTION_START,
-    OVERSHOOT_PROTECTION_WEIGHT_MAX,
-    OVERSHOOT_PROTECTION_WEIGHT_MIN,
     PEAK_AWARE_EFFECT_THRESHOLD,
     PEAK_AWARE_EFFECT_WEIGHT_MIN,
     PROACTIVE_ZONE1_OFFSET,
@@ -873,21 +863,21 @@ class DecisionEngine:
         #    "Ignore DM if the indoor temp is already at target and price is normal or expensive"
         #    Exception: Absolute safety limit (-1500) always triggers
 
-        temp_error = indoor_temp - target_temp
+        temp_deviation = indoor_temp - target_temp
         tolerance = self.tolerance_range
 
         # Case 1: Too warm (above tolerance)
-        if temp_error > tolerance:
+        if temp_deviation > tolerance:
             # Too warm - emergency heating would be counterproductive
             # DM will naturally improve as house cools and we maintain target temp later
             return LayerDecision(
                 offset=0.0,
                 weight=0.0,
-                reason=f"DM {degree_minutes:.0f} BUT indoor {indoor_temp:.1f}°C is {temp_error:.1f}°C over target - let cool naturally first",
+                reason=f"DM {degree_minutes:.0f} BUT indoor {indoor_temp:.1f}°C is {temp_deviation:.1f}°C over target - let cool naturally first",
             )
 
         # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
-        if temp_error >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
+        if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
             # Check if price is cheap
             is_cheap = False
             if price_data and price_data.today:
@@ -1298,52 +1288,7 @@ class DecisionEngine:
         predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
 
         # ========================================
-        # OVERSHOOT PROTECTION: Graduated coast response when above target
-        # ========================================
-        # Based on Dec 1-2, 2025 production analysis: overshoot was ignored, causing DM spiral
-        # Key insight: DM recovers when we STOP heating, not by boosting
-        # Graduated response: 0.6°C → -7°C offset, 1.5°C → -10°C offset
-        overshoot = -deficit  # Convert deficit to overshoot (positive when above target)
-
-        if overshoot >= OVERSHOOT_PROTECTION_START:
-            # Check if weather forecast shows NO significant cooling (cold snap check)
-            forecast_stable = True
-            if weather_data and weather_data.forecast_hours:
-                forecast_hours = weather_data.forecast_hours[:OVERSHOOT_PROTECTION_FORECAST_HORIZON]
-                if forecast_hours:
-                    min_forecast_temp = min(h.temperature for h in forecast_hours)
-                    # Cold snap = forecast drops >threshold from current outdoor temp
-                    forecast_stable = (
-                        outdoor_temp - min_forecast_temp
-                    ) < OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD
-
-            if forecast_stable:
-                # Calculate graduated response (linear interpolation)
-                overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
-                fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
-
-                # Scale offset from -7°C at 0.6°C overshoot to -10°C at 1.5°C overshoot
-                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
-                    OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
-                )
-
-                # Scale weight from 0.5 at 0.6°C overshoot to 1.0 at 1.5°C overshoot
-                coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
-                    OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
-                )
-
-                return LayerDecision(
-                    offset=coast_offset,
-                    weight=coast_weight,
-                    reason=(
-                        f"Overshoot protection: COAST at {coast_offset:.1f}°C, weight {coast_weight:.2f} "
-                        f"(indoor {indoor_temp:.1f}°C is {overshoot:.1f}°C above target, weather stable, DM {degree_minutes:.0f})"
-                    ),
-                )
-            # If cold snap is forecast, don't coast - let prediction layer handle pre-heating
-
-        # ========================================
-        # NEW: RAPID COOLING DETECTION (Predictive)
+        # RAPID COOLING DETECTION (Predictive)
         # ========================================
         # Detect rapid cooling BEFORE thermal debt accumulates in degree minutes
         # This gives 30-60 minutes advance warning vs reactive DM-based approach
@@ -2316,7 +2261,7 @@ class DecisionEngine:
         Returns:
             LayerDecision with comfort correction
         """
-        temp_error = nibe_state.indoor_temp - self.target_temp
+        temp_deviation = nibe_state.indoor_temp - self.target_temp
 
         # Temperature tolerance based on user setting
         tolerance = self.tolerance_range  # ±0.4-4.0°C
@@ -2324,67 +2269,83 @@ class DecisionEngine:
         # Fixed dead zone (very close to target, no action needed)
         dead_zone = COMFORT_DEAD_ZONE
 
-        if abs(temp_error) < dead_zone:
+        if abs(temp_deviation) < dead_zone:
             # Very close to target - we're right on target
             return LayerDecision(offset=0.0, weight=0.0, reason="Temp at target")
-        elif abs(temp_error) < tolerance:
+        elif abs(temp_deviation) < tolerance:
             # Within comfort zone but drifting from target
             # Gentle correction to maintain target during favorable conditions
             # Lower weight (0.2) so it doesn't override cost optimization,
             # but provides gentle steering when prices are similar
-            correction = -temp_error * COMFORT_CORRECTION_MULT  # Gentle correction
+            correction = -temp_deviation * COMFORT_CORRECTION_MULT  # Gentle correction
 
-            if temp_error > 0:
-                reason = f"Slightly warm (+{temp_error:.1f}°C), gentle reduce"
+            if temp_deviation > 0:
+                reason = f"Slightly warm (+{temp_deviation:.1f}°C), gentle reduce"
             else:
-                reason = f"Slightly cool ({temp_error:.1f}°C), gentle boost"
+                reason = f"Slightly cool ({temp_deviation:.1f}°C), gentle boost"
 
             return LayerDecision(
                 offset=correction,
                 weight=LAYER_WEIGHT_COMFORT_MIN,  # Low weight - advisory only
                 reason=reason,
             )
-        elif temp_error > tolerance:
-            # Too warm - graduated response based on severity (Phase 2: Temperature Control Fixes)
-            # This replaces the old fixed 0.5 weight with dynamic scaling
-            overshoot = temp_error - tolerance
+        elif temp_deviation > tolerance:
+            # ========================================
+            # OVERSHOOT PROTECTION (Dec 2, 2025 - moved from proactive layer)
+            # ========================================
+            # When above target, we need to STOP heating to let DM recover naturally.
+            # Key insight: DM recovers when we stop asking for heat, not by boosting.
+            # Use strong offsets (-7 to -10°C) to effectively stop heating.
+            #
+            # Graduated response based on how far above target:
+            # - 0.6°C above: -7°C offset, weight 0.7 (start coasting)
+            # - 1.5°C above: -10°C offset, weight 1.0 (full coast, overrides all)
+            #
+            # NOTE: Removed old DM < -200 check - it was backwards!
+            # High DM debt during overshoot means flow temp was too high.
+            # The fix is to REDUCE heating, not block the reduction.
 
-            # SAFETY CHECK: Don't apply cooling if thermal debt accumulating
-            # If DM < -200, heat pump already struggling - cooling would worsen debt
-            # This prevents sensor errors or outliers from creating thermal debt
-            if nibe_state.degree_minutes < COMFORT_DM_COOLING_THRESHOLD:
-                return LayerDecision(
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"Overheat detected ({temp_error:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling to prevent thermal debt",
+            overshoot = temp_deviation  # How far above target (positive value)
+
+            if overshoot >= OVERSHOOT_PROTECTION_START:
+                # Strong overshoot protection with graduated response
+                overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
+                fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
+
+                # Scale offset from -7°C at 0.6°C overshoot to -10°C at 1.5°C overshoot
+                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+                    OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
                 )
 
-            # Graduated weight scaling based on overshoot severity:
-            # - 0-0.5°C over tolerance: weight 0.7 (high priority, standard correction)
-            # - 0.5-1°C over tolerance: weight 0.9 (very high priority, strong correction)
-            # - 1°C+ over tolerance: weight 1.0 (CRITICAL - same as safety layer, emergency correction)
-            # Dec 2, 2025: Lowered thresholds to trigger at 0.5°C and 1.0°C (was 1.0°C and 2.0°C)
-            if overshoot >= COMFORT_OVERSHOOT_CRITICAL:
-                weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0 - forces cooling, overrides all layers
-                correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x multiplier
-                reason = f"CRITICAL overheat: {temp_error:.1f}°C over target (emergency cooling)"
-            elif overshoot >= COMFORT_OVERSHOOT_SEVERE:
-                weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9 - very high priority
-                correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x multiplier
-                reason = f"Severe overheat: {temp_error:.1f}°C over target"
-            else:
-                weight = LAYER_WEIGHT_COMFORT_HIGH  # 0.7 - high priority
-                correction = -overshoot * COMFORT_CORRECTION_MILD  # 1.0x multiplier
-                reason = f"Too warm: {temp_error:.1f}°C over target"
+                # Scale weight from 0.7 at 0.6°C to 1.0 at 1.5°C (always high priority)
+                coast_weight = LAYER_WEIGHT_COMFORT_HIGH + fraction * (
+                    LAYER_WEIGHT_COMFORT_CRITICAL - LAYER_WEIGHT_COMFORT_HIGH
+                )
 
-            return LayerDecision(offset=correction, weight=weight, reason=reason)
+                return LayerDecision(
+                    offset=coast_offset,
+                    weight=coast_weight,
+                    reason=(
+                        f"Overshoot: COAST {coast_offset:.1f}°C @ weight {coast_weight:.2f} "
+                        f"(indoor {nibe_state.indoor_temp:.1f}°C is {overshoot:.1f}°C above target)"
+                    ),
+                )
+            else:
+                # Mild overshoot (below 0.6°C threshold) - gentle correction
+                # Use proportional correction, not the aggressive coast offsets
+                correction = -temp_deviation * COMFORT_CORRECTION_MILD
+                return LayerDecision(
+                    offset=correction,
+                    weight=LAYER_WEIGHT_COMFORT_HIGH,
+                    reason=f"Warm: {temp_deviation:.1f}°C above target, gentle reduce",
+                )
         else:
             # Too cold, increase heating strongly
-            correction = -(temp_error + tolerance) * 0.5
+            correction = -(temp_deviation + tolerance) * 0.5
             return LayerDecision(
                 offset=correction,
                 weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too cold: {-temp_error:.1f}°C under",
+                reason=f"Too cold: {-temp_deviation:.1f}°C under",
             )
 
     def _aggregate_layers(self, layers: list[LayerDecision]) -> float:

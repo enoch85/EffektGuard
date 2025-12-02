@@ -355,15 +355,15 @@ class WeatherCompensationCalculator:
         Returns:
             Recommended heating curve offset adjustment (°C)
         """
-        temp_error = optimal_flow_temp - current_flow_temp
-        offset_adjustment = temp_error / curve_sensitivity
+        temp_deviation = optimal_flow_temp - current_flow_temp
+        offset_adjustment = temp_deviation / curve_sensitivity
 
         _LOGGER.debug(
             "Offset calculation: optimal=%.1f°C, current=%.1f°C, "
             "error=%.1f°C, sensitivity=%.1f -> offset=%.1f",
             optimal_flow_temp,
             current_flow_temp,
-            temp_error,
+            temp_deviation,
             curve_sensitivity,
             offset_adjustment,
         )

@@ -63,14 +63,12 @@ class TestOvershootProtectionGraduatedResponse:
         overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
         fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
 
-        coast_offset = (
-            OVERSHOOT_PROTECTION_OFFSET_MIN
-            + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN)
+        coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+            OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
         )
 
-        coast_weight = (
-            OVERSHOOT_PROTECTION_WEIGHT_MIN
-            + fraction * (OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN)
+        coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
+            OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
         )
 
         return coast_offset, coast_weight
@@ -162,14 +160,12 @@ class TestOvershootProtectionVsDecisionTable:
         overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
         fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
 
-        coast_offset = (
-            OVERSHOOT_PROTECTION_OFFSET_MIN
-            + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN)
+        coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+            OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
         )
 
-        coast_weight = (
-            OVERSHOOT_PROTECTION_WEIGHT_MIN
-            + fraction * (OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN)
+        coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
+            OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
         )
 
         return coast_offset, coast_weight
@@ -203,14 +199,12 @@ class TestOvershootProtectionScenarios:
         overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
         fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
 
-        coast_offset = (
-            OVERSHOOT_PROTECTION_OFFSET_MIN
-            + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN)
+        coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+            OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
         )
 
-        coast_weight = (
-            OVERSHOOT_PROTECTION_WEIGHT_MIN
-            + fraction * (OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN)
+        coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
+            OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
         )
 
         return coast_offset, coast_weight

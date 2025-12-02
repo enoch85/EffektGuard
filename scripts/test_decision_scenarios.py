@@ -404,22 +404,22 @@ class ScenarioTester:
         tolerance = self.tolerance_range
 
         # FIRST CHECK: Never apply emergency recovery when already above target (Nov 27, 2025)
-        temp_error = indoor - target
-        if temp_error > tolerance:
+        temp_deviation = indoor - target
+        if temp_deviation > tolerance:
             return LayerVote(
                 "Emergency",
                 offset=0.0,
                 weight=0.0,
-                reason=f"DM {dm:.0f} BUT indoor {indoor:.1f}°C is {temp_error:.1f}°C over target - let cool first",
+                reason=f"DM {dm:.0f} BUT indoor {indoor:.1f}°C is {temp_deviation:.1f}°C over target - let cool first",
             )
 
         # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
         # (Nov 29, 2025 User Request)
-        if temp_error >= 0 and dm > DM_THRESHOLD_AUX_LIMIT:
+        if temp_deviation >= 0 and dm > DM_THRESHOLD_AUX_LIMIT:
             is_cheap = False
             if price_data and price_data.classification == QuarterClassification.CHEAP:
                 is_cheap = True
-            
+
             if not is_cheap:
                 return LayerVote(
                     "Emergency",
@@ -542,7 +542,10 @@ class ScenarioTester:
             # Check forecast if available
             forecast_stable = True
             if weather_data and weather_data.forecast_hours:
-                min_forecast = min(f.temperature for f in weather_data.forecast_hours[:OVERSHOOT_PROTECTION_FORECAST_HORIZON])
+                min_forecast = min(
+                    f.temperature
+                    for f in weather_data.forecast_hours[:OVERSHOOT_PROTECTION_FORECAST_HORIZON]
+                )
                 if (outdoor - min_forecast) >= OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD:
                     forecast_stable = False
 
@@ -550,8 +553,12 @@ class ScenarioTester:
                 # Calculate graduated response
                 overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
                 fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
-                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN)
-                coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN)
+                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+                    OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
+                )
+                coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
+                    OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
+                )
                 return LayerVote(
                     "Proactive",
                     offset=coast_offset,
@@ -815,59 +822,59 @@ class ScenarioTester:
 
     def calculate_comfort_layer(self, nibe_state: MockNibeState) -> LayerVote:
         """Calculate comfort layer vote - matches production code (Nov 27, 2025)."""
-        temp_error = nibe_state.indoor_temp - self.config["target_indoor_temp"]
+        temp_deviation = nibe_state.indoor_temp - self.config["target_indoor_temp"]
         dead_zone = COMFORT_DEAD_ZONE
         tolerance = self.tolerance_range
 
-        if abs(temp_error) < dead_zone:
+        if abs(temp_deviation) < dead_zone:
             return LayerVote("Comfort", offset=0.0, weight=0.0, reason="At target")
-        elif abs(temp_error) < tolerance:
+        elif abs(temp_deviation) < tolerance:
             # Gentle steering
-            offset = -temp_error * COMFORT_CORRECTION_MULT
+            offset = -temp_deviation * COMFORT_CORRECTION_MULT
             return LayerVote(
                 "Comfort",
                 offset=offset,
                 weight=LAYER_WEIGHT_COMFORT_MIN,
-                reason=f"Gentle steer ({temp_error:+.1f}°C from target)",
+                reason=f"Gentle steer ({temp_deviation:+.1f}°C from target)",
             )
-        elif temp_error > tolerance:
+        elif temp_deviation > tolerance:
             # Too warm - graduated response (Phase 2)
-            overshoot = temp_error - tolerance
-            
+            overshoot = temp_deviation - tolerance
+
             # SAFETY CHECK: Don't cool if thermal debt accumulating (Nov 27, 2025)
             if nibe_state.degree_minutes < COMFORT_DM_COOLING_THRESHOLD:
                 return LayerVote(
                     "Comfort",
                     offset=0.0,
                     weight=0.0,
-                    reason=f"Overheat ({temp_error:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling",
+                    reason=f"Overheat ({temp_deviation:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling",
                 )
-            
+
             # Graduated weight based on severity (Dec 2, 2025: lowered thresholds)
             if overshoot >= COMFORT_OVERSHOOT_CRITICAL:
                 weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0
                 correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x
-                reason = f"CRITICAL overheat: {temp_error:.1f}°C over target"
+                reason = f"CRITICAL overheat: {temp_deviation:.1f}°C over target"
             elif overshoot >= COMFORT_OVERSHOOT_SEVERE:
                 weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9
                 correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x
-                reason = f"Severe overheat: {temp_error:.1f}°C over target"
+                reason = f"Severe overheat: {temp_deviation:.1f}°C over target"
             else:
                 weight = LAYER_WEIGHT_COMFORT_HIGH  # 0.7
                 correction = -overshoot * COMFORT_CORRECTION_MILD  # 1.0x
-                reason = f"Too warm: {temp_error:.1f}°C over target"
-                
+                reason = f"Too warm: {temp_deviation:.1f}°C over target"
+
             return LayerVote("Comfort", offset=correction, weight=weight, reason=reason)
         else:
             # Too cold - increase heating
-            # temp_error is negative, tolerance is positive
+            # temp_deviation is negative, tolerance is positive
             # correction should be positive to increase heating
-            correction = -(temp_error + tolerance) * 0.5  # Production formula
+            correction = -(temp_deviation + tolerance) * 0.5  # Production formula
             return LayerVote(
                 "Comfort",
                 offset=correction,
                 weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too cold: {-temp_error:.1f}°C under",
+                reason=f"Too cold: {-temp_deviation:.1f}°C under",
             )
 
     def aggregate_layers(self, layers: list[LayerVote]) -> tuple[float, list[LayerVote]]:
@@ -1281,7 +1288,7 @@ Examples:
         expensive_offset=args.expensive_offset,
         peak_offset=args.peak_offset,
     )
-    
+
     # Override target temperature if provided
     if args.target is not None:
         tester.config["target_indoor_temp"] = args.target
@@ -1408,7 +1415,7 @@ Examples:
             peak_offset=args.peak_offset,
         )
         user_tester.tolerance = 2
-        user_tester.tolerance_range = 2 * TOLERANCE_RANGE_MULTIPLIER # 0.8
+        user_tester.tolerance_range = 2 * TOLERANCE_RANGE_MULTIPLIER  # 0.8
 
         scenarios["user_verification"] = user_tester.test_scenario(
             name="User Verification: Warm House, Normal Price, DM Debt",
@@ -1424,13 +1431,15 @@ Examples:
                 is_daytime=True,
             ),
             peak_data=MockPeakData(
-                current_peak=2.0, # Higher peak to ensure "Safe margin"
+                current_peak=2.0,  # Higher peak to ensure "Safe margin"
                 current_power=0.1,
             ),
             weather_data=MockWeatherData(
                 current_temp=6.0,
-                forecast_min=6.0, # Stable
-                forecast_hours=[MockForecastHour(i, 6.0) for i in range(12)] # Need hours for common sense check
+                forecast_min=6.0,  # Stable
+                forecast_hours=[
+                    MockForecastHour(i, 6.0) for i in range(12)
+                ],  # Need hours for common sense check
             ),
         )
 

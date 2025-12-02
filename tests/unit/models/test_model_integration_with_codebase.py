@@ -54,8 +54,7 @@ class TestModelThermalDebtIntegration:
         print("=" * 80)
         print(f"Testing {len(nibe_models)} NIBE models")
         print(
-            f"Key thresholds: start {DM_THRESHOLD_START}, "
-            f"absolute max {DM_THRESHOLD_AUX_LIMIT}"
+            f"Key thresholds: start {DM_THRESHOLD_START}, " f"absolute max {DM_THRESHOLD_AUX_LIMIT}"
         )
         print("=" * 80)
 

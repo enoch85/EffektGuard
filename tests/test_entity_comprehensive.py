@@ -109,10 +109,10 @@ def mock_coordinator_with_data(mock_hass, mock_config_entry):
     from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
     from datetime import datetime
     from homeassistant.util import dt as dt_util
-    
+
     price_data = Mock()
     price_data.current_price = 1.25
-    
+
     # Create mock QuarterPeriod objects with prices
     now = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
     price_data.today = [
@@ -443,7 +443,9 @@ class TestSensorExtraStateAttributes:
         assert attrs["layer_votes"][0]["weight"] == 0.5
         assert attrs["layer_votes"][0]["reason"] == "Price optimization"
 
-    def test_price_period_classification_attributes(self, mock_coordinator_with_data, mock_config_entry):
+    def test_price_period_classification_attributes(
+        self, mock_coordinator_with_data, mock_config_entry
+    ):
         """Test price period classification sensor has price data."""
         sensor_desc = next(s for s in SENSORS if s.key == "price_period_classification")
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
