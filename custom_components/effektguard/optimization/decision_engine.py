@@ -21,9 +21,6 @@ from typing import Any, Optional
 from homeassistant.util import dt as dt_util
 
 from ..const import (
-    COMMON_SENSE_COLD_SNAP_THRESHOLD,
-    COMMON_SENSE_FORECAST_HORIZON,
-    COMMON_SENSE_TEMP_ABOVE_TARGET,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_TOLERANCE,
@@ -75,6 +72,14 @@ from ..const import (
     LAYER_WEIGHT_PREDICTION,
     LAYER_WEIGHT_SAFETY,
     MIN_TEMP_LIMIT,
+    OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD,
+    OVERSHOOT_PROTECTION_FORECAST_HORIZON,
+    OVERSHOOT_PROTECTION_FULL,
+    OVERSHOOT_PROTECTION_OFFSET_MAX,
+    OVERSHOOT_PROTECTION_OFFSET_MIN,
+    OVERSHOOT_PROTECTION_START,
+    OVERSHOOT_PROTECTION_WEIGHT_MAX,
+    OVERSHOOT_PROTECTION_WEIGHT_MIN,
     PEAK_AWARE_EFFECT_THRESHOLD,
     PEAK_AWARE_EFFECT_WEIGHT_MIN,
     PROACTIVE_ZONE1_OFFSET,
@@ -1293,29 +1298,49 @@ class DecisionEngine:
         predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
 
         # ========================================
-        # COMMON SENSE CHECK: Don't heat if well above target with no cold snap
+        # OVERSHOOT PROTECTION: Graduated coast response when above target
         # ========================================
-        # If indoor is significantly above target AND weather is stable/warming,
-        # then thermal debt prevention is not needed - we have plenty of thermal margin.
-        # This prevents unnecessary heating when conditions are actually comfortable.
-        if deficit < -COMMON_SENSE_TEMP_ABOVE_TARGET:  # Above target threshold
-            # Check if weather forecast shows NO significant cooling
+        # Based on Dec 1-2, 2025 production analysis: overshoot was ignored, causing DM spiral
+        # Key insight: DM recovers when we STOP heating, not by boosting
+        # Graduated response: 0.6°C → -7°C offset, 1.5°C → -10°C offset
+        overshoot = -deficit  # Convert deficit to overshoot (positive when above target)
+
+        if overshoot >= OVERSHOOT_PROTECTION_START:
+            # Check if weather forecast shows NO significant cooling (cold snap check)
             forecast_stable = True
             if weather_data and weather_data.forecast_hours:
-                forecast_hours = weather_data.forecast_hours[:COMMON_SENSE_FORECAST_HORIZON]
+                forecast_hours = weather_data.forecast_hours[:OVERSHOOT_PROTECTION_FORECAST_HORIZON]
                 if forecast_hours:
                     min_forecast_temp = min(h.temperature for h in forecast_hours)
-                    # Cold snap = forecast drops >threshold from current
+                    # Cold snap = forecast drops >threshold from current outdoor temp
                     forecast_stable = (
                         outdoor_temp - min_forecast_temp
-                    ) < COMMON_SENSE_COLD_SNAP_THRESHOLD
+                    ) < OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD
 
             if forecast_stable:
-                return LayerDecision(
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"Common sense: Indoor {indoor_temp:.1f}°C is {abs(deficit):.1f}°C above target, weather stable - no heating needed (DM {degree_minutes:.0f})",
+                # Calculate graduated response (linear interpolation)
+                overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
+                fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
+
+                # Scale offset from -7°C at 0.6°C overshoot to -10°C at 1.5°C overshoot
+                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
+                    OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
                 )
+
+                # Scale weight from 0.5 at 0.6°C overshoot to 1.0 at 1.5°C overshoot
+                coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
+                    OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
+                )
+
+                return LayerDecision(
+                    offset=coast_offset,
+                    weight=coast_weight,
+                    reason=(
+                        f"Overshoot protection: COAST at {coast_offset:.1f}°C, weight {coast_weight:.2f} "
+                        f"(indoor {indoor_temp:.1f}°C is {overshoot:.1f}°C above target, weather stable, DM {degree_minutes:.0f})"
+                    ),
+                )
+            # If cold snap is forecast, don't coast - let prediction layer handle pre-heating
 
         # ========================================
         # NEW: RAPID COOLING DETECTION (Predictive)

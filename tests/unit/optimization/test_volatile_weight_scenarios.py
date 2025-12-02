@@ -36,7 +36,7 @@ class TestVolatileWeightReduction:
         hass_mock = MagicMock()
         
         config = {
-            "target_temperature": 22.0,
+            "target_indoor_temp": 22.0,  # Correct key name (not target_temperature)
             "tolerance": 5.0,
             "system_type": "concrete_ufh",
             "pump_mode": "AUTO",
@@ -58,7 +58,7 @@ class TestVolatileWeightReduction:
     def base_nibe_state(self):
         """Create base NIBE state."""
         state = MagicMock()
-        state.indoor_temp = 22.0
+        state.indoor_temp = 21.5  # Below target to avoid triggering overshoot protection
         state.outdoor_temp = -5.0
         state.flow_temp = 35.0
         state.degree_minutes = -100.0

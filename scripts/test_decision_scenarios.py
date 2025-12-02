@@ -183,9 +183,14 @@ from const import (
     PRICE_TOLERANCE_DIVISOR,
     COMFORT_DEAD_ZONE,
     COMFORT_CORRECTION_MULT,
-    COMMON_SENSE_TEMP_ABOVE_TARGET,
-    COMMON_SENSE_COLD_SNAP_THRESHOLD,
-    COMMON_SENSE_FORECAST_HORIZON,
+    OVERSHOOT_PROTECTION_START,
+    OVERSHOOT_PROTECTION_FULL,
+    OVERSHOOT_PROTECTION_OFFSET_MIN,
+    OVERSHOOT_PROTECTION_OFFSET_MAX,
+    OVERSHOOT_PROTECTION_WEIGHT_MIN,
+    OVERSHOOT_PROTECTION_WEIGHT_MAX,
+    OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD,
+    OVERSHOOT_PROTECTION_FORECAST_HORIZON,
 )
 
 # Load climate zone constants that climate_zones.py needs
@@ -527,24 +532,29 @@ class ScenarioTester:
         indoor = nibe_state.indoor_temp
         target = self.config["target_indoor_temp"]
 
-        # COMMON SENSE CHECK (Oct 26, 2025)
-        # Don't heat if well above target with no cold snap
+        # OVERSHOOT PROTECTION (Dec 2, 2025)
+        # Graduated coast response when above target with stable weather
         deficit = target - indoor
-        if deficit < -COMMON_SENSE_TEMP_ABOVE_TARGET:
+        overshoot = -deficit  # Positive when above target
+        if overshoot >= OVERSHOOT_PROTECTION_START:
             # Check forecast if available
             forecast_stable = True
             if weather_data and weather_data.forecast_hours:
-                # Simplified check
-                min_forecast = min(f.temperature for f in weather_data.forecast_hours[:COMMON_SENSE_FORECAST_HORIZON])
-                if (outdoor - min_forecast) >= COMMON_SENSE_COLD_SNAP_THRESHOLD:
+                min_forecast = min(f.temperature for f in weather_data.forecast_hours[:OVERSHOOT_PROTECTION_FORECAST_HORIZON])
+                if (outdoor - min_forecast) >= OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD:
                     forecast_stable = False
-            
+
             if forecast_stable:
+                # Calculate graduated response
+                overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
+                fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
+                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN)
+                coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN)
                 return LayerVote(
                     "Proactive",
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"Common sense: Indoor {indoor:.1f}°C is {abs(deficit):.1f}°C above target, weather stable",
+                    offset=coast_offset,
+                    weight=coast_weight,
+                    reason=f"Overshoot protection: COAST at {coast_offset:.1f}°C (overshoot {overshoot:.1f}°C)",
                 )
 
         # Get climate-aware expected DM ranges (same as emergency layer)

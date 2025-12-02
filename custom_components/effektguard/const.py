@@ -422,12 +422,20 @@ PROACTIVE_ZONE4_WEIGHT: Final = 0.7  # Strong weight
 PROACTIVE_ZONE5_OFFSET: Final = 1.8  # Very strong prevention
 PROACTIVE_ZONE5_WEIGHT: Final = 0.85  # Very strong weight
 
-# Common sense proactive override (Oct 26, 2025)
-# Prevents unnecessary heating when indoor temp is well above target with stable weather
-# This overrides thermal debt prevention when conditions don't warrant it
-COMMON_SENSE_TEMP_ABOVE_TARGET: Final = 1.0  # °C above target to trigger common sense check
-COMMON_SENSE_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
-COMMON_SENSE_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop in forecast that qualifies as cold snap
+# Overshoot Protection
+# Graduated coasting response when indoor temp is above target with stable weather
+# Based on Dec 1-2, 2025 production analysis: overshoot was ignored, causing DM spiral
+# Key insight: DM recovers when we STOP heating, not by boosting
+OVERSHOOT_PROTECTION_START: Final = (
+    0.6  # °C above target to start responding (catches Dec 2 crisis)
+)
+OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for full response
+OVERSHOOT_PROTECTION_OFFSET_MIN: Final = -7.0  # Offset at start threshold (coast gently)
+OVERSHOOT_PROTECTION_OFFSET_MAX: Final = -10.0  # Offset at full threshold (full coast)
+OVERSHOOT_PROTECTION_WEIGHT_MIN: Final = 0.5  # Weight at start threshold
+OVERSHOOT_PROTECTION_WEIGHT_MAX: Final = 1.0  # Weight at full threshold (full override)
+OVERSHOOT_PROTECTION_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
+OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop that qualifies as cold snap
 
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
