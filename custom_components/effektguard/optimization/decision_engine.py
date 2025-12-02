@@ -2168,7 +2168,6 @@ class DecisionEngine:
             # True volatility = oscillating between cheap and expensive sides
             # PEAK excluded from volatility calculation
             high_price_count = expensive_count
-            has_cheap_expensive_mix = cheap_count > 0 and high_price_count > 0
 
             actual_scan_periods = len(scan_classifications)
 
@@ -2176,8 +2175,10 @@ class DecisionEngine:
                 # Definitely volatile - 4+ brief excursions
                 is_volatile_period = True
                 volatile_reason = f" | Volatile: {non_normal_count} brief excursions in ±{actual_scan_periods * 15 // 2}min - holding steady"
-            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD and has_cheap_expensive_mix:
-                # Moderately volatile - 2+ brief excursions AND oscillating
+            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD:
+                # Moderately volatile - 2+ brief excursions (CHEAP or EXPENSIVE)
+                # Don't chase brief cheap dips - pump can't ramp up in time
+                # Don't react to brief expensive spikes - not worth reducing for
                 is_volatile_period = True
                 types = []
                 # PEAK excluded from volatile detection - always gets full weight
