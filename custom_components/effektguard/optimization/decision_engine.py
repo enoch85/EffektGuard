@@ -1926,9 +1926,8 @@ class DecisionEngine:
         current_price = current_period.price
 
         # Initialize variables (moved outside if-block to avoid UnboundLocalError)
-        current_cheap_too_brief = False
         remaining_cheap_quarters = 0
-        is_volatile_period = False
+        is_volatile = False
         volatile_reason = ""
 
         # Forward-looking price analysis - horizon scales with thermal mass
@@ -2016,8 +2015,6 @@ class DecisionEngine:
                         else:
                             break
 
-                current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
-
             # Volatile detection: brief runs get reduced weight (see const.py for details)
             # Calculate current quarter's run length by scanning backwards and forwards
             current_run_length = 1  # Count current quarter
@@ -2056,12 +2053,21 @@ class DecisionEngine:
             # A period is volatile if the current run is brief (< 3 quarters = < 45 min)
             # PEAK is never volatile - it's always predictable grid stress, we always reduce
             is_brief_run = current_run_length < PRICE_FORECAST_MIN_DURATION
-            is_volatile_period = is_brief_run and classification != QuarterClassification.PEAK
+            is_ending_soon = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
 
-            if is_volatile_period:
-                volatile_reason = f" | Volatile: {classification.name} run of {current_run_length}Q ({current_run_length * 15}min < 45min)"
-            else:
-                volatile_reason = ""
+            # Single volatility flag - either the whole run is short OR we're near the end
+            # PEAK is never volatile - it's always predictable grid stress, we always reduce
+            is_volatile = (is_brief_run and classification != QuarterClassification.PEAK) or (
+                classification == QuarterClassification.CHEAP and is_ending_soon
+            )
+
+            if is_volatile:
+                quarters_left = (
+                    min(remaining_cheap_quarters, current_run_length)
+                    if classification == QuarterClassification.CHEAP
+                    else current_run_length
+                )
+                volatile_reason = f" | Price volatile: {classification.name} {quarters_left * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
 
             # Apply normal forecast logic regardless of volatility
             # Volatility will reduce weight, not block smart decisions
@@ -2189,11 +2195,9 @@ class DecisionEngine:
                 base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
                 pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
 
-        # Skip heating boost for brief CHEAP periods (Nov 29, 2025)
+        # Skip heating boost for volatile CHEAP periods (Nov 29, 2025)
         # Compressor needs ~45min to be efficient - don't boost for short dips
-        brief_cheap_reason = ""
-        if current_cheap_too_brief and base_offset > 0:
-            brief_cheap_reason = f" | Current cheap period too brief ({remaining_cheap_quarters * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min) - skipping boost"
+        if is_volatile and classification == QuarterClassification.CHEAP and base_offset > 0:
             base_offset = 0.0  # Treat as NORMAL instead of CHEAP
 
         # Adjust for tolerance setting (1-10 scale)
@@ -2219,12 +2223,12 @@ class DecisionEngine:
         # Was 0.1 (10%) before fix when decimal changes caused API oscillation
         # Effect: Thermal/comfort/weather layers still dominate, but price has meaningful input
         price_weight = LAYER_WEIGHT_PRICE
-        if is_volatile_period:
+        if is_volatile:
             price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s%s",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2237,16 +2241,15 @@ class DecisionEngine:
             forecast_adjustment,
             final_offset,
             price_weight,
-            volatile_reason if is_volatile_period else "",
+            volatile_reason,
             strategic_context,
-            brief_cheap_reason,
             pre_peak_reason,
         )
 
         return LayerDecision(
             offset=final_offset,
             weight=price_weight,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason if is_volatile_period else ''}{strategic_context}{brief_cheap_reason}{pre_peak_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:
