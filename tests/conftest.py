@@ -25,10 +25,10 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="homeassis
 def setup_frame_helper(monkeypatch):
     """Set up the frame helper for all tests."""
     from homeassistant.helpers import frame
-    
+
     # Mock the report_usage function to avoid frame helper errors
     monkeypatch.setattr(frame, "report_usage", Mock())
-    
+
     yield
 
 

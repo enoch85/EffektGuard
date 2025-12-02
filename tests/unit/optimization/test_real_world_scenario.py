@@ -362,7 +362,7 @@ class TestRealWorldScenario:
         winter_weather_data,
     ):
         """Test that daytime multiplier amplifies expensive/peak reductions.
-        
+
         Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
         when much cheaper period detected within 4-hour horizon.
         """
@@ -438,8 +438,9 @@ class TestRealWorldScenario:
             assert price_layer.offset > 0.0, "Should pre-heat during CHEAP period"
             # Q10 is in stable VERY_CHEAP region with ±30min window (Q8-Q12 all VERY_CHEAP)
             # No volatility detected, so expect full weight
-            assert price_layer.weight == pytest.approx(LAYER_WEIGHT_PRICE, abs=0.01), \
-                f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
+            assert price_layer.weight == pytest.approx(
+                LAYER_WEIGHT_PRICE, abs=0.01
+            ), f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
 
     @pytest.mark.asyncio
     async def test_evening_peak_aggressive_reduction(
@@ -478,8 +479,9 @@ class TestRealWorldScenario:
             ), f"Should reduce during high-price period, got {price_layer.offset}°C"
             # Q72 is in stable PEAK region with ±30min window (Q70-Q74 all PEAK)
             # No volatility detected, so expect full weight
-            assert price_layer.weight == pytest.approx(LAYER_WEIGHT_PRICE, abs=0.01), \
-                f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
+            assert price_layer.weight == pytest.approx(
+                LAYER_WEIGHT_PRICE, abs=0.01
+            ), f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
             # Check it's recognized as high-price period
             assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
 
@@ -492,7 +494,7 @@ class TestRealWorldScenario:
         winter_weather_data,
     ):
         """Test that user tolerance setting scales spot price optimization.
-        
+
         Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
         independent of tolerance setting.
         """

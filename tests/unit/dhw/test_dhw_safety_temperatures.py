@@ -697,4 +697,6 @@ class TestDHWHeatingTimeAndPeakAvoidance:
 
         # Verify temperature is safe for 3+ hour wait
         assert current_time.hour + 3 < 24  # Can wait until 20:00
-        assert decision.target_temp == DEFAULT_DHW_TARGET_TEMP  # Shows user target even when not heating
+        assert (
+            decision.target_temp == DEFAULT_DHW_TARGET_TEMP
+        )  # Shows user target even when not heating
