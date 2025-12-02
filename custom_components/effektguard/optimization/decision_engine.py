@@ -2123,9 +2123,9 @@ class DecisionEngine:
             # Count brief (non-sustained) periods as volatility indicators
             # Brief = runs of < 3 consecutive quarters (same as PRICE_FORECAST_MIN_DURATION)
             # Sustained runs (≥3 quarters) are trends to follow, not volatility
+            # NOTE: PEAK is excluded from volatility - we always want full PEAK response
             cheap_count = 0
             expensive_count = 0
-            peak_count = 0
 
             i = 0
             while i < len(scan_classifications):
@@ -2146,22 +2146,26 @@ class DecisionEngine:
 
                 # Only count brief runs (< 3 quarters) as volatility
                 # Sustained periods (≥ 3 quarters) are trends, not noise
+                # NOTE: PEAK is NOT counted - we always want strong PEAK response
                 if run_length < PRICE_FORECAST_MIN_DURATION:
                     if current_class == QuarterClassification.CHEAP:
                         cheap_count += run_length
                     elif current_class == QuarterClassification.EXPENSIVE:
                         expensive_count += run_length
-                    elif current_class == QuarterClassification.PEAK:
-                        peak_count += run_length
+                    # PEAK excluded from volatile detection (Dec 2, 2025)
+                    # We WANT strong PEAK response, never suppress it
+                    # elif current_class == QuarterClassification.PEAK:
+                    #     peak_count += run_length
 
                 i += run_length
 
-            # Calculate non-NORMAL brief periods (EXPENSIVE + CHEAP + PEAK)
-            non_normal_count = expensive_count + cheap_count + peak_count
+            # Calculate non-NORMAL brief periods (EXPENSIVE + CHEAP only)
+            # PEAK excluded: we always want full response to peaks
+            non_normal_count = expensive_count + cheap_count
 
             # True volatility = oscillating between cheap and expensive sides
-            # EXPENSIVE + PEAK are both "high price" - combine them
-            high_price_count = expensive_count + peak_count
+            # PEAK excluded from volatility calculation
+            high_price_count = expensive_count
             has_cheap_expensive_mix = cheap_count > 0 and high_price_count > 0
 
             actual_scan_periods = len(scan_classifications)
@@ -2174,8 +2178,7 @@ class DecisionEngine:
                 # Moderately volatile - 2+ brief excursions AND oscillating
                 is_volatile_period = True
                 types = []
-                if peak_count > 0:
-                    types.append(f"{peak_count}×PEAK")
+                # PEAK excluded from volatile detection - always gets full weight
                 if expensive_count > 0:
                     types.append(f"{expensive_count}×EXP")
                 if cheap_count > 0:
