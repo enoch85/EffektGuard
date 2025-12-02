@@ -177,9 +177,7 @@ from ..const import (
     PRICE_FORECAST_MIN_DURATION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
-    PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION,
-    PRICE_VOLATILE_MIN_THRESHOLD,
-    PRICE_VOLATILE_MAX_THRESHOLD,
+    PRICE_PRE_PEAK_OFFSET,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
@@ -2075,118 +2073,50 @@ class DecisionEngine:
 
                 current_cheap_too_brief = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
 
-            # Volatile/jumpy price detection (Dec 1, 2025)
-            # Bidirectional scan: ±30min window around current quarter
-            #
-            # ALGORITHM: Duration-based volatility classification
-            # Distinguishes between sustained price trends and brief noise:
-            #
-            # SUSTAINED PERIODS (≥45 min consecutive):
-            # - Represent actual market trends worth following
-            # - Example: 2-hour expensive period (80-85 öre) → follow the trend
-            # - Action: Full weight optimization, follow price signal
-            #
-            # BRIEF EXCURSIONS (<45 min consecutive):
-            # - Represent market noise or temporary spikes
-            # - Example: 15-30 min spike to PEAK or dip to CHEAP → ignore
-            # - Action: Reduce layer weight to prevent heat pump cycling
-            #
-            # VOLATILITY TRIGGERS (scaled to 5-period window):
-            # - ≥4 brief excursions in scan window → Definitely volatile (hold steady)
-            # - ≥2 brief excursions + price oscillation (CHEAP↔EXPENSIVE) → Moderately volatile
-            #
-            # This prevents inefficient heat pump cycling during jumpy spot markets
-            # while still allowing optimization during sustained price trends.
+            # Volatile detection: brief runs get reduced weight (see const.py for details)
+            # Calculate current quarter's run length by scanning backwards and forwards
+            current_run_length = 1  # Count current quarter
 
-            # Scan window: N quarters back + current + N forward
-            scan_start = max(0, current_quarter - PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION)
-            scan_end = min(current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION, 95)
+            # Scan backwards to find start of current run
+            for offset in range(1, 96):  # Max scan to start of day
+                check_quarter = current_quarter - offset
+                if check_quarter < 0:
+                    break
+                check_class = self.price.get_current_classification(check_quarter)
+                if check_class == classification:
+                    current_run_length += 1
+                else:
+                    break
 
-            # Collect all classifications in scan window (today + tomorrow if needed)
-            scan_classifications = []
+            # Scan forwards to find end of current run
+            for offset in range(1, 96):  # Max scan to end of day
+                check_quarter = current_quarter + offset
+                if check_quarter < 96:
+                    check_class = self.price.get_current_classification(check_quarter)
+                elif price_data.has_tomorrow:
+                    # Look into tomorrow if available
+                    tomorrow_quarter = check_quarter - 96
+                    if tomorrow_quarter < 96:
+                        check_class = self.price.get_tomorrow_classification(tomorrow_quarter)
+                    else:
+                        break
+                else:
+                    break
 
-            # Scan bidirectionally through today
-            for quarter_idx in range(scan_start, scan_end + 1):
-                classification = self.price.get_current_classification(quarter_idx)
-                scan_classifications.append(classification)
+                if check_class == classification:
+                    current_run_length += 1
+                else:
+                    break
 
-            # Check tomorrow if forward scan extends past midnight
-            if (
-                current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION > 95
-                and price_data.has_tomorrow
-            ):
-                remaining_scan = (
-                    current_quarter + PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION
-                ) - 95
-                for quarter_idx in range(min(remaining_scan, 96)):
-                    classification = self.price.get_tomorrow_classification(quarter_idx)
-                    scan_classifications.append(classification)
+            # A period is volatile if the current run is brief (< 3 quarters = < 45 min)
+            # PEAK is never volatile - it's always predictable grid stress, we always reduce
+            is_brief_run = current_run_length < PRICE_FORECAST_MIN_DURATION
+            is_volatile_period = is_brief_run and classification != QuarterClassification.PEAK
 
-            # Count brief (non-sustained) periods as volatility indicators
-            # Brief = runs of < 3 consecutive quarters (same as PRICE_FORECAST_MIN_DURATION)
-            # Sustained runs (≥3 quarters) are trends to follow, not volatility
-            # NOTE: PEAK is excluded from volatility - we always want full PEAK response
-            cheap_count = 0
-            expensive_count = 0
-
-            i = 0
-            while i < len(scan_classifications):
-                current_class = scan_classifications[i]
-
-                # Skip NORMAL periods
-                if current_class == QuarterClassification.NORMAL:
-                    i += 1
-                    continue
-
-                # Count consecutive quarters of same classification
-                run_length = 1
-                while (
-                    i + run_length < len(scan_classifications)
-                    and scan_classifications[i + run_length] == current_class
-                ):
-                    run_length += 1
-
-                # Only count brief runs (< 3 quarters) as volatility
-                # Sustained periods (≥ 3 quarters) are trends, not noise
-                # NOTE: PEAK is NOT counted - we always want strong PEAK response
-                if run_length < PRICE_FORECAST_MIN_DURATION:
-                    if current_class == QuarterClassification.CHEAP:
-                        cheap_count += run_length
-                    elif current_class == QuarterClassification.EXPENSIVE:
-                        expensive_count += run_length
-                    # PEAK excluded from volatile detection (Dec 2, 2025)
-                    # We WANT strong PEAK response, never suppress it
-                    # elif current_class == QuarterClassification.PEAK:
-                    #     peak_count += run_length
-
-                i += run_length
-
-            # Calculate non-NORMAL brief periods (EXPENSIVE + CHEAP only)
-            # PEAK excluded: we always want full response to peaks
-            non_normal_count = expensive_count + cheap_count
-
-            # True volatility = oscillating between cheap and expensive sides
-            # PEAK excluded from volatility calculation
-            high_price_count = expensive_count
-
-            actual_scan_periods = len(scan_classifications)
-
-            if non_normal_count >= PRICE_VOLATILE_MAX_THRESHOLD:
-                # Definitely volatile - 4+ brief excursions
-                is_volatile_period = True
-                volatile_reason = f" | Volatile: {non_normal_count} brief excursions in ±{actual_scan_periods * 15 // 2}min - holding steady"
-            elif non_normal_count >= PRICE_VOLATILE_MIN_THRESHOLD:
-                # Moderately volatile - 2+ brief excursions (CHEAP or EXPENSIVE)
-                # Don't chase brief cheap dips - pump can't ramp up in time
-                # Don't react to brief expensive spikes - not worth reducing for
-                is_volatile_period = True
-                types = []
-                # PEAK excluded from volatile detection - always gets full weight
-                if expensive_count > 0:
-                    types.append(f"{expensive_count}×EXP")
-                if cheap_count > 0:
-                    types.append(f"{cheap_count}×CHEAP")
-                volatile_reason = f" | Volatile: {' + '.join(types)} brief in ±{actual_scan_periods * 15 // 2}min - reducing confidence"
+            if is_volatile_period:
+                volatile_reason = f" | Volatile: {classification.name} run of {current_run_length}Q ({current_run_length * 15}min < 45min)"
+            else:
+                volatile_reason = ""
 
             # Apply normal forecast logic regardless of volatility
             # Volatility will reduce weight, not block smart decisions
@@ -2290,6 +2220,30 @@ class DecisionEngine:
             current_period.is_daytime,
         )
 
+        # Pre-PEAK detection (Dec 2, 2025)
+        # Start reducing 1 quarter BEFORE peak to allow pump slowdown time
+        # Pump needs time to reduce output - acting at PEAK start is too late
+        pre_peak_reason = ""
+        next_quarter = current_quarter + 1
+        if next_quarter < 96:
+            next_classification = self.price.get_current_classification(next_quarter)
+            if (
+                next_classification == QuarterClassification.PEAK
+                and classification != QuarterClassification.PEAK
+            ):
+                # Next quarter is PEAK but current is not - pre-act now
+                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
+                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
+        elif price_data.has_tomorrow:
+            # Check tomorrow Q0 if we're at Q95
+            next_classification = self.price.get_tomorrow_classification(0)
+            if (
+                next_classification == QuarterClassification.PEAK
+                and classification != QuarterClassification.PEAK
+            ):
+                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
+                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
+
         # Skip heating boost for brief CHEAP periods (Nov 29, 2025)
         # Compressor needs ~45min to be efficient - don't boost for short dips
         brief_cheap_reason = ""
@@ -2325,7 +2279,7 @@ class DecisionEngine:
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2341,12 +2295,13 @@ class DecisionEngine:
             volatile_reason if is_volatile_period else "",
             strategic_context,
             brief_cheap_reason,
+            pre_peak_reason,
         )
 
         return LayerDecision(
             offset=final_offset,
             weight=price_weight,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason if is_volatile_period else ''}{strategic_context}{brief_cheap_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason if is_volatile_period else ''}{strategic_context}{brief_cheap_reason}{pre_peak_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:

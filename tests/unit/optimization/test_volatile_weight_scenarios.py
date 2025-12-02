@@ -12,12 +12,10 @@ from freezegun import freeze_time
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
-    PRICE_VOLATILE_MIN_THRESHOLD,
-    PRICE_VOLATILE_MAX_THRESHOLD,
-    PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
+    PRICE_FORECAST_MIN_DURATION,
     LAYER_WEIGHT_PRICE,
 )
 
@@ -721,31 +719,19 @@ class TestVolatileWeightReduction:
 
     def test_constants_relationship(self):
         """Verify constants have sensible relationships."""
-        # Min threshold should prevent single-dip false positives
-        # Scaled to 5-period window (±30min): 2 brief excursions = 40% of window
-        assert PRICE_VOLATILE_MIN_THRESHOLD >= 2, \
-            "Min threshold should ignore single 1-period dips"
-        
-        # Max threshold should be achievable within bidirectional scan window
-        # Window size = 2 * PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION + 1 (current)
-        scan_window_size = 2 * PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION + 1
-        assert PRICE_VOLATILE_MAX_THRESHOLD <= scan_window_size, \
-            f"Max threshold {PRICE_VOLATILE_MAX_THRESHOLD} must be within scan window {scan_window_size}"
-        
-        # Scaled to 5-period window: maintain 60-80% volatility ratio
-        # With MIN=2, MAX=4 in 5-period window: 40% and 80% (maintains spread)
-        volatility_ratio = PRICE_VOLATILE_MAX_THRESHOLD / scan_window_size
-        assert 0.6 <= volatility_ratio <= 0.8, \
-            f"Max threshold should be 60-80% of scan window, got {volatility_ratio:.1%}"
+        # Run-length volatility uses PRICE_FORECAST_MIN_DURATION (3 quarters / 45 min)
+        # Any run shorter than this is considered "brief" and triggers volatility
+        assert PRICE_FORECAST_MIN_DURATION >= 2, \
+            "Min duration should be at least 2 quarters (30 min) for compressor efficiency"
+        assert PRICE_FORECAST_MIN_DURATION <= 4, \
+            "Min duration shouldn't be too long or real price changes get ignored"
         
         # Weight reduction during volatility - moderate to prevent chasing erratic prices
         # Dec 1, 2025: Changed to 0.25-0.35 range (25-35% retention) after int accumulation fix
-        # Integer-only NIBE writes prevent oscillation, allowing stronger price influence
-        # Was 0.05-0.15 (5-15%) before fix when decimal changes caused API hammering
         assert 0.25 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.35, \
             f"Weight reduction should be moderate (25-35% retention), got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
         
-        # Expensive threshold for spikes should require >2x price
+        # Expensive threshold for spikes should require significant increase
         assert PRICE_FORECAST_EXPENSIVE_THRESHOLD >= 1.5, \
             f"Expensive threshold should require significant increase, got {PRICE_FORECAST_EXPENSIVE_THRESHOLD}"
 

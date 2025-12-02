@@ -543,25 +543,23 @@ PRICE_FORECAST_MIN_DURATION: Final = (
 PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
-# Volatile price detection (Nov 30, 2025)
-# When prices jump frequently between classifications, drastically reduce price influence
-# Bidirectional scan: 1h backward + 1h forward = 2h total window
+# Volatile price detection - Current run-length approach (Dec 2, 2025)
+# A quarter is volatile if its own run is brief (< 3 quarters / 45 min).
+# Compressor needs ~45 min to ramp up - brief periods cause wear.
 #
-# MULTIPLIER MATH (smaller = more aggressive dampening):
-# - Normal price weight: 0.8
-# - During volatility: 0.8 × 0.1 = 0.08 (price layer reduced to 10% of normal strength)
-# - This lets thermal/comfort/weather layers dominate decision-making
-# - Prevents heat pump from chasing rapid CHEAP↔EXPENSIVE price swings
-PRICE_VOLATILE_SCAN_QUARTERS_EACH_DIRECTION: Final = 2  # 30 min each direction (2 × 15min)
-PRICE_VOLATILE_MIN_THRESHOLD: Final = (
-    2  # Min brief excursions to trigger volatility (33% of 6-period window)
-)
-PRICE_VOLATILE_MAX_THRESHOLD: Final = (
-    4  # Max brief excursions before definitely volatile (67% of 6-period window)
-)
-PRICE_VOLATILE_WEIGHT_REDUCTION: Final = (
-    0.3  # Moderate reduction: retain 30% during volatility (0.8 → 0.24)
-)
+# EXAMPLES:
+# - EXPENSIVE(4Q), NORMAL(1Q), EXPENSIVE(4Q) → at NORMAL: run=1 → VOLATILE
+# - NORMAL(3Q), CHEAP(1Q), NORMAL(3Q) → at CHEAP: run=1 → VOLATILE
+# - NORMAL(2Q), CHEAP(4Q), NORMAL(2Q) → at CHEAP: run=4 → NOT VOLATILE
+#
+# PEAK EXCLUDED: Always gets full response (never suppressed)
+# WEIGHT REDUCTION: 0.8 → 0.24 (70% reduction during volatility)
+PRICE_VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility (0.8 → 0.24)
+
+# Pre-PEAK offset (Dec 2, 2025)
+# Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
+# Pump needs time to reduce - acting at PEAK start is too late
+PRICE_PRE_PEAK_OFFSET: Final = -2.0  # °C - reduce heating before PEAK arrives
 
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
