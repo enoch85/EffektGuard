@@ -65,6 +65,8 @@ from ..const import (
     COMFORT_CORRECTION_STRONG,
     COMFORT_CORRECTION_CRITICAL,
     COMFORT_DM_COOLING_THRESHOLD,
+    COMFORT_OVERSHOOT_CRITICAL,
+    COMFORT_OVERSHOOT_SEVERE,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
@@ -2402,14 +2404,15 @@ class DecisionEngine:
                 )
 
             # Graduated weight scaling based on overshoot severity:
-            # - 0-1°C over tolerance: weight 0.7 (high priority, standard correction)
-            # - 1-2°C over tolerance: weight 0.9 (very high priority, strong correction)
-            # - 2°C+ over tolerance: weight 1.0 (CRITICAL - same as safety layer, emergency correction)
-            if overshoot >= 2.0:
+            # - 0-0.5°C over tolerance: weight 0.7 (high priority, standard correction)
+            # - 0.5-1°C over tolerance: weight 0.9 (very high priority, strong correction)
+            # - 1°C+ over tolerance: weight 1.0 (CRITICAL - same as safety layer, emergency correction)
+            # Dec 2, 2025: Lowered thresholds to trigger at 0.5°C and 1.0°C (was 1.0°C and 2.0°C)
+            if overshoot >= COMFORT_OVERSHOOT_CRITICAL:
                 weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0 - forces cooling, overrides all layers
                 correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x multiplier
                 reason = f"CRITICAL overheat: {temp_error:.1f}°C over target (emergency cooling)"
-            elif overshoot >= 1.0:
+            elif overshoot >= COMFORT_OVERSHOOT_SEVERE:
                 weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9 - very high priority
                 correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x multiplier
                 reason = f"Severe overheat: {temp_error:.1f}°C over target"

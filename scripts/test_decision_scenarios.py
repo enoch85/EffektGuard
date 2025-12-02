@@ -132,6 +132,8 @@ from const import (
     COMFORT_CORRECTION_STRONG,
     COMFORT_CORRECTION_CRITICAL,
     COMFORT_DM_COOLING_THRESHOLD,
+    COMFORT_OVERSHOOT_CRITICAL,
+    COMFORT_OVERSHOOT_SEVERE,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
     LAYER_WEIGHT_PROACTIVE_MAX,
@@ -841,12 +843,12 @@ class ScenarioTester:
                     reason=f"Overheat ({temp_error:.1f}°C) BUT DM {nibe_state.degree_minutes:.0f} - blocking cooling",
                 )
             
-            # Graduated weight based on severity
-            if overshoot >= 2.0:
+            # Graduated weight based on severity (Dec 2, 2025: lowered thresholds)
+            if overshoot >= COMFORT_OVERSHOOT_CRITICAL:
                 weight = LAYER_WEIGHT_COMFORT_CRITICAL  # 1.0
                 correction = -overshoot * COMFORT_CORRECTION_CRITICAL  # 1.5x
                 reason = f"CRITICAL overheat: {temp_error:.1f}°C over target"
-            elif overshoot >= 1.0:
+            elif overshoot >= COMFORT_OVERSHOOT_SEVERE:
                 weight = LAYER_WEIGHT_COMFORT_SEVERE  # 0.9
                 correction = -overshoot * COMFORT_CORRECTION_STRONG  # 1.2x
                 reason = f"Severe overheat: {temp_error:.1f}°C over target"

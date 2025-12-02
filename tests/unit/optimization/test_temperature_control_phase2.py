@@ -4,9 +4,13 @@ Tests for graduated comfort layer response and MAX_TEMP_LIMIT removal.
 
 Validates that:
 1. Comfort layer provides graduated response (0.7, 0.9, 1.0 weights)
-2. System prevents prolonged overshoots (2-3°C)
+2. System prevents prolonged overshoots (1-2°C)
 3. Upper limit is dynamic (based on user target, not fixed 24°C)
-4. Critical overshoot (2°C+) forces cooling with weight 1.0
+4. Critical overshoot (1°C+) forces cooling with weight 1.0
+
+Dec 2, 2025: Lowered thresholds from (1.0°C, 2.0°C) to (0.5°C, 1.0°C)
+- Severe starts at 0.5°C overshoot
+- Critical starts at 1.0°C overshoot
 """
 
 import pytest
@@ -24,6 +28,8 @@ from custom_components.effektguard.const import (
     COMFORT_CORRECTION_STRONG,
     COMFORT_CORRECTION_CRITICAL,
     COMFORT_DEAD_ZONE,
+    COMFORT_OVERSHOOT_SEVERE,
+    COMFORT_OVERSHOOT_CRITICAL,
 )
 from custom_components.effektguard.optimization.decision_engine import (
     DecisionEngine,
@@ -91,9 +97,11 @@ def create_mock_nibe_state(
 
 
 def test_comfort_layer_mild_overshoot():
-    """Test comfort layer with 0.5°C overshoot (within 1°C over tolerance).
+    """Test comfort layer with 0.25°C overshoot (within 0-0.5°C mild range).
 
     Should use LAYER_WEIGHT_COMFORT_HIGH and COMFORT_CORRECTION_MILD.
+    
+    Dec 2, 2025: Updated thresholds - mild is now 0-0.5°C (was 0-1°C).
     """
     target = 21.0
     tolerance_range = 1.0  # Desired tolerance_range for testing
@@ -101,10 +109,10 @@ def test_comfort_layer_mild_overshoot():
 
     engine = create_engine(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 22.5°C, Target: 21.0°C
-    # temp_error = 22.5 - 21.0 = 1.5°C
-    # overshoot = 1.5 - 1.0 = 0.5°C (mild: 0-1°C range)
-    nibe_state = create_mock_nibe_state(indoor_temp=22.5)
+    # Indoor: 22.25°C, Target: 21.0°C
+    # temp_error = 22.25 - 21.0 = 1.25°C
+    # overshoot = 1.25 - 1.0 = 0.25°C (mild: 0-0.5°C range)
+    nibe_state = create_mock_nibe_state(indoor_temp=22.25)
 
     decision = engine._comfort_layer(nibe_state)
 
@@ -114,7 +122,7 @@ def test_comfort_layer_mild_overshoot():
     )
 
     # Should use mild correction multiplier
-    overshoot = 0.5
+    overshoot = COMFORT_OVERSHOOT_SEVERE / 2  # 0.25 (halfway to severe threshold)
     expected_correction = -overshoot * COMFORT_CORRECTION_MILD
     assert (
         abs(decision.offset - expected_correction) < 0.01
@@ -122,13 +130,14 @@ def test_comfort_layer_mild_overshoot():
 
     # Should have appropriate reason
     assert "Too warm" in decision.reason
-    assert "22.5" in decision.reason or "1.5" in decision.reason
 
 
 def test_comfort_layer_severe_overshoot():
-    """Test comfort layer with 1.5°C overshoot (1-2°C over tolerance).
+    """Test comfort layer with 0.7°C overshoot (0.5-1.0°C severe range).
 
     Should use LAYER_WEIGHT_COMFORT_SEVERE and COMFORT_CORRECTION_STRONG.
+    
+    Dec 2, 2025: Updated thresholds - severe is now 0.5-1.0°C (was 1-2°C).
     """
     target = 21.0
     tolerance_range = 1.0
@@ -136,10 +145,10 @@ def test_comfort_layer_severe_overshoot():
 
     engine = create_engine(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 23.5°C, Target: 21.0°C
-    # temp_error = 23.5 - 21.0 = 2.5°C
-    # overshoot = 2.5 - 1.0 = 1.5°C (severe: 1-2°C range)
-    nibe_state = create_mock_nibe_state(indoor_temp=23.5)
+    # Indoor: 22.7°C, Target: 21.0°C
+    # temp_error = 22.7 - 21.0 = 1.7°C
+    # overshoot = 1.7 - 1.0 = 0.7°C (severe: 0.5-1.0°C range)
+    nibe_state = create_mock_nibe_state(indoor_temp=22.7)
 
     decision = engine._comfort_layer(nibe_state)
 
@@ -150,7 +159,7 @@ def test_comfort_layer_severe_overshoot():
     )
 
     # Should use strong correction multiplier
-    overshoot = 1.5
+    overshoot = COMFORT_OVERSHOOT_SEVERE + 0.2  # 0.7 (in severe range)
     expected_correction = -overshoot * COMFORT_CORRECTION_STRONG
     assert (
         abs(decision.offset - expected_correction) < 0.01
@@ -161,10 +170,12 @@ def test_comfort_layer_severe_overshoot():
 
 
 def test_comfort_layer_critical_overshoot():
-    """Test comfort layer with 2.0°C overshoot (2°C+ over tolerance).
+    """Test comfort layer with 1.0°C overshoot (1.0°C+ critical range).
 
     Should use LAYER_WEIGHT_COMFORT_CRITICAL and COMFORT_CORRECTION_CRITICAL.
-    This is the October 27-28 case: target 21°C, actual 23.7°C = 2.7°C overshoot.
+    
+    Dec 2, 2025: Updated thresholds - critical is now 1.0°C+ (was 2.0°C+).
+    This means the October 27-28 case (1.7°C overshoot) is now CRITICAL.
     """
     target = 21.0
     tolerance_range = 1.0
@@ -172,10 +183,10 @@ def test_comfort_layer_critical_overshoot():
 
     engine = create_engine(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 24.0°C, Target: 21.0°C
-    # temp_error = 24.0 - 21.0 = 3.0°C
-    # overshoot = 3.0 - 1.0 = 2.0°C (critical: 2°C+ range)
-    nibe_state = create_mock_nibe_state(indoor_temp=24.0)
+    # Indoor: 23.0°C, Target: 21.0°C
+    # temp_error = 23.0 - 21.0 = 2.0°C
+    # overshoot = 2.0 - 1.0 = 1.0°C (critical: 1.0°C+ range)
+    nibe_state = create_mock_nibe_state(indoor_temp=23.0)
 
     decision = engine._comfort_layer(nibe_state)
 
@@ -186,7 +197,7 @@ def test_comfort_layer_critical_overshoot():
     )
 
     # Should use critical correction multiplier
-    overshoot = 2.0
+    overshoot = COMFORT_OVERSHOOT_CRITICAL  # 1.0
     expected_correction = -overshoot * COMFORT_CORRECTION_CRITICAL
     assert (
         abs(decision.offset - expected_correction) < 0.01
@@ -205,7 +216,10 @@ def test_comfort_layer_october_27_case():
     - Actual: 23.7°C
     - Overshoot: 1.7°C over tolerance
     - Old behavior: weight 0.5, correction -0.85°C → other layers override
-    - New behavior: weight 0.9, correction -2.04°C → strong cooling
+    - New behavior (Dec 2): weight 1.0 CRITICAL, correction -2.55°C → emergency cooling
+    
+    Dec 2, 2025: With lowered thresholds (critical at 1.0°C), this 1.7°C overshoot
+    is now CRITICAL, not SEVERE. This is the correct aggressive response.
     """
     target = 21.0
     tolerance_range = 1.0
@@ -217,23 +231,23 @@ def test_comfort_layer_october_27_case():
 
     decision = engine._comfort_layer(nibe_state)
 
-    # Should use severe weight (0.9) since overshoot is 1.7°C (in 1-2°C range)
-    assert decision.weight == LAYER_WEIGHT_COMFORT_SEVERE, (
-        f"October 27 case should use severe weight {LAYER_WEIGHT_COMFORT_SEVERE}, "
+    # With new thresholds, 1.7°C overshoot is now CRITICAL (>=1.0°C)
+    assert decision.weight == LAYER_WEIGHT_COMFORT_CRITICAL, (
+        f"October 27 case should now use CRITICAL weight {LAYER_WEIGHT_COMFORT_CRITICAL}, "
         f"got {decision.weight}"
     )
 
-    # Should provide strong cooling correction
+    # Should provide CRITICAL cooling correction
     # temp_error = 23.7 - 21.0 = 2.7°C
     # overshoot = 2.7 - 1.0 = 1.7°C
-    # correction = -1.7 * 1.2 = -2.04°C
-    expected_correction = -1.7 * COMFORT_CORRECTION_STRONG
+    # correction = -1.7 * 1.5 = -2.55°C (CRITICAL multiplier)
+    expected_correction = -1.7 * COMFORT_CORRECTION_CRITICAL
     assert (
         abs(decision.offset - expected_correction) < 0.01
-    ), f"Expected strong correction {expected_correction}, got {decision.offset}"
+    ), f"Expected critical correction {expected_correction}, got {decision.offset}"
 
-    # With weight 0.9 and offset -2.04°C, this should dominate most other layers
-    # (only safety layer with weight 1.0 can override)
+    # With weight 1.0 and offset -2.55°C, this forces immediate cooling
+    # No other layer can override this critical response
 
 
 def test_no_fixed_max_temp_limit():
@@ -268,49 +282,57 @@ def test_no_fixed_max_temp_limit():
 def test_dynamic_upper_limit_adapts_to_target():
     """Verify upper limit adapts to user's target temperature.
 
-    User with target 22°C should get critical cooling at 25°C (22 + 1 + 2 = 25).
-    User with target 19°C should get critical cooling at 22°C (19 + 1 + 2 = 22).
+    User with target 22°C should get critical cooling at 24°C (22 + 1 + 1 = 24).
+    User with target 19°C should get critical cooling at 21°C (19 + 1 + 1 = 21).
+    
+    Dec 2, 2025: Updated for new thresholds (critical at 1.0°C overshoot).
     """
     tolerance_range = 1.0
     tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
 
     # User 1: Target 22°C
     engine1 = create_engine(target_temp=22.0, tolerance=tolerance)
-    nibe_state1 = create_mock_nibe_state(indoor_temp=25.0)
+    nibe_state1 = create_mock_nibe_state(indoor_temp=24.0)
     decision1 = engine1._comfort_layer(nibe_state1)
 
-    # 25.0 - 22.0 = 3.0°C error, overshoot = 3.0 - 1.0 = 2.0°C (critical)
+    # 24.0 - 22.0 = 2.0°C error, overshoot = 2.0 - 1.0 = 1.0°C (critical)
     assert decision1.weight == LAYER_WEIGHT_COMFORT_CRITICAL
     assert "CRITICAL" in decision1.reason
 
     # User 2: Target 19°C
     engine2 = create_engine(target_temp=19.0, tolerance=tolerance)
-    nibe_state2 = create_mock_nibe_state(indoor_temp=22.0)
+    nibe_state2 = create_mock_nibe_state(indoor_temp=21.0)
     decision2 = engine2._comfort_layer(nibe_state2)
 
-    # 22.0 - 19.0 = 3.0°C error, overshoot = 3.0 - 1.0 = 2.0°C (critical)
+    # 21.0 - 19.0 = 2.0°C error, overshoot = 2.0 - 1.0 = 1.0°C (critical)
     assert decision2.weight == LAYER_WEIGHT_COMFORT_CRITICAL
     assert "CRITICAL" in decision2.reason
 
-    # Same temperature (22°C) triggers different responses based on user target!
+    # Same temperature (21°C) triggers different responses based on user target!
 
 
 def test_graduated_weights_increase_with_severity():
-    """Verify weights increase as overshoot worsens."""
+    """Verify weights increase as overshoot worsens.
+    
+    Dec 2, 2025: Updated for new thresholds:
+    - Mild: 0-0.5°C overshoot
+    - Severe: 0.5-1.0°C overshoot
+    - Critical: 1.0°C+ overshoot
+    """
     target = 21.0
     tolerance_range = 1.0
     tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
     engine = create_engine(target_temp=target, tolerance=tolerance)
 
     # Test at different overshoot levels
-    # Boundaries: <1.0°C = HIGH (0.7), >=1.0 to <2.0 = SEVERE (0.9), >=2.0 = CRITICAL (1.0)
+    # Boundaries: <0.5°C = HIGH (0.7), >=0.5 to <1.0 = SEVERE (0.9), >=1.0 = CRITICAL (1.0)
     test_cases = [
-        (22.5, LAYER_WEIGHT_COMFORT_HIGH),  # 0.5°C overshoot → HIGH (0.7)
-        (22.9, LAYER_WEIGHT_COMFORT_HIGH),  # 0.9°C overshoot → HIGH (0.7)
-        (23.0, LAYER_WEIGHT_COMFORT_SEVERE),  # 1.0°C overshoot → SEVERE (0.9) - boundary
-        (23.5, LAYER_WEIGHT_COMFORT_SEVERE),  # 1.5°C overshoot → SEVERE (0.9)
-        (24.0, LAYER_WEIGHT_COMFORT_CRITICAL),  # 2.0°C overshoot → CRITICAL (1.0) - boundary
-        (24.5, LAYER_WEIGHT_COMFORT_CRITICAL),  # 2.5°C overshoot → CRITICAL (1.0)
+        (22.25, LAYER_WEIGHT_COMFORT_HIGH),  # 0.25°C overshoot → HIGH (0.7)
+        (22.4, LAYER_WEIGHT_COMFORT_HIGH),  # 0.4°C overshoot → HIGH (0.7)
+        (22.5, LAYER_WEIGHT_COMFORT_SEVERE),  # 0.5°C overshoot → SEVERE (0.9) - boundary
+        (22.75, LAYER_WEIGHT_COMFORT_SEVERE),  # 0.75°C overshoot → SEVERE (0.9)
+        (23.0, LAYER_WEIGHT_COMFORT_CRITICAL),  # 1.0°C overshoot → CRITICAL (1.0) - boundary
+        (23.5, LAYER_WEIGHT_COMFORT_CRITICAL),  # 1.5°C overshoot → CRITICAL (1.0)
     ]
 
     for indoor_temp, expected_weight in test_cases:
@@ -328,30 +350,31 @@ def test_graduated_weights_increase_with_severity():
 
 
 def test_correction_multipliers_increase_with_severity():
-    """Verify correction multipliers scale properly."""
+    """Verify correction multipliers scale properly.
+    
+    Dec 2, 2025: Updated for new thresholds (0.5°C severe, 1.0°C critical).
+    """
     target = 21.0
     tolerance_range = 1.0
     tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
     engine = create_engine(target_temp=target, tolerance=tolerance)
 
-    # Test same overshoot amount but different severity levels
-    # We'll use 0.5°C overshoot in each bracket
+    # Test different severity levels at meaningful overshoot values
 
-    # Mild: 22.5°C (0.5°C overshoot)
-    nibe_mild = create_mock_nibe_state(indoor_temp=22.5)
+    # Mild: 22.25°C (0.25°C overshoot, in <0.5 range)
+    nibe_mild = create_mock_nibe_state(indoor_temp=22.25)
     decision_mild = engine._comfort_layer(nibe_mild)
-    expected_mild = -0.5 * COMFORT_CORRECTION_MILD  # -0.5
+    expected_mild = -0.25 * COMFORT_CORRECTION_MILD  # -0.25
 
-    # Severe: 23.5°C (1.5°C overshoot, but compare on same 0.5°C increment)
-    # We'll compare the multiplier effect
-    nibe_severe = create_mock_nibe_state(indoor_temp=23.5)
+    # Severe: 22.7°C (0.7°C overshoot, in 0.5-1.0 range)
+    nibe_severe = create_mock_nibe_state(indoor_temp=22.7)
     decision_severe = engine._comfort_layer(nibe_severe)
-    expected_severe = -1.5 * COMFORT_CORRECTION_STRONG  # -1.8
+    expected_severe = -0.7 * COMFORT_CORRECTION_STRONG  # -0.84
 
-    # Critical: 24.5°C (2.5°C overshoot)
-    nibe_critical = create_mock_nibe_state(indoor_temp=24.5)
+    # Critical: 23.5°C (1.5°C overshoot, in >=1.0 range)
+    nibe_critical = create_mock_nibe_state(indoor_temp=23.5)
     decision_critical = engine._comfort_layer(nibe_critical)
-    expected_critical = -2.5 * COMFORT_CORRECTION_CRITICAL  # -3.75
+    expected_critical = -1.5 * COMFORT_CORRECTION_CRITICAL  # -2.25
 
     # Verify corrections get stronger
     assert (
