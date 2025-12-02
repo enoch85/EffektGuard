@@ -525,7 +525,8 @@ COMPRESSOR_MIN_CYCLE_MINUTES: Final = (
 # Price forecast lookahead (Nov 27, 2025)
 # Forward-looking price optimization: reduce heating when cheaper period coming soon
 # Updated Nov 28, 2025: Horizon scales with thermal_mass (configurable 0.5-2.0)
-PRICE_FORECAST_BASE_HORIZON: Final = 4.0  # hours - base value multiplied by thermal_mass
+# Updated Dec 2, 2025: Increased from 4h to 5h for better PEAK visibility
+PRICE_FORECAST_BASE_HORIZON: Final = 5.0  # hours - base value multiplied by thermal_mass
 # Examples of dynamic scaling:
 #   thermal_mass 2.0 (heavy concrete slab): 4.0 × 2.0 = 8.0 hours lookahead
 #   thermal_mass 1.2 (medium timber):       4.0 × 1.2 = 4.8 hours lookahead
