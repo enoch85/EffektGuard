@@ -46,6 +46,7 @@ from .models.nibe import (
     NibeS1155Profile,
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
+from .optimization.decision_engine import LayerDecision, OptimizationDecision
 from .optimization.thermal_predictor import ThermalStatePredictor
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
@@ -1658,8 +1659,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Returns zero offset to maintain current operation without changes.
         """
-        from .optimization.decision_engine import LayerDecision, OptimizationDecision
-
         _LOGGER.debug("Using safe default decision (no changes)")
 
         return OptimizationDecision(
