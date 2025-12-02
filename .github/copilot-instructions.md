@@ -828,6 +828,37 @@ set_optimization_mode:
 
 ---
 
+## GitHub Release Notes Format
+
+When creating release notes via `gh release create`, use this exact format:
+
+```markdown
+## Key Changes
+
+### Bug Fixes
+• Fixed [description]
+
+### Enhancements  
+• **Feature name**: Brief description
+
+### Removed
+• `CONSTANT_NAME` - reason for removal
+
+**Full Changelog**: https://github.com/enoch85/EffektGuard/compare/vX.Y.Z...vX.Y.W
+```
+
+**Rules:**
+- Use `## Key Changes` as main header
+- Group changes under `### Bug Fixes`, `### Enhancements`, `### Removed`, `### Renamed` as needed
+- Use bullet points with `•` character
+- Bold feature names with `**Feature**:`
+- Use backticks for constant/function names
+- Keep descriptions concise (one line each)
+- Always include Full Changelog link at bottom
+- Omit empty sections
+
+---
+
 ## Project Context
 
 **Purpose:** Intelligent NIBE heat pump control for Swedish effect tariff optimization
