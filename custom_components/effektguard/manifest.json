@@ -1,7 +1,7 @@
 {
   "domain": "effektguard",
   "name": "EffektGuard",
-  "after_dependencies": ["ge_spot", "myuplink", "recorder", "sunspec", "template", "weather"],
+  "after_dependencies": ["ge_spot", "mqtt", "myuplink", "recorder", "sunspec", "template", "weather"],
   "codeowners": ["@enoch85"],
   "config_flow": true,
   "dependencies": [],

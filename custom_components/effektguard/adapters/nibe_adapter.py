@@ -779,6 +779,11 @@ class NibeAdapter:
         Combines NIBE BT50 with additional room sensors for more accurate
         whole-house temperature reading.
 
+        During startup, MQTT sensors may not be available yet. This method:
+        - Logs a warning when configured sensors aren't ready
+        - Uses only available sensors for calculation
+        - Logs when all sensors become available
+
         Args:
             nibe_temp: Temperature from NIBE BT50 sensor
 

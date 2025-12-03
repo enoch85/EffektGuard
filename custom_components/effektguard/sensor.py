@@ -369,11 +369,14 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         # Note: compressor_health is excluded - it's a string sensor ("healthy", "watch", etc.)
         # calculated from compressor_stats on each update, no restoration needed
         # compressor_frequency is restored to avoid "unavailable" state on restart
+        # indoor_temperature is restored to avoid wrong readings during startup
+        # when MQTT sensors aren't ready yet (uses NIBE BT50 only otherwise)
         should_restore = self.entity_description.key in {
             "peak_today",
             "peak_this_month",
             "savings_estimate",
             "compressor_frequency",
+            "indoor_temperature",
         }
 
         if should_restore:
