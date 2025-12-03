@@ -159,6 +159,8 @@ from ..const import (
     PRICE_TOLERANCE_FACTOR_MAX,
     COMFORT_DEAD_ZONE,
     COMFORT_CORRECTION_MULT,
+    MODE_CONFIGS,
+    OPTIMIZATION_MODE_BALANCED,
     MULTIPLIER_BOOST_30_PERCENT,
     MULTIPLIER_REDUCTION_20_PERCENT,
     THERMAL_CHANGE_MODERATE,
@@ -251,6 +253,10 @@ class DecisionEngine:
         self.tolerance = config.get("tolerance", DEFAULT_TOLERANCE)
         self.tolerance_range = self.tolerance * TOLERANCE_RANGE_MULTIPLIER
 
+        # Optimization mode configuration (comfort/balanced/savings)
+        # This affects dead zones, layer weights, and price behavior
+        self._update_mode_config()
+
         # Weather compensation enabled/disabled
         self.enable_weather_compensation = config.get("enable_weather_compensation", True)
         self.weather_comp_weight = config.get(
@@ -297,6 +303,22 @@ class DecisionEngine:
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
         self._manual_override_until: Any = None  # datetime or None
+
+    def _update_mode_config(self) -> None:
+        """Update cached mode configuration from current optimization mode.
+
+        Called on init and when mode changes. Caches the mode config to avoid
+        repeated lookups during layer calculations.
+        """
+        mode = self.config.get("optimization_mode", OPTIMIZATION_MODE_BALANCED)
+        self.mode_config = MODE_CONFIGS.get(mode, MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED])
+        _LOGGER.debug(
+            "Optimization mode: %s (dead_zone=%.1f, comfort_mult=%.1f, price_mult=%.1f)",
+            mode,
+            self.mode_config.dead_zone,
+            self.mode_config.comfort_weight_multiplier,
+            self.mode_config.price_tolerance_multiplier,
+        )
 
     def set_manual_override(self, offset: float, duration_minutes: int = 0) -> None:
         """Set manual override for heating curve offset.
@@ -2211,7 +2233,15 @@ class DecisionEngine:
             PRICE_TOLERANCE_FACTOR_MIN
             + ((self.tolerance - PRICE_TOLERANCE_MIN) / tolerance_range) * factor_range
         )
-        adjusted_offset = base_offset * tolerance_factor
+
+        # Apply mode multiplier (comfort=0.7, balanced=1.0, savings=1.3)
+        tolerance_factor *= self.mode_config.price_tolerance_multiplier
+
+        # Savings mode: PEAK bypasses tolerance (always full reduction)
+        if classification == QuarterClassification.PEAK and self.mode_config.peak_bypass_tolerance:
+            adjusted_offset = base_offset  # Skip tolerance scaling for PEAK in savings mode
+        else:
+            adjusted_offset = base_offset * tolerance_factor
 
         # Apply forecast adjustment (additive to base classification)
         # BUT: During PEAK, we want maximum reduction regardless of forecast
@@ -2224,13 +2254,19 @@ class DecisionEngine:
 
         # Check for strategic overshoot context when pre-heating
         strategic_context = ""
+        max_overshoot = self.mode_config.preheat_overshoot_allowed
         if forecast_adjustment > 0 and nibe_state.indoor_temp > self.target_temp:
             overshoot = nibe_state.indoor_temp - self.target_temp
-            # Calculate cost savings multiplier from price forecast
-            if upcoming_periods and current_price > 0:
-                max_upcoming = max(p.price for p in upcoming_periods)
-                cost_multiplier = max_upcoming / current_price
-                strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot acceptable for {cost_multiplier:.1f}x cost savings"
+            if overshoot <= max_overshoot:
+                # Calculate cost savings multiplier from price forecast
+                if upcoming_periods and current_price > 0:
+                    max_upcoming = max(p.price for p in upcoming_periods)
+                    cost_multiplier = max_upcoming / current_price
+                    strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot OK (≤{max_overshoot:.1f}°C)"
+            else:
+                # Overshoot exceeds mode limit - reduce pre-heating
+                final_offset = max(final_offset - (overshoot - max_overshoot), 0)
+                strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
 
         # Apply moderate volatility weight reduction (Dec 1, 2025)
         # After int accumulation fix, safe to allow stronger price influence during volatility
@@ -2279,6 +2315,11 @@ class DecisionEngine:
         Provides gentle steering toward target even within tolerance zone.
         This ensures temperature doesn't drift unnecessarily during cheap periods.
 
+        Mode affects behavior:
+        - Comfort mode: Tighter dead zone (0.1°C), stronger weight multiplier (1.3x)
+        - Balanced mode: Standard dead zone (0.2°C), normal weights
+        - Savings mode: Wider dead zone (0.3°C), weaker weight multiplier (0.7x)
+
         Args:
             nibe_state: Current NIBE state
 
@@ -2290,8 +2331,11 @@ class DecisionEngine:
         # Temperature tolerance based on user setting
         tolerance = self.tolerance_range  # ±0.4-4.0°C
 
-        # Fixed dead zone (very close to target, no action needed)
-        dead_zone = COMFORT_DEAD_ZONE
+        # Dead zone from mode config (comfort=0.1, balanced=0.2, savings=0.3)
+        dead_zone = self.mode_config.dead_zone
+
+        # Weight multiplier from mode (comfort=1.3, balanced=1.0, savings=0.7)
+        weight_mult = self.mode_config.comfort_weight_multiplier
 
         if abs(temp_deviation) < dead_zone:
             # Very close to target - we're right on target
@@ -2299,9 +2343,8 @@ class DecisionEngine:
         elif abs(temp_deviation) < tolerance:
             # Within comfort zone but drifting from target
             # Gentle correction to maintain target during favorable conditions
-            # Lower weight (0.2) so it doesn't override cost optimization,
-            # but provides gentle steering when prices are similar
             correction = -temp_deviation * COMFORT_CORRECTION_MULT  # Gentle correction
+            base_weight = LAYER_WEIGHT_COMFORT_MIN
 
             if temp_deviation > 0:
                 reason = f"Slightly warm (+{temp_deviation:.1f}°C), gentle reduce"
@@ -2310,7 +2353,7 @@ class DecisionEngine:
 
             return LayerDecision(
                 offset=correction,
-                weight=LAYER_WEIGHT_COMFORT_MIN,  # Low weight - advisory only
+                weight=base_weight * weight_mult,  # Mode-adjusted weight
                 reason=reason,
             )
         elif temp_deviation > tolerance:

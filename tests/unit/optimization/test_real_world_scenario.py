@@ -134,7 +134,7 @@ async def decision_engine(hass_mock, expensive_price_data):
 
     config = {
         "target_temperature": 21.0,  # User target
-        "tolerance": 5.0,  # Balanced (1-10 scale)
+        "tolerance": 2.0,  # Balanced (0.5-3.0 scale, 2.0 = 68% factor)
         "heat_loss_coefficient": 180.0,  # W/°C typical Swedish house
     }
 
@@ -385,13 +385,14 @@ class TestRealWorldScenario:
             # Q32 is daytime (08:00), price 2.40 öre
             # EXPENSIVE classification: base -1.0°C
             # Daytime multiplier: ×1.5
-            # Tolerance: 5/5.0 = 1.0
-            # Base: -1.0 × 1.5 × 1.0 = -1.5°C
+            # Tolerance factor: 0.2 + ((2.0 - 0.5) / 2.5) * 0.8 = 0.68
+            # Mode multiplier: 1.0 (balanced)
+            # Base: -1.0 × 1.5 × 0.68 × 1.0 = -1.02°C
             # Forward-looking: Detects cheaper period ahead (Q44-48 @ 0.90 öre = 62% cheaper)
             # Forecast adjustment: -1.0°C (wait for cheaper period)
-            # Expected: -1.5 + (-1.0) = -2.5°C
+            # Expected: -1.02 + (-1.0) = -2.02°C
 
-            assert price_layer.offset == pytest.approx(-2.5, abs=0.2)
+            assert price_layer.offset == pytest.approx(-2.0, abs=0.3)
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
             # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
             min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
@@ -495,13 +496,17 @@ class TestRealWorldScenario:
     ):
         """Test that user tolerance setting scales spot price optimization.
 
+        Tolerance range: 0.5-3.0 maps to factor 0.2-1.0
+        Formula: factor = 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
+
         Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
         independent of tolerance setting.
         """
         test_time = datetime(2025, 1, 16, 8, 0)  # Q32
 
         # Create two engines with different tolerance settings
-        for tolerance_setting, expected_factor in [(1, 0.2), (10, 2.0)]:
+        # Using actual tolerance range: 0.5-3.0
+        for tolerance_setting, expected_factor in [(0.5, 0.2), (3.0, 1.0)]:
             price_analyzer = PriceAnalyzer()
             effect_manager = EffectManager(hass_mock)
             thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
@@ -537,9 +542,10 @@ class TestRealWorldScenario:
 
                 # Base: -1.0°C (EXPENSIVE)
                 # Daytime: ×1.5
-                # Tolerance factor: tolerance / 5.0
+                # Tolerance factor: 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
+                # Mode multiplier: 1.0 (balanced)
                 # Forward-looking: -1.0°C (cheaper period ahead, independent of tolerance)
-                expected_base = -1.0 * 1.5 * expected_factor
+                expected_base = -1.0 * 1.5 * expected_factor * 1.0  # mode mult = 1.0
                 expected_offset = expected_base + (-1.0)  # Add forecast adjustment
 
                 print(

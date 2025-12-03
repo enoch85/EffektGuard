@@ -170,10 +170,8 @@ class PriceAnalyzer:
 
         # More aggressive during daytime (full effect tariff weight)
         # Nighttime peaks are less critical (50% tariff weight)
-        if is_daytime and classification in [
-            QuarterClassification.EXPENSIVE,
-            QuarterClassification.PEAK,
-        ]:
+        # Note: PEAK already at -10.0 (NIBE max), don't multiply further
+        if is_daytime and classification == QuarterClassification.EXPENSIVE:
             offset *= PRICE_DAYTIME_MULTIPLIER
 
         return offset

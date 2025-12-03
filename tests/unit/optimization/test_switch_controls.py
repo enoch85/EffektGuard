@@ -20,6 +20,8 @@ from custom_components.effektguard.const import (
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_ENABLE_WEATHER_PREDICTION,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
+    MODE_CONFIGS,
+    OPTIMIZATION_MODE_BALANCED,
     QuarterClassification,
 )
 
@@ -81,6 +83,9 @@ def create_engine_mock(config_overrides=None):
 
     # Add tolerance (used by price layer)
     engine.tolerance = 5.0
+
+    # Add mode_config (used by price and comfort layers)
+    engine.mode_config = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
 
     # Add _get_thermal_trend method to engine
     engine._get_thermal_trend = MagicMock(

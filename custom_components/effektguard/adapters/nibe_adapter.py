@@ -34,6 +34,8 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
+    MAX_OFFSET,
+    MIN_OFFSET,
     NIBE_DEFAULT_SUPPLY_TEMP,
     NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD,
     NIBE_POWER_FACTOR,
@@ -352,6 +354,10 @@ class NibeAdapter:
             # Accumulator has crossed threshold, apply the integer part
             accumulated_adjustment = int(self._fractional_accumulator)
             offset_to_apply = self._last_nibe_offset + accumulated_adjustment
+
+            # Clamp to NIBE's valid range (MIN_OFFSET to MAX_OFFSET)
+            offset_to_apply = int(max(MIN_OFFSET, min(offset_to_apply, MAX_OFFSET)))
+
             _LOGGER.info(
                 "✓ Accumulated fractional offset reached threshold: "
                 "applying %+d°C adjustment (accumulator: %.2f°C, new_offset: %d°C)",

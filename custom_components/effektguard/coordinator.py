@@ -2002,9 +2002,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.engine.thermal.insulation_quality = new_options["insulation_quality"]
             _LOGGER.debug("Updated insulation quality: %.2f", new_options["insulation_quality"])
 
-        # Update optimization mode (note: stored in config dict, not cached)
+        # Update optimization mode and recalculate mode config
         if "optimization_mode" in new_options:
             self.engine.config["optimization_mode"] = new_options["optimization_mode"]
+            self.engine._update_mode_config()  # Recalculate mode-specific settings
             _LOGGER.debug("Updated optimization mode: %s", new_options["optimization_mode"])
 
         # Update control priority (note: stored in config dict, not cached)

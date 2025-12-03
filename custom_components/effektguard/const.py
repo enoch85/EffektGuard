@@ -1,5 +1,6 @@
 """Constants for EffektGuard integration."""
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
@@ -62,6 +63,55 @@ TEMP_STEP: Final = 0.5  # °C - temperature adjustment step
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
 OPTIMIZATION_MODE_BALANCED: Final = "balanced"  # Balance comfort and savings
 OPTIMIZATION_MODE_SAVINGS: Final = "savings"  # Maximize savings, wider tolerance
+
+
+@dataclass(frozen=True)
+class OptimizationModeConfig:
+    """Configuration for each optimization mode.
+
+    Defines how each mode affects the optimization behavior:
+    - dead_zone: Temperature band around target where no action is taken
+    - comfort_weight_multiplier: Scales comfort layer influence (higher = comfort wins more)
+    - price_tolerance_multiplier: Scales price layer effect (higher = more aggressive)
+    - peak_bypass_tolerance: If True, PEAK ignores tolerance scaling (always full reduction)
+    - preheat_overshoot_allowed: How much overshoot to accept during pre-heating (°C)
+    """
+
+    dead_zone: float  # °C - no action within this range
+    comfort_weight_multiplier: float  # Scales comfort layer weight
+    price_tolerance_multiplier: float  # Scales price layer tolerance factor
+    peak_bypass_tolerance: bool  # PEAK always uses full offset
+    preheat_overshoot_allowed: float  # °C - acceptable overshoot during cheap pre-heat
+
+
+# Mode configurations - these define the behavior philosophy
+# Comfort: Rock-solid temperature, price is secondary
+# Balanced: Smart trade-offs between comfort and savings
+# Savings: Maximum savings, temperature can drift more
+MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
+    OPTIMIZATION_MODE_COMFORT: OptimizationModeConfig(
+        dead_zone=0.1,  # Tighter: react faster to any deviation
+        comfort_weight_multiplier=1.3,  # Comfort layer wins more often
+        price_tolerance_multiplier=0.7,  # Reduce price layer effect
+        peak_bypass_tolerance=False,  # Respect tolerance even during PEAK
+        preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
+    ),
+    OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
+        dead_zone=0.2,  # Standard dead zone
+        comfort_weight_multiplier=1.0,  # Normal comfort influence
+        price_tolerance_multiplier=1.0,  # Normal price effect
+        peak_bypass_tolerance=False,  # Respect tolerance setting
+        preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
+    ),
+    OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
+        dead_zone=0.3,  # Wider: ignore small deviations
+        comfort_weight_multiplier=0.7,  # Price wins more often
+        price_tolerance_multiplier=1.3,  # Amplify price effect
+        peak_bypass_tolerance=True,  # PEAK always full reduction
+        preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
+    ),
+}
+
 
 # Config keys for internal use
 CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
@@ -383,7 +433,7 @@ TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # Scale: 1-10 -> 0.4-4.0°C
 
 # Safety layer emergency offsets (Oct 19, 2025)
 # Used for extreme temperature deviations and absolute DM maximum
-SAFETY_EMERGENCY_OFFSET: Final = 10.0  # Emergency temperature correction (too cold/hot)
+SAFETY_EMERGENCY_OFFSET: Final = MAX_OFFSET  # Emergency temperature correction (too cold/hot)
 
 # WARNING layer dynamic offsets (Oct 19, 2025)
 # Progressive offset calculation based on DM deviation severity
@@ -434,7 +484,7 @@ OVERSHOOT_PROTECTION_START: Final = (
 )
 OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for full response
 OVERSHOOT_PROTECTION_OFFSET_MIN: Final = -7.0  # Offset at start threshold (coast gently)
-OVERSHOOT_PROTECTION_OFFSET_MAX: Final = -10.0  # Offset at full threshold (full coast)
+OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # Offset at full threshold (full coast)
 OVERSHOOT_PROTECTION_WEIGHT_MIN: Final = 0.5  # Weight at start threshold
 OVERSHOOT_PROTECTION_WEIGHT_MAX: Final = 1.0  # Weight at full threshold (full override)
 OVERSHOOT_PROTECTION_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
@@ -565,12 +615,12 @@ PRICE_VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatil
 
 # Price classification base offsets (Dec 3, 2025)
 # Used by price_analyzer.py get_base_offset() for spot price optimization
-# These are base values before daytime multiplier (1.5x for EXPENSIVE/PEAK during 06:00-22:00)
+# These are base values before daytime multiplier (1.5x for EXPENSIVE during 06:00-22:00)
 PRICE_OFFSET_CHEAP: Final = 3.0  # °C - pre-heat opportunity, charge thermal battery
 PRICE_OFFSET_NORMAL: Final = 0.0  # °C - maintain current heating
 PRICE_OFFSET_EXPENSIVE: Final = -1.0  # °C - conserve, reduce heating
-PRICE_OFFSET_PEAK: Final = -10.0  # °C - aggressive peak reduction (coast through expensive period)
-PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE/PEAK during daytime (06:00-22:00)
+PRICE_OFFSET_PEAK: Final = MIN_OFFSET  # Maximum reduction (coast through expensive period)
+PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE during daytime (06:00-22:00)
 
 # Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
 # Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
