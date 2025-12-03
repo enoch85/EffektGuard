@@ -182,7 +182,10 @@ from const import (
     WEATHER_COMP_DEFER_WEIGHT_LIGHT,
     WEATHER_COMP_DEFER_WEIGHT_MODERATE,
     WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
-    PRICE_TOLERANCE_DIVISOR,
+    PRICE_TOLERANCE_MIN,
+    PRICE_TOLERANCE_MAX,
+    PRICE_TOLERANCE_FACTOR_MIN,
+    PRICE_TOLERANCE_FACTOR_MAX,
     COMFORT_DEAD_ZONE,
     COMFORT_CORRECTION_MULT,
     OVERSHOOT_PROTECTION_START,
@@ -803,9 +806,13 @@ class ScenarioTester:
         # Use configurable price offsets
         offset = self.price_offsets[price_data.classification]
 
-        # Adjust for tolerance (1-10 scale, 5 = default = factor 1.0)
-        # Higher tolerance = more aggressive optimization
-        tolerance_factor = self.tolerance / PRICE_TOLERANCE_DIVISOR  # 0.2-2.0 range
+        # Adjust for tolerance (0.5-3.0 scale → 0.2-1.0 factor)
+        # Linear interpolation: 0.5 → 0.2 (conservative), 3.0 → 1.0 (full offset)
+        tolerance_range = PRICE_TOLERANCE_MAX - PRICE_TOLERANCE_MIN  # 2.5
+        factor_range = PRICE_TOLERANCE_FACTOR_MAX - PRICE_TOLERANCE_FACTOR_MIN  # 0.8
+        tolerance_factor = PRICE_TOLERANCE_FACTOR_MIN + (
+            (self.tolerance - PRICE_TOLERANCE_MIN) / tolerance_range
+        ) * factor_range
         adjusted_offset = offset * tolerance_factor
 
         # Extra boost for negative prices

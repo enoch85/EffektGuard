@@ -298,14 +298,20 @@ def test_test_files_can_use_production_constants():
             COMFORT_CORRECTION_MULT,
             COMFORT_DEAD_ZONE,
             LAYER_WEIGHT_WEATHER_PREDICTION,
-            PRICE_TOLERANCE_DIVISOR,
+            PRICE_TOLERANCE_MIN,
+            PRICE_TOLERANCE_MAX,
+            PRICE_TOLERANCE_FACTOR_MIN,
+            PRICE_TOLERANCE_FACTOR_MAX,
             TOLERANCE_RANGE_MULTIPLIER,
         )
 
         # Verify constants have expected types
         assert isinstance(TOLERANCE_RANGE_MULTIPLIER, (int, float))
         assert isinstance(LAYER_WEIGHT_WEATHER_PREDICTION, (int, float))
-        assert isinstance(PRICE_TOLERANCE_DIVISOR, (int, float))
+        assert isinstance(PRICE_TOLERANCE_MIN, (int, float))
+        assert isinstance(PRICE_TOLERANCE_MAX, (int, float))
+        assert isinstance(PRICE_TOLERANCE_FACTOR_MIN, (int, float))
+        assert isinstance(PRICE_TOLERANCE_FACTOR_MAX, (int, float))
         assert isinstance(COMFORT_DEAD_ZONE, (int, float))
         assert isinstance(COMFORT_CORRECTION_MULT, (int, float))
 

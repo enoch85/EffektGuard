@@ -512,7 +512,14 @@ LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal 
 WEATHER_WEIGHT_CAP: Final = 0.99  # Cap for weather weight (below Safety 1.0)
 
 # Price layer constants (Oct 19, 2025)
-PRICE_TOLERANCE_DIVISOR: Final = 5.0  # tolerance_factor = tolerance / 5.0 (0.2-2.0)
+# Tolerance scaling: maps UI range (0.5-3.0) to factor range (0.2-1.0)
+# Formula: factor = 0.2 + (tolerance - 0.5) * 0.32
+# At tolerance 0.5: factor = 0.2 (20% of offset - most conservative)
+# At tolerance 3.0: factor = 1.0 (100% of offset - full effect)
+PRICE_TOLERANCE_MIN: Final = 0.5  # UI slider minimum
+PRICE_TOLERANCE_MAX: Final = 3.0  # UI slider maximum
+PRICE_TOLERANCE_FACTOR_MIN: Final = 0.2  # Minimum scaling factor (20%)
+PRICE_TOLERANCE_FACTOR_MAX: Final = 1.0  # Maximum scaling factor (100%)
 
 # Heat pump compressor dynamics (Nov 28, 2025)
 # Based on typical NIBE F-series compressor behavior
