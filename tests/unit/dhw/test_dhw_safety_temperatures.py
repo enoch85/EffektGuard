@@ -1,8 +1,8 @@
 """Tests for DHW safety temperature adjustments.
 
 Tests the new DHW safety thresholds:
-- DHW_SAFETY_CRITICAL = 10°C (always heat, no deferral)
-- DHW_SAFETY_MIN = 20°C (can defer if 10-20°C during expensive periods)
+- DHW_SAFETY_CRITICAL = 20°C (always heat, no deferral)
+- DHW_SAFETY_MIN = 30°C (can defer if 20-30°C during expensive periods)
 
 This prevents peak billing hits when DHW can safely wait for better prices.
 

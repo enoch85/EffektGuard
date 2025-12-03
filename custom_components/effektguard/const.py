@@ -455,25 +455,46 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # Proactive layer zone thresholds (Oct 19, 2025)
 # Five-zone system based on percentage of climate-aware expected DM thresholds
 # Prevents thermal debt accumulation before reaching WARNING thresholds
-PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.05  # 5% of normal max (early warning)
-PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.20  # 20% of normal max (moderate)
+#
+# DESIGN: All proactive zones trigger BEFORE warning threshold!
+# Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
+#
+PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.10  # 10% of normal max (early warning)
+PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
 PROACTIVE_ZONE3_THRESHOLD_PERCENT: Final = 0.50  # 50% of normal max (significant)
-PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 1.00  # 100% of normal max (strong)
-PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 1.25  # 125% of warning (very strong)
+PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 0.75  # 75% of normal max (strong)
+PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 1.00  # 100% of normal max (at warning boundary)
 
 # Proactive layer zone offsets and weights (Oct 19, 2025)
 # Progressive escalation as DM approaches warning threshold
-PROACTIVE_ZONE1_OFFSET: Final = 0.5  # Gentle nudge
+# Zone offsets must be >= 1.0 to have immediate effect on NIBE (integer only)
+# Lower offsets accumulate via fractional accumulator but take multiple cycles to apply
+#
+# ESCALATION HIERARCHY (must be strictly increasing):
+# Z1 → Z2 → Z3 → Z4 → Z5 → WARNING → T1 → T2 → T3
+#
+# Effective contribution = offset × weight
+# Z1: 1.0 × 0.30 = 0.30 (gentle nudge)
+# Z2: 1.5 × 0.40 = 0.60 (moderate boost)
+# Z3: 2.0 × 0.50 = 1.00 to 2.5 × 0.50 = 1.25 (significant)
+# Z4: 2.5 × 0.55 = 1.38 (strong prevention)
+# Z5: 3.0 × 0.60 = 1.80 (very strong, approaching WARNING)
+# WARNING: 0.8-1.8 × 0.5-0.7 = 0.4-1.26 (at warning threshold)
+# T1: 4.0 × 0.65 = 2.60 (recovery mode)
+# T2: 7.0 × 0.81 = 5.67 (strong recovery)
+# T3: 8.5 × 0.91 = 7.74 (emergency recovery)
+#
+PROACTIVE_ZONE1_OFFSET: Final = 1.0  # Light boost (immediate NIBE effect)
 # Zone 1 weight uses LAYER_WEIGHT_PROACTIVE_MIN (0.3)
-PROACTIVE_ZONE2_OFFSET: Final = 0.7  # Moderate boost
+PROACTIVE_ZONE2_OFFSET: Final = 1.5  # Moderate boost
 PROACTIVE_ZONE2_WEIGHT: Final = 0.4  # Mid-range weight
-PROACTIVE_ZONE3_OFFSET_MIN: Final = 1.0  # Base offset for zone 3
+PROACTIVE_ZONE3_OFFSET_MIN: Final = 2.0  # Base offset for zone 3
 PROACTIVE_ZONE3_OFFSET_RANGE: Final = 0.5  # Additional offset based on severity (0.0-0.5)
-# Zone 3 weight uses LAYER_WEIGHT_PROACTIVE_MAX (0.6)
-PROACTIVE_ZONE4_OFFSET: Final = 1.3  # Strong prevention
-PROACTIVE_ZONE4_WEIGHT: Final = 0.7  # Strong weight
-PROACTIVE_ZONE5_OFFSET: Final = 1.8  # Very strong prevention
-PROACTIVE_ZONE5_WEIGHT: Final = 0.85  # Very strong weight
+PROACTIVE_ZONE3_WEIGHT: Final = 0.50  # Zone 3 weight
+PROACTIVE_ZONE4_OFFSET: Final = 2.5  # Strong prevention
+PROACTIVE_ZONE4_WEIGHT: Final = 0.55  # Strong weight (below WARNING)
+PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNING)
+PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
 # Overshoot Protection
 # Graduated coasting response when indoor temp is above target with stable weather
@@ -759,7 +780,7 @@ ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 #
 # Temperature hierarchy:
-# - 15°C (DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
+# - 20°C (DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
 # - 30°C (DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
 # - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
 # - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
@@ -830,8 +851,8 @@ NIBE_VOLTAGE_PER_PHASE: Final = (
     240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
 )
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
-DHW_SAFETY_CRITICAL: Final = 15.0  # °C - Hard floor, always heat below this (emergency)
-DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 15-30°C during expensive periods)
+DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
+DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 

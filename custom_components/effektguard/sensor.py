@@ -368,10 +368,12 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         # Restore last state for specific sensors that benefit from persistence
         # Note: compressor_health is excluded - it's a string sensor ("healthy", "watch", etc.)
         # calculated from compressor_stats on each update, no restoration needed
+        # compressor_frequency is restored to avoid "unavailable" state on restart
         should_restore = self.entity_description.key in {
             "peak_today",
             "peak_this_month",
             "savings_estimate",
+            "compressor_frequency",
         }
 
         if should_restore:
@@ -686,10 +688,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 if nibe_data and hasattr(nibe_data, "outdoor_temp"):
                     attrs["current_outdoor_temp"] = nibe_data.outdoor_temp
 
-            # Add weather forecast to compressor health for context
-            # Helps understand if high Hz operation is expected due to incoming cold weather
-            self._add_weather_forecast_to_attrs(attrs)
-
         elif key == "indoor_temperature":
             # Show all temperature sources and calculation method
             if "nibe" in self.coordinator.data:
@@ -785,9 +783,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["samples"] = trend_data["samples"]
                     if "temp_change_2h" in trend_data:
                         attrs["temp_change_2h"] = trend_data["temp_change_2h"]
-
-            # Add weather forecast to outdoor temperature sensor
-            self._add_weather_forecast_to_attrs(attrs)
 
         elif key == "savings_estimate":
             # Show breakdown of savings

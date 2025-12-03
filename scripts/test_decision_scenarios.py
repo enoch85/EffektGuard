@@ -54,7 +54,7 @@ Layer Weights:
   - LAYER_WEIGHT_EMERGENCY: 0.8 (high priority, DM beyond expected)
   - LAYER_WEIGHT_PRICE: 0.75 (strong influence)
   - LAYER_WEIGHT_WEATHER_PREDICTION: 0.49 (moderate influence)
-  - LAYER_WEIGHT_PROACTIVE_MAX: 0.6 (Zone 3)
+  - PROACTIVE_ZONE3_WEIGHT: 0.55 (Zone 3)
   - LAYER_WEIGHT_PROACTIVE_MIN: 0.3 (Zone 1)
   - LAYER_WEIGHT_COMFORT_MAX: 0.5
   - LAYER_WEIGHT_COMFORT_MIN: 0.2
@@ -136,7 +136,6 @@ from const import (
     COMFORT_OVERSHOOT_SEVERE,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
-    LAYER_WEIGHT_PROACTIVE_MAX,
     LAYER_WEIGHT_PROACTIVE_MIN,
     LAYER_WEIGHT_SAFETY,
     MAX_INDOOR_TEMP,
@@ -157,6 +156,7 @@ from const import (
     PROACTIVE_ZONE3_OFFSET_MIN,
     PROACTIVE_ZONE3_OFFSET_RANGE,
     PROACTIVE_ZONE3_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE3_WEIGHT,
     PROACTIVE_ZONE4_OFFSET,
     PROACTIVE_ZONE4_THRESHOLD_PERCENT,
     PROACTIVE_ZONE4_WEIGHT,
@@ -318,7 +318,7 @@ class ScenarioTester:
         emergency_weight: float = LAYER_WEIGHT_EMERGENCY,
         proactive_weight_z1: float = LAYER_WEIGHT_PROACTIVE_MIN,
         proactive_weight_z2: float = PROACTIVE_ZONE2_WEIGHT,
-        proactive_weight_z3: float = LAYER_WEIGHT_PROACTIVE_MAX,
+        proactive_weight_z3: float = PROACTIVE_ZONE3_WEIGHT,
         comfort_weight_min: float = LAYER_WEIGHT_COMFORT_MIN,
         comfort_weight_max: float = LAYER_WEIGHT_COMFORT_MAX,
         cheap_offset: float = 3.0,  # From price_analyzer.py
@@ -1189,8 +1189,8 @@ Examples:
     weight_group.add_argument(
         "--proactive-z3-weight",
         type=float,
-        default=LAYER_WEIGHT_PROACTIVE_MAX,
-        help=f"Proactive Zone 3 weight (default: {LAYER_WEIGHT_PROACTIVE_MAX})",
+        default=PROACTIVE_ZONE3_WEIGHT,
+        help=f"Proactive Zone 3 weight (default: {PROACTIVE_ZONE3_WEIGHT})",
     )
     weight_group.add_argument(
         "--comfort-weight-min",
@@ -1244,7 +1244,7 @@ Examples:
         print(
             f"  LAYER_WEIGHT_WEATHER_PREDICTION:  {LAYER_WEIGHT_WEATHER_PREDICTION:.2f} (moderate influence)"
         )
-        print(f"  LAYER_WEIGHT_PROACTIVE_MAX: {LAYER_WEIGHT_PROACTIVE_MAX:.2f} (Zone 3)")
+        print(f"  PROACTIVE_ZONE3_WEIGHT:     {PROACTIVE_ZONE3_WEIGHT:.2f} (Zone 3)")
         print(f"  LAYER_WEIGHT_PROACTIVE_MIN: {LAYER_WEIGHT_PROACTIVE_MIN:.2f} (Zone 1)")
         print(f"  Proactive Zone 2:           0.40 (hardcoded in decision_engine.py)")
         print(f"  LAYER_WEIGHT_COMFORT_MAX:   {LAYER_WEIGHT_COMFORT_MAX:.2f}")

@@ -63,7 +63,6 @@ from ..const import (
     COMFORT_CORRECTION_MILD,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PRICE,
-    LAYER_WEIGHT_PROACTIVE_MAX,
     LAYER_WEIGHT_PROACTIVE_MIN,
     LAYER_WEIGHT_PREDICTION,
     LAYER_WEIGHT_SAFETY,
@@ -82,6 +81,7 @@ from ..const import (
     PROACTIVE_ZONE3_OFFSET_MIN,
     PROACTIVE_ZONE3_OFFSET_RANGE,
     PROACTIVE_ZONE3_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE3_WEIGHT,
     PROACTIVE_ZONE4_OFFSET,
     PROACTIVE_ZONE4_THRESHOLD_PERCENT,
     PROACTIVE_ZONE4_WEIGHT,
@@ -1357,18 +1357,21 @@ class DecisionEngine:
         expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
 
         # Climate-aware thresholds (adapt to outdoor temp and climate zone)
+        # All zones use percentage of normal_max - proactive zones are PREVENTION before warning
         # In Arctic winter (-30°C), these thresholds will be much deeper than mild climate (5°C)
         zone1_threshold = expected_dm["normal"] * PROACTIVE_ZONE1_THRESHOLD_PERCENT
         zone2_threshold = expected_dm["normal"] * PROACTIVE_ZONE2_THRESHOLD_PERCENT
         zone3_threshold = expected_dm["normal"] * PROACTIVE_ZONE3_THRESHOLD_PERCENT
+        zone4_threshold = expected_dm["normal"] * PROACTIVE_ZONE4_THRESHOLD_PERCENT
+        zone5_threshold = expected_dm["normal"] * PROACTIVE_ZONE5_THRESHOLD_PERCENT
 
         # PROACTIVE ZONE 1: Early warning (gentle nudge at any meaningful thermal debt)
-        # 5% threshold adapts: Arctic -30°C → DM -60, Mild 10°C → DM -10 (climate-aware)
+        # 10% threshold adapts: Arctic -30°C → DM -120, Mild 10°C → DM -28 (climate-aware)
         if zone2_threshold < degree_minutes <= zone1_threshold:
             # Gentle nudge to prevent deeper deficit
             offset = PROACTIVE_ZONE1_OFFSET
 
-            # NEW: Boost more if also cooling rapidly
+            # Boost more if also cooling rapidly
             if trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
                 offset *= MULTIPLIER_BOOST_30_PERCENT
                 reason_suffix = f" (trend: {trend_rate:.2f}°C/h)"
@@ -1382,10 +1385,8 @@ class DecisionEngine:
             )
 
         # PROACTIVE ZONE 2: Compressor running, monitor trend
-        # Example: Arctic -30°C → -320, Cold -10°C → -180, Mild 0°C → -120
+        # 30% threshold: Arctic -30°C → -360, Cold -10°C → -170, Mild 0°C → -84
         elif zone3_threshold < degree_minutes <= zone2_threshold:
-            # Compressor running, check if deficit still growing
-            # Slight boost to help it catch up faster
             offset = PROACTIVE_ZONE2_OFFSET
             return LayerDecision(
                 offset=offset,
@@ -1393,33 +1394,22 @@ class DecisionEngine:
                 reason=f"Proactive Z2: DM {degree_minutes:.0f} (threshold: {zone2_threshold:.0f}), boost recovery speed",
             )
 
-        # PROACTIVE ZONE 3: Significant deficit (beyond typical)
-        # Uses expected_dm["normal"] directly (already climate-aware)
-        elif expected_dm["normal"] < degree_minutes <= zone3_threshold:
-            # Deficit growing beyond typical - stronger action
-            # Scale offset based on how far into warning zone
+        # PROACTIVE ZONE 3: Significant deficit (50% of normal_max)
+        elif zone4_threshold < degree_minutes <= zone3_threshold:
+            # Scale offset based on how far into zone
             deficit_severity = (zone3_threshold - degree_minutes) / (
-                zone3_threshold - expected_dm["normal"]
+                zone3_threshold - zone4_threshold
             )  # 0-1 scale
             offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
 
             return LayerDecision(
                 offset=offset,
-                weight=LAYER_WEIGHT_PROACTIVE_MAX,
+                weight=PROACTIVE_ZONE3_WEIGHT,
                 reason=f"Proactive Z3: DM {degree_minutes:.0f} (threshold: {zone3_threshold:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
             )
 
-        # NEW: Extended proactive zones (Oct 19, 2025 fix)
-        # Previous gap: Zone 3 stopped at 50% of normal_max, leaving huge gap to WARNING
-        # New zones provide continuous escalation to prevent thermal debt worsening
-
-        # Calculate extended zone thresholds
-        zone4_threshold = expected_dm["normal"] * PROACTIVE_ZONE4_THRESHOLD_PERCENT
-        zone5_threshold = expected_dm["warning"] * PROACTIVE_ZONE5_THRESHOLD_PERCENT
-
-        # PROACTIVE ZONE 4: Strong prevention (between normal and warning)
-        # At -4.3°C: DM -293 to -586 (was gap before, now has intervention)
-        if zone4_threshold < degree_minutes <= expected_dm["normal"]:
+        # PROACTIVE ZONE 4: Strong prevention (75% of normal_max)
+        elif zone5_threshold < degree_minutes <= zone4_threshold:
             offset = PROACTIVE_ZONE4_OFFSET
             return LayerDecision(
                 offset=offset,
@@ -1427,14 +1417,14 @@ class DecisionEngine:
                 reason=f"Proactive Z4: DM {degree_minutes:.0f} (threshold: {zone4_threshold:.0f}), strong prevention",
             )
 
-        # PROACTIVE ZONE 5: Very strong prevention (beyond warning threshold)
-        # At -4.3°C: DM -586 to -733 (prevents escalation to CRITICAL tiers)
-        elif zone5_threshold < degree_minutes <= zone4_threshold:
+        # PROACTIVE ZONE 5: Very strong prevention (100% of normal_max - at warning boundary)
+        # This is the last proactive layer before WARNING/T-levels take over
+        elif expected_dm["warning"] < degree_minutes <= zone5_threshold:
             offset = PROACTIVE_ZONE5_OFFSET
             return LayerDecision(
                 offset=offset,
                 weight=PROACTIVE_ZONE5_WEIGHT,
-                reason=f"Proactive Z5: DM {degree_minutes:.0f} (threshold: {zone5_threshold:.0f}), very strong prevention",
+                reason=f"Proactive Z5: DM {degree_minutes:.0f} (threshold: {zone5_threshold:.0f}), approaching warning",
             )
 
         # Outside proactive zones - let emergency/critical layers handle it

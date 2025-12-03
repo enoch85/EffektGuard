@@ -1,6 +1,6 @@
 """Test DHW safety minimum with active window optimization.
 
-Verifies that when DHW is in the 15-30°C safety deferral range during expensive
+Verifies that when DHW is in the 20-30°C safety deferral range during expensive
 periods, the system actively finds and schedules heating for the next cheap window
 instead of just passively waiting.
 
@@ -56,9 +56,9 @@ def price_periods_with_cheap_window():
 def test_safety_deferral_finds_upcoming_cheap_window(
     dhw_optimizer, price_periods_with_cheap_window
 ):
-    """When DHW at 19.6°C during expensive period, should find next cheap window."""
+    """When DHW at 25.0°C during expensive period, should find next cheap window."""
     decision = dhw_optimizer.should_start_dhw(
-        current_dhw_temp=19.6,  # In safety deferral range (15-30°C)
+        current_dhw_temp=25.0,  # In safety deferral range (20-30°C)
         space_heating_demand_kw=1.5,
         thermal_debt_dm=-200,  # Healthy
         indoor_temp=22.0,
@@ -84,9 +84,9 @@ def test_safety_deferral_finds_upcoming_cheap_window(
 
 
 def test_safety_deferral_heats_when_in_cheap_window(dhw_optimizer, price_periods_with_cheap_window):
-    """When DHW at 19.6°C and we're IN the cheap window, should heat immediately."""
+    """When DHW at 25.0°C and we're IN the cheap window, should heat immediately."""
     decision = dhw_optimizer.should_start_dhw(
-        current_dhw_temp=19.6,  # In safety deferral range
+        current_dhw_temp=25.0,  # In safety deferral range (20-30°C)
         space_heating_demand_kw=1.5,
         thermal_debt_dm=-200,  # Healthy
         indoor_temp=22.0,
@@ -107,9 +107,9 @@ def test_safety_deferral_heats_when_in_cheap_window(dhw_optimizer, price_periods
 
 
 def test_safety_critical_always_heats_immediately(dhw_optimizer, price_periods_with_cheap_window):
-    """Below 15°C critical threshold, heat immediately regardless of price."""
+    """Below 20°C critical threshold, heat immediately regardless of price."""
     decision = dhw_optimizer.should_start_dhw(
-        current_dhw_temp=14.5,  # CRITICAL - below 15°C
+        current_dhw_temp=19.5,  # CRITICAL - below 20°C
         space_heating_demand_kw=1.5,
         thermal_debt_dm=-200,  # Healthy
         indoor_temp=22.0,
@@ -136,7 +136,7 @@ def test_no_window_found_falls_back_to_defer(dhw_optimizer):
         expensive_periods.append(QuarterPeriod(start_time=start, price=120.0))
 
     decision = dhw_optimizer.should_start_dhw(
-        current_dhw_temp=19.6,
+        current_dhw_temp=25.0,  # In deferral range (20-30°C)
         space_heating_demand_kw=1.5,
         thermal_debt_dm=-200,
         indoor_temp=22.0,
@@ -158,7 +158,7 @@ def test_no_window_found_falls_back_to_defer(dhw_optimizer):
 def test_safety_deferral_respects_thermal_debt(dhw_optimizer, price_periods_with_cheap_window):
     """With poor thermal debt, DHW is blocked to protect space heating."""
     decision = dhw_optimizer.should_start_dhw(
-        current_dhw_temp=19.6,
+        current_dhw_temp=25.0,  # In deferral range (20-30°C)
         space_heating_demand_kw=1.5,
         thermal_debt_dm=-450,  # Poor thermal debt - blocks DHW (DM_DHW_BLOCK_FALLBACK = -340)
         indoor_temp=22.0,

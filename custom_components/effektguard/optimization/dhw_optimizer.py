@@ -7,7 +7,7 @@ Based on POST_PHASE_5_ROADMAP.md Phase 8 research and Forum_Summary.md findings.
 
 Priority order:
 1. Space heating comfort (indoor temp > target - 0.5°C)
-2. DHW safety minimum (≥30°C for price optimization, ≥15°C critical)
+2. DHW safety minimum (≥30°C for price optimization, ≥20°C critical)
 3. Thermal debt prevention (climate-aware DM thresholds)
 4. Space heating target (±0.3°C)
 5. DHW comfort (50°C normal)
@@ -467,9 +467,9 @@ class IntelligentDHWScheduler:
         # - This prevents peak billing hits when DHW can wait and space heating is healthy
         if current_dhw_temp < DHW_SAFETY_MIN:
             # Check if we should defer due to peak pricing + thermal debt
-            # Only defer if temp is still safe (15-30°C range) and not critically low
+            # Only defer if temp is still safe (20-30°C range) and not critically low
             can_defer_for_peak = (
-                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 15°C)
+                current_dhw_temp >= DHW_SAFETY_CRITICAL  # Not critically low (>= 20°C)
                 and price_classification in ["expensive", "peak"]  # High cost period
                 and thermal_debt_dm > (dm_block_threshold + 20)  # DM healthy enough to defer
             )
