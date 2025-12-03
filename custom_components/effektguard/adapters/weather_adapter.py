@@ -38,6 +38,8 @@ class WeatherData:
 
     current_temp: float  # Current outdoor temperature
     forecast_hours: list[WeatherForecastHour]  # Next 24-48 hours
+    source_entity: str = ""  # Weather entity ID
+    source_method: str = ""  # "attribute" or "service_call"
 
 
 class WeatherAdapter:
@@ -117,6 +119,7 @@ class WeatherAdapter:
 
         # Try attribute access first (Met.no, AccuWeather, etc.)
         forecast_raw = state.attributes.get("forecast", [])
+        source_method = "attribute" if forecast_raw else ""
 
         # If no forecast attribute, try service call (OpenWeatherMap, etc.)
         if not forecast_raw:
@@ -171,6 +174,7 @@ class WeatherAdapter:
                         )
                         # Success! Reset random attempt timer
                         self._next_random_attempt = None
+                        source_method = "service_call"
                     else:
                         _LOGGER.warning(
                             "Service call succeeded but returned no forecast data. " "Response: %s",
@@ -268,4 +272,6 @@ class WeatherAdapter:
         return WeatherData(
             current_temp=float(current_temp),
             forecast_hours=forecast_hours,
+            source_entity=self._weather_entity,
+            source_method=source_method,
         )

@@ -459,7 +459,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         # For all other sensors, use description's unit
         return self.entity_description.native_unit_of_measurement
 
-    def _add_weather_forecast_to_attrs(self, attrs: dict[str, Any], hours: int = 3) -> None:
+    def _add_weather_forecast_to_attrs(self, attrs: dict[str, Any], hours: int = 12) -> None:
         """Add weather forecast to attributes if available.
 
         Helper method to avoid code duplication across multiple sensors.
@@ -470,7 +470,21 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         """
         weather_data = self.coordinator.data.get("weather")
         if weather_data and hasattr(weather_data, "forecast_hours") and weather_data.forecast_hours:
-            attrs["forecast"] = [
+            # Add forecast source metadata for debugging visibility
+            if hasattr(weather_data, "source_entity") and weather_data.source_entity:
+                attrs["Forecast source"] = weather_data.source_entity
+            if hasattr(weather_data, "source_method") and weather_data.source_method:
+                # Make method human-readable
+                method = weather_data.source_method
+                if method == "service_call":
+                    method = "Service call (OpenWeatherMap v3.0)"
+                elif method == "attribute":
+                    method = "Attribute (Met.no/AccuWeather)"
+                attrs["Forecast method"] = method
+            attrs["Forecast hours available"] = len(weather_data.forecast_hours)
+
+            # Add forecast data
+            attrs["Forecast"] = [
                 {"time": f.datetime, "temp": f.temperature}
                 for f in weather_data.forecast_hours[:hours]
             ]
