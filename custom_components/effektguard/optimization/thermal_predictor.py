@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 
-from ..const import DM_THRESHOLD_AUX_LIMIT
+from ..const import DM_THRESHOLD_AUX_LIMIT, SAMPLES_PER_HOUR
 from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class ThermalStatePredictor:
         """
         self.lookback_hours = lookback_hours
         self.state_history: deque[ThermalSnapshot] = deque(
-            maxlen=int(lookback_hours * 4)  # 15-minute intervals
+            maxlen=int(lookback_hours * SAMPLES_PER_HOUR)
         )
         self._thermal_responsiveness: float | None = None
 
@@ -331,10 +331,10 @@ class ThermalStatePredictor:
             return 0.0
 
         # Base confidence on history length
-        history_confidence = min(len(self.state_history) / (24 * 4), 1.0)
+        history_confidence = min(len(self.state_history) / (24 * SAMPLES_PER_HOUR), 1.0)
 
-        # Data consistency (low variance in trends = higher confidence)
-        recent_temps = [s.indoor_temp for s in list(self.state_history)[-12:]]
+        # Data consistency (low variance in last hour = higher confidence)
+        recent_temps = [s.indoor_temp for s in list(self.state_history)[-SAMPLES_PER_HOUR:]]
         if len(recent_temps) > 4:
             temp_variance = np.std(recent_temps)
             # Low variance in reasonable range = good
@@ -361,7 +361,9 @@ class ThermalStatePredictor:
         # Calculate temperature change over last 2 hours
         current = self.state_history[-1]
         two_hours_ago = (
-            self.state_history[-8] if len(self.state_history) >= 8 else self.state_history[0]
+            self.state_history[-(SAMPLES_PER_HOUR * 2)]
+            if len(self.state_history) >= SAMPLES_PER_HOUR * 2
+            else self.state_history[0]
         )
 
         time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600
@@ -405,7 +407,9 @@ class ThermalStatePredictor:
         # Calculate outdoor temperature change over last 2 hours
         current = self.state_history[-1]
         two_hours_ago = (
-            self.state_history[-8] if len(self.state_history) >= 8 else self.state_history[0]
+            self.state_history[-(SAMPLES_PER_HOUR * 2)]
+            if len(self.state_history) >= SAMPLES_PER_HOUR * 2
+            else self.state_history[0]
         )
 
         time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600

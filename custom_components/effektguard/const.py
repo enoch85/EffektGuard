@@ -728,6 +728,9 @@ UPDATE_INTERVAL_MINUTES: Final = (
 )
 QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
 
+# Thermal predictor history constants (derived from UPDATE_INTERVAL_MINUTES)
+SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 5-min intervals
+
 # Adaptive learning parameters
 # Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
 LEARNING_OBSERVATION_WINDOW: Final = 672  # 1 week of 15-minute observations

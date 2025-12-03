@@ -220,6 +220,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_heating_end = None  # When last DHW cycle ended
         self.dhw_was_heating = False  # Track state changes
 
+        # Spot price savings tracking (per-cycle accumulation)
+        self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
+
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
@@ -801,6 +804,30 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
                 # Continue anyway - next cycle will retry
 
+        # Calculate actual spot savings for this cycle using real NIBE power
+        now_time = dt_util.now()
+        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        if (
+            price_data
+            and hasattr(price_data, "today")
+            and price_data.today
+            and nibe_data
+            and nibe_data.power_kw is not None
+        ):
+            prices_today = [q.price for q in price_data.today]
+            if prices_today and current_quarter < len(price_data.today):
+                average_price = sum(prices_today) / len(prices_today)
+                current_price = price_data.today[current_quarter].price
+
+                # Calculate savings using ACTUAL power consumption
+                cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
+                    actual_power_kw=nibe_data.power_kw,
+                    current_price=current_price,
+                    average_price_today=average_price,
+                    cycle_minutes=UPDATE_INTERVAL_MINUTES,
+                )
+                self._daily_spot_savings += cycle_savings
+
         # Check for day change and save yesterday's peak
         now = dt_util.now()
         if not hasattr(self, "_last_update_date"):
@@ -813,6 +840,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 "Day change detected: Yesterday's peak was %.2f kW, resetting daily peak",
                 self.yesterday_peak,
             )
+
+            # Record yesterday's spot savings to the calculator
+            if self._daily_spot_savings != 0.0:
+                self.savings_calculator.record_spot_savings(self._daily_spot_savings)
+                _LOGGER.info(
+                    "Recorded daily spot savings: %.2f SEK",
+                    self._daily_spot_savings,
+                )
+            self._daily_spot_savings = 0.0  # Reset for new day
+
             # Reset daily peak for new day
             self.peak_today = 0.0
             self.peak_today_time = None

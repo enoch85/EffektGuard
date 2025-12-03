@@ -15,12 +15,7 @@ from ..const import (
     BASELINE_EMA_WEIGHT_NEW,
     BASELINE_EMA_WEIGHT_OLD,
     BASELINE_PEAK_MULTIPLIER,
-    CHEAP_PERIOD_BONUS_MULTIPLIER,
     DAYS_PER_MONTH,
-    DEFAULT_HEAT_PUMP_POWER_KW,
-    EMERGENCY_HEATING_COST_FACTOR,
-    HEATING_FACTOR_PER_DEGREE,
-    MULTIPLIER_BOOST_30_PERCENT,
     ORE_TO_SEK_CONVERSION,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
@@ -120,68 +115,61 @@ class SavingsCalculator:
             optimized_cost=round(optimized_cost, 0),
         )
 
-    def estimate_spot_savings_per_cycle(
+    def calculate_spot_savings_per_cycle(
         self,
-        offset_applied: float,
-        price_classification: str,
-        average_price_today: float,
+        actual_power_kw: float,
         current_price: float,
-        heating_hours: float = 1.0,
-        heat_pump_power_kw: float = DEFAULT_HEAT_PUMP_POWER_KW,
+        average_price_today: float,
+        cycle_minutes: float = 5.0,
     ) -> float:
-        """Estimate savings from a single optimization cycle.
+        """Calculate actual spot savings for this cycle using real power data.
 
-        This estimates how much was saved (or cost) by applying offset
-        during current price period compared to heating at average price.
+        This uses the ACTUAL power consumption from NIBE to calculate real savings.
+        Savings = what it would cost at average price - what it actually cost.
+
+        If current_price < average_price: positive savings (we used power during cheap time)
+        If current_price > average_price: negative savings (we used power during expensive time)
 
         Args:
-            offset_applied: Heating curve offset applied (°C)
-            price_classification: Current price classification (cheap/normal/expensive/peak)
-            average_price_today: Average electricity price today (öre/kWh)
-            current_price: Current electricity price (öre/kWh)
-            heating_hours: Hours of heating in this cycle (default 1.0)
-            heat_pump_power_kw: Average heat pump power consumption (kW), default from const.py
+            actual_power_kw: Actual NIBE power consumption this cycle (kW)
+            current_price: Current spot price (öre/kWh)
+            average_price_today: Average spot price today (öre/kWh)
+            cycle_minutes: Duration of this cycle in minutes (default 5)
 
         Returns:
-            Estimated savings for this cycle (SEK), negative if cost increase
+            Savings for this cycle (SEK), positive = saved money, negative = cost more
+
+        Example:
+            Power: 2.5 kW for 5 minutes = 0.208 kWh
+            Current price: 50 öre, Average: 100 öre
+            Actual cost: 0.208 × 50 / 100 = 0.104 SEK
+            Baseline cost: 0.208 × 100 / 100 = 0.208 SEK
+            Savings: 0.208 - 0.104 = 0.104 SEK (we saved by using power when cheap!)
         """
-        # Determine if offset increased or decreased heating
-        # Positive offset = more heating
-        # Negative offset = less heating
-        heating_factor = 1.0 + (offset_applied * HEATING_FACTOR_PER_DEGREE)
+        if actual_power_kw is None or actual_power_kw <= 0:
+            return 0.0
 
         # Energy used this cycle
-        energy_kwh = heat_pump_power_kw * heating_hours * heating_factor
+        cycle_hours = cycle_minutes / 60.0
+        energy_kwh = actual_power_kw * cycle_hours
 
-        # Cost at current price vs average price
-        cost_current = (energy_kwh * current_price) / ORE_TO_SEK_CONVERSION
-        cost_average = (energy_kwh * average_price_today) / ORE_TO_SEK_CONVERSION
+        # Actual cost at current price
+        actual_cost = (energy_kwh * current_price) / ORE_TO_SEK_CONVERSION
 
-        # Savings: positive if we saved, negative if cost more
-        cycle_savings = cost_average - cost_current
+        # What it would have cost at average price (baseline)
+        baseline_cost = (energy_kwh * average_price_today) / ORE_TO_SEK_CONVERSION
 
-        # Additional consideration: did we shift heating away from expensive period?
-        if price_classification in ["cheap", "CHEAP"]:
-            # Heating during cheap: likely good decision
-            # Bonus for preheating during cheap periods
-            if offset_applied > 0:
-                cycle_savings *= CHEAP_PERIOD_BONUS_MULTIPLIER
-        elif price_classification in ["expensive", "EXPENSIVE", "peak", "PEAK"]:
-            # Heating during expensive: likely cost increase unless necessary
-            if offset_applied < 0:
-                # Reduced heating during expensive period: good!
-                cycle_savings *= MULTIPLIER_BOOST_30_PERCENT
-            elif offset_applied > 0:
-                # Increased heating during expensive: probably thermal debt emergency
-                cycle_savings *= EMERGENCY_HEATING_COST_FACTOR
+        # Savings: positive if we paid less than average
+        cycle_savings = baseline_cost - actual_cost
 
         _LOGGER.debug(
-            "Cycle savings: offset %.2f°C, price %s (%.2f öre), "
-            "energy %.2f kWh, savings %.2f SEK",
-            offset_applied,
-            price_classification,
-            current_price,
+            "Spot savings: %.2f kW × %.2f min = %.3f kWh, "
+            "price %.1f öre (avg %.1f), savings: %.4f SEK",
+            actual_power_kw,
+            cycle_minutes,
             energy_kwh,
+            current_price,
+            average_price_today,
             cycle_savings,
         )
 
