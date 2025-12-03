@@ -9,7 +9,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..const import QuarterClassification
+from ..const import (
+    PRICE_DAYTIME_MULTIPLIER,
+    PRICE_OFFSET_CHEAP,
+    PRICE_OFFSET_EXPENSIVE,
+    PRICE_OFFSET_NORMAL,
+    PRICE_OFFSET_PEAK,
+    QuarterClassification,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -152,15 +159,14 @@ class PriceAnalyzer:
 
         Note: CHEAP includes negative prices (you get paid to heat!)
         """
-        # Base offsets for each classification
-        base_offsets = {
-            QuarterClassification.CHEAP: +3.0,  # Increased from +2.0 for better thermal storage
-            QuarterClassification.NORMAL: 0.0,
-            QuarterClassification.EXPENSIVE: -1.0,
-            QuarterClassification.PEAK: -2.0,
-        }
-
-        offset = base_offsets[classification]
+        if classification == QuarterClassification.CHEAP:
+            offset = PRICE_OFFSET_CHEAP
+        elif classification == QuarterClassification.NORMAL:
+            offset = PRICE_OFFSET_NORMAL
+        elif classification == QuarterClassification.EXPENSIVE:
+            offset = PRICE_OFFSET_EXPENSIVE
+        else:  # PEAK
+            offset = PRICE_OFFSET_PEAK
 
         # More aggressive during daytime (full effect tariff weight)
         # Nighttime peaks are less critical (50% tariff weight)
@@ -168,7 +174,7 @@ class PriceAnalyzer:
             QuarterClassification.EXPENSIVE,
             QuarterClassification.PEAK,
         ]:
-            offset *= 1.5  # More aggressive reduction during daytime
+            offset *= PRICE_DAYTIME_MULTIPLIER
 
         return offset
 

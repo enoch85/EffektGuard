@@ -2205,7 +2205,13 @@ class DecisionEngine:
         adjusted_offset = base_offset * tolerance_factor
 
         # Apply forecast adjustment (additive to base classification)
-        final_offset = adjusted_offset + forecast_adjustment
+        # BUT: During PEAK, we want maximum reduction regardless of forecast
+        if classification == QuarterClassification.PEAK:
+            # PEAK periods get maximum reduction, no forecast adjustment
+            # The goal is -10 offset to coast through the expensive period
+            final_offset = adjusted_offset  # Already -10 from base_offset
+        else:
+            final_offset = adjusted_offset + forecast_adjustment
 
         # Check for strategic overshoot context when pre-heating
         strategic_context = ""
@@ -2222,9 +2228,15 @@ class DecisionEngine:
         # Math: 0.8 × 0.3 = 0.24 (price layer reduced to 30% of normal strength)
         # Was 0.1 (10%) before fix when decimal changes caused API oscillation
         # Effect: Thermal/comfort/weather layers still dominate, but price has meaningful input
-        price_weight = LAYER_WEIGHT_PRICE
-        if is_volatile:
+        #
+        # Dec 3, 2025: PEAK classification gets weight 1.0 (critical priority)
+        # This ensures peak avoidance overrides all other layers except safety
+        if classification == QuarterClassification.PEAK:
+            price_weight = 1.0  # Critical priority - override all other layers
+        elif is_volatile:
             price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
+        else:
+            price_weight = LAYER_WEIGHT_PRICE
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(

@@ -112,7 +112,7 @@ EFFECT_WEIGHT_CRITICAL: Final = 1.0  # Already at peak - immediate action
 EFFECT_WEIGHT_PREDICTIVE: Final = 0.85  # Will approach peak (<1kW margin) - act NOW
 EFFECT_WEIGHT_WARNING_RISING: Final = 0.75  # Close to peak + demand rising
 EFFECT_WEIGHT_WARNING_STABLE: Final = 0.65  # Close to peak + demand stable/falling
-EFFECT_OFFSET_CRITICAL: Final = -3.0  # Aggressive reduction at peak
+EFFECT_OFFSET_CRITICAL: Final = -3.0  # Aggressive reduction at power peak
 EFFECT_OFFSET_PREDICTIVE: Final = -1.5  # Moderate reduction before peak
 EFFECT_OFFSET_WARNING_RISING: Final = -1.0  # Gentle reduction near peak
 EFFECT_OFFSET_WARNING_STABLE: Final = -0.5  # Light reduction near peak
@@ -556,10 +556,21 @@ PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive peri
 # WEIGHT REDUCTION: 0.8 → 0.24 (70% reduction during volatility)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility (0.8 → 0.24)
 
-# Pre-PEAK offset (Dec 2, 2025)
+# Price classification base offsets (Dec 3, 2025)
+# Used by price_analyzer.py get_base_offset() for spot price optimization
+# These are base values before daytime multiplier (1.5x for EXPENSIVE/PEAK during 06:00-22:00)
+PRICE_OFFSET_CHEAP: Final = 3.0  # °C - pre-heat opportunity, charge thermal battery
+PRICE_OFFSET_NORMAL: Final = 0.0  # °C - maintain current heating
+PRICE_OFFSET_EXPENSIVE: Final = -1.0  # °C - conserve, reduce heating
+PRICE_OFFSET_PEAK: Final = -10.0  # °C - aggressive peak reduction (coast through expensive period)
+PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE/PEAK during daytime (06:00-22:00)
+
+# Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
 # Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
 # Pump needs time to reduce - acting at PEAK start is too late
-PRICE_PRE_PEAK_OFFSET: Final = -2.0  # °C - reduce heating before PEAK arrives
+# Dec 3, 2025: Increased from -2.0 to -10.0 for aggressive peak avoidance
+# when cheap prices are coming. With UFH thermal mass, we can coast through PEAK.
+PRICE_PRE_PEAK_OFFSET: Final = -10.0  # °C - aggressive reduction before PEAK arrives
 
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
