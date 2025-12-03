@@ -59,6 +59,16 @@ MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature
 MAX_INDOOR_TEMP: Final = 25.0  # °C - maximum settable temperature
 TEMP_STEP: Final = 0.5  # °C - temperature adjustment step
 
+# Daytime/Nighttime boundaries (Swedish effect tariff periods)
+# Swedish Effektavgift uses different weights for day vs night peaks
+# Daytime: Full effect tariff weight, higher prices typical
+# Nighttime: 50% effect tariff weight, lower prices typical
+DAYTIME_START_HOUR: Final = 6  # 06:00 - daytime starts
+DAYTIME_END_HOUR: Final = 22  # 22:00 - daytime ends (nighttime 22:00-06:00)
+# Quarter equivalents (each hour = 4 quarters, so 6*4=24 and 22*4=88)
+DAYTIME_START_QUARTER: Final = 24  # Quarter 24 = 06:00
+DAYTIME_END_QUARTER: Final = 87  # Quarter 87 = 21:45 (last daytime quarter)
+
 # Optimization modes for climate entity presets
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
 OPTIMIZATION_MODE_BALANCED: Final = "balanced"  # Balance comfort and savings

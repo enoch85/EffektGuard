@@ -19,7 +19,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from ..const import PEAK_RECORDING_MINIMUM, STORAGE_KEY, STORAGE_VERSION
+from ..const import (
+    DAYTIME_END_QUARTER,
+    DAYTIME_START_QUARTER,
+    PEAK_RECORDING_MINIMUM,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,7 +156,7 @@ class EffectManager:
             return None
 
         # Determine if daytime (06:00-22:00)
-        is_daytime = 24 <= quarter <= 87  # Quarters 24-87 = 06:00-22:00
+        is_daytime = DAYTIME_START_QUARTER <= quarter <= DAYTIME_END_QUARTER
 
         # Calculate effective power (50% weight at night)
         effective_power = power_kw if is_daytime else power_kw * 0.5
@@ -212,7 +218,7 @@ class EffectManager:
             Decision with limit recommendation and severity
         """
         # Calculate effective power
-        is_daytime = 24 <= current_quarter <= 87  # 06:00-22:00
+        is_daytime = DAYTIME_START_QUARTER <= current_quarter <= DAYTIME_END_QUARTER
         effective_power = current_power if is_daytime else current_power * 0.5
 
         # If no peaks yet, no limit needed

@@ -25,7 +25,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_GESPOT_ENTITY
+from ..const import CONF_GESPOT_ENTITY, DAYTIME_END_HOUR, DAYTIME_START_HOUR
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class QuarterPeriod:
     @property
     def is_daytime(self) -> bool:
         """True if 06:00-22:00 (full effect tariff weight)."""
-        return 6 <= self.start_time.hour < 22
+        return DAYTIME_START_HOUR <= self.start_time.hour < DAYTIME_END_HOUR
 
 
 @dataclass
