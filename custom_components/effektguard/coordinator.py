@@ -287,94 +287,68 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
             return CLIMATE_CENTRAL_SWEDEN
 
-    async def _maintain_clock_alignment(self) -> None:
-        """Maintain coordinator updates aligned to 5-minute clock boundaries + 10 seconds.
+    def _calculate_next_aligned_time(self) -> datetime:
+        """Calculate next 5-minute boundary + 10 seconds.
 
-        This ensures updates happen at predictable times (:00:10, :05:10, :10:10, etc.)
-        aligned with spot price 15-minute intervals. The 10-second offset gives sensors
-        time to update with fresh data before we read them.
-
-        Called after every coordinator update to check alignment and reschedule
-        if needed. This is critical because DataUpdateCoordinator schedules the
-        next update based on when the previous update completed, which causes
-        drift over time (e.g., :00:12 → :05:14 → :10:16 → :47:57).
-
-        Example drift scenario without realignment:
-        - Update completes at 20:00:12 → next at 20:05:12
-        - Update completes at 20:05:14 → next at 20:10:14
-        - After several hours → update at 20:47:57
-        - Price period classification changes at :00:10, :15:10, :30:10, :45:10 are missed!
+        Returns:
+            Next aligned datetime (e.g., 17:50:10, 17:55:10, 18:00:10)
         """
         now = dt_util.now()
-        current_minute = now.minute
-        current_second = now.second
+        minutes_past = now.minute % UPDATE_INTERVAL_MINUTES
+        seconds_past = now.second
 
-        # Target: 10 seconds past each 5-minute boundary
-        TARGET_OFFSET_SECONDS = 10
-
-        # Calculate how far past the nearest 5-minute boundary we are
-        minutes_past_boundary = current_minute % UPDATE_INTERVAL_MINUTES
-
-        # If we're at a 5-minute boundary + 10 seconds (±3 second tolerance), consider aligned
-        # Tolerance allows for update processing time without constant rescheduling
-        if minutes_past_boundary == 0 and 7 <= current_second <= 13:
-            if not self._clock_aligned:
-                self._clock_aligned = True
-                _LOGGER.info(
-                    "Clock aligned - updates every %d min at :%02d:10, :%02d:10, :%02d:10...",
-                    UPDATE_INTERVAL_MINUTES,
-                    current_minute,
-                    (current_minute + 5) % 60,
-                    (current_minute + 10) % 60,
-                )
-            return
-
-        # We're misaligned - need to reschedule to next boundary + 10 seconds
-        # This can happen on startup or after system clock changes
-        if minutes_past_boundary == 0 and current_second < TARGET_OFFSET_SECONDS:
-            # We're before :X0:10 in this boundary - schedule for :X0:10
-            seconds_to_next = TARGET_OFFSET_SECONDS - current_second
+        if minutes_past == 0 and seconds_past < 10:
+            # Within current boundary, before :10
+            seconds_to_next = 10 - seconds_past
         else:
-            # We're past :X0:10 or in a later minute - schedule for next boundary + 10 seconds
-            minutes_to_next = UPDATE_INTERVAL_MINUTES - minutes_past_boundary
-            seconds_to_next = (minutes_to_next * 60) - current_second + TARGET_OFFSET_SECONDS
+            # Schedule for next boundary + 10 seconds
+            minutes_to_next = UPDATE_INTERVAL_MINUTES - minutes_past
+            seconds_to_next = (minutes_to_next * 60) - seconds_past + 10
 
-        # Schedule next update at aligned time
-        next_aligned_time = now + timedelta(seconds=seconds_to_next)
+        return now + timedelta(seconds=seconds_to_next)
 
-        if not self._clock_aligned:
-            _LOGGER.info(
-                "Aligning clock: next update in %d seconds at %s (then every %d min at :XX:10)",
-                seconds_to_next,
-                next_aligned_time.strftime("%H:%M:%S"),
-                UPDATE_INTERVAL_MINUTES,
-            )
-        else:
-            # Drift detected - realign
-            _LOGGER.warning(
-                "Clock drift detected (%d:%02d, expected :%02d:10) - realigning to %s",
-                current_minute,
-                current_second,
-                (current_minute // 5) * 5,
-                next_aligned_time.strftime("%H:%M:%S"),
-            )
+    def _schedule_aligned_refresh(self) -> None:
+        """Schedule next update at aligned time (bypasses base class drift).
 
-        # Cancel current scheduled refresh
+        Updates are aligned to :XX:10 (10 seconds past each 5-minute mark).
+        This gives sensors time to update before we read them, and aligns
+        with 15-minute spot price intervals.
+        """
+        # Cancel any existing schedule
         if self._unsub_refresh:
             self._unsub_refresh()
             self._unsub_refresh = None
 
-        # Schedule one-time refresh at aligned time
-        # After this refresh completes, this function runs again to maintain alignment
-        @callback
-        def _aligned_refresh(_now: datetime) -> None:
-            """Trigger refresh at aligned time."""
-            self._clock_aligned = True
-            self.hass.async_create_task(self.async_request_refresh())
+        next_time = self._calculate_next_aligned_time()
 
-        self._unsub_refresh = async_track_point_in_time(
-            self.hass, _aligned_refresh, next_aligned_time
-        )
+        @callback
+        def _on_refresh(_now: datetime) -> None:
+            self.hass.async_create_task(self._do_aligned_refresh())
+
+        self._unsub_refresh = async_track_point_in_time(self.hass, _on_refresh, next_time)
+
+        if not self._clock_aligned:
+            self._clock_aligned = True
+            _LOGGER.info(
+                "Clock aligned to %s (updates every %d min at :XX:10)",
+                next_time.strftime("%H:%M:%S"),
+                UPDATE_INTERVAL_MINUTES,
+            )
+        else:
+            _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
+
+    async def _do_aligned_refresh(self) -> None:
+        """Perform refresh and schedule next aligned update."""
+        try:
+            self.data = await self._async_update_data()
+            self.last_update_success = True
+            self.async_set_updated_data(self.data)
+        except Exception as err:  # noqa: BLE001
+            self.last_update_success = False
+            _LOGGER.error("Update failed: %s", err)
+
+        # Schedule next aligned refresh (maintains alignment regardless of update duration)
+        self._schedule_aligned_refresh()
 
     async def async_initialize_learning(self) -> None:
         """Initialize learning modules by loading persisted data.
@@ -1039,9 +1013,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         temperature_trend_data = self.thermal_predictor.get_current_trend()
         outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
 
-        # Clock alignment: Maintain alignment to :00, :05, :10, etc. after every update
-        # This prevents drift from update processing time accumulation
-        await self._maintain_clock_alignment()
+        # Start aligned scheduling on first update (replaces base class scheduling)
+        if not self._clock_aligned:
+            self._schedule_aligned_refresh()
 
         return {
             "nibe": nibe_data,
