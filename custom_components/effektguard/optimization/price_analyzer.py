@@ -147,15 +147,20 @@ class PriceAnalyzer:
             classification: CHEAP/NORMAL/EXPENSIVE/PEAK
             is_daytime: True if 06:00-22:00 (full effect tariff weight)
 
-        Returns offset in °C:
+        Returns offset in °C (before tolerance scaling):
             CHEAP: +3.0 (pre-heat opportunity, charge thermal battery!)
             NORMAL: 0.0 (maintain)
-            EXPENSIVE: -1.0 (conserve)
-            PEAK: -2.0 (minimize)
+            EXPENSIVE: -1.0 (conserve), -1.5 during daytime
+            PEAK: -10.0 (maximum reduction, coast through expensive period)
+
+        Note: These are BASE offsets before tolerance factor is applied.
+        Final offset depends on user tolerance setting and optimization mode:
+        - Savings mode: PEAK bypasses tolerance (always full -10.0°C)
+        - Balanced/Comfort modes: Tolerance factor applied (e.g., -3.0°C)
 
         Effect tariff weighting:
-            - Daytime (06:00-22:00): Full weight, more aggressive reductions
-            - Nighttime (22:00-06:00): 50% weight, gentler reductions
+            - Daytime (06:00-22:00): Full weight, EXPENSIVE gets 1.5x multiplier
+            - Nighttime (22:00-06:00): Standard weight
 
         Note: CHEAP includes negative prices (you get paid to heat!)
         """

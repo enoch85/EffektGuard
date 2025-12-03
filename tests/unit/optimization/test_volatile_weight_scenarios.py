@@ -7,7 +7,7 @@ trigger pre-heating through weighted aggregation.
 
 import pytest
 from unittest.mock import MagicMock
-from datetime import datetime
+from datetime import datetime, timedelta
 from freezegun import freeze_time
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
@@ -536,10 +536,12 @@ class TestVolatileWeightReduction:
 
         # 4. Verify price layer had reduced influence (implicit via reduced offset)
         #    If price layer was at full weight 1.0 during PEAK, we'd see -10.0
-        #    With volatility reduction, offset should be much smaller
+        #    With PEAK cluster detection (Dec 3, 2025), sandwiched quarters may get
+        #    PEAK treatment (weight 1.0) which increases the offset magnitude.
+        #    Just verify we're getting a reasonable negative offset during this period.
         assert (
-            decision.offset > -5.0
-        ), f"Volatile weight reduction should limit PEAK influence, got: {decision.offset}"
+            decision.offset < 0.0
+        ), f"Should have negative offset during PEAK/volatile period, got: {decision.offset}"
 
     def test_early_morning_edge_case(self, engine, base_nibe_state, base_weather_data):
         """Test backward scan at Q0-Q7 when full 8-quarter history unavailable.
@@ -754,6 +756,120 @@ class TestVolatileWeightReduction:
         assert (
             PRICE_FORECAST_EXPENSIVE_THRESHOLD >= 1.5
         ), f"Expensive threshold should require significant increase, got {PRICE_FORECAST_EXPENSIVE_THRESHOLD}"
+
+    @freeze_time("2025-01-15 17:15:00")
+    def test_peak_cluster_expensive_between_peaks(self, engine, base_nibe_state, base_weather_data):
+        """Test PEAK cluster: EXPENSIVE quarter sandwiched between PEAKs uses PEAK offset.
+
+        Scenario (real-world evening peak pattern):
+        - Q68 (17:00): PEAK (95 öre)
+        - Q69 (17:15): EXPENSIVE (85 öre) - current quarter, sandwiched
+        - Q70 (17:30): PEAK (92 öre)
+        - Q71 (17:45): PEAK (90 öre)
+
+        Expected:
+        - EXPENSIVE at Q69 is volatile (run length = 1)
+        - But PEAK+EXPENSIVE cluster run = 4 (>=3 threshold)
+        - Therefore EXPENSIVE should inherit PEAK behavior:
+          - Use PEAK offset (-10.0 or scaled)
+          - Weight = 1.0 (critical priority)
+        """
+        from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
+        from datetime import timezone
+        from custom_components.effektguard.const import (
+            PRICE_OFFSET_PEAK,
+            QuarterClassification,
+        )
+
+        # Build evening price data with PEAK cluster pattern
+        price_periods = []
+        classifications = []
+
+        base_date = datetime(2025, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
+
+        for q in range(96):
+            start_time = base_date + timedelta(minutes=q * 15)
+            if q in [68, 70, 71]:  # PEAK quarters
+                price = 95.0 - (q - 68) * 2  # Slightly decreasing
+                period = QuarterPeriod(
+                    start_time=start_time,
+                    price=price,
+                )
+                price_periods.append(period)
+                classifications.append(QuarterClassification.PEAK)
+            elif q == 69:  # Current quarter - EXPENSIVE sandwiched between PEAKs
+                period = QuarterPeriod(
+                    start_time=start_time,
+                    price=85.0,
+                )
+                price_periods.append(period)
+                classifications.append(QuarterClassification.EXPENSIVE)
+            elif q >= 64 and q <= 75:  # Surrounding hours - EXPENSIVE/NORMAL
+                price = 70.0 + (q % 4) * 2
+                period = QuarterPeriod(
+                    start_time=start_time,
+                    price=price,
+                )
+                price_periods.append(period)
+                classifications.append(QuarterClassification.EXPENSIVE)
+            else:  # Rest of day - NORMAL
+                period = QuarterPeriod(
+                    start_time=start_time,
+                    price=50.0,
+                )
+                price_periods.append(period)
+                classifications.append(QuarterClassification.NORMAL)
+
+        # Set up price data
+        price_data = MagicMock()
+        price_data.today = price_periods
+        price_data.tomorrow = []
+        price_data.has_tomorrow = False
+
+        # Configure classifier
+        engine.price._classifications_today = classifications
+        engine.price._classifications_tomorrow = []
+
+        def get_classification(quarter):
+            if 0 <= quarter < len(classifications):
+                return classifications[quarter]
+            return None
+
+        engine.price.get_current_classification = get_classification
+        engine.price.get_tomorrow_classification = lambda q: None
+
+        decision = engine.calculate_decision(
+            nibe_state=base_nibe_state,
+            price_data=price_data,
+            weather_data=base_weather_data,
+            current_peak=5.0,
+            current_power=2.0,
+        )
+
+        # Find the price layer decision
+        price_layer = next(
+            (layer for layer in decision.layers if "GE-Spot" in layer.reason),
+            None,
+        )
+        assert price_layer is not None, "Should have price layer"
+
+        # EXPENSIVE between PEAKs should inherit PEAK behavior
+        # Weight should be 1.0 (critical priority like PEAK)
+        assert (
+            price_layer.weight == 1.0
+        ), f"EXPENSIVE in PEAK cluster should have weight 1.0, got {price_layer.weight}"
+
+        # Should mention PEAK cluster in reason
+        assert (
+            "PEAK cluster" in price_layer.reason
+        ), f"Should mention PEAK cluster in reason: {price_layer.reason}"
+
+        # Offset should be scaled PEAK offset (tolerance factor applied)
+        # In balanced mode: PEAK uses tolerance factor, so offset will be -3.0 or similar
+        # The key is it should be significantly negative, not the small EXPENSIVE reduction
+        assert (
+            price_layer.offset < -1.0
+        ), f"PEAK cluster should use aggressive negative offset, got {price_layer.offset}"
 
 
 if __name__ == "__main__":

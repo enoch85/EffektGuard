@@ -172,6 +172,7 @@ from ..const import (
     PRICE_FORECAST_MIN_DURATION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
+    PRICE_OFFSET_PEAK,
     PRICE_PRE_PEAK_OFFSET,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
@@ -1944,6 +1945,7 @@ class DecisionEngine:
         remaining_cheap_quarters = 0
         is_volatile = False
         volatile_reason = ""
+        in_peak_cluster = False  # True when EXPENSIVE is sandwiched between PEAKs
 
         # Forward-looking price analysis - horizon scales with thermal mass
         # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
@@ -2076,6 +2078,62 @@ class DecisionEngine:
                 classification == QuarterClassification.CHEAP and is_ending_soon
             )
 
+            # PEAK cluster detection: When EXPENSIVE or NORMAL quarters are sandwiched between PEAKs,
+            # treat them as PEAK to prevent offset jumps during peak pricing periods.
+            # Example: PEAK(17:00) → NORMAL(17:15) → PEAK(17:30) should all use PEAK offset.
+            # CHEAP quarters are NOT included - they should break the cluster.
+            # This prevents the heat pump from ramping up during brief dips in peak periods.
+            in_peak_cluster = False
+            if (
+                classification in [QuarterClassification.EXPENSIVE, QuarterClassification.NORMAL]
+                and is_volatile
+            ):
+                # Check if we're sandwiched between PEAK quarters
+                # Scan backwards to find if there's a PEAK within the cluster window
+                has_peak_before = False
+                for back_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
+                    check_quarter = current_quarter - back_offset
+                    if check_quarter < 0:
+                        break
+                    check_class = self.price.get_current_classification(check_quarter)
+                    if check_class == QuarterClassification.PEAK:
+                        has_peak_before = True
+                        break
+                    # Stop if we hit CHEAP - that breaks the cluster
+                    if check_class == QuarterClassification.CHEAP:
+                        break
+
+                # Scan forwards to find if there's a PEAK within the cluster window
+                has_peak_after = False
+                if has_peak_before:  # Only check forward if we found PEAK before
+                    for fwd_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
+                        check_quarter = current_quarter + fwd_offset
+                        if check_quarter >= 96:
+                            # Check tomorrow if available
+                            if price_data.has_tomorrow:
+                                tomorrow_quarter = check_quarter - 96
+                                check_class = self.price.get_tomorrow_classification(
+                                    tomorrow_quarter
+                                )
+                            else:
+                                break
+                        else:
+                            check_class = self.price.get_current_classification(check_quarter)
+
+                        if check_class is None:
+                            break
+                        if check_class == QuarterClassification.PEAK:
+                            has_peak_after = True
+                            break
+                        # Stop if we hit CHEAP - that breaks the cluster
+                        if check_class == QuarterClassification.CHEAP:
+                            break
+
+                # If sandwiched between PEAKs, inherit PEAK behavior
+                if has_peak_before and has_peak_after:
+                    in_peak_cluster = True
+                    is_volatile = False  # No longer volatile when part of PEAK cluster
+
             if is_volatile:
                 quarters_left = (
                     min(remaining_cheap_quarters, current_run_length)
@@ -2186,6 +2244,12 @@ class DecisionEngine:
             current_period.is_daytime,
         )
 
+        # PEAK cluster: EXPENSIVE quarters between PEAKs use PEAK offset
+        peak_cluster_reason = ""
+        if in_peak_cluster:
+            base_offset = PRICE_OFFSET_PEAK
+            peak_cluster_reason = " | PEAK cluster: EXPENSIVE sandwiched between PEAKs"
+
         # Pre-PEAK detection (Dec 2, 2025)
         # Start reducing 1 quarter BEFORE peak to allow pump slowdown time
         # Pump needs time to reduce output - acting at PEAK start is too late
@@ -2266,7 +2330,8 @@ class DecisionEngine:
         #
         # Dec 3, 2025: PEAK classification gets weight 1.0 (critical priority)
         # This ensures peak avoidance overrides all other layers except safety
-        if classification == QuarterClassification.PEAK:
+        # PEAK cluster: EXPENSIVE quarters between PEAKs also get PEAK treatment
+        if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority - override all other layers
         elif is_volatile:
             price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
@@ -2275,7 +2340,7 @@ class DecisionEngine:
 
         # DEBUG: Log price analysis with thermal mass horizon calculation
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s",
+            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s%s",
             current_quarter,
             now.hour,
             now.minute,
@@ -2291,12 +2356,13 @@ class DecisionEngine:
             volatile_reason,
             strategic_context,
             pre_peak_reason,
+            peak_cluster_reason,
         )
 
         return LayerDecision(
             offset=final_offset,
             weight=price_weight,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}",
+            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
         )
 
     def _comfort_layer(self, nibe_state) -> LayerDecision:
