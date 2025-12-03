@@ -568,9 +568,8 @@ PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE/PEAK during da
 # Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
 # Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
 # Pump needs time to reduce - acting at PEAK start is too late
-# Dec 3, 2025: Increased from -2.0 to -10.0 for aggressive peak avoidance
-# when cheap prices are coming. With UFH thermal mass, we can coast through PEAK.
-PRICE_PRE_PEAK_OFFSET: Final = -10.0  # °C - aggressive reduction before PEAK arrives
+# Dec 3, 2025: Set to -6.0 for gradual decrease before PEAK (-10.0 was too aggressive)
+PRICE_PRE_PEAK_OFFSET: Final = -6.0  # °C - gradual reduction before PEAK arrives
 
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
