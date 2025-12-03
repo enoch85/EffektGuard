@@ -366,11 +366,12 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         await super().async_added_to_hass()
 
         # Restore last state for specific sensors that benefit from persistence
+        # Note: compressor_health is excluded - it's a string sensor ("healthy", "watch", etc.)
+        # calculated from compressor_stats on each update, no restoration needed
         should_restore = self.entity_description.key in {
             "peak_today",
             "peak_this_month",
             "savings_estimate",
-            "compressor_health",
         }
 
         if should_restore:

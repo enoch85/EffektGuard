@@ -242,10 +242,15 @@ class WeatherAdapter:
             return None
 
         # Validate forecast length
+        # For UFH concrete slab (10h prediction horizon), 24h forecast is ideal
+        # Met.no provides 9 days, OpenWeatherMap v3.0 provides 48h
         forecast_count = len(forecast_hours)
-        if forecast_count < 12:
+        if forecast_count < 24:
             _LOGGER.warning(
-                "Weather forecast from %s: only %d hours (minimum 12h recommended for optimal pre-heating)",
+                "Weather forecast from %s: only %d hours available "
+                "(24h recommended for optimal pre-heating with concrete slab UFH). "
+                "If using OpenWeatherMap Free tier, upgrade to v3.0 (One Call API 3.0) "
+                "for 48h hourly forecast, or switch to Met.no for free 9-day forecast.",
                 self._weather_entity,
                 forecast_count,
             )
