@@ -15,10 +15,12 @@ from .const import (
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    CONF_HEAT_PUMP_MODEL,
     CONF_INSULATION_QUALITY,
     CONF_OPTIMIZATION_MODE,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
+    DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INSULATION_QUALITY,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_THERMAL_MASS,
@@ -27,6 +29,7 @@ from .const import (
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
 )
+from .models import HeatPumpModelRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -232,8 +235,19 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 ),
                 {"collapsed": False},
             ),
-            # Airflow Optimization Section (Exhaust Air Heat Pumps: F750, F730)
-            vol.Required("airflow_optimization"): section(
+        }
+
+        # Only show airflow section for exhaust air heat pumps (F750, F730)
+        model_id = self.config_entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
+        supports_airflow = False
+        try:
+            model_profile = HeatPumpModelRegistry.get_model(model_id)
+            supports_airflow = getattr(model_profile, "supports_exhaust_airflow", False)
+        except ValueError:
+            _LOGGER.debug("Unknown heat pump model: %s", model_id)
+
+        if supports_airflow:
+            schema_dict[vol.Required("airflow_optimization")] = section(
                 vol.Schema(
                     {
                         vol.Optional(
@@ -273,7 +287,6 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                     }
                 ),
                 {"collapsed": True},
-            ),
-        }
+            )
 
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema_dict))
