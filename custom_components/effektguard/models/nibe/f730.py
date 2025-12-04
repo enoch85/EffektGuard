@@ -42,6 +42,12 @@ class NibeF730Profile(HeatPumpProfile):
     min_runtime_minutes: int = 30
     min_rest_minutes: int = 10
 
+    # Exhaust air heat pump features
+    # F730 is an EAHP - supports airflow optimization for heat extraction
+    supports_exhaust_airflow: bool = True
+    standard_airflow_m3h: float = 120.0  # Normal ventilation rate (smaller unit)
+    enhanced_airflow_m3h: float = 200.0  # Maximum ventilation rate
+
     def __post_init__(self):
         """Initialize COP curve."""
         # Same curve as F750 (same technology, different size)

@@ -69,6 +69,12 @@ class NibeF750Profile(HeatPumpProfile):
     min_runtime_minutes: int = 30  # NIBE recommendation
     min_rest_minutes: int = 10  # Minimum off time between cycles
 
+    # Exhaust air heat pump features
+    # F750 is an EAHP - supports airflow optimization for heat extraction
+    supports_exhaust_airflow: bool = True
+    standard_airflow_m3h: float = 150.0  # Normal ventilation rate
+    enhanced_airflow_m3h: float = 252.0  # Maximum ventilation rate
+
     def __post_init__(self):
         """Initialize COP curve after dataclass creation."""
         # Real-world F750 COP curve (tested and validated)

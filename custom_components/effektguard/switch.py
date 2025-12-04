@@ -15,14 +15,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_ENABLE_WEATHER_PREDICTION,
+    CONF_HEAT_PUMP_MODEL,
+    DEFAULT_HEAT_PUMP_MODEL,
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
+from .models import HeatPumpModelRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +74,13 @@ SWITCHES: tuple[EffektGuardSwitchEntityDescription, ...] = (
         icon="mdi:water-boiler",
         config_key=CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     ),
+    EffektGuardSwitchEntityDescription(
+        key="airflow_optimization",
+        name="Airflow Optimization",
+        translation_key="airflow_optimization",
+        icon="mdi:fan",
+        config_key=CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    ),
 )
 
 
@@ -81,7 +92,26 @@ async def async_setup_entry(
     """Set up EffektGuard switch entities from a config entry."""
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [EffektGuardSwitch(coordinator, entry, description) for description in SWITCHES]
+    # Check if heat pump supports exhaust airflow optimization
+    model_id = entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
+    supports_airflow = False
+    try:
+        model_profile = HeatPumpModelRegistry.get_model(model_id)
+        supports_airflow = getattr(model_profile, "supports_exhaust_airflow", False)
+    except ValueError:
+        _LOGGER.warning("Unknown heat pump model: %s, airflow optimization disabled", model_id)
+
+    # Filter switches based on heat pump capabilities
+    entities = []
+    for description in SWITCHES:
+        # Only show airflow optimization switch for exhaust air heat pumps
+        if description.key == "airflow_optimization" and not supports_airflow:
+            _LOGGER.debug(
+                "Hiding airflow optimization switch - model %s does not support exhaust airflow",
+                model_id,
+            )
+            continue
+        entities.append(EffektGuardSwitch(coordinator, entry, description))
 
     async_add_entities(entities)
 
@@ -124,6 +154,7 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
             CONF_ENABLE_PEAK_PROTECTION: True,
             CONF_ENABLE_WEATHER_PREDICTION: True,
             CONF_ENABLE_HOT_WATER_OPTIMIZATION: False,  # Experimental, off by default
+            CONF_ENABLE_AIRFLOW_OPTIMIZATION: False,  # Experimental, off by default
         }
 
         return self._entry.data.get(config_key, defaults.get(config_key, False))

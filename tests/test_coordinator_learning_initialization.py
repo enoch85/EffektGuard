@@ -53,6 +53,7 @@ def create_mock_entry():
         Mock entry with options that return actual values, not Mocks
     """
     mock_entry = Mock()
+    mock_entry.data = Mock()
     # Configure options.get() to return actual values with defaults
     mock_entry.options.get.side_effect = lambda key, default=None: {
         "dhw_morning_enabled": True,
@@ -60,7 +61,10 @@ def create_mock_entry():
         "dhw_evening_enabled": True,
         "dhw_evening_hour": 18,
         "enable_dhw_optimization": False,
+        "enable_airflow_optimization": False,
     }.get(key, default)
+    # Configure data.get() to return defaults for values not in options
+    mock_entry.data.get.side_effect = lambda key, default=None: default
     return mock_entry
 
 

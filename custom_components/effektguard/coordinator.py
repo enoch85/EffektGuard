@@ -167,6 +167,51 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Savings calculator
         self.savings_calculator = SavingsCalculator()
 
+        # Airflow optimizer for exhaust air heat pumps (F750/F730)
+        # Only active for exhaust air models - improves COP by enhanced ventilation
+        from .optimization.airflow_optimizer import AirflowOptimizer
+        from .const import (
+            AIRFLOW_DEFAULT_ENHANCED,
+            AIRFLOW_DEFAULT_STANDARD,
+            CONF_AIRFLOW_ENHANCED_RATE,
+            CONF_AIRFLOW_STANDARD_RATE,
+            CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+        )
+
+        airflow_enabled = entry.options.get(
+            CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+            entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False),
+        )
+
+        if airflow_enabled:
+            flow_standard = float(
+                entry.options.get(
+                    CONF_AIRFLOW_STANDARD_RATE,
+                    entry.data.get(CONF_AIRFLOW_STANDARD_RATE, AIRFLOW_DEFAULT_STANDARD),
+                )
+            )
+            flow_enhanced = float(
+                entry.options.get(
+                    CONF_AIRFLOW_ENHANCED_RATE,
+                    entry.data.get(CONF_AIRFLOW_ENHANCED_RATE, AIRFLOW_DEFAULT_ENHANCED),
+                )
+            )
+            self.airflow_optimizer = AirflowOptimizer(
+                flow_standard=flow_standard,
+                flow_enhanced=flow_enhanced,
+            )
+            _LOGGER.info(
+                "Airflow optimizer enabled: standard %.0f m³/h, enhanced %.0f m³/h",
+                flow_standard,
+                flow_enhanced,
+            )
+        else:
+            self.airflow_optimizer = None
+            _LOGGER.debug("Airflow optimizer disabled")
+
+        # Track airflow enhancement state for minimum duration enforcement
+        self._airflow_enhance_start: datetime | None = None
+
         if demand_periods:
             try:
                 # Format DHW periods for logging (handle both real values and test mocks)
@@ -1050,6 +1095,31 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         temperature_trend_data = self.thermal_predictor.get_current_trend()
         outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
 
+        # Evaluate and control airflow for exhaust air heat pumps (F750/F730)
+        airflow_decision = None
+        if self.airflow_optimizer and nibe_data:
+            try:
+                # Get target temperature from config
+                target_temp = float(
+                    self.entry.options.get(
+                        "target_indoor_temp",
+                        self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+                    )
+                )
+
+                airflow_decision = self.airflow_optimizer.evaluate_from_nibe(
+                    nibe_data=nibe_data,
+                    target_temp=target_temp,
+                    thermal_trend=temperature_trend_data,
+                )
+
+                # Automatic ventilation control based on decision
+                await self._apply_airflow_decision(airflow_decision)
+
+            except (AttributeError, ValueError, TypeError) as err:
+                _LOGGER.warning("Airflow evaluation failed: %s", err)
+                # Continue without airflow optimization
+
         # Start aligned scheduling on first update (replaces base class scheduling)
         if not self._clock_aligned:
             self._schedule_aligned_refresh()
@@ -1077,6 +1147,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_recommendation": dhw_recommendation,
             "dhw_planning_summary": dhw_planning_summary,  # Human-readable summary
             "dhw_planning": dhw_planning_details,  # Detailed machine-readable data
+            "airflow_decision": airflow_decision,  # Airflow enhancement decision (F750/F730)
         }
 
     async def _calculate_dhw_recommendation(
@@ -1506,6 +1577,85 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         hours = (now - last_time).total_seconds() / 3600
 
         return max(0.0, hours)  # Never negative
+
+    async def _apply_airflow_decision(self, decision) -> None:
+        """Apply automatic ventilation control based on airflow optimizer decision.
+
+        Controls NIBE enhanced ventilation switch for exhaust air heat pumps (F750/F730).
+        When enhanced airflow is beneficial, turns on increased ventilation to extract
+        more heat from exhaust air. When not beneficial, returns to normal.
+
+        Based on thermodynamic calculations:
+        - Enhanced airflow extracts more heat from exhaust air
+        - COP improves ~20% with warmer evaporator
+        - Trade-off is ventilation penalty (more cold air to heat)
+
+        Automatic stop conditions:
+        - Indoor temp reaches target
+        - Indoor trend turns positive (> +0.1°C/h)
+        - Compressor drops below threshold
+        - Maximum duration reached
+        - Outdoor temp drops below -15°C (penalty exceeds gains)
+
+        Args:
+            decision: FlowDecision from airflow optimizer
+        """
+        from .const import NIBE_VENTILATION_MIN_ENHANCED_DURATION
+
+        # Check if enhanced ventilation is currently active
+        is_enhanced = await self.nibe.is_enhanced_ventilation_active()
+
+        if is_enhanced is None:
+            _LOGGER.debug("Ventilation control unavailable - no ventilation switch found")
+            return
+
+        # Determine target state based on decision
+        if decision.should_enhance:
+            # Only turn on if not already enhanced
+            if not is_enhanced:
+                success = await self.nibe.set_enhanced_ventilation(True)
+                if success:
+                    # Track when we started enhanced mode
+                    self._airflow_enhance_start = dt_util.utcnow()
+                    _LOGGER.info(
+                        "🌀 Ventilation ENHANCED: ON for %d min (+%.2f kW gain) - %s",
+                        decision.duration_minutes,
+                        decision.expected_gain_kw,
+                        decision.reason,
+                    )
+            else:
+                _LOGGER.debug(
+                    "Ventilation already enhanced - %s",
+                    decision.reason,
+                )
+        else:
+            # Only reduce if currently enhanced and minimum duration passed
+            if is_enhanced:
+                # Check minimum enhanced duration to prevent rapid cycling
+                if hasattr(self, "_airflow_enhance_start") and self._airflow_enhance_start:
+                    elapsed_minutes = (
+                        dt_util.utcnow() - self._airflow_enhance_start
+                    ).total_seconds() / 60
+
+                    if elapsed_minutes < NIBE_VENTILATION_MIN_ENHANCED_DURATION:
+                        _LOGGER.debug(
+                            "Ventilation: keeping enhanced for %d more min (min duration)",
+                            int(NIBE_VENTILATION_MIN_ENHANCED_DURATION - elapsed_minutes),
+                        )
+                        return
+
+                success = await self.nibe.set_enhanced_ventilation(False)
+                if success:
+                    self._airflow_enhance_start = None
+                    _LOGGER.info(
+                        "🌀 Ventilation NORMAL: OFF - %s",
+                        decision.reason,
+                    )
+            else:
+                _LOGGER.debug(
+                    "Ventilation at normal - %s",
+                    decision.reason,
+                )
 
     async def _apply_dhw_control(
         self, decision, current_dhw_temp: float, now_time: datetime
