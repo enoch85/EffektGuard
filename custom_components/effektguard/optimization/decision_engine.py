@@ -67,6 +67,8 @@ from ..const import (
     LAYER_WEIGHT_PREDICTION,
     LAYER_WEIGHT_SAFETY,
     MIN_TEMP_LIMIT,
+    OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD,
+    OVERSHOOT_PROTECTION_FORECAST_HORIZON,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
@@ -753,7 +755,7 @@ class DecisionEngine:
             ),  # Mathematical WC with Swedish adaptations
             self._weather_layer(nibe_state, weather_data),  # Simple pre-heating logic
             self._price_layer(nibe_state, price_data),
-            self._comfort_layer(nibe_state),
+            self._comfort_layer(nibe_state, weather_data, price_data),
         ]
 
         # Aggregate layers with priority weighting
@@ -2365,7 +2367,7 @@ class DecisionEngine:
             reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
         )
 
-    def _comfort_layer(self, nibe_state) -> LayerDecision:
+    def _comfort_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
         """Comfort layer: Reactive adjustment to maintain comfort.
 
         Provides gentle steering toward target even within tolerance zone.
@@ -2376,8 +2378,26 @@ class DecisionEngine:
         - Balanced mode: Standard dead zone (0.2°C), normal weights
         - Savings mode: Wider dead zone (0.3°C), weaker weight multiplier (0.7x)
 
+        Thermal-aware overshoot protection (Dec 4, 2025):
+        - Calculates REAL thermal buffer duration based on:
+          1. Current indoor temp trend (observed cooling rate)
+          2. Weather forecast (upcoming cold = higher heat loss)
+          3. Building thermal characteristics (insulation, thermal mass)
+        - Compares buffer hours to upcoming expensive period duration
+        - If buffer is INSUFFICIENT, reduces weight to allow price layer pre-heating
+        - If buffer is SUFFICIENT, allows gentle coasting with surplus-adjusted weight
+
+        Example calculation:
+        - Overshoot: 0.8°C above target
+        - Heat loss rate: 0.4°C/hour (from trend + forecast cold snap)
+        - Buffer duration: 0.8 / 0.4 = 2.0 hours
+        - Expensive period: starts in 1h, lasts 8h → need 9h buffer
+        - DEFICIT: 7 hours! → Must pre-heat now, not coast!
+
         Args:
             nibe_state: Current NIBE state
+            weather_data: Weather forecast (for cold snap → higher heat loss)
+            price_data: GE-Spot price data (for expensive period timing)
 
         Returns:
             LayerDecision with comfort correction
@@ -2431,7 +2451,139 @@ class DecisionEngine:
             overshoot = temp_deviation  # How far above target (positive value)
 
             if overshoot >= OVERSHOOT_PROTECTION_START:
-                # Strong overshoot protection with graduated response
+                # ========================================
+                # THERMAL-AWARE OVERSHOOT PROTECTION (Dec 4, 2025)
+                # ========================================
+                # Problem: Small overshoot (0.8°C) triggers aggressive coasting (-7.7°C offset)
+                # which fights the price layer's smart pre-heating for upcoming expensive period.
+                #
+                # Solution: Calculate REAL thermal buffer duration:
+                # 1. Current heat loss rate (from thermal trend + weather forecast)
+                # 2. How many hours will our buffer last?
+                # 3. When does expensive period start/end?
+                # 4. Is buffer sufficient to coast through expensive hours?
+                #
+                # If buffer is INSUFFICIENT, we need to pre-heat NOW during cheap hours!
+
+                # Get current thermal trend (observed indoor temp change rate)
+                thermal_trend = self._get_thermal_trend()
+                indoor_rate = thermal_trend.get("rate_per_hour", 0.0)  # Negative = cooling
+
+                # Get thermal model parameters
+                thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
+                insulation = self.thermal.insulation_quality if self.thermal else 1.0
+
+                # Calculate heat loss rate based on physics
+                # heat_loss_rate = (indoor - outdoor) / (insulation × 10)
+                outdoor_temp = nibe_state.outdoor_temp
+                indoor_temp = nibe_state.indoor_temp
+                temp_diff = indoor_temp - outdoor_temp
+                base_heat_loss = temp_diff / (insulation * 10)  # °C per hour at current outdoor
+
+                # Check weather forecast for upcoming cold
+                forecast_heat_loss = base_heat_loss
+                forecast_min_outdoor = outdoor_temp
+                if weather_data and weather_data.forecast_hours:
+                    # Use thermal model's prediction horizon
+                    horizon = int(self.thermal.get_prediction_horizon()) if self.thermal else 12
+                    forecast_temps = [h.temperature for h in weather_data.forecast_hours[:horizon]]
+                    if forecast_temps:
+                        forecast_min_outdoor = min(forecast_temps)
+                        # Heat loss will be WORSE when colder outside
+                        future_temp_diff = indoor_temp - forecast_min_outdoor
+                        forecast_heat_loss = future_temp_diff / (insulation * 10)
+
+                # Use the WORSE of current trend or forecast-based loss
+                # If indoor is already cooling at -0.5°C/h, use that
+                # If forecast predicts higher loss due to cold snap, use that
+                effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)
+
+                # Safety: if we can't determine loss rate, assume moderate loss
+                if effective_heat_loss <= 0.01:
+                    effective_heat_loss = 0.3  # Default: 0.3°C/hour loss
+
+                # Calculate buffer duration: how long until we hit target temp?
+                buffer_hours = overshoot / effective_heat_loss
+
+                # Now check prices: when does expensive period start and how long?
+                expensive_start_hours = None
+                expensive_duration_hours = 0
+                price_increase_pct = 0.0
+
+                if price_data and price_data.today:
+                    now = dt_util.now()
+                    current_quarter = (now.hour * 4) + (now.minute // 15)
+
+                    if current_quarter < len(price_data.today):
+                        current_price = price_data.today[current_quarter].price
+
+                        # Scan forward to find expensive periods
+                        forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
+                        forecast_quarters = int(forecast_hours * 4)
+                        lookahead_end = min(current_quarter + 1 + forecast_quarters, 96)
+
+                        upcoming = list(price_data.today[current_quarter + 1 : lookahead_end])
+                        if price_data.has_tomorrow and lookahead_end >= 96:
+                            remaining = forecast_quarters - (96 - current_quarter - 1)
+                            upcoming.extend(price_data.tomorrow[:remaining])
+
+                        # Find first expensive quarter and count duration
+                        if upcoming and current_price > 0:
+                            for i, period in enumerate(upcoming):
+                                ratio = period.price / current_price
+                                if ratio >= PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                                    if expensive_start_hours is None:
+                                        expensive_start_hours = (i + 1) * 0.25  # hours from now
+                                        price_increase_pct = (ratio - 1.0) * 100
+                                    expensive_duration_hours += 0.25
+                                elif expensive_start_hours is not None:
+                                    # Expensive period ended
+                                    break
+
+                # Decision logic based on thermal buffer vs expensive period
+                if expensive_start_hours is not None:
+                    # Calculate: will buffer last through the expensive period?
+                    hours_needed = expensive_start_hours + expensive_duration_hours
+                    buffer_sufficient = buffer_hours >= hours_needed
+                    buffer_deficit = hours_needed - buffer_hours
+
+                    if not buffer_sufficient:
+                        # CRITICAL: Buffer is NOT enough! We need to pre-heat NOW!
+                        # Apply minimal weight so price layer can do its job
+                        correction = -temp_deviation * COMFORT_CORRECTION_MILD
+
+                        return LayerDecision(
+                            offset=correction,
+                            weight=LAYER_WEIGHT_COMFORT_MIN,
+                            reason=(
+                                f"Buffer {overshoot:.1f}°C = {buffer_hours:.1f}h @ {effective_heat_loss:.2f}°C/h loss | "
+                                f"Need {hours_needed:.1f}h for {price_increase_pct:.0f}% spike in {expensive_start_hours:.1f}h | "
+                                f"DEFICIT {buffer_deficit:.1f}h - pre-heat required!"
+                            ),
+                        )
+                    else:
+                        # Buffer IS sufficient - but still be gentle, don't fight price layer
+                        # Weighted by how much buffer surplus we have
+                        surplus_ratio = buffer_hours / hours_needed  # >1.0 = surplus
+                        # More surplus = higher weight (can afford to coast)
+                        # 1.0x surplus = 0.3 weight, 2.0x surplus = 0.6 weight
+                        adjusted_weight = min(
+                            LAYER_WEIGHT_COMFORT_MIN * surplus_ratio, LAYER_WEIGHT_COMFORT_HIGH
+                        )
+
+                        coast_offset = -temp_deviation * COMFORT_CORRECTION_MILD * 2  # Gentle coast
+
+                        return LayerDecision(
+                            offset=coast_offset,
+                            weight=adjusted_weight,
+                            reason=(
+                                f"Buffer {overshoot:.1f}°C = {buffer_hours:.1f}h @ {effective_heat_loss:.2f}°C/h | "
+                                f"Spike in {expensive_start_hours:.1f}h for {expensive_duration_hours:.1f}h | "
+                                f"OK: {surplus_ratio:.1f}x surplus - gentle coast"
+                            ),
+                        )
+
+                # Standard overshoot protection - no cold snap or sufficient buffer
                 overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
                 fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
 

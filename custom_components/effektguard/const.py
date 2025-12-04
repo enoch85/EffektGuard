@@ -521,6 +521,7 @@ OVERSHOOT_PROTECTION_WEIGHT_MAX: Final = 1.0  # Weight at full threshold (full o
 OVERSHOOT_PROTECTION_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
 OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop that qualifies as cold snap
 
+# Price-aware overshoot protection (Dec 4, 2025)
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
 RAPID_COOLING_THRESHOLD: Final = -0.3  # °C/hour for rapid cooling detection

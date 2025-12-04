@@ -13,12 +13,7 @@ from custom_components.effektguard.const import (
     BASELINE_EMA_WEIGHT_NEW,
     BASELINE_EMA_WEIGHT_OLD,
     BASELINE_PEAK_MULTIPLIER,
-    CHEAP_PERIOD_BONUS_MULTIPLIER,
     DAYS_PER_MONTH,
-    DEFAULT_HEAT_PUMP_POWER_KW,
-    EMERGENCY_HEATING_COST_FACTOR,
-    HEATING_FACTOR_PER_DEGREE,
-    MULTIPLIER_BOOST_30_PERCENT,
     ORE_TO_SEK_CONVERSION,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
@@ -175,152 +170,128 @@ class TestMonthlySavingsEstimation:
 
 
 class TestCycleSavingsEstimation:
-    """Test per-cycle savings estimation."""
+    """Test per-cycle savings estimation using actual power data."""
 
-    def test_cycle_savings_basic_calculation(self):
-        """Test basic cycle savings calculation."""
+    def test_cycle_savings_same_price_no_savings(self):
+        """Test that same price as average yields no savings."""
         calc = SavingsCalculator()
 
-        # No offset (neutral), price same as average
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=0.0,
-            price_classification="normal",
-            average_price_today=100.0,  # öre/kWh
+        # 4 kW power, current price = average price
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
             current_price=100.0,  # öre/kWh
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            average_price_today=100.0,  # öre/kWh
+            cycle_minutes=5.0,
         )
 
         # Same price = no savings
         assert savings == pytest.approx(0.0, abs=0.01)
 
-    def test_cycle_savings_heating_during_cheap(self):
-        """Test savings when heating during cheap period."""
+    def test_cycle_savings_during_cheap_period(self):
+        """Test savings when using power during cheap period."""
         calc = SavingsCalculator()
 
-        # Heating during cheap period (50 öre vs 100 öre average)
-        # Energy: 4 kW × 1 h = 4 kWh
-        # Cost at cheap: 4 × 50 / 100 = 2 SEK
-        # Cost at average: 4 × 100 / 100 = 4 SEK
-        # Base savings: 4 - 2 = 2 SEK
-        # With cheap bonus (1.2x): 2 × 1.2 = 2.4 SEK
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=0.0,  # No offset change
-            price_classification="cheap",
-            average_price_today=100.0,
+        # 4 kW power for 5 minutes during cheap period (50 öre vs 100 öre average)
+        # Energy: 4 kW × (5/60) h = 0.333 kWh
+        # Cost at cheap: 0.333 × 50 / 100 = 0.167 SEK
+        # Cost at average: 0.333 × 100 / 100 = 0.333 SEK
+        # Savings: 0.333 - 0.167 = 0.167 SEK
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
             current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
         )
 
-        base_savings = 2.0  # 4 - 2
-        expected_savings = base_savings  # No offset, so no bonus
-        assert savings == pytest.approx(expected_savings, rel=1e-2)
-
-    def test_cycle_savings_preheating_during_cheap_gets_bonus(self):
-        """Test that preheating during cheap period gets bonus."""
-        calc = SavingsCalculator()
-
-        # Positive offset during cheap = strategic preheating
-        # Heating factor: 1.0 + (2.0 × 0.1) = 1.2
-        # Energy: 4 × 1 × 1.2 = 4.8 kWh
-        # Cost at cheap: 4.8 × 50 / 100 = 2.4 SEK
-        # Cost at average: 4.8 × 100 / 100 = 4.8 SEK
-        # Base savings: 4.8 - 2.4 = 2.4 SEK
-        # With bonus: 2.4 × 1.2 = 2.88 SEK
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=2.0,  # Increased heating
-            price_classification="cheap",
-            average_price_today=100.0,
-            current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
-        )
-
-        heating_factor = 1.0 + (2.0 * HEATING_FACTOR_PER_DEGREE)
-        energy_kwh = 4.0 * 1.0 * heating_factor
+        energy_kwh = 4.0 * (5.0 / 60.0)
         cost_cheap = (energy_kwh * 50.0) / ORE_TO_SEK_CONVERSION
         cost_average = (energy_kwh * 100.0) / ORE_TO_SEK_CONVERSION
-        base_savings = cost_average - cost_cheap
-        expected_savings = base_savings * CHEAP_PERIOD_BONUS_MULTIPLIER
+        expected_savings = cost_average - cost_cheap
 
         assert savings == pytest.approx(expected_savings, rel=1e-2)
 
-    def test_cycle_savings_reducing_during_expensive_gets_bonus(self):
-        """Test that reducing heating during expensive period gets bonus."""
+    def test_cycle_savings_during_expensive_period(self):
+        """Test negative savings when using power during expensive period."""
         calc = SavingsCalculator()
 
-        # Negative offset during expensive = avoiding expensive heating
-        # Heating factor: 1.0 + (-2.0 × 0.1) = 0.8
-        # Energy: 4 × 1 × 0.8 = 3.2 kWh
-        # Cost at expensive: 3.2 × 150 / 100 = 4.8 SEK
-        # Cost at average: 3.2 × 100 / 100 = 3.2 SEK
-        # Base savings: 3.2 - 4.8 = -1.6 SEK (negative = cost more)
-        # But we reduced heating, so get avoidance bonus: -1.6 × 1.3 = -2.08 SEK
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=-2.0,  # Reduced heating
-            price_classification="expensive",
-            average_price_today=100.0,
+        # 4 kW power for 5 minutes during expensive period (150 öre vs 100 öre)
+        # Energy: 4 kW × (5/60) h = 0.333 kWh
+        # Cost at expensive: 0.333 × 150 / 100 = 0.5 SEK
+        # Cost at average: 0.333 × 100 / 100 = 0.333 SEK
+        # Savings: 0.333 - 0.5 = -0.167 SEK (negative = cost more)
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
             current_price=150.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
         )
 
-        heating_factor = 1.0 + (-2.0 * HEATING_FACTOR_PER_DEGREE)
-        energy_kwh = 4.0 * 1.0 * heating_factor
+        energy_kwh = 4.0 * (5.0 / 60.0)
         cost_expensive = (energy_kwh * 150.0) / ORE_TO_SEK_CONVERSION
         cost_average = (energy_kwh * 100.0) / ORE_TO_SEK_CONVERSION
-        base_savings = cost_average - cost_expensive
-        expected_savings = base_savings * MULTIPLIER_BOOST_30_PERCENT
+        expected_savings = cost_average - cost_expensive
 
         assert savings == pytest.approx(expected_savings, rel=1e-2)
+        assert savings < 0  # Negative savings = cost more than average
 
-    def test_cycle_savings_emergency_heating_during_expensive(self):
-        """Test that emergency heating during expensive gets cost factor."""
+    def test_cycle_savings_very_cheap_period(self):
+        """Test larger savings during very cheap period."""
         calc = SavingsCalculator()
 
-        # Positive offset during expensive = thermal debt emergency
-        # Heating factor: 1.0 + (3.0 × 0.1) = 1.3
-        # Emergency cost factor applied (0.7)
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=3.0,  # Increased heating (emergency)
-            price_classification="expensive",
+        # Very cheap: 20 öre vs 100 öre average
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
+            current_price=20.0,
             average_price_today=100.0,
-            current_price=150.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            cycle_minutes=5.0,
         )
 
-        heating_factor = 1.0 + (3.0 * HEATING_FACTOR_PER_DEGREE)
-        energy_kwh = 4.0 * 1.0 * heating_factor
-        cost_expensive = (energy_kwh * 150.0) / ORE_TO_SEK_CONVERSION
+        energy_kwh = 4.0 * (5.0 / 60.0)
+        cost_cheap = (energy_kwh * 20.0) / ORE_TO_SEK_CONVERSION
         cost_average = (energy_kwh * 100.0) / ORE_TO_SEK_CONVERSION
-        base_savings = cost_average - cost_expensive
-        expected_savings = base_savings * EMERGENCY_HEATING_COST_FACTOR
+        expected_savings = cost_average - cost_cheap
 
         assert savings == pytest.approx(expected_savings, rel=1e-2)
+        assert savings > 0.2  # Significant savings when price is 80% below average
+
+    def test_cycle_savings_longer_cycle(self):
+        """Test savings scale with cycle duration."""
+        calc = SavingsCalculator()
+
+        savings_5min = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
+            current_price=50.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
+        )
+
+        savings_10min = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
+            current_price=50.0,
+            average_price_today=100.0,
+            cycle_minutes=10.0,
+        )
+
+        # 10 minutes should save 2x more than 5 minutes
+        assert savings_10min == pytest.approx(savings_5min * 2.0, rel=1e-2)
 
     def test_cycle_savings_with_different_power(self):
-        """Test cycle savings with different heat pump power."""
+        """Test cycle savings scale with power consumption."""
         calc = SavingsCalculator()
 
         # Higher power consumption = more savings potential
-        savings_4kw = calc.estimate_spot_savings_per_cycle(
-            offset_applied=0.0,
-            price_classification="normal",
-            average_price_today=100.0,
+        savings_4kw = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
             current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
         )
 
-        savings_6kw = calc.estimate_spot_savings_per_cycle(
-            offset_applied=0.0,
-            price_classification="normal",
-            average_price_today=100.0,
+        savings_6kw = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=6.0,
             current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=6.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
         )
 
         # 6 kW should save 1.5x more than 4 kW
@@ -425,40 +396,19 @@ class TestConstantsUsage:
         expected_savings = peak_reduction * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH
         assert estimate.effect_savings == pytest.approx(expected_savings, rel=1e-2)
 
-    def test_heating_factor_from_const(self):
-        """Test heating factor uses constant."""
+    def test_ore_to_sek_conversion_in_cycle_savings(self):
+        """Test öre to SEK conversion uses constant."""
         calc = SavingsCalculator()
-        # Apply 1°C offset, should change heating by HEATING_FACTOR_PER_DEGREE
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=1.0,
-            price_classification="normal",
-            average_price_today=100.0,
-            current_price=100.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
-        )
-        # With 1°C offset, factor = 1.0 + 1.0 × HEATING_FACTOR_PER_DEGREE
-        # Energy = 4 × 1 × factor
-        expected_factor = 1.0 + HEATING_FACTOR_PER_DEGREE
-        expected_energy = 4.0 * expected_factor
-        # At same price, savings should be ~0 (tiny rounding difference)
-        assert savings == pytest.approx(0.0, abs=0.01)
-
-    def test_default_heat_pump_power_from_const(self):
-        """Test default heat pump power uses constant."""
-        calc = SavingsCalculator()
-        # Call without specifying power, should use DEFAULT_HEAT_PUMP_POWER_KW
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=0.0,
-            price_classification="normal",
-            average_price_today=100.0,
+        # 4 kW for 60 minutes = 4 kWh, price diff of 50 öre
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=4.0,
             current_price=50.0,
-            heating_hours=1.0,
-            # heat_pump_power_kw not specified, should use default
+            average_price_today=100.0,
+            cycle_minutes=60.0,
         )
-        # Energy = DEFAULT_HEAT_PUMP_POWER_KW × 1 h
-        expected_energy = DEFAULT_HEAT_PUMP_POWER_KW
-        expected_savings = (expected_energy * (100.0 - 50.0)) / ORE_TO_SEK_CONVERSION
+        # Energy = 4 kWh, price diff = 50 öre
+        # Savings = 4 * 50 / 100 = 2 SEK
+        expected_savings = (4.0 * 50.0) / ORE_TO_SEK_CONVERSION
         assert savings == pytest.approx(expected_savings, rel=1e-2)
 
 
@@ -480,58 +430,41 @@ class TestEdgeCases:
         # 15 kW reduction × 50 SEK = 750 SEK
         assert estimate.effect_savings == 750.0
 
-    def test_negative_offset_reduces_heating(self):
-        """Test that negative offset reduces heating factor below 1.0."""
+    def test_zero_power_no_savings(self):
+        """Test that zero power consumption yields no savings."""
         calc = SavingsCalculator()
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=-5.0,  # Large negative offset
-            price_classification="normal",
-            average_price_today=100.0,
-            current_price=100.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
-        )
-        # Heating factor: 1.0 + (-5.0 × 0.1) = 0.5
-        # Less heating, but same price, so ~0 savings
-        assert savings == pytest.approx(0.0, abs=0.01)
-
-    def test_zero_heating_hours(self):
-        """Test handling of zero heating hours."""
-        calc = SavingsCalculator()
-        savings = calc.estimate_spot_savings_per_cycle(
-            offset_applied=2.0,
-            price_classification="cheap",
-            average_price_today=100.0,
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=0.0,
             current_price=50.0,
-            heating_hours=0.0,
-            heat_pump_power_kw=4.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
         )
-        # No heating = no savings
+        # No power = no savings
         assert savings == 0.0
 
-    def test_peak_classification_case_insensitive(self):
-        """Test that price classification is case-insensitive."""
+    def test_negative_power_treated_as_zero(self):
+        """Test that negative power is treated as zero (no consumption)."""
         calc = SavingsCalculator()
-
-        savings_lower = calc.estimate_spot_savings_per_cycle(
-            offset_applied=1.0,
-            price_classification="cheap",
-            average_price_today=100.0,
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=-2.0,
             current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
-        )
-
-        savings_upper = calc.estimate_spot_savings_per_cycle(
-            offset_applied=1.0,
-            price_classification="CHEAP",
             average_price_today=100.0,
-            current_price=50.0,
-            heating_hours=1.0,
-            heat_pump_power_kw=4.0,
+            cycle_minutes=5.0,
         )
+        # Negative power = no savings (edge case protection)
+        assert savings == 0.0
 
-        assert savings_lower == savings_upper
+    def test_none_power_treated_as_zero(self):
+        """Test that None power is treated as zero."""
+        calc = SavingsCalculator()
+        savings = calc.calculate_spot_savings_per_cycle(
+            actual_power_kw=None,
+            current_price=50.0,
+            average_price_today=100.0,
+            cycle_minutes=5.0,
+        )
+        # None power = no savings
+        assert savings == 0.0
 
 
 class TestIntegration:

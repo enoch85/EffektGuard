@@ -15,16 +15,21 @@ from custom_components.effektguard.optimization.thermal_predictor import Thermal
 
 @pytest.fixture
 def thermal_predictor():
-    """Create thermal predictor with sample history."""
+    """Create thermal predictor with sample history.
+    
+    Adds samples in chronological order (oldest first, newest last)
+    to match real-world data collection behavior.
+    """
     predictor = ThermalStatePredictor(lookback_hours=24)
 
     # Add 2+ hours of history for trend calculation
+    # Samples added in chronological order: oldest (i=9) to newest (i=0)
     base_time = datetime.now()
-    for i in range(10):
+    for i in range(9, -1, -1):  # 9, 8, 7, ..., 1, 0
         predictor.record_state(
             timestamp=base_time - timedelta(minutes=15 * i),
             indoor_temp=22.0,
-            outdoor_temp=0.0 - (i * 0.1),  # Slowly cooling outdoor
+            outdoor_temp=0.0 - ((9 - i) * 0.1),  # Slowly cooling: -0.9 to 0.0
             heating_offset=0.0,
             flow_temp=35.0,
             degree_minutes=-100.0,
@@ -98,68 +103,76 @@ def create_forecast(temp_list):
 class TestOutdoorTrendTracking:
     """Test outdoor temperature trend tracking."""
 
-    def test_outdoor_trend_detects_rapid_cooling(self, thermal_predictor):
+    def test_outdoor_trend_detects_rapid_cooling(self):
         """Test outdoor trend detects rapid cooling (-0.6°C/h)."""
-        # Add history with rapid outdoor cooling
+        predictor = ThermalStatePredictor(lookback_hours=24)
+
+        # Add history with rapid outdoor cooling (chronological order)
         base_time = datetime.now()
-        for i in range(8):
-            thermal_predictor.record_state(
-                timestamp=base_time - timedelta(minutes=15 * (7 - i)),
+        for i in range(7, -1, -1):  # 7, 6, 5, ..., 1, 0 (oldest to newest)
+            predictor.record_state(
+                timestamp=base_time - timedelta(minutes=15 * i),
                 indoor_temp=22.0,
-                outdoor_temp=5.0 - (i * 0.15),  # Cooling 0.6°C/h
+                outdoor_temp=5.0 - ((7 - i) * 0.15),  # Cooling 0.6°C/h
                 heating_offset=0.0,
                 flow_temp=35.0,
                 degree_minutes=-100.0,
             )
 
-        trend = thermal_predictor.get_outdoor_trend()
+        trend = predictor.get_outdoor_trend()
 
         assert trend["trend"] == "cooling_rapidly"
         assert trend["rate_per_hour"] < -0.5
         assert trend["confidence"] > 0.0
 
-    def test_outdoor_trend_detects_rapid_warming(self, thermal_predictor):
+    def test_outdoor_trend_detects_rapid_warming(self):
         """Test outdoor trend detects rapid warming (0.6°C/h)."""
+        predictor = ThermalStatePredictor(lookback_hours=24)
+
         base_time = datetime.now()
-        for i in range(8):
-            thermal_predictor.record_state(
-                timestamp=base_time - timedelta(minutes=15 * (7 - i)),
+        for i in range(7, -1, -1):  # Oldest to newest
+            predictor.record_state(
+                timestamp=base_time - timedelta(minutes=15 * i),
                 indoor_temp=22.0,
-                outdoor_temp=0.0 + (i * 0.15),  # Warming 0.6°C/h
+                outdoor_temp=0.0 + ((7 - i) * 0.15),  # Warming 0.6°C/h
                 heating_offset=0.0,
                 flow_temp=35.0,
                 degree_minutes=-100.0,
             )
 
-        trend = thermal_predictor.get_outdoor_trend()
+        trend = predictor.get_outdoor_trend()
 
         assert trend["trend"] == "warming_rapidly"
         assert trend["rate_per_hour"] > 0.5
 
-    def test_outdoor_trend_detects_moderate_cooling(self, thermal_predictor):
+    def test_outdoor_trend_detects_moderate_cooling(self):
         """Test outdoor trend detects moderate cooling (-0.3°C/h)."""
+        predictor = ThermalStatePredictor(lookback_hours=24)
+
         base_time = datetime.now()
-        for i in range(8):
-            thermal_predictor.record_state(
-                timestamp=base_time - timedelta(minutes=15 * (7 - i)),
+        for i in range(7, -1, -1):  # Oldest to newest
+            predictor.record_state(
+                timestamp=base_time - timedelta(minutes=15 * i),
                 indoor_temp=22.0,
-                outdoor_temp=5.0 - (i * 0.075),  # Cooling 0.3°C/h
+                outdoor_temp=5.0 - ((7 - i) * 0.075),  # Cooling 0.3°C/h
                 heating_offset=0.0,
                 flow_temp=35.0,
                 degree_minutes=-100.0,
             )
 
-        trend = thermal_predictor.get_outdoor_trend()
+        trend = predictor.get_outdoor_trend()
 
         assert trend["trend"] == "cooling"
         assert -0.5 < trend["rate_per_hour"] < -0.2
 
-    def test_outdoor_trend_stable(self, thermal_predictor):
+    def test_outdoor_trend_stable(self):
         """Test outdoor trend detects stable temperature."""
+        predictor = ThermalStatePredictor(lookback_hours=24)
+
         base_time = datetime.now()
-        for i in range(8):
-            thermal_predictor.record_state(
-                timestamp=base_time - timedelta(minutes=15 * (7 - i)),
+        for i in range(7, -1, -1):  # Oldest to newest
+            predictor.record_state(
+                timestamp=base_time - timedelta(minutes=15 * i),
                 indoor_temp=22.0,
                 outdoor_temp=5.0,  # Stable
                 heating_offset=0.0,
@@ -167,7 +180,7 @@ class TestOutdoorTrendTracking:
                 degree_minutes=-100.0,
             )
 
-        trend = thermal_predictor.get_outdoor_trend()
+        trend = predictor.get_outdoor_trend()
 
         assert trend["trend"] == "stable"
         assert abs(trend["rate_per_hour"]) < 0.2
@@ -176,9 +189,9 @@ class TestOutdoorTrendTracking:
         """Test outdoor trend returns unknown with insufficient data."""
         predictor = ThermalStatePredictor(lookback_hours=24)
 
-        # Add only 4 samples (need 8)
+        # Add only 4 samples (need 8) - in chronological order
         base_time = datetime.now()
-        for i in range(4):
+        for i in range(3, -1, -1):  # Oldest to newest
             predictor.record_state(
                 timestamp=base_time - timedelta(minutes=15 * i),
                 indoor_temp=22.0,
