@@ -338,9 +338,6 @@ class TestF750RealisticScenarios:
         class MockThermalModel:
             thermal_mass = 1.0
 
-            def calculate_preheating_target(self, *args, **kwargs):
-                return 21.0
-
         class MockNibeState:
             def __init__(self, dm, outdoor):
                 self.degree_minutes = dm

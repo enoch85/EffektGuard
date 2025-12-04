@@ -46,7 +46,6 @@ def engine_mock():
     # Mock thermal model
     engine.thermal = MagicMock()
     engine.thermal.get_prediction_horizon = MagicMock(return_value=12.0)
-    engine.thermal.calculate_preheating_target = MagicMock(return_value=23.0)
     engine.thermal.thermal_mass = 2.0
 
     # Mock predictor

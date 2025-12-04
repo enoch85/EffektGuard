@@ -5,12 +5,10 @@ Tests:
 2. Configuration flow validation
 3. Wear protection (rate limiting)
 4. Ventilation optimization readiness
-5. Self-learning data collection
 """
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 import voluptuous as vol
 
@@ -30,7 +28,6 @@ from custom_components.effektguard.const import (
     CONF_INSULATION_QUALITY,
 )
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
-from custom_components.effektguard.optimization.thermal_model import ThermalModel
 
 
 class TestSensorAvailability:
@@ -311,74 +308,6 @@ class TestVentilationReadiness:
         assert len(future_ventilation_sensors) == 3
 
         # Note: Not required for Phase 3, documented for future
-
-
-class TestSelfLearning:
-    """Test self-learning capability (future feature)."""
-
-    @pytest.mark.asyncio
-    async def test_thermal_model_observation_collection(self):
-        """Test: Thermal model collects observations for learning."""
-        thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
-
-        # Add observation
-        thermal_model.add_observation(
-            timestamp=datetime.now().timestamp(),
-            indoor_temp=21.0,
-            outdoor_temp=5.0,
-            heating_active=True,
-            heating_offset=0.5,
-        )
-
-        # Verify observation stored
-        assert len(thermal_model._learning_data) == 1
-
-    @pytest.mark.asyncio
-    async def test_thermal_model_limits_observation_history(self):
-        """Test: Thermal model limits observation history to prevent memory growth."""
-        thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
-
-        # Add many observations
-        for i in range(1500):
-            thermal_model.add_observation(
-                timestamp=datetime.now().timestamp() + i,
-                indoor_temp=21.0,
-                outdoor_temp=5.0,
-                heating_active=True,
-                heating_offset=0.0,
-            )
-
-        # Should limit to 1000
-        assert len(thermal_model._learning_data) == 1000
-
-    @pytest.mark.asyncio
-    async def test_future_learning_enhancement_placeholder(self):
-        """Test: Placeholder for future ML enhancement.
-
-        Future self-learning enhancements:
-        - Learn actual thermal mass from observations
-        - Learn actual insulation quality from observations
-        - Adjust predictions based on historical accuracy
-        - Personalize to specific building characteristics
-
-        Note: Data collection infrastructure is ready.
-        """
-        # Current: User-configured values
-        # Future: Learned values
-        learning_features = [
-            "thermal_mass_learning",
-            "insulation_learning",
-            "prediction_accuracy_tracking",
-            "building_characterization",
-        ]
-
-        assert len(learning_features) == 4
-
-        # Infrastructure ready:
-        # - Observation collection ✅
-        # - Data structure ✅
-        # - Storage limit ✅
-        # - ML algorithms ❌ (future)
 
 
 class TestCoordinatorIntegration:
