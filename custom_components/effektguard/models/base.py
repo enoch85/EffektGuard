@@ -65,6 +65,12 @@ class HeatPumpProfile(ABC):
     min_runtime_minutes: int = 30
     min_rest_minutes: int = 10
 
+    # Exhaust air heat pump features
+    # Only EAHP models (F730, F750) support airflow optimization
+    supports_exhaust_airflow: bool = False
+    standard_airflow_m3h: float = 0.0  # Normal ventilation rate
+    enhanced_airflow_m3h: float = 0.0  # Maximum ventilation rate
+
     @abstractmethod
     def calculate_optimal_flow_temp(
         self,

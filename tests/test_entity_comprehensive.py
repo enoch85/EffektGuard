@@ -33,6 +33,7 @@ from custom_components.effektguard.const import (
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_ENABLE_WEATHER_PREDICTION,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
+    CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_OPTIMIZATION_MODE,
     CONF_TARGET_INDOOR_TEMP,
     DOMAIN,
@@ -227,7 +228,8 @@ class TestSensorEntityDefinitions:
 
     def test_sensor_count_matches_expected(self):
         """Test that we have the expected number of sensors."""
-        assert len(SENSORS) == 22, f"Expected 22 sensors, found {len(SENSORS)}"
+        # 22 base sensors + 2 airflow sensors = 24
+        assert len(SENSORS) == 24, f"Expected 24 sensors, found {len(SENSORS)}"
 
     def test_all_sensor_keys_are_unique(self):
         """Verify no duplicate sensor keys."""
@@ -596,8 +598,8 @@ class TestSwitchEntities:
 
     def test_switch_count_matches_expected(self):
         """Verify we have all expected switches."""
-        # EffektGuard has 5 feature toggle switches
-        assert len(SWITCHES) == 5, f"Expected 5 switches, found {len(SWITCHES)}"
+        # EffektGuard has 6 feature toggle switches (including airflow optimization)
+        assert len(SWITCHES) == 6, f"Expected 6 switches, found {len(SWITCHES)}"
 
     def test_all_switch_keys_are_unique(self):
         """Verify no duplicate switch keys."""
@@ -612,6 +614,7 @@ class TestSwitchEntities:
             CONF_ENABLE_PEAK_PROTECTION,
             CONF_ENABLE_WEATHER_PREDICTION,
             CONF_ENABLE_HOT_WATER_OPTIMIZATION,
+            CONF_ENABLE_AIRFLOW_OPTIMIZATION,
         }
 
         actual_config_keys = {switch.config_key for switch in SWITCHES}
@@ -678,8 +681,8 @@ class TestEntityIntegration:
             assert switch.unique_id not in unique_ids, f"Duplicate unique_id: {switch.unique_id}"
             unique_ids.add(switch.unique_id)
 
-        # Total entities: 22 sensors + 1 climate + 5 switches = 28 entities
-        assert len(unique_ids) == 28
+        # Total entities: 24 sensors + 1 climate + 6 switches = 31 entities
+        assert len(unique_ids) == 31
 
 
 class TestConfigReloadIntegration:
