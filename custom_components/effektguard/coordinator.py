@@ -173,30 +173,37 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.savings_calculator = SavingsCalculator()
 
         # Airflow optimizer for exhaust air heat pumps (F750/F730)
-        # Always created (like DHW optimizer), control gated by enable flag
-        from .optimization.airflow_optimizer import AirflowOptimizer
+        # Only created if model supports exhaust airflow optimization
+        self.airflow_optimizer = None
+        if self.heat_pump_model.supports_exhaust_airflow:
+            from .optimization.airflow_optimizer import AirflowOptimizer
 
-        flow_standard = float(
-            entry.options.get(
-                CONF_AIRFLOW_STANDARD_RATE,
-                entry.data.get(CONF_AIRFLOW_STANDARD_RATE, AIRFLOW_DEFAULT_STANDARD),
+            flow_standard = float(
+                entry.options.get(
+                    CONF_AIRFLOW_STANDARD_RATE,
+                    entry.data.get(CONF_AIRFLOW_STANDARD_RATE, AIRFLOW_DEFAULT_STANDARD),
+                )
             )
-        )
-        flow_enhanced = float(
-            entry.options.get(
-                CONF_AIRFLOW_ENHANCED_RATE,
-                entry.data.get(CONF_AIRFLOW_ENHANCED_RATE, AIRFLOW_DEFAULT_ENHANCED),
+            flow_enhanced = float(
+                entry.options.get(
+                    CONF_AIRFLOW_ENHANCED_RATE,
+                    entry.data.get(CONF_AIRFLOW_ENHANCED_RATE, AIRFLOW_DEFAULT_ENHANCED),
+                )
             )
-        )
-        self.airflow_optimizer = AirflowOptimizer(
-            flow_standard=flow_standard,
-            flow_enhanced=flow_enhanced,
-        )
-        _LOGGER.debug(
-            "Airflow optimizer initialized: standard %.0f m³/h, enhanced %.0f m³/h",
-            flow_standard,
-            flow_enhanced,
-        )
+            self.airflow_optimizer = AirflowOptimizer(
+                flow_standard=flow_standard,
+                flow_enhanced=flow_enhanced,
+            )
+            _LOGGER.debug(
+                "Airflow optimizer initialized: standard %.0f m³/h, enhanced %.0f m³/h",
+                flow_standard,
+                flow_enhanced,
+            )
+        else:
+            _LOGGER.debug(
+                "Airflow optimizer not available - model %s does not support exhaust airflow",
+                self.heat_pump_model.model_name,
+            )
 
         # Track airflow enhancement state for minimum duration enforcement
         self._airflow_enhance_start: datetime | None = None
@@ -1108,7 +1115,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "compressor=%d Hz, outdoor=%.1f°C)",
                     airflow_decision.reason,
                     airflow_decision.should_enhance,
-                    airflow_decision.thermal_gain_kw,
+                    airflow_decision.expected_gain_kw,
                     nibe_data.indoor_temp,
                     nibe_data.compressor_hz or 0,
                     nibe_data.outdoor_temp,

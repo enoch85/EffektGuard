@@ -358,7 +358,23 @@ async def async_setup_entry(
     """Set up EffektGuard sensor entities from a config entry."""
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [EffektGuardSensor(coordinator, entry, description) for description in SENSORS]
+    # Check if heat pump supports exhaust airflow optimization
+    supports_airflow = coordinator.heat_pump_model and getattr(
+        coordinator.heat_pump_model, "supports_exhaust_airflow", False
+    )
+
+    # Filter sensors based on heat pump capabilities
+    airflow_sensor_keys = {"airflow_enhancement", "airflow_thermal_gain"}
+    entities = []
+    for description in SENSORS:
+        # Only show airflow sensors for exhaust air heat pumps
+        if description.key in airflow_sensor_keys and not supports_airflow:
+            _LOGGER.debug(
+                "Hiding %s sensor - model does not support exhaust airflow",
+                description.key,
+            )
+            continue
+        entities.append(EffektGuardSensor(coordinator, entry, description))
 
     async_add_entities(entities)
 
