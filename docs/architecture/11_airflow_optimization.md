@@ -125,45 +125,23 @@ EffektGuard controls the NIBE "Increased Ventilation" switch:
 
 ```mermaid
 flowchart TD
-    subgraph "Coordinator Update Cycle"
-        A[Start Update Cycle]
-        B{Is airflow_optimization<br/>switch enabled?}
-        C[Skip airflow control]
-    end
-
-    subgraph "Thermal Evaluation"
-        D[Evaluate thermal state]
-        E[Read outdoor temp]
-        F[Read indoor temp]
-        G[Read target temp]
-        H[Read compressor %]
-        I[Read indoor trend]
-    end
-
-    subgraph "Decision Calculation"
-        J[Calculate net benefit<br/>from enhanced airflow]
-        K{benefit > 0?}
-    end
-
-    subgraph "Ventilation Control"
-        L[Turn ON<br/>increased ventilation]
-        M[Turn OFF<br/>increased ventilation]
-        N[Log decision reason]
-    end
-
-    A --> B
-    B -->|No| C
-    B -->|Yes| D
-    D --> E
-    D --> F
-    D --> G
-    D --> H
-    D --> I
-    E & F & G & H & I --> J
-    J --> K
-    K -->|Yes| L
-    K -->|No| M
-    L --> N
+    A[Start Update Cycle] --> B{Is airflow_optimization<br/>switch enabled?}
+    B -->|No| C[Skip airflow control]
+    B -->|Yes| D[Evaluate thermal state]
+    
+    D --> E[Read outdoor temp]
+    D --> F[Read indoor temp]
+    D --> G[Read target temp]
+    D --> H[Read compressor %]
+    D --> I[Read indoor trend]
+    
+    E & F & G & H & I --> J[Calculate net benefit<br/>from enhanced airflow]
+    
+    J --> K{benefit > 0?}
+    K -->|Yes| L[Turn ON<br/>increased ventilation]
+    K -->|No| M[Turn OFF<br/>increased ventilation]
+    
+    L --> N[Log decision reason]
     M --> N
 ```
 
