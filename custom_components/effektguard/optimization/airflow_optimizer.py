@@ -36,6 +36,9 @@ from ..const import (
     AIRFLOW_COP_IMPROVEMENT_FACTOR,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
+    AIRFLOW_DEFICIT_LARGE_THRESHOLD,
+    AIRFLOW_DEFICIT_MODERATE_THRESHOLD,
+    AIRFLOW_DEFICIT_SMALL_THRESHOLD,
     AIRFLOW_DURATION_COLD_CAP,
     AIRFLOW_DURATION_COOL_CAP,
     AIRFLOW_DURATION_EXTREME_DEFICIT,
@@ -46,6 +49,8 @@ from ..const import (
     AIRFLOW_INDOOR_DEFICIT_MIN,
     AIRFLOW_OUTDOOR_TEMP_MIN,
     AIRFLOW_SPECIFIC_HEAT,
+    AIRFLOW_TEMP_COLD_THRESHOLD,
+    AIRFLOW_TEMP_COOL_THRESHOLD,
     AIRFLOW_TREND_WARMING_THRESHOLD,
 )
 
@@ -234,19 +239,19 @@ def calculate_duration(deficit: float, temp_outdoor: float) -> int:
     Returns:
         Duration in minutes
     """
-    if deficit < 0.3:
+    if deficit < AIRFLOW_DEFICIT_SMALL_THRESHOLD:
         base_duration = AIRFLOW_DURATION_SMALL_DEFICIT
-    elif deficit < 0.5:
+    elif deficit < AIRFLOW_DEFICIT_MODERATE_THRESHOLD:
         base_duration = AIRFLOW_DURATION_MODERATE_DEFICIT
-    elif deficit < 1.0:
+    elif deficit < AIRFLOW_DEFICIT_LARGE_THRESHOLD:
         base_duration = AIRFLOW_DURATION_LARGE_DEFICIT
     else:
         base_duration = AIRFLOW_DURATION_EXTREME_DEFICIT
 
     # Reduce duration in cold conditions
-    if temp_outdoor < -10:
+    if temp_outdoor < AIRFLOW_TEMP_COLD_THRESHOLD:
         return min(base_duration, AIRFLOW_DURATION_COLD_CAP)
-    elif temp_outdoor < -5:
+    elif temp_outdoor < AIRFLOW_TEMP_COOL_THRESHOLD:
         return min(base_duration, AIRFLOW_DURATION_COOL_CAP)
 
     return base_duration
