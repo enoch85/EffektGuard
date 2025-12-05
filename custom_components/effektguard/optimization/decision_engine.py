@@ -2333,9 +2333,15 @@ class DecisionEngine:
         # Dec 3, 2025: PEAK classification gets weight 1.0 (critical priority)
         # This ensures peak avoidance overrides all other layers except safety
         # PEAK cluster: EXPENSIVE quarters between PEAKs also get PEAK treatment
+        #
+        # Dec 5, 2025: Only reduce weight for volatile CHEAP periods, not EXPENSIVE
+        # Volatility logic was designed to prevent oscillation during short CHEAP dips
+        # But we WANT strong price influence during EXPENSIVE periods to reduce heating
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority - override all other layers
-        elif is_volatile:
+        elif is_volatile and classification == QuarterClassification.CHEAP:
+            # Only reduce weight for volatile CHEAP periods (prevent ramp-up for brief dips)
+            # EXPENSIVE periods keep full weight even if volatile - we want to reduce heating!
             price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
         else:
             price_weight = LAYER_WEIGHT_PRICE

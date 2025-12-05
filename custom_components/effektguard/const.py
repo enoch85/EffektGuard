@@ -629,7 +629,9 @@ PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
 PRICE_FORECAST_MIN_DURATION: Final = (
     COMPRESSOR_MIN_CYCLE_MINUTES // 15
 )  # quarters - derived from compressor dynamics (45min / 15min = 3)
-PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
+PRICE_FORECAST_REDUCTION_OFFSET: Final = (
+    -1.5
+)  # °C - reduce heating when cheap period coming (Dec 5, 2025: strengthened from -1.0)
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
 # Volatile price detection - Current run-length approach (Dec 2, 2025)
