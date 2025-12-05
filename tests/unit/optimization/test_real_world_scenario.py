@@ -389,10 +389,10 @@ class TestRealWorldScenario:
             # Mode multiplier: 1.0 (balanced)
             # Base: -1.0 × 1.5 × 0.68 × 1.0 = -1.02°C
             # Forward-looking: Detects cheaper period ahead (Q44-48 @ 0.90 öre = 62% cheaper)
-            # Forecast adjustment: -1.0°C (wait for cheaper period)
-            # Expected: -1.02 + (-1.0) = -2.02°C
+            # Forecast adjustment: -1.5°C (wait for cheaper period - strengthened Dec 5, 2025)
+            # Expected: -1.02 + (-1.5) = -2.52°C
 
-            assert price_layer.offset == pytest.approx(-2.0, abs=0.3)
+            assert price_layer.offset == pytest.approx(-2.5, abs=0.3)
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
             # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
             min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
@@ -544,9 +544,9 @@ class TestRealWorldScenario:
                 # Daytime: ×1.5
                 # Tolerance factor: 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
                 # Mode multiplier: 1.0 (balanced)
-                # Forward-looking: -1.0°C (cheaper period ahead, independent of tolerance)
+                # Forward-looking: -1.5°C (cheaper period ahead, strengthened Dec 5, 2025)
                 expected_base = -1.0 * 1.5 * expected_factor * 1.0  # mode mult = 1.0
-                expected_offset = expected_base + (-1.0)  # Add forecast adjustment
+                expected_offset = expected_base + (-1.5)  # Add forecast adjustment
 
                 print(
                     f"\nTolerance {tolerance_setting}: "

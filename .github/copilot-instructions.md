@@ -542,6 +542,42 @@ pytest tests/ --cov=custom_components/effektguard --cov-report=html
 3. Check thermal debt tracker state
 4. Verify NIBE entity readings
 5. Test with `logger.setLevel(logging.DEBUG)`
+6. **Create visualization graphs** for complex optimization issues
+
+### Debugging with Visualization Graphs
+
+**Create matplotlib graphs when debugging optimization issues.** Graphs provide:
+- Clear visual comparison of current vs expected behavior
+- Concrete data to discuss with stakeholders
+- Evidence of the bug and proof the fix works
+
+**Graph template:**
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+
+# 3-panel comparison: Prices, Current Behavior, Expected Behavior
+fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+fig.suptitle("Issue: [Description]", fontsize=14, fontweight="bold")
+
+# Panel 1: Prices (color-coded by classification)
+# Panel 2: Current (buggy) behavior - offsets over time
+# Panel 3: Expected (fixed) behavior - offsets over time
+
+# Use clear colors:
+# - Red/orange for EXPENSIVE/PEAK periods
+# - Green for CHEAP periods  
+# - Blue for heating (+offset), Red for reducing (-offset)
+
+plt.savefig("docs/dev/debug_issue_description.png", dpi=150)
+```
+
+**Graph requirements:**
+1. Top panel: Input data (prices, temperatures, DM values)
+2. Middle panel: Current system behavior with offsets
+3. Bottom panel: Expected behavior after fix
+4. Clear color coding and annotations
+5. Save to `docs/dev/` for discussion
 
 ### Configuration Issues
 
