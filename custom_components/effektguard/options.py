@@ -14,7 +14,6 @@ from .const import (
     AIRFLOW_DEFAULT_STANDARD,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
-    CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     CONF_INSULATION_QUALITY,
     CONF_OPTIMIZATION_MODE,
@@ -250,12 +249,6 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             schema_dict[vol.Required("airflow_optimization")] = section(
                 vol.Schema(
                     {
-                        vol.Optional(
-                            CONF_ENABLE_AIRFLOW_OPTIMIZATION,
-                            default=self.config_entry.options.get(
-                                CONF_ENABLE_AIRFLOW_OPTIMIZATION, False
-                            ),
-                        ): selector.BooleanSelector(),
                         vol.Optional(
                             CONF_AIRFLOW_STANDARD_RATE,
                             default=self.config_entry.options.get(
