@@ -108,6 +108,9 @@
       },
       "hot_water_optimization": {
         "name": "Lämpimän veden optimointi"
+      },
+      "airflow_optimization": {
+        "name": "Ilmavirran optimointi"
       }
     }
   },

@@ -108,6 +108,9 @@
       },
       "hot_water_optimization": {
         "name": "Varmtvandsoptimering"
+      },
+      "airflow_optimization": {
+        "name": "Luftstrømsoptimering"
       }
     }
   },

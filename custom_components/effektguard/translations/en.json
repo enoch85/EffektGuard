@@ -80,6 +80,18 @@
               "dhw_morning_hour": "Hour when morning hot water heating should start.",
               "dhw_evening_hour": "Hour when evening hot water heating should start."
             }
+          },
+          "airflow_optimization": {
+            "name": "Airflow Optimization (Exhaust Air)",
+            "description": "Configure airflow rates for exhaust air heat pumps. Enable/disable via the Airflow Optimization switch in Controls.",
+            "data": {
+              "airflow_standard_rate": "Standard Airflow Rate",
+              "airflow_enhanced_rate": "Enhanced Airflow Rate"
+            },
+            "data_description": {
+              "airflow_standard_rate": "Normal ventilation rate used during regular operation.\nSet this to your preferred comfort level for daily use.\n\nNIBE F750 default: 150 m³/h (speed 2).",
+              "airflow_enhanced_rate": "Boosted ventilation rate used during favorable conditions to extract more heat from exhaust air and improve COP.\n\nNIBE F750 default: 252 m³/h (speed 4)."
+            }
           }
         }
       }
@@ -101,6 +113,9 @@
       },
       "hot_water_optimization": {
         "name": "Hot Water Optimization"
+      },
+      "airflow_optimization": {
+        "name": "Airflow Optimization"
       }
     }
   },
