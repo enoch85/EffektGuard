@@ -1122,10 +1122,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 # Apply control only if airflow optimization is enabled (like DHW)
-                airflow_enabled = self.entry.options.get(
-                    CONF_ENABLE_AIRFLOW_OPTIMIZATION,
-                    self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False),
-                )
+                airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
                 if airflow_enabled:
                     await self._apply_airflow_decision(airflow_decision)
                 else:

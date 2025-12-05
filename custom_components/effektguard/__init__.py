@@ -212,6 +212,7 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         "enable_price_optimization",
         "enable_weather_prediction",
         "enable_hot_water_optimization",
+        "enable_airflow_optimization",
     }
 
     # Check if only runtime options or switches changed
