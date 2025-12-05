@@ -83,16 +83,14 @@
           },
           "airflow_optimization": {
             "name": "Airflow Optimization (Exhaust Air)",
-            "description": "Enhanced airflow for exhaust air heat pumps (F750, F730). Improves COP by extracting more heat from exhaust air when conditions are favorable.",
+            "description": "Configure airflow rates for exhaust air heat pumps. Enable/disable via the Airflow Optimization switch in Controls.",
             "data": {
-              "enable_airflow_optimization": "Enable Airflow Optimization",
-              "airflow_standard_rate": "Standard Airflow",
-              "airflow_enhanced_rate": "Enhanced Airflow"
+              "airflow_standard_rate": "Standard Airflow Rate",
+              "airflow_enhanced_rate": "Enhanced Airflow Rate"
             },
             "data_description": {
-              "enable_airflow_optimization": "Enable intelligent airflow enhancement to improve heat extraction.\n\nOnly applicable for exhaust air heat pumps (NIBE F750, F730).",
-              "airflow_standard_rate": "Normal ventilation airflow rate in m³/h.\n\nNIBE F750 default: 150 m³/h (speed 2).",
-              "airflow_enhanced_rate": "Maximum ventilation airflow rate in m³/h.\n\nNIBE F750 default: 252 m³/h (speed 4)."
+              "airflow_standard_rate": "Normal ventilation rate used during regular operation.\nSet this to your preferred comfort level for daily use.\n\nNIBE F750 default: 150 m³/h (speed 2).",
+              "airflow_enhanced_rate": "Boosted ventilation rate used during favorable conditions to extract more heat from exhaust air and improve COP.\n\nNIBE F750 default: 252 m³/h (speed 4)."
             }
           }
         }
