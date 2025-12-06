@@ -88,11 +88,11 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_gespot(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Configure GE-Spot integration."""
+        """Configure spot price integration."""
         errors = {}
 
         if user_input is not None:
-            # Store GE-Spot settings
+            # Store spot price settings
             self._data[CONF_GESPOT_ENTITY] = user_input.get(CONF_GESPOT_ENTITY)
             self._data[CONF_ENABLE_PRICE_OPTIMIZATION] = user_input.get(
                 CONF_ENABLE_PRICE_OPTIMIZATION, True
@@ -108,7 +108,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 return await self.async_step_model()
 
-        # Auto-detect GE-Spot entities (prioritizes current_price sensors)
+        # Auto-detect spot price entities (prioritizes current_price sensors)
         gespot_entities = self._discover_gespot_entities()
         auto_detected_gespot = gespot_entities[0] if gespot_entities else None
 
@@ -136,12 +136,12 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Create description message
         if gespot_entities:
-            detection_msg = f"Auto-detected {len(gespot_entities)} GE-Spot sensor(s)"
+            detection_msg = f"Auto-detected {len(gespot_entities)} spot price sensor(s)"
             if auto_detected_gespot:
                 detection_msg += f". Selected: {auto_detected_gespot.split('.')[-1]}"
         else:
             detection_msg = (
-                "No GE-Spot sensors detected. Please configure GE-Spot integration first."
+                "No spot price sensors detected. Please configure a spot price integration first."
             )
 
         return self.async_show_form(
@@ -384,9 +384,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return entities
 
     def _discover_gespot_entities(self) -> list[str]:
-        """Discover GE-Spot price entities.
+        """Discover spot price entities.
 
-        Auto-detect GE-Spot integration sensors:
+        Auto-detect spot price integration sensors:
         - sensor.gespot_current_price_* (preferred - real-time 15-min prices)
         - sensor.gespot_average_price_*
         - sensor.gespot_peak_price_*
@@ -402,11 +402,11 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             entity_id = state.entity_id
             entity_lower = entity_id.lower()
 
-            # Match GE-Spot sensors
+            # Match spot price sensors
             if not entity_id.startswith("sensor."):
                 continue
 
-            # Check for GE-Spot patterns
+            # Check for spot price patterns
             is_gespot = (
                 "gespot" in entity_lower
                 or entity_id.startswith("sensor.ge_spot")

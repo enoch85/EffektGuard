@@ -172,9 +172,9 @@ class TestVolatileWeightReduction:
         ), f"Offset too negative before spike (should be gentle), got {decision.offset}"
 
         # Verify proactive layer is contributing positive offset
-        proactive_layer = [l for l in decision.layers if "Proactive" in l.reason]
-        assert len(proactive_layer) > 0, "Should have proactive layer active"
-        assert proactive_layer[0].offset > 0, "Proactive layer should suggest heating"
+        proactive_layers = [l for l in decision.layers if l.name.startswith("Proactive")]
+        assert len(proactive_layers) > 0, "Should have proactive layer active"
+        assert proactive_layers[0].offset > 0, "Proactive layer should suggest heating"
 
     def test_normal_volatility_without_extreme_spike(
         self, engine, base_nibe_state, base_weather_data
@@ -235,11 +235,9 @@ class TestVolatileWeightReduction:
             abs(decision.offset) < 1.5
         ), f"Should hold relatively steady during normal volatility, got {decision.offset}"
 
-        # Reasoning should mention price layer (GE-Spot, price, or volatile)
-        reasoning_lower = decision.reasoning.lower()
-        assert any(
-            keyword in reasoning_lower for keyword in ["volatile", "price", "ge-spot", "spot"]
-        ), f"Reasoning should mention price behavior: {decision.reasoning}"
+        # Verify Spot Price layer is present (price optimization is active)
+        price_layer = next((l for l in decision.layers if l.name == "Spot Price"), None)
+        assert price_layer is not None, "Should have Spot Price layer"
 
     def test_weight_reduction_math(self):
         """Test that weight reduction constants make mathematical sense.
@@ -848,7 +846,7 @@ class TestVolatileWeightReduction:
 
         # Find the price layer decision
         price_layer = next(
-            (layer for layer in decision.layers if "GE-Spot" in layer.reason),
+            (layer for layer in decision.layers if layer.name == "Spot Price"),
             None,
         )
         assert price_layer is not None, "Should have price layer"

@@ -629,7 +629,9 @@ PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
 PRICE_FORECAST_MIN_DURATION: Final = (
     COMPRESSOR_MIN_CYCLE_MINUTES // 15
 )  # quarters - derived from compressor dynamics (45min / 15min = 3)
-PRICE_FORECAST_REDUCTION_OFFSET: Final = -1.0  # °C - reduce heating when cheap period coming
+PRICE_FORECAST_REDUCTION_OFFSET: Final = (
+    -1.5
+)  # °C - reduce heating when cheap period coming (Dec 5, 2025: strengthened from -1.0)
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
 # Volatile price detection - Current run-length approach (Dec 2, 2025)
@@ -865,6 +867,95 @@ NIBE_VOLTAGE_PER_PHASE: Final = (
     240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
 )
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
+
+# ============================================================================
+# Airflow Optimizer Constants (Exhaust Air Heat Pump)
+# ============================================================================
+# Description:
+#   Original thermodynamic calculations for exhaust air heat pump airflow optimization.
+#   Enhanced airflow extracts more heat from exhaust air, improving COP when conditions
+#   are favorable. Based on first-principles energy balance.
+#
+# Physics:
+#   Net Benefit = (Extra heat extracted) + (COP improvement) - (Ventilation penalty)
+#   Q_extract = ṁ × cp × ΔT = (flow_m³h / 3600) × 1.2 kg/m³ × 1.005 kJ/kg·K × 12°C
+#   COP_enhanced ≈ 1.20 × COP_standard (warmer evaporator from enhanced airflow)
+#   Q_penalty = ṁ × cp × (T_indoor - T_outdoor)
+#
+# When Enhanced Airflow Helps:
+#   Outdoor °C | Min Compressor % | Expected Gain
+#   +10        | 50%              | +1.3 kW
+#   0          | 50%              | +0.9 kW
+#   -5         | 62%              | +0.7 kW
+#   -10        | 75%              | +0.4 kW
+#   < -15      | Don't enhance    | Negative
+#
+# Reference:
+#   - Original thermodynamic first-principles analysis
+#   - NIBE F750 ventilation specifications
+# ============================================================================
+
+# Physical constants for airflow calculations
+AIRFLOW_AIR_DENSITY: Final = 1.2  # kg/m³ at ~20°C
+AIRFLOW_SPECIFIC_HEAT: Final = 1.005  # kJ/kg·K for air
+AIRFLOW_EVAPORATOR_TEMP_DROP: Final = 12.0  # °C typical temperature drop through evaporator
+
+# Default flow rates for NIBE F750 (m³/h)
+# Standard: Normal ventilation speed (speed 2)
+# Enhanced: Maximum ventilation speed (speed 4)
+AIRFLOW_DEFAULT_STANDARD: Final = 150.0  # m³/h - Normal ventilation
+AIRFLOW_DEFAULT_ENHANCED: Final = 252.0  # m³/h - Maximum ventilation
+
+# COP improvement from enhanced airflow
+# More air → warmer evaporator → better COP
+# Empirically ~20% improvement at enhanced flow
+AIRFLOW_COP_IMPROVEMENT_FACTOR: Final = 1.20  # 20% COP improvement
+AIRFLOW_BASE_COP: Final = 3.3  # Typical NIBE F750 COP
+
+# Compressor input power for benefit calculations
+AIRFLOW_COMPRESSOR_INPUT_KW: Final = 2.0  # kW typical compressor electrical input
+
+# Temperature thresholds
+AIRFLOW_OUTDOOR_TEMP_MIN: Final = -15.0  # °C - Never enhance below this (penalty exceeds gains)
+AIRFLOW_INDOOR_DEFICIT_MIN: Final = 0.2  # °C - Minimum deficit to trigger enhancement
+
+# Compressor threshold calculation
+# Minimum compressor % needed for enhanced flow to be beneficial
+# Colder outside → need higher compressor output to justify extra ventilation
+# Formula: threshold = 50 + slope * outdoor_temp (for outdoor_temp < 0)
+AIRFLOW_COMPRESSOR_BASE_THRESHOLD: Final = 50.0  # % base threshold at 0°C
+AIRFLOW_COMPRESSOR_SLOPE: Final = -2.5  # Increase by 2.5% per degree below 0°C
+
+# Temperature deficit thresholds for duration calculation (°C)
+AIRFLOW_DEFICIT_SMALL_THRESHOLD: Final = 0.3  # Small deficit boundary
+AIRFLOW_DEFICIT_MODERATE_THRESHOLD: Final = 0.5  # Moderate deficit boundary
+AIRFLOW_DEFICIT_LARGE_THRESHOLD: Final = 1.0  # Large deficit boundary
+
+# Outdoor temperature thresholds for duration caps (°C)
+AIRFLOW_TEMP_COLD_THRESHOLD: Final = -10.0  # Very cold - apply duration cap
+AIRFLOW_TEMP_COOL_THRESHOLD: Final = -5.0  # Cool - apply moderate duration cap
+
+# Duration calculation for enhanced airflow (minutes)
+AIRFLOW_DURATION_SMALL_DEFICIT: Final = 15  # minutes for deficit < 0.3°C
+AIRFLOW_DURATION_MODERATE_DEFICIT: Final = 20  # minutes for deficit 0.3-0.5°C
+AIRFLOW_DURATION_LARGE_DEFICIT: Final = 45  # minutes for deficit 0.5-1.0°C
+AIRFLOW_DURATION_EXTREME_DEFICIT: Final = 60  # minutes for deficit > 1.0°C
+AIRFLOW_DURATION_COLD_CAP: Final = 20  # minutes cap when outdoor < -10°C
+AIRFLOW_DURATION_COOL_CAP: Final = 30  # minutes cap when outdoor < -5°C
+
+# Indoor temperature trend threshold for enhancement decision
+AIRFLOW_TREND_WARMING_THRESHOLD: Final = 0.1  # °C/h - already warming, let stabilize
+
+# Configuration keys
+CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"
+CONF_AIRFLOW_STANDARD_RATE: Final = "airflow_standard_rate"  # m³/h
+CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
+
+# NIBE Enhanced Ventilation (F750/F730)
+# Controls the "Increased Ventilation" switch on exhaust air heat pumps
+# Entity pattern: switch.{device}_increased_ventilation
+NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 5  # Minimum minutes to run enhanced
+
 DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
@@ -932,7 +1023,7 @@ class OptimizationMode(StrEnum):
 
 
 class QuarterClassification(StrEnum):
-    """Price period classification based on GE-Spot prices.
+    """Price period classification based on spot prices.
 
     Can represent hourly or 15-minute (quarterly) periods depending on price data granularity.
     """

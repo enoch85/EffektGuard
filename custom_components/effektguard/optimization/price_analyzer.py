@@ -1,6 +1,6 @@
 """Price analyzer for spot price classification.
 
-Analyzes GE-Spot prices with native 15-minute granularity to classify
+Analyzes spot prices with native 15-minute granularity to classify
 periods for optimization decisions.
 """
 
@@ -29,7 +29,7 @@ __all__ = ["PriceAnalyzer", "PriceData", "QuarterPeriod"]
 class PriceAnalyzer:
     """Analyze electricity spot prices with native 15-minute granularity.
 
-    GE-Spot provides true quarterly data (96 intervals per day), which
+    Spot price integrations provide true quarterly data (96 intervals per day), which
     perfectly matches Swedish Effektavgift requirements.
     """
 
@@ -67,7 +67,7 @@ class PriceAnalyzer:
         self,
         periods: list[QuarterPeriod],
     ) -> dict[int, QuarterClassification]:
-        """Classify 15-minute periods from native GE-Spot data.
+        """Classify 15-minute periods from native spot price data.
 
         Algorithm:
         1. Calculate price percentiles across all 96 periods
@@ -106,7 +106,7 @@ class PriceAnalyzer:
         )
 
         # Special case: Uniform prices (all equal) - happens with fallback mode
-        # When GE-Spot unavailable, fallback creates 96 periods with price=1.0
+        # When spot price unavailable, fallback creates 96 periods with price=1.0
         # Without variance, classification is meaningless - mark all as NORMAL
         if p25 == p90:  # No price variance
             _LOGGER.info(

@@ -82,7 +82,7 @@ def mock_hass():
         attributes={"forecast": [{"datetime": "2025-10-14T12:00:00", "temperature": 15}] * 24},
     )
 
-    # GE-Spot entity
+    # Spot price entity
     mock_states["sensor.gespot_current_price"] = MagicMock(
         entity_id="sensor.gespot_current_price",
         state="0.50",
@@ -315,10 +315,10 @@ class TestWeatherForecastValidation:
 
 
 class TestTomorrowPricesDetection:
-    """Test tomorrow prices detection from GE-Spot."""
+    """Test tomorrow prices detection from spot price integration."""
 
     def test_gespot_with_tomorrow_prices(self):
-        """Test GE-Spot integration with tomorrow prices available."""
+        """Test spot price integration with tomorrow prices available."""
         # This will be implemented in gespot_adapter.py
         # For now, verify the status sensor can detect it
         from custom_components.effektguard.sensor import SENSORS
@@ -327,7 +327,7 @@ class TestTomorrowPricesDetection:
         assert sensor is not None
 
     def test_gespot_without_tomorrow_prices(self):
-        """Test GE-Spot integration with only today prices."""
+        """Test spot price integration with only today prices."""
         from custom_components.effektguard.sensor import SENSORS
 
         sensor = next(s for s in SENSORS if s.key == "optional_features_status")

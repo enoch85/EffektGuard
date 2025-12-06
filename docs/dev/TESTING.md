@@ -207,7 +207,7 @@ def nibe_state():
     
 @pytest.fixture
 def price_data():
-    """Sample GE-Spot price data."""
+    """Sample Spot Price price data."""
     # Returns 15-minute price data
 ```
 

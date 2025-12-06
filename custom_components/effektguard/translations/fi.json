@@ -12,10 +12,10 @@
         }
       },
       "gespot": {
-        "title": "Määritä GE-Spot-integraatio",
-        "description": "Määritä valinnainen GE-Spot 15 minuutin spot-hintojen optimointiin.\n\n{detection_info}\n\n**Suositus:** Käytä `current_price` sensoria reaaliaikaiseen neljännesvuosihintaan.",
+        "title": "Määritä spot-hinta-integraatio",
+        "description": "Määritä valinnainen spot-hinta 15 minuutin hintojen optimointiin.\n\n{detection_info}\n\n**Suositus:** Käytä `current_price` sensoria reaaliaikaiseen neljännesvuosihintaan.",
         "data": {
-          "gespot_entity": "GE-Spot Hintasensori (Current Price Suositeltu)",
+          "gespot_entity": "Spot-hinta-sensori (Current Price Suositeltu)",
           "enable_price_optimization": "Ota käyttöön hintojen optimointi"
         }
       },
@@ -30,7 +30,7 @@
     },
     "error": {
       "nibe_entity_not_found": "NIBE-yksikköä ei löytynyt",
-      "gespot_entity_not_found": "GE-Spot-yksikköä ei löytynyt"
+      "gespot_entity_not_found": "Spot-hinta-yksikköä ei löytynyt"
     },
     "abort": {
       "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ensin NIBE Myuplink-integraatio."
@@ -108,6 +108,9 @@
       },
       "hot_water_optimization": {
         "name": "Lämpimän veden optimointi"
+      },
+      "airflow_optimization": {
+        "name": "Ilmavirran optimointi"
       }
     }
   },

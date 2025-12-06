@@ -293,7 +293,7 @@ class TestRealWorldScenario:
         # Final offset - The multi-layer system balances all factors
         # In this scenario:
         # - Weather pre-heat: +1.17°C (weight 0.7) - suggests heating before cold
-        # - GE-Spot price: -1.5°C (weight 0.75) - expensive period, reduce heating
+        # - Spot Price: -1.5°C (weight 0.75) - expensive period, reduce heating
         # - Math WC: +0.33°C (weight 0.3185) - weather compensation adjustment
         # - Proactive Z1: +0.5°C (weight 0.3) - gentle debt prevention
         #
@@ -306,17 +306,16 @@ class TestRealWorldScenario:
         assert decision.offset is not None, "Decision should have an offset"
 
         # Verify all major layers contributed to the decision
-        layer_reasons = [l.reason for l in decision.layers if l.weight > 0]
-        # Weather pre-heat may appear in final reasoning even if not a separate active layer
-        # Check both individual layers and final decision reasoning
-        all_reasons = " | ".join(layer_reasons) + " | " + decision.reasoning
-        assert (
-            any("pre-heat" in r.lower() or "weather" in r.lower() for r in layer_reasons)
-            or "pre-heat" in decision.reasoning.lower()
-        ), f"Weather/preheat should be considered. Layers: {layer_reasons}, Decision: {decision.reasoning}"
+        active_layers = [l for l in decision.layers if l.weight > 0]
+        active_layer_names = [l.name for l in active_layers]
+
+        # Weather pre-heat layer should be active
         assert any(
-            "EXPENSIVE" in r or "PEAK" in r for r in layer_reasons
-        ), "Price layer should be active"
+            "Weather" in name or "Pre-heat" in name for name in active_layer_names
+        ), f"Weather/preheat should be considered. Active layers: {active_layer_names}"
+
+        # Price layer should be active
+        assert "Spot Price" in active_layer_names, f"Price layer should be active. Active layers: {active_layer_names}"
 
         # Expected range: Price optimization may win if not urgent
         # If offset is negative: cost optimization dominant (correct when not urgent)
@@ -389,10 +388,10 @@ class TestRealWorldScenario:
             # Mode multiplier: 1.0 (balanced)
             # Base: -1.0 × 1.5 × 0.68 × 1.0 = -1.02°C
             # Forward-looking: Detects cheaper period ahead (Q44-48 @ 0.90 öre = 62% cheaper)
-            # Forecast adjustment: -1.0°C (wait for cheaper period)
-            # Expected: -1.02 + (-1.0) = -2.02°C
+            # Forecast adjustment: -1.5°C (wait for cheaper period - strengthened Dec 5, 2025)
+            # Expected: -1.02 + (-1.5) = -2.52°C
 
-            assert price_layer.offset == pytest.approx(-2.0, abs=0.3)
+            assert price_layer.offset == pytest.approx(-2.5, abs=0.3)
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
             # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
             min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
@@ -544,9 +543,9 @@ class TestRealWorldScenario:
                 # Daytime: ×1.5
                 # Tolerance factor: 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
                 # Mode multiplier: 1.0 (balanced)
-                # Forward-looking: -1.0°C (cheaper period ahead, independent of tolerance)
+                # Forward-looking: -1.5°C (cheaper period ahead, strengthened Dec 5, 2025)
                 expected_base = -1.0 * 1.5 * expected_factor * 1.0  # mode mult = 1.0
-                expected_offset = expected_base + (-1.0)  # Add forecast adjustment
+                expected_offset = expected_base + (-1.5)  # Add forecast adjustment
 
                 print(
                     f"\nTolerance {tolerance_setting}: "

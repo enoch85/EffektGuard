@@ -2,7 +2,7 @@
 
 Tests the complete configuration flow:
 1. NIBE entity selection (async_step_user)
-2. GE-Spot entity selection (async_step_gespot)
+2. Spot price entity selection (async_step_gespot)
 3. Heat pump model selection (async_step_model) - NEW
 4. Optional features (async_step_optional)
 5. Optional sensors (async_step_optional_sensors)
@@ -73,7 +73,7 @@ def mock_hass(mock_entity_registry, monkeypatch):
             state="0.0",
             attributes={},
         ),
-        # GE-Spot entities
+        # Spot price entities
         "sensor.gespot_current_price": MagicMock(
             entity_id="sensor.gespot_current_price",
             state="0.50",
@@ -151,7 +151,7 @@ class TestConfigFlowUserStep:
         assert "MyUplink just loaded" in result["description_placeholders"]["info"]
 
     async def test_user_step_valid_submission(self, mock_hass):
-        """Test valid NIBE entity submission proceeds to GE-Spot step."""
+        """Test valid NIBE entity submission proceeds to spot price step."""
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = mock_hass
 
@@ -178,10 +178,10 @@ class TestConfigFlowUserStep:
 
 
 class TestConfigFlowGESpotStep:
-    """Test the GE-Spot entity selection step."""
+    """Test the spot price entity selection step."""
 
     async def test_gespot_step_shows_form(self, mock_hass):
-        """Test that GE-Spot step shows form."""
+        """Test that spot price step shows form."""
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = mock_hass
         config_flow._data = {CONF_NIBE_ENTITY: "sensor.nibe_outdoor_temp"}
@@ -194,7 +194,7 @@ class TestConfigFlowGESpotStep:
         assert CONF_ENABLE_PRICE_OPTIMIZATION in result["data_schema"].schema
 
     async def test_gespot_step_with_entity_proceeds_to_model(self, mock_hass):
-        """Test that valid GE-Spot submission proceeds to model selection."""
+        """Test that valid spot price submission proceeds to model selection."""
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = mock_hass
         config_flow._data = {CONF_NIBE_ENTITY: "sensor.nibe_outdoor_temp"}
@@ -212,7 +212,7 @@ class TestConfigFlowGESpotStep:
         assert config_flow._data[CONF_ENABLE_PRICE_OPTIMIZATION] is True
 
     async def test_gespot_step_skip_proceeds_to_model(self, mock_hass):
-        """Test that skipping GE-Spot (None) proceeds to model selection."""
+        """Test that skipping spot price (None) proceeds to model selection."""
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = mock_hass
         config_flow._data = {CONF_NIBE_ENTITY: "sensor.nibe_outdoor_temp"}
@@ -229,7 +229,7 @@ class TestConfigFlowGESpotStep:
         assert config_flow._data.get(CONF_GESPOT_ENTITY) is None
 
     async def test_gespot_step_invalid_entity(self, mock_hass):
-        """Test error when GE-Spot entity doesn't exist."""
+        """Test error when spot price entity doesn't exist."""
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = mock_hass
         config_flow._data = {CONF_NIBE_ENTITY: "sensor.nibe_outdoor_temp"}
@@ -449,7 +449,7 @@ class TestCompleteConfigFlow:
         )
         assert result["step_id"] == "gespot"
 
-        # Step 2: GE-Spot entity
+        # Step 2: Spot price entity
         result = await config_flow.async_step_gespot(
             user_input={
                 CONF_GESPOT_ENTITY: "sensor.gespot_current_price",
@@ -505,7 +505,7 @@ class TestCompleteConfigFlow:
         )
         assert result["step_id"] == "gespot"
 
-        # Step 2: Skip GE-Spot
+        # Step 2: Skip spot price
         result = await config_flow.async_step_gespot(
             user_input={
                 CONF_GESPOT_ENTITY: None,
@@ -556,7 +556,7 @@ class TestCompleteConfigFlow:
             user_input={CONF_NIBE_ENTITY: "sensor.nibe_outdoor_temp"}
         )
 
-        # Step 2: GE-Spot
+        # Step 2: Spot price
         result = await config_flow.async_step_gespot(
             user_input={
                 CONF_GESPOT_ENTITY: "sensor.gespot_current_price",

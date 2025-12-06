@@ -39,7 +39,7 @@ class SavingsCalculator:
 
     Conservative estimates based on:
     - Swedish electricity market (15-minute effect tariff)
-    - Typical GE-Spot price variations
+    - Typical spot price variations
     - Observed peak reductions and price avoidance
     """
 

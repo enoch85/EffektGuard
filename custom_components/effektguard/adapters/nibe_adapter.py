@@ -414,6 +414,106 @@ class NibeAdapter:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             return False
 
+    async def set_enhanced_ventilation(self, enabled: bool) -> bool:
+        """Enable or disable enhanced ventilation for exhaust air heat pumps.
+
+        NIBE F750/F730 "Increased Ventilation" is a switch entity that toggles
+        between normal and enhanced airflow. When enabled, the exhaust fan runs
+        at higher speed to extract more heat from indoor air.
+
+        Includes rate limiting and redundant state check to minimize API calls.
+
+        Entity pattern: switch.{device}_increased_ventilation
+
+        Args:
+            enabled: True to enable enhanced ventilation, False for normal
+
+        Returns:
+            True if ventilation was set, False if skipped/failed
+
+        Note:
+            Based on NIBE myuplink entity: switch.f750_cu_3x400v_increased_ventilation
+        """
+        from datetime import timedelta
+
+        # Get ventilation switch entity from cache
+        ventilation_entity = self._entity_cache.get("increased_ventilation")
+
+        if not ventilation_entity:
+            _LOGGER.debug("Enhanced ventilation switch not found - exhaust air control unavailable")
+            return False
+
+        # Check entity is available and get current state
+        state = self.hass.states.get(ventilation_entity)
+        if not state or state.state in ["unavailable", "unknown"]:
+            _LOGGER.warning(
+                "Ventilation switch %s not ready (state: %s), skipping",
+                ventilation_entity,
+                state.state if state else "None",
+            )
+            return False
+
+        # Check if already in desired state (avoid redundant API calls)
+        current_is_on = state.state == "on"
+        if current_is_on == enabled:
+            _LOGGER.debug(
+                "Ventilation already %s, skipping redundant call",
+                "ENHANCED" if enabled else "NORMAL",
+            )
+            return False
+
+        # Rate limiting - minimum time between writes
+        now = dt_util.utcnow()
+        if not hasattr(self, "_last_ventilation_write"):
+            self._last_ventilation_write = None
+
+        if self._last_ventilation_write and now - self._last_ventilation_write < timedelta(
+            minutes=SERVICE_RATE_LIMIT_MINUTES
+        ):
+            remaining = (
+                timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES) - (now - self._last_ventilation_write)
+            ).total_seconds()
+            _LOGGER.debug(
+                "Ventilation rate limited, %d seconds remaining",
+                int(remaining),
+            )
+            return False
+
+        try:
+            service = "turn_on" if enabled else "turn_off"
+            await self.hass.services.async_call(
+                "switch",
+                service,
+                {"entity_id": ventilation_entity},
+                blocking=False,
+            )
+
+            self._last_ventilation_write = now
+            status = "ENHANCED" if enabled else "NORMAL"
+            _LOGGER.info("✓ Ventilation set to %s via %s", status, ventilation_entity)
+            return True
+
+        except (AttributeError, OSError, ValueError, TypeError) as err:
+            _LOGGER.error("Failed to set enhanced ventilation: %s", err)
+            return False
+
+    async def is_enhanced_ventilation_active(self) -> bool | None:
+        """Check if enhanced ventilation is currently active.
+
+        Returns:
+            True if enhanced ventilation is on, False if normal, None if unavailable
+        """
+        ventilation_entity = self._entity_cache.get("increased_ventilation")
+
+        if not ventilation_entity:
+            return None
+
+        state = self.hass.states.get(ventilation_entity)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+
+        return state.state == "on"
+
     async def _discover_nibe_entities(self) -> None:
         """Discover NIBE entities from entity registry.
 
@@ -497,7 +597,7 @@ class NibeAdapter:
             ],  # Compressor frequency param 43136
         }
 
-        # Find entities
+        # Find sensor/number entities
         for entity in registry.entities.values():
             if not entity.entity_id.startswith("sensor.") and not entity.entity_id.startswith(
                 "number."
@@ -552,6 +652,28 @@ class NibeAdapter:
 
                             self._entity_cache[key] = entity.entity_id
                             _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
+                            break
+
+        # Discover switch entities (separate loop for increased_ventilation)
+        switch_patterns = {
+            "increased_ventilation": [
+                "increased_ventilation",
+            ],  # NIBE F750/F730 enhanced ventilation switch
+        }
+
+        for entity in registry.entities.values():
+            if not entity.entity_id.startswith("switch."):
+                continue
+
+            entity_id_lower = entity.entity_id.lower()
+
+            # Match against switch patterns
+            for key, patterns_list in switch_patterns.items():
+                if key not in self._entity_cache:
+                    for pattern in patterns_list:
+                        if pattern in entity_id_lower:
+                            self._entity_cache[key] = entity.entity_id
+                            _LOGGER.debug("Found NIBE switch %s: %s", key, entity.entity_id)
                             break
 
         # Log all discovered entities for debugging

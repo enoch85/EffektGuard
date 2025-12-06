@@ -25,7 +25,7 @@ State WARNING: DM -522 beyond expected for 7.0°C (expected: -360) | Math WC: ku
 **Full Reasoning in Attributes:**
 ```yaml
 attributes:
-  full_reasoning: "State WARNING: DM -522 beyond expected for 7.0°C (expected: -360) | Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C; Safety: +1.5°C; Adjusted: 27.7°C; Unusual weather (severity=0.5); Current: 35.0°C → offset: -4.8°C; Weight: 0.49 | GE-Spot Q0: CHEAP (night)"
+  full_reasoning: "State WARNING: DM -522 beyond expected for 7.0°C (expected: -360) | Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C; Safety: +1.5°C; Adjusted: 27.7°C; Unusual weather (severity=0.5); Current: 35.0°C → offset: -4.8°C; Weight: 0.49 | Spot Price Q0: CHEAP (night)"
   applied_offset: -4.8
   decision_timestamp: "2025-10-16T00:04:31"
   layers:
@@ -35,7 +35,7 @@ attributes:
     - reason: "Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C"
       offset: -4.8
       weight: 0.49
-    - reason: "GE-Spot Q0: CHEAP (night)"
+    - reason: "Spot Price Q0: CHEAP (night)"
       offset: 0.0
       weight: 0.3
 ```

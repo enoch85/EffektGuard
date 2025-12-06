@@ -10,7 +10,7 @@ EffektGuard now **automatically controls DHW heating** using NIBE's temporary lu
 1. ✅ **Monitors** DHW temperature and thermal debt continuously
 2. ✅ **Calculates** optimal DHW heating decisions based on:
    - Thermal debt (degree minutes)
-   - Electricity prices (GE-Spot)
+   - Electricity prices (Spot Price)
    - Space heating demand
    - Indoor temperature vs target
    - High demand periods (morning/evening)

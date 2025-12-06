@@ -12,10 +12,10 @@
         }
       },
       "gespot": {
-        "title": "Konfigurer GE-Spot-integrasjon",
-        "description": "Valgfritt konfigurer GE-Spot for 15-minutters spotprisoptimalisering.\n\n{detection_info}\n\n**Anbefalt:** Bruk `current_price` sensor for sanntids kvartersprispriser.",
+        "title": "Konfigurer spotpris-integrasjon",
+        "description": "Valgfritt konfigurer spotpris for 15-minutters prisoptimalisering.\n\n{detection_info}\n\n**Anbefalt:** Bruk `current_price` sensor for sanntids kvartersprispriser.",
         "data": {
-          "gespot_entity": "GE-Spot Prissensor (Current Price Anbefalt)",
+          "gespot_entity": "Spotpris-sensor (Current Price Anbefalt)",
           "enable_price_optimization": "Aktiver prisoptimalisering"
         }
       },
@@ -30,7 +30,7 @@
     },
     "error": {
       "nibe_entity_not_found": "NIBE-enhet ikke funnet",
-      "gespot_entity_not_found": "GE-Spot-enhet ikke funnet"
+      "gespot_entity_not_found": "Spotpris-enhet ikke funnet"
     },
     "abort": {
       "nibe_not_found": "NIBE-integrasjon ikke funnet. Vennligst installer NIBE Myuplink-integrasjon først."
@@ -108,6 +108,9 @@
       },
       "hot_water_optimization": {
         "name": "Varmtvannsoptimalisering"
+      },
+      "airflow_optimization": {
+        "name": "Luftstrømoptimalisering"
       }
     }
   },

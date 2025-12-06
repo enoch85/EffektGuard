@@ -11,7 +11,7 @@ def create_mock_coordinator_dependencies(mock_hass, entry):
     nibe_adapter = MagicMock()
     nibe_adapter.get_current_state = AsyncMock()
 
-    # Mock GE-Spot adapter
+    # Mock spot price adapter
     gespot_adapter = MagicMock()
     gespot_adapter.get_prices = AsyncMock()
 

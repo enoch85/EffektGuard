@@ -12,11 +12,16 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    AIRFLOW_DEFAULT_ENHANCED,
+    AIRFLOW_DEFAULT_STANDARD,
     CLIMATE_CENTRAL_SWEDEN,
     CLIMATE_MID_NORTHERN_SWEDEN,
     CLIMATE_NORTHERN_LAPLAND,
     CLIMATE_NORTHERN_SWEDEN,
     CLIMATE_SOUTHERN_SWEDEN,
+    CONF_AIRFLOW_ENHANCED_RATE,
+    CONF_AIRFLOW_STANDARD_RATE,
+    CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_POWER_KW,
@@ -67,7 +72,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     """Coordinate data updates for EffektGuard.
 
     This coordinator orchestrates:
-    - Data collection from NIBE, GE-Spot, and weather
+    - Data collection from NIBE, spot price, and weather
     - Optimization decision calculation
     - State management and persistence
     - Updates to all entities
@@ -166,6 +171,42 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Savings calculator
         self.savings_calculator = SavingsCalculator()
+
+        # Airflow optimizer for exhaust air heat pumps (F750/F730)
+        # Only created if model supports exhaust airflow optimization
+        self.airflow_optimizer = None
+        if self.heat_pump_model.supports_exhaust_airflow:
+            from .optimization.airflow_optimizer import AirflowOptimizer
+
+            flow_standard = float(
+                entry.options.get(
+                    CONF_AIRFLOW_STANDARD_RATE,
+                    entry.data.get(CONF_AIRFLOW_STANDARD_RATE, AIRFLOW_DEFAULT_STANDARD),
+                )
+            )
+            flow_enhanced = float(
+                entry.options.get(
+                    CONF_AIRFLOW_ENHANCED_RATE,
+                    entry.data.get(CONF_AIRFLOW_ENHANCED_RATE, AIRFLOW_DEFAULT_ENHANCED),
+                )
+            )
+            self.airflow_optimizer = AirflowOptimizer(
+                flow_standard=flow_standard,
+                flow_enhanced=flow_enhanced,
+            )
+            _LOGGER.debug(
+                "Airflow optimizer initialized: standard %.0f m³/h, enhanced %.0f m³/h",
+                flow_standard,
+                flow_enhanced,
+            )
+        else:
+            _LOGGER.debug(
+                "Airflow optimizer not available - model %s does not support exhaust airflow",
+                self.heat_pump_model.model_name,
+            )
+
+        # Track airflow enhancement state for minimum duration enforcement
+        self._airflow_enhance_start: datetime | None = None
 
         if demand_periods:
             try:
@@ -576,7 +617,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Returns:
             Dictionary containing:
             - nibe: Current NIBE state
-            - price: GE-Spot price data (native 15-min intervals)
+            - price: Spot price data (native 15-min intervals)
             - weather: Weather forecast
             - decision: Optimization decision with offset and reasoning
             - offset: Current heating curve offset
@@ -660,7 +701,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
-        # GE-Spot price data (native 15-minute intervals)
+        # Spot price data (native 15-minute intervals)
         try:
             price_data = await self.gespot.get_prices()
             if price_data and price_data.today:
@@ -669,7 +710,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     price_data.today[current_q].price if current_q < len(price_data.today) else 0
                 )
 
-                # Get unit from GE-Spot entity for accurate logging
+                # Get unit from spot price entity for accurate logging
                 gespot_entity = self.hass.states.get(self.entry.data.get("gespot_entity"))
                 unit = (
                     gespot_entity.attributes.get("unit_of_measurement", "units")
@@ -678,14 +719,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 _LOGGER.debug(
-                    "GE-Spot data retrieved: %d quarters today, current Q%d = %.2f %s",
+                    "Spot price data retrieved: %d quarters today, current Q%d = %.2f %s",
                     len(price_data.today),
                     current_q,
                     current_price,
                     unit,
                 )
             else:
-                _LOGGER.debug("GE-Spot data empty, using fallback prices")
+                _LOGGER.debug("Spot price data empty, using fallback prices")
                 price_data = self._get_fallback_prices()
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Price data unavailable, using fallback: %s", err)
@@ -1007,7 +1048,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
 
-                # Use the optimizer's recommended start time (timezone-aware from GE-Spot)
+                # Use the optimizer's recommended start time (timezone-aware from spot price)
                 dhw_next_boost = dhw_planning_details.get("recommended_start_time")
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
@@ -1050,6 +1091,47 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         temperature_trend_data = self.thermal_predictor.get_current_trend()
         outdoor_trend_data = self.thermal_predictor.get_outdoor_trend()
 
+        # Evaluate and control airflow for exhaust air heat pumps (F750/F730)
+        airflow_decision = None
+        if self.airflow_optimizer and nibe_data:
+            try:
+                # Get target temperature from config
+                target_temp = float(
+                    self.entry.options.get(
+                        "target_indoor_temp",
+                        self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+                    )
+                )
+
+                airflow_decision = self.airflow_optimizer.evaluate_from_nibe(
+                    nibe_data=nibe_data,
+                    target_temp=target_temp,
+                    thermal_trend=temperature_trend_data,
+                )
+
+                # Log airflow decision details
+                _LOGGER.debug(
+                    "Airflow decision: %s (enhance=%s, gain=%.2f kW, indoor=%.1f°C, "
+                    "compressor=%d Hz, outdoor=%.1f°C)",
+                    airflow_decision.reason,
+                    airflow_decision.should_enhance,
+                    airflow_decision.expected_gain_kw,
+                    nibe_data.indoor_temp,
+                    nibe_data.compressor_hz or 0,
+                    nibe_data.outdoor_temp,
+                )
+
+                # Apply control only if airflow optimization is enabled (like DHW)
+                airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
+                if airflow_enabled:
+                    await self._apply_airflow_decision(airflow_decision)
+                else:
+                    _LOGGER.debug("Airflow optimization disabled - not applying control")
+
+            except (AttributeError, ValueError, TypeError) as err:
+                _LOGGER.warning("Airflow evaluation failed: %s", err)
+                # Continue without airflow optimization
+
         # Start aligned scheduling on first update (replaces base class scheduling)
         if not self._clock_aligned:
             self._schedule_aligned_refresh()
@@ -1077,6 +1159,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_recommendation": dhw_recommendation,
             "dhw_planning_summary": dhw_planning_summary,  # Human-readable summary
             "dhw_planning": dhw_planning_details,  # Detailed machine-readable data
+            "airflow_decision": airflow_decision,  # Airflow enhancement decision (F750/F730)
         }
 
     async def _calculate_dhw_recommendation(
@@ -1086,7 +1169,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Args:
             nibe_data: Current NIBE state
-            price_data: GE-Spot price data
+            price_data: Spot price data
             weather_data: Weather forecast
             current_dhw_temp: Current DHW temperature (°C)
             now_time: Current datetime
@@ -1507,6 +1590,85 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         return max(0.0, hours)  # Never negative
 
+    async def _apply_airflow_decision(self, decision) -> None:
+        """Apply automatic ventilation control based on airflow optimizer decision.
+
+        Controls NIBE enhanced ventilation switch for exhaust air heat pumps (F750/F730).
+        When enhanced airflow is beneficial, turns on increased ventilation to extract
+        more heat from exhaust air. When not beneficial, returns to normal.
+
+        Based on thermodynamic calculations:
+        - Enhanced airflow extracts more heat from exhaust air
+        - COP improves ~20% with warmer evaporator
+        - Trade-off is ventilation penalty (more cold air to heat)
+
+        Automatic stop conditions:
+        - Indoor temp reaches target
+        - Indoor trend turns positive (> +0.1°C/h)
+        - Compressor drops below threshold
+        - Maximum duration reached
+        - Outdoor temp drops below -15°C (penalty exceeds gains)
+
+        Args:
+            decision: FlowDecision from airflow optimizer
+        """
+        from .const import NIBE_VENTILATION_MIN_ENHANCED_DURATION
+
+        # Check if enhanced ventilation is currently active
+        is_enhanced = await self.nibe.is_enhanced_ventilation_active()
+
+        if is_enhanced is None:
+            _LOGGER.debug("Ventilation control unavailable - no ventilation switch found")
+            return
+
+        # Determine target state based on decision
+        if decision.should_enhance:
+            # Only turn on if not already enhanced
+            if not is_enhanced:
+                success = await self.nibe.set_enhanced_ventilation(True)
+                if success:
+                    # Track when we started enhanced mode
+                    self._airflow_enhance_start = dt_util.utcnow()
+                    _LOGGER.info(
+                        "🌀 Ventilation ENHANCED: ON for %d min (+%.2f kW gain) - %s",
+                        decision.duration_minutes,
+                        decision.expected_gain_kw,
+                        decision.reason,
+                    )
+            else:
+                _LOGGER.debug(
+                    "Ventilation already enhanced - %s",
+                    decision.reason,
+                )
+        else:
+            # Only reduce if currently enhanced and minimum duration passed
+            if is_enhanced:
+                # Check minimum enhanced duration to prevent rapid cycling
+                if hasattr(self, "_airflow_enhance_start") and self._airflow_enhance_start:
+                    elapsed_minutes = (
+                        dt_util.utcnow() - self._airflow_enhance_start
+                    ).total_seconds() / 60
+
+                    if elapsed_minutes < NIBE_VENTILATION_MIN_ENHANCED_DURATION:
+                        _LOGGER.debug(
+                            "Ventilation: keeping enhanced for %d more min (min duration)",
+                            int(NIBE_VENTILATION_MIN_ENHANCED_DURATION - elapsed_minutes),
+                        )
+                        return
+
+                success = await self.nibe.set_enhanced_ventilation(False)
+                if success:
+                    self._airflow_enhance_start = None
+                    _LOGGER.info(
+                        "🌀 Ventilation NORMAL: OFF - %s",
+                        decision.reason,
+                    )
+            else:
+                _LOGGER.debug(
+                    "Ventilation at normal - %s",
+                    decision.reason,
+                )
+
     async def _apply_dhw_control(
         self, decision, current_dhw_temp: float, now_time: datetime
     ) -> None:
@@ -1640,7 +1802,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
     def _get_fallback_prices(self):
-        """Get fallback price data when GE-Spot unavailable.
+        """Get fallback price data when spot price unavailable.
 
         Returns neutral price classification to maintain safe operation
         without optimization.
@@ -2004,25 +2166,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to reset offset: %s", err)
 
-    async def async_update_config(self, new_options: dict[str, Any]) -> None:
+    async def async_update_config(self, options: dict[str, Any]) -> None:
         """Update configuration without full reload.
 
         Allows hot-reload of runtime options like target temperature,
         thermal mass, and DHW settings without restarting the integration.
 
         Args:
-            new_options: Dictionary of updated option values
+            options: Dictionary of updated option values
         """
-        _LOGGER.debug("Updating configuration: %s", new_options)
+        _LOGGER.debug("Updating configuration: %s", options)
 
         # Update decision engine cached configuration values
         # CRITICAL: Decision engine caches these at init, must update them here
-        if "target_indoor_temp" in new_options:
-            self.engine.target_temp = float(new_options["target_indoor_temp"])
+        if "target_indoor_temp" in options:
+            self.engine.target_temp = float(options["target_indoor_temp"])
             _LOGGER.debug("Updated target temperature: %.1f°C", self.engine.target_temp)
 
-        if "tolerance" in new_options:
-            self.engine.tolerance = float(new_options["tolerance"])
+        if "tolerance" in options:
+            self.engine.tolerance = float(options["tolerance"])
             self.engine.tolerance_range = self.engine.tolerance * 0.4  # Recalculate range
             _LOGGER.debug(
                 "Updated tolerance: %.1f (range: %.1f°C)",
@@ -2031,24 +2193,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
         # Update thermal model parameters
-        if "thermal_mass" in new_options:
-            self.engine.thermal.thermal_mass = new_options["thermal_mass"]
-            _LOGGER.debug("Updated thermal mass: %.2f", new_options["thermal_mass"])
+        if "thermal_mass" in options:
+            self.engine.thermal.thermal_mass = options["thermal_mass"]
+            _LOGGER.debug("Updated thermal mass: %.2f", options["thermal_mass"])
 
-        if "insulation_quality" in new_options:
-            self.engine.thermal.insulation_quality = new_options["insulation_quality"]
-            _LOGGER.debug("Updated insulation quality: %.2f", new_options["insulation_quality"])
+        if "insulation_quality" in options:
+            self.engine.thermal.insulation_quality = options["insulation_quality"]
+            _LOGGER.debug("Updated insulation quality: %.2f", options["insulation_quality"])
 
         # Update optimization mode and recalculate mode config
-        if "optimization_mode" in new_options:
-            self.engine.config["optimization_mode"] = new_options["optimization_mode"]
+        if "optimization_mode" in options:
+            self.engine.config["optimization_mode"] = options["optimization_mode"]
             self.engine._update_mode_config()  # Recalculate mode-specific settings
-            _LOGGER.debug("Updated optimization mode: %s", new_options["optimization_mode"])
+            _LOGGER.debug("Updated optimization mode: %s", options["optimization_mode"])
 
         # Update control priority (note: stored in config dict, not cached)
-        if "control_priority" in new_options:
-            self.engine.config["control_priority"] = new_options["control_priority"]
-            _LOGGER.debug("Updated control priority: %s", new_options["control_priority"])
+        if "control_priority" in options:
+            self.engine.config["control_priority"] = options["control_priority"]
+            _LOGGER.debug("Updated control priority: %s", options["control_priority"])
 
         # Update switch states (stored in config dict, checked by layers)
         switch_keys = {
@@ -2059,16 +2221,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "enable_hot_water_optimization",
         }
         for key in switch_keys:
-            if key in new_options:
-                self.engine.config[key] = new_options[key]
-                _LOGGER.debug("Updated switch %s: %s", key, new_options[key])
+            if key in options:
+                self.engine.config[key] = options[key]
+                _LOGGER.debug("Updated switch %s: %s", key, options[key])
 
         # Update peak protection margin (note: stored in config dict, not cached)
-        if "peak_protection_margin" in new_options:
-            self.engine.config["peak_protection_margin"] = new_options["peak_protection_margin"]
-            _LOGGER.debug(
-                "Updated peak protection margin: %.2f", new_options["peak_protection_margin"]
-            )
+        if "peak_protection_margin" in options:
+            self.engine.config["peak_protection_margin"] = options["peak_protection_margin"]
+            _LOGGER.debug("Updated peak protection margin: %.2f", options["peak_protection_margin"])
 
         # Update DHW settings
         dhw_config_changed = False
@@ -2080,7 +2240,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_target_temp",
         }
 
-        if any(key in new_options for key in dhw_keys):
+        if any(key in options for key in dhw_keys):
             dhw_config_changed = True
 
         if dhw_config_changed:
@@ -2088,11 +2248,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             from .optimization.dhw_optimizer import DHWDemandPeriod
             from .const import DEFAULT_DHW_TARGET_TEMP
 
-            dhw_target = float(new_options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
+            dhw_target = float(options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
             demand_periods = []
 
-            if new_options.get("dhw_morning_enabled", True):
-                morning_hour = int(new_options.get("dhw_morning_hour", 7))
+            if options.get("dhw_morning_enabled", True):
+                morning_hour = int(options.get("dhw_morning_hour", 7))
                 demand_periods.append(
                     DHWDemandPeriod(
                         start_hour=morning_hour,
@@ -2101,8 +2261,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                 )
 
-            if new_options.get("dhw_evening_enabled", True):
-                evening_hour = int(new_options.get("dhw_evening_hour", 18))
+            if options.get("dhw_evening_enabled", True):
+                evening_hour = int(options.get("dhw_evening_hour", 18))
                 demand_periods.append(
                     DHWDemandPeriod(
                         start_hour=evening_hour,
@@ -2119,6 +2279,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 len(demand_periods),
                 dhw_target,
             )
+
+        # Handle airflow optimization toggle (F750/F730 exhaust air heat pumps)
+        # Note: Optimizer is always created, this just controls whether it applies changes
+        if CONF_ENABLE_AIRFLOW_OPTIMIZATION in options:
+            airflow_enabled = options[CONF_ENABLE_AIRFLOW_OPTIMIZATION]
+            _LOGGER.debug("Updated airflow optimization: %s", airflow_enabled)
+
+            # If disabling, turn off enhanced ventilation if active
+            if not airflow_enabled:
+                self._airflow_enhance_start = None
+                try:
+                    if await self.nibe.is_enhanced_ventilation_active():
+                        await self.nibe.set_enhanced_ventilation(False)
+                        _LOGGER.info("Disabled enhanced ventilation on airflow optimizer disable")
+                except (AttributeError, ValueError, OSError) as err:
+                    _LOGGER.warning("Failed to disable enhanced ventilation: %s", err)
 
         # Configuration is now updated in the engine's internal state
         # Next coordinator update cycle (≤5 min) will use these new values

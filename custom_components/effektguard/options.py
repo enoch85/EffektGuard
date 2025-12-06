@@ -10,10 +10,16 @@ from homeassistant.data_entry_flow import FlowResult, section
 from homeassistant.helpers import selector
 
 from .const import (
+    AIRFLOW_DEFAULT_ENHANCED,
+    AIRFLOW_DEFAULT_STANDARD,
+    CONF_AIRFLOW_ENHANCED_RATE,
+    CONF_AIRFLOW_STANDARD_RATE,
+    CONF_HEAT_PUMP_MODEL,
     CONF_INSULATION_QUALITY,
     CONF_OPTIMIZATION_MODE,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
+    DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INSULATION_QUALITY,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_THERMAL_MASS,
@@ -22,6 +28,7 @@ from .const import (
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
 )
+from .models import HeatPumpModelRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +50,8 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             validated.update(user_input["building_characteristics"])
         if "domestic_hot_water" in user_input:
             validated.update(user_input["domestic_hot_water"])
+        if "airflow_optimization" in user_input:
+            validated.update(user_input["airflow_optimization"])
 
         # Also handle flat structure (backward compatibility)
         for key, value in user_input.items():
@@ -50,6 +59,7 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 "optimization_settings",
                 "building_characteristics",
                 "domestic_hot_water",
+                "airflow_optimization",
             ]:
                 validated[key] = value
 
@@ -76,6 +86,19 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                     validated[hour_field] = int(validated[hour_field])
                 except (TypeError, ValueError) as e:
                     raise vol.Invalid(f"Invalid hour value for {hour_field}: {e}")
+
+        # Validate airflow rates
+        if CONF_AIRFLOW_STANDARD_RATE in validated:
+            try:
+                validated[CONF_AIRFLOW_STANDARD_RATE] = float(validated[CONF_AIRFLOW_STANDARD_RATE])
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid standard airflow rate: {e}")
+
+        if CONF_AIRFLOW_ENHANCED_RATE in validated:
+            try:
+                validated[CONF_AIRFLOW_ENHANCED_RATE] = float(validated[CONF_AIRFLOW_ENHANCED_RATE])
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid enhanced airflow rate: {e}")
 
         return validated
 
@@ -212,5 +235,51 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 {"collapsed": False},
             ),
         }
+
+        # Only show airflow section for exhaust air heat pumps (F750, F730)
+        model_id = self.config_entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
+        supports_airflow = False
+        try:
+            model_profile = HeatPumpModelRegistry.get_model(model_id)
+            supports_airflow = getattr(model_profile, "supports_exhaust_airflow", False)
+        except ValueError:
+            _LOGGER.debug("Unknown heat pump model: %s", model_id)
+
+        if supports_airflow:
+            schema_dict[vol.Required("airflow_optimization")] = section(
+                vol.Schema(
+                    {
+                        vol.Optional(
+                            CONF_AIRFLOW_STANDARD_RATE,
+                            default=self.config_entry.options.get(
+                                CONF_AIRFLOW_STANDARD_RATE, AIRFLOW_DEFAULT_STANDARD
+                            ),
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=100.0,
+                                max=300.0,
+                                step=10.0,
+                                mode=selector.NumberSelectorMode.SLIDER,
+                                unit_of_measurement="m³/h",
+                            )
+                        ),
+                        vol.Optional(
+                            CONF_AIRFLOW_ENHANCED_RATE,
+                            default=self.config_entry.options.get(
+                                CONF_AIRFLOW_ENHANCED_RATE, AIRFLOW_DEFAULT_ENHANCED
+                            ),
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=150.0,
+                                max=400.0,
+                                step=10.0,
+                                mode=selector.NumberSelectorMode.SLIDER,
+                                unit_of_measurement="m³/h",
+                            )
+                        ),
+                    }
+                ),
+                {"collapsed": False},
+            )
 
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema_dict))

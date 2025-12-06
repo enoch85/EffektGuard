@@ -1,6 +1,6 @@
 # Scenario 3: Effect Tariff Peak Protection
 
-**Description**: 15-minute peak avoidance using GE-Spot quarterly data and monthly top-3 tracking.
+**Description**: 15-minute peak avoidance using Spot Price quarterly data and monthly top-3 tracking.
 
 ```mermaid
 flowchart TD
@@ -37,7 +37,7 @@ flowchart TD
         T[OK<br/>Offset: 0.0°C<br/>Safe margin]
     end
 
-    subgraph "GE-Spot Integration"
+    subgraph "Spot Price Integration"
         U[96 Native Quarters/Day<br/>Perfect Effektavgift Match]
         V[Q0: 00:00-00:15<br/>Q24: 06:00-06:15<br/>Q87: 21:45-22:00<br/>Q95: 23:45-00:00]
     end
@@ -66,7 +66,7 @@ flowchart TD
     R -->|Yes| S
     R -->|No| T
 
-    %% GE-Spot connection
+    %% Spot Price connection
     U --> A
     V --> C
 
@@ -89,7 +89,7 @@ flowchart TD
 
 ### Perfect Quarter Alignment
 
-EffektGuard leverages GE-Spot's **native 15-minute data structure** which provides exactly 96 quarterly periods per day:
+EffektGuard leverages Spot Price's **native 15-minute data structure** which provides exactly 96 quarterly periods per day:
 
 - **Q0**: 00:00-00:15 (Night, 50% weight)
 - **Q24**: 06:00-06:15 (Daytime starts, full weight)

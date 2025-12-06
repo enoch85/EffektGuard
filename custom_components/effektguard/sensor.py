@@ -112,7 +112,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Current Electricity Price",
         icon="mdi:currency-eur",
         device_class=SensorDeviceClass.MONETARY,
-        # Unit dynamically set from GE-Spot entity in native_unit_of_measurement property
+        # Unit dynamically set from spot price entity in native_unit_of_measurement property
         # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
@@ -321,6 +321,32 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
             coordinator.data.get("dhw_next_boost") if coordinator.data else None
         ),
     ),
+    # Airflow Optimization sensors (Exhaust Air Heat Pump)
+    EffektGuardSensorEntityDescription(
+        key="airflow_enhancement",
+        name="Airflow Enhancement",
+        icon="mdi:fan",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            coordinator.data["airflow_decision"].mode.value
+            if coordinator.data and coordinator.data.get("airflow_decision")
+            else "standard"
+        ),
+    ),
+    EffektGuardSensorEntityDescription(
+        key="airflow_thermal_gain",
+        name="Airflow Thermal Gain",
+        icon="mdi:heat-wave",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda coordinator: (
+            round(coordinator.data["airflow_decision"].expected_gain_kw, 2)
+            if coordinator.data and coordinator.data.get("airflow_decision")
+            else 0.0
+        ),
+    ),
 )
 
 
@@ -332,7 +358,23 @@ async def async_setup_entry(
     """Set up EffektGuard sensor entities from a config entry."""
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [EffektGuardSensor(coordinator, entry, description) for description in SENSORS]
+    # Check if heat pump supports exhaust airflow optimization
+    supports_airflow = coordinator.heat_pump_model and getattr(
+        coordinator.heat_pump_model, "supports_exhaust_airflow", False
+    )
+
+    # Filter sensors based on heat pump capabilities
+    airflow_sensor_keys = {"airflow_enhancement", "airflow_thermal_gain"}
+    entities = []
+    for description in SENSORS:
+        # Only show airflow sensors for exhaust air heat pumps
+        if description.key in airflow_sensor_keys and not supports_airflow:
+            _LOGGER.debug(
+                "Hiding %s sensor - model does not support exhaust airflow",
+                description.key,
+            )
+            continue
+        entities.append(EffektGuardSensor(coordinator, entry, description))
 
     async_add_entities(entities)
 
@@ -448,7 +490,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
     @property
     def native_unit_of_measurement(self) -> str | None:
         """Return the unit of measurement dynamically for price sensor."""
-        # For current_price sensor, get unit from GE-Spot entity
+        # For current_price sensor, get unit from spot price entity
         if self.entity_description.key == "current_price":
             try:
                 gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
@@ -458,7 +500,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         return gespot_state.attributes.get("unit_of_measurement", "öre/kWh")
             except (AttributeError, KeyError):
                 pass
-            # Fallback to öre/kWh if GE-Spot not available
+            # Fallback to öre/kWh if spot price entity not available
             return "öre/kWh"
 
         # For all other sensors, use description's unit
@@ -506,18 +548,16 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         key = self.entity_description.key
 
         if key == "current_offset":
-            # Show layer breakdown for calculated offset
+            # Show layer breakdown for calculated offset - each layer as its own attribute
             if "decision" in self.coordinator.data:
                 decision = self.coordinator.data["decision"]
                 if decision and hasattr(decision, "layers"):
-                    attrs["layer_votes"] = [
-                        {
+                    for layer in decision.layers:
+                        attrs[layer.name] = {
+                            "reason": layer.reason,
                             "offset": layer.offset,
                             "weight": layer.weight,
-                            "reason": layer.reason,
                         }
-                        for layer in decision.layers
-                    ]
 
         elif key == "price_period_classification":
             # Show today's full classification
@@ -956,16 +996,14 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["decision_timestamp"] = decision.timestamp.isoformat()
                     if hasattr(decision, "offset"):
                         attrs["applied_offset"] = decision.offset
-                    # Add layer breakdown for detailed analysis
+                    # Add layer breakdown - each layer as its own attribute
                     if hasattr(decision, "layers") and decision.layers:
-                        attrs["layers"] = [
-                            {
+                        for layer in decision.layers:
+                            attrs[layer.name] = {
                                 "reason": layer.reason,
                                 "offset": layer.offset,
                                 "weight": layer.weight,
                             }
-                            for layer in decision.layers
-                        ]
 
         elif key == "optional_features_status":
             # Show detailed status of all optional features
@@ -1006,7 +1044,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     "note": "Estimating from heat pump data",
                 }
 
-            # Tomorrow prices status (from GE-Spot)
+            # Tomorrow prices status (from spot price entity)
             if "price" in self.coordinator.data:
                 price_data = self.coordinator.data["price"]
                 has_tomorrow = (
@@ -1143,5 +1181,41 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         if hasattr(last_heated, "isoformat")
                         else str(last_heated)
                     )
+
+        elif key == "airflow_enhancement":
+            # Airflow mode decision attributes
+            if "airflow_decision" in self.coordinator.data:
+                decision = self.coordinator.data["airflow_decision"]
+                if decision:
+                    attrs["reason"] = decision.reason
+                    attrs["duration_minutes"] = decision.duration_minutes
+                    if decision.timestamp:
+                        attrs["decision_time"] = decision.timestamp.isoformat()
+
+            # Flow rate configuration (user's configured values)
+            if (
+                hasattr(self.coordinator, "airflow_optimizer")
+                and self.coordinator.airflow_optimizer
+            ):
+                attrs["flow_standard_m3h"] = self.coordinator.airflow_optimizer.flow_standard
+                attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
+
+        elif key == "airflow_thermal_gain":
+            # Thermal gain statistics and breakdown
+            if "airflow_decision" in self.coordinator.data:
+                decision = self.coordinator.data["airflow_decision"]
+                if decision:
+                    attrs["mode"] = decision.mode.value
+
+            # Enhancement statistics (gain-related)
+            if (
+                hasattr(self.coordinator, "airflow_optimizer")
+                and self.coordinator.airflow_optimizer
+            ):
+                stats = self.coordinator.airflow_optimizer.get_enhancement_stats()
+                attrs["total_decisions"] = stats.get("total_decisions", 0)
+                attrs["enhance_recommendations"] = stats.get("enhance_recommendations", 0)
+                attrs["enhance_percentage"] = round(stats.get("enhance_percentage", 0.0), 1)
+                attrs["average_gain_kw"] = round(stats.get("average_gain_kw", 0.0), 3)
 
         return attrs

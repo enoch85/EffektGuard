@@ -1,10 +1,10 @@
-# Scenario 5: Spot Price Optimization with GE-Spot
+# Scenario 5: Spot Price Optimization with Spot Price
 
-**Description**: Base optimization using native 15-minute GE-Spot price classification.
+**Description**: Base optimization using native 15-minute Spot Price price classification.
 
 ```mermaid
 flowchart TD
-    subgraph "GE-Spot Data Processing"
+    subgraph "Spot Price Data Processing"
         A[96 Native 15-min Periods<br/>Perfect Effektavgift Match]
         B[Today: Q0-Q95<br/>Tomorrow: Q0-Q95 if available]
         C[Parse Quarter Periods<br/>quarter, hour, minute, price, is_daytime]
@@ -72,11 +72,11 @@ flowchart TD
     style P fill:#666,stroke:#fff,stroke-width:2px,color:#fff
 ```
 
-## GE-Spot Native Integration
+## Spot Price Native Integration
 
 ### Perfect Quarter Alignment
 
-GE-Spot provides **exactly 96 quarterly periods per day**, eliminating the need for:
+Spot Price provides **exactly 96 quarterly periods per day**, eliminating the need for:
 - Hourly price interpolation
 - Complex time zone calculations  
 - Approximation errors
