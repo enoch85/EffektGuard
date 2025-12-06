@@ -97,12 +97,15 @@ def mock_coordinator_with_data(mock_hass, mock_config_entry):
     nibe_data.phase3_current = 11.0
 
     # Mock decision data
+    # Use LayerDecision directly since Mock(name=...) doesn't work as expected
+    from custom_components.effektguard.optimization.decision_engine import LayerDecision
+
     decision_data = Mock()
     decision_data.offset = 2.0
     decision_data.reasoning = "Optimizing for low price period"
     decision_data.layers = [
-        Mock(offset=1.0, weight=0.5, reason="Price optimization"),
-        Mock(offset=1.0, weight=0.5, reason="Weather compensation"),
+        LayerDecision(name="Spot Price", offset=1.0, weight=0.5, reason="Price optimization"),
+        LayerDecision(name="Math WC", offset=1.0, weight=0.5, reason="Weather compensation"),
     ]
 
     # Mock price data
@@ -439,11 +442,13 @@ class TestSensorExtraStateAttributes:
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
 
         attrs = sensor.extra_state_attributes
-        assert "layer_votes" in attrs
-        assert len(attrs["layer_votes"]) == 2
-        assert attrs["layer_votes"][0]["offset"] == 1.0
-        assert attrs["layer_votes"][0]["weight"] == 0.5
-        assert attrs["layer_votes"][0]["reason"] == "Price optimization"
+        # Each layer is now its own attribute keyed by layer name
+        assert "Spot Price" in attrs
+        assert attrs["Spot Price"]["offset"] == 1.0
+        assert attrs["Spot Price"]["weight"] == 0.5
+        assert attrs["Spot Price"]["reason"] == "Price optimization"
+        assert "Math WC" in attrs
+        assert attrs["Math WC"]["offset"] == 1.0
 
     def test_price_period_classification_attributes(
         self, mock_coordinator_with_data, mock_config_entry

@@ -548,18 +548,16 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
         key = self.entity_description.key
 
         if key == "current_offset":
-            # Show layer breakdown for calculated offset
+            # Show layer breakdown for calculated offset - each layer as its own attribute
             if "decision" in self.coordinator.data:
                 decision = self.coordinator.data["decision"]
                 if decision and hasattr(decision, "layers"):
-                    attrs["layer_votes"] = [
-                        {
+                    for layer in decision.layers:
+                        attrs[layer.name] = {
+                            "reason": layer.reason,
                             "offset": layer.offset,
                             "weight": layer.weight,
-                            "reason": layer.reason,
                         }
-                        for layer in decision.layers
-                    ]
 
         elif key == "price_period_classification":
             # Show today's full classification
