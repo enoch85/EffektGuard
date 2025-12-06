@@ -222,7 +222,8 @@ def test_no_fixed_max_temp_limit():
         safety_decision.weight == 0.0
     ), "Safety layer should not activate at 24°C - upper limit now handled by comfort layer"
     assert safety_decision.offset == 0.0
-    assert "Safety OK" in safety_decision.reason
+    assert safety_decision.name == "Safety"
+    assert safety_decision.reason == "OK"
 
     # But comfort layer SHOULD handle it with coast offsets
     comfort_decision = engine._comfort_layer(nibe_state)

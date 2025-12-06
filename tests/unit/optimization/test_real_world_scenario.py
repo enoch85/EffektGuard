@@ -293,7 +293,7 @@ class TestRealWorldScenario:
         # Final offset - The multi-layer system balances all factors
         # In this scenario:
         # - Weather pre-heat: +1.17°C (weight 0.7) - suggests heating before cold
-        # - GE-Spot price: -1.5°C (weight 0.75) - expensive period, reduce heating
+        # - Spot Price: -1.5°C (weight 0.75) - expensive period, reduce heating
         # - Math WC: +0.33°C (weight 0.3185) - weather compensation adjustment
         # - Proactive Z1: +0.5°C (weight 0.3) - gentle debt prevention
         #
@@ -306,17 +306,16 @@ class TestRealWorldScenario:
         assert decision.offset is not None, "Decision should have an offset"
 
         # Verify all major layers contributed to the decision
-        layer_reasons = [l.reason for l in decision.layers if l.weight > 0]
-        # Weather pre-heat may appear in final reasoning even if not a separate active layer
-        # Check both individual layers and final decision reasoning
-        all_reasons = " | ".join(layer_reasons) + " | " + decision.reasoning
-        assert (
-            any("pre-heat" in r.lower() or "weather" in r.lower() for r in layer_reasons)
-            or "pre-heat" in decision.reasoning.lower()
-        ), f"Weather/preheat should be considered. Layers: {layer_reasons}, Decision: {decision.reasoning}"
+        active_layers = [l for l in decision.layers if l.weight > 0]
+        active_layer_names = [l.name for l in active_layers]
+
+        # Weather pre-heat layer should be active
         assert any(
-            "EXPENSIVE" in r or "PEAK" in r for r in layer_reasons
-        ), "Price layer should be active"
+            "Weather" in name or "Pre-heat" in name for name in active_layer_names
+        ), f"Weather/preheat should be considered. Active layers: {active_layer_names}"
+
+        # Price layer should be active
+        assert "Spot Price" in active_layer_names, f"Price layer should be active. Active layers: {active_layer_names}"
 
         # Expected range: Price optimization may win if not urgent
         # If offset is negative: cost optimization dominant (correct when not urgent)

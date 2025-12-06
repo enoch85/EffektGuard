@@ -69,7 +69,7 @@ custom_components/effektguard/
 │
 ├── adapters/                # External data interfaces
 │   ├── nibe_adapter.py      # NIBE MyUplink reader
-│   ├── gespot_adapter.py    # GE-Spot price reader
+│   ├── gespot_adapter.py    # Spot Price price reader
 │   └── weather_adapter.py   # Weather forecast reader
 │
 └── utils/                   # Cross-cutting utilities

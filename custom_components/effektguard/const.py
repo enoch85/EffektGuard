@@ -1023,7 +1023,7 @@ class OptimizationMode(StrEnum):
 
 
 class QuarterClassification(StrEnum):
-    """Price period classification based on GE-Spot prices.
+    """Price period classification based on spot prices.
 
     Can represent hourly or 15-minute (quarterly) periods depending on price data granularity.
     """

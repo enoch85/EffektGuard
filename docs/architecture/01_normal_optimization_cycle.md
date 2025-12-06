@@ -6,7 +6,7 @@
 flowchart TD
     subgraph "HA Core"
         A[NIBE MyUplink Entities]
-        B[GE-Spot Entities] 
+        B[Spot Price Entities] 
         C[Weather Entities]
         D[HA Services]
     end
@@ -14,7 +14,7 @@ flowchart TD
     subgraph "Coordinator Update Cycle (5min)"
         E[EffektGuardCoordinator._async_update_data]
         F[Gather NIBE Data]
-        G[Gather GE-Spot Prices]
+        G[Gather Spot Price Prices]
         H[Gather Weather Forecast]
         I[Run Decision Engine]
         J[Update Peak Tracking]
@@ -101,7 +101,7 @@ flowchart TD
 ### 1. Data Collection (Every 5 minutes)
 The coordinator orchestrates data gathering from three main sources:
 - **NIBE MyUplink**: Heat pump state, temperatures, degree minutes
-- **GE-Spot**: Native 15-minute electricity prices (96 quarters/day)
+- **Spot Price**: Native 15-minute electricity prices (96 quarters/day)
 - **Weather**: Forecast data for predictive optimization
 
 ### 2. Decision Engine Execution

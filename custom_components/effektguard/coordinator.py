@@ -72,7 +72,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     """Coordinate data updates for EffektGuard.
 
     This coordinator orchestrates:
-    - Data collection from NIBE, GE-Spot, and weather
+    - Data collection from NIBE, spot price, and weather
     - Optimization decision calculation
     - State management and persistence
     - Updates to all entities
@@ -617,7 +617,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Returns:
             Dictionary containing:
             - nibe: Current NIBE state
-            - price: GE-Spot price data (native 15-min intervals)
+            - price: Spot price data (native 15-min intervals)
             - weather: Weather forecast
             - decision: Optimization decision with offset and reasoning
             - offset: Current heating curve offset
@@ -701,7 +701,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
-        # GE-Spot price data (native 15-minute intervals)
+        # Spot price data (native 15-minute intervals)
         try:
             price_data = await self.gespot.get_prices()
             if price_data and price_data.today:
@@ -710,7 +710,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     price_data.today[current_q].price if current_q < len(price_data.today) else 0
                 )
 
-                # Get unit from GE-Spot entity for accurate logging
+                # Get unit from spot price entity for accurate logging
                 gespot_entity = self.hass.states.get(self.entry.data.get("gespot_entity"))
                 unit = (
                     gespot_entity.attributes.get("unit_of_measurement", "units")
@@ -719,14 +719,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 _LOGGER.debug(
-                    "GE-Spot data retrieved: %d quarters today, current Q%d = %.2f %s",
+                    "Spot price data retrieved: %d quarters today, current Q%d = %.2f %s",
                     len(price_data.today),
                     current_q,
                     current_price,
                     unit,
                 )
             else:
-                _LOGGER.debug("GE-Spot data empty, using fallback prices")
+                _LOGGER.debug("Spot price data empty, using fallback prices")
                 price_data = self._get_fallback_prices()
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Price data unavailable, using fallback: %s", err)
@@ -1048,7 +1048,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_planning_summary = dhw_result["summary"]
                 dhw_planning_details = dhw_result["details"]
 
-                # Use the optimizer's recommended start time (timezone-aware from GE-Spot)
+                # Use the optimizer's recommended start time (timezone-aware from spot price)
                 dhw_next_boost = dhw_planning_details.get("recommended_start_time")
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
@@ -1169,7 +1169,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Args:
             nibe_data: Current NIBE state
-            price_data: GE-Spot price data
+            price_data: Spot price data
             weather_data: Weather forecast
             current_dhw_temp: Current DHW temperature (°C)
             now_time: Current datetime
@@ -1802,7 +1802,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
     def _get_fallback_prices(self):
-        """Get fallback price data when GE-Spot unavailable.
+        """Get fallback price data when spot price unavailable.
 
         Returns neutral price classification to maintain safe operation
         without optimization.

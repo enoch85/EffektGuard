@@ -19,7 +19,7 @@ Based on research and code analysis, here are the findings about NIBE MyUplink A
 # NIBE data - reads from existing NIBE integration entities
 outdoor_temp = await self._read_entity_float(self._entity_cache.get("outdoor_temp"))
 
-# GE-Spot data - reads from existing GE-Spot integration entities  
+# Spot Price data - reads from existing Spot Price integration entities  
 state = self.hass.states.get(self._gespot_entity)
 prices = state.attributes.get("prices_today", [])
 

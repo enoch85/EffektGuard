@@ -4,7 +4,7 @@ EffektGuard is a Home Assistant integration for intelligent NIBE heat pump contr
 optimizing for Swedish electricity costs (spot prices and effect tariffs) while
 maintaining comfort.
 
-This integration leverages existing integrations (NIBE Myuplink, GE-Spot, weather)
+This integration leverages existing integrations (NIBE Myuplink, spot price, weather)
 to implement original optimization algorithms designed specifically for Sweden's
 effect tariff system.
 """
@@ -95,7 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     # Wait for first successful data fetch
-    # This validates that all dependencies (MyUplink, GE-Spot) are available
+    # This validates that all dependencies (MyUplink, spot price) are available
     # If not ready, raises ConfigEntryNotReady and HA will retry automatically
     try:
         await coordinator.async_config_entry_first_refresh()

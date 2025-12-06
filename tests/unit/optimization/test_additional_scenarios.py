@@ -61,9 +61,9 @@ class TestSensorAvailability:
 
     @pytest.mark.asyncio
     async def test_required_price_sensors(self):
-        """Test: Verify required price sensors (GE-Spot).
+        """Test: Verify required price sensors (spot price).
 
-        Required from GE-Spot integration:
+        Required from spot price integration:
         - 96 quarterly prices (15-minute intervals)
         - Today's prices
         - Tomorrow's prices (if available)
@@ -71,7 +71,7 @@ class TestSensorAvailability:
         required_data = ["today", "quarterly_prices"]
         assert len(required_data) == 2
 
-        # GE-Spot provides native 15-minute data (96 quarters per day)
+        # Spot price provides native 15-minute data (96 quarters per day)
         quarters_per_day = 96
         assert quarters_per_day == 24 * 4  # 24 hours × 4 quarters per hour
 
@@ -171,7 +171,7 @@ class TestConfigurationFlow:
         entity_patterns = [
             "sensor.*_outdoor_temperature",  # NIBE outdoor
             "sensor.*_supply_temperature",  # NIBE supply
-            "sensor.*_nordpool*",  # GE-Spot or similar
+            "sensor.*_nordpool*",  # Spot price or similar
             "weather.*",  # Weather integration
         ]
 
@@ -263,7 +263,7 @@ class TestWearProtection:
 
         # Ensures:
         # 1. NIBE Myuplink is ready
-        # 2. GE-Spot has data
+        # 2. Spot price has data
         # 3. Weather integration loaded
 
 
@@ -338,7 +338,7 @@ class TestCoordinatorIntegration:
 
         Data flow:
         1. NIBE adapter → heat pump state
-        2. GE-Spot adapter → 15-min prices
+        2. Spot price adapter → 15-min prices
         3. Weather adapter → temperature forecast
         4. Effect manager → peak status
         5. Decision engine → optimal offset

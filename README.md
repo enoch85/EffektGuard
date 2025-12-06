@@ -72,7 +72,7 @@ Native 15-minute (quarterly) integration:
 - **Day/night weighting** - full effect daytime, reduced nighttime
 - **Savings calculation** - estimates monthly savings (effect + spot)
 
-Works with any 15-min price source ([GE-Spot](https://github.com/enoch85/ge-spot), Nordpool, Tibber, etc.).
+Works with any 15-min price source (GE-Spot, Nordpool, Tibber, etc.).
 
 ### 💰 Smart Price Forecasting
 Multi-factor forward-looking optimization combining:
@@ -129,7 +129,7 @@ Production-ready safety mechanisms:
 
 Guided setup flow with validation:
 1. **Select heat pump entity** - heating curve offset (e.g., number.xxx_offset_s1_47011 for NIBE)
-2. **Select price entity** - quarterly price sensor (GE-Spot, Nordpool, etc.)
+2. **Select price entity** - quarterly price sensor (any spot price integration)
 3. **Select weather entity** - forecast integration
 4. **Configure targets** - indoor temperature, tolerance, optimization mode
 5. **Optional features** - DHW optimization, power meter, extra sensors
@@ -153,7 +153,7 @@ Integration Layer (HA-specific)
 Optimization Engine (pure Python)
 └── decision_engine.py (8-layer aggregation)
     ├── thermal_model.py (physics)
-    ├── price_analyzer.py (GE-Spot classification)
+    ├── price_analyzer.py (spot price classification)
     ├── effect_manager.py (peak tracking)
     ├── weather_compensation.py (mathematical WC)
     ├── adaptive_learning.py (self-tuning)

@@ -112,7 +112,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         name="Current Electricity Price",
         icon="mdi:currency-eur",
         device_class=SensorDeviceClass.MONETARY,
-        # Unit dynamically set from GE-Spot entity in native_unit_of_measurement property
+        # Unit dynamically set from spot price entity in native_unit_of_measurement property
         # Note: monetary device_class doesn't support state_class
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
@@ -490,7 +490,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
     @property
     def native_unit_of_measurement(self) -> str | None:
         """Return the unit of measurement dynamically for price sensor."""
-        # For current_price sensor, get unit from GE-Spot entity
+        # For current_price sensor, get unit from spot price entity
         if self.entity_description.key == "current_price":
             try:
                 gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
@@ -500,7 +500,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         return gespot_state.attributes.get("unit_of_measurement", "öre/kWh")
             except (AttributeError, KeyError):
                 pass
-            # Fallback to öre/kWh if GE-Spot not available
+            # Fallback to öre/kWh if spot price entity not available
             return "öre/kWh"
 
         # For all other sensors, use description's unit
@@ -1002,6 +1002,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     if hasattr(decision, "layers") and decision.layers:
                         attrs["layers"] = [
                             {
+                                "name": layer.name,
                                 "reason": layer.reason,
                                 "offset": layer.offset,
                                 "weight": layer.weight,
@@ -1048,7 +1049,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     "note": "Estimating from heat pump data",
                 }
 
-            # Tomorrow prices status (from GE-Spot)
+            # Tomorrow prices status (from spot price entity)
             if "price" in self.coordinator.data:
                 price_data = self.coordinator.data["price"]
                 has_tomorrow = (

@@ -191,6 +191,7 @@ class LayerDecision:
     Each layer proposes an offset and provides reasoning.
     """
 
+    name: str  # Layer name for display (e.g., "Safety", "Spot Price", "Comfort")
     offset: float  # Proposed heating curve offset (°C)
     weight: float  # Layer weight/priority (0.0-1.0)
     reason: str  # Human-readable explanation
@@ -696,7 +697,7 @@ class DecisionEngine:
 
         Args:
             nibe_state: Current NIBE heat pump state
-            price_data: GE-Spot price data (native 15-min intervals)
+            price_data: Spot price data (native 15-min intervals)
             weather_data: Weather forecast data
             current_peak: Current monthly peak threshold (kW) - from peak_this_month sensor
             current_power: Current whole-house power consumption (kW) - from peak_today sensor
@@ -714,9 +715,10 @@ class DecisionEngine:
                 offset=manual_override,
                 layers=[
                     LayerDecision(
+                        name="Manual Override",
                         offset=manual_override,
                         weight=1.0,
-                        reason=f"Manual override: {manual_override:.1f}°C",
+                        reason=f"User-set offset: {manual_override:.1f}°C",
                     )
                 ],
                 reasoning=f"Manual override active: {manual_override:.1f}°C",
@@ -835,16 +837,18 @@ class DecisionEngine:
             # Too cold - emergency heating
             offset = SAFETY_EMERGENCY_OFFSET
             return LayerDecision(
+                name="Safety",
                 offset=offset,
                 weight=LAYER_WEIGHT_SAFETY,
-                reason=f"SAFETY: Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
+                reason=f"Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
             )
         else:
             # Within safe limits (no fixed upper limit - comfort layer handles dynamically)
             return LayerDecision(
+                name="Safety",
                 offset=0.0,
                 weight=0.0,
-                reason="Safety OK",
+                reason="OK",
             )
 
     def _emergency_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
@@ -899,9 +903,10 @@ class DecisionEngine:
             # Too warm - emergency heating would be counterproductive
             # DM will naturally improve as house cools and we maintain target temp later
             return LayerDecision(
+                name="Thermal Debt",
                 offset=0.0,
                 weight=0.0,
-                reason=f"DM {degree_minutes:.0f} BUT indoor {indoor_temp:.1f}°C is {temp_deviation:.1f}°C over target - let cool naturally first",
+                reason=f"DM {degree_minutes:.0f} but {temp_deviation:.1f}°C over target - let cool naturally",
             )
 
         # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
@@ -919,9 +924,10 @@ class DecisionEngine:
 
             if not is_cheap:
                 return LayerDecision(
+                    name="Thermal Debt",
                     offset=0.0,
                     weight=0.0,
-                    reason=f"Smart Recovery: At target ({indoor_temp:.1f}°C) & Price not cheap - ignoring DM {degree_minutes:.0f}",
+                    reason=f"At target & price not cheap - ignoring DM {degree_minutes:.0f}",
                 )
 
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
@@ -930,9 +936,10 @@ class DecisionEngine:
             # This applies regardless of outdoor temperature or conditions
             offset = SAFETY_EMERGENCY_OFFSET
             return LayerDecision(
+                name="Thermal Debt",
                 offset=offset,
                 weight=1.0,
-                reason=f"AUX LIMIT: DM {degree_minutes:.0f} at aux limit -1500 - EMERGENCY",
+                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit -1500",
             )
 
         # Calculate context-aware thresholds based on outdoor temperature
@@ -1000,13 +1007,14 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"{THERMAL_RECOVERY_T3_NAME}: DM {degree_minutes:.0f} near absolute max "
+                f"DM {degree_minutes:.0f} near absolute max "
                 f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
 
             return LayerDecision(
+                name="Thermal Recovery T3",
                 offset=damped_offset,
                 weight=DM_CRITICAL_T3_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -1030,13 +1038,14 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"{THERMAL_RECOVERY_T2_NAME}: DM {degree_minutes:.0f} approaching T3 "
+                f"DM {degree_minutes:.0f} approaching T3 "
                 f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
 
             return LayerDecision(
+                name="Thermal Recovery T2",
                 offset=damped_offset,
                 weight=DM_CRITICAL_T2_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -1060,13 +1069,14 @@ class DecisionEngine:
             )
 
             reason_parts = [
-                f"{THERMAL_RECOVERY_T1_NAME}: DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
+                f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
                 f"(threshold: {t1_threshold:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
 
             return LayerDecision(
+                name="Thermal Recovery T1",
                 offset=damped_offset,
                 weight=DM_CRITICAL_T1_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -1103,13 +1113,13 @@ class DecisionEngine:
             )
 
             reason = (
-                f"WARNING: DM {degree_minutes:.0f} beyond expected for "
+                f"DM {degree_minutes:.0f} beyond expected for "
                 f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
-                f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f}, "
-                f"{percent_beyond:.0%} beyond)"
+                f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f})"
             )
 
             return LayerDecision(
+                name="Thermal Debt Warning",
                 offset=offset,
                 weight=LAYER_WEIGHT_EMERGENCY,  # Strong suggestion, but not absolute override
                 reason=reason,
@@ -1120,17 +1130,19 @@ class DecisionEngine:
             # Slightly beyond normal - gentle correction
             offset = WARNING_CAUTION_OFFSET
             return LayerDecision(
+                name="Thermal Debt",
                 offset=offset,
                 weight=WARNING_CAUTION_WEIGHT,
-                reason=f"CAUTION: DM {degree_minutes:.0f} at {outdoor_temp:.1f}°C - monitoring",
+                reason=f"DM {degree_minutes:.0f} approaching limits - monitoring",
             )
 
         else:
             # DM within normal expected range for this temperature
             return LayerDecision(
+                name="Thermal Debt",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Thermal debt OK (DM: {degree_minutes:.0f} at {outdoor_temp:.1f}°C)",
+                reason=f"OK (DM: {degree_minutes:.0f})",
             )
 
     def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
@@ -1347,10 +1359,11 @@ class DecisionEngine:
                             forecast_reason = " (forecast stable, likely temporary)"
 
                 return LayerDecision(
+                    name="Proactive",
                     offset=boost,
                     weight=RAPID_COOLING_WEIGHT,
                     reason=(
-                        f"Proactive: Rapid cooling ({trend_rate:.2f}°C/h), "
+                        f"Rapid cooling ({trend_rate:.2f}°C/h), "
                         f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
                         f"{forecast_reason}"
                     ),
@@ -1382,9 +1395,10 @@ class DecisionEngine:
                 reason_suffix = ""
 
             return LayerDecision(
+                name="Proactive Z1",
                 offset=offset,
                 weight=LAYER_WEIGHT_PROACTIVE_MIN,
-                reason=f"Proactive Z1: DM {degree_minutes:.0f} (threshold: {zone1_threshold:.0f}), gentle heating prevents debt{reason_suffix}",
+                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}",
             )
 
         # PROACTIVE ZONE 2: Compressor running, monitor trend
@@ -1392,9 +1406,10 @@ class DecisionEngine:
         elif zone3_threshold < degree_minutes <= zone2_threshold:
             offset = PROACTIVE_ZONE2_OFFSET
             return LayerDecision(
+                name="Proactive Z2",
                 offset=offset,
                 weight=PROACTIVE_ZONE2_WEIGHT,
-                reason=f"Proactive Z2: DM {degree_minutes:.0f} (threshold: {zone2_threshold:.0f}), boost recovery speed",
+                reason=f"DM {degree_minutes:.0f}, boost recovery speed",
             )
 
         # PROACTIVE ZONE 3: Significant deficit (50% of normal_max)
@@ -1406,18 +1421,20 @@ class DecisionEngine:
             offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
 
             return LayerDecision(
+                name="Proactive Z3",
                 offset=offset,
                 weight=PROACTIVE_ZONE3_WEIGHT,
-                reason=f"Proactive Z3: DM {degree_minutes:.0f} (threshold: {zone3_threshold:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
+                reason=f"DM {degree_minutes:.0f}, prevent deeper debt",
             )
 
         # PROACTIVE ZONE 4: Strong prevention (75% of normal_max)
         elif zone5_threshold < degree_minutes <= zone4_threshold:
             offset = PROACTIVE_ZONE4_OFFSET
             return LayerDecision(
+                name="Proactive Z4",
                 offset=offset,
                 weight=PROACTIVE_ZONE4_WEIGHT,
-                reason=f"Proactive Z4: DM {degree_minutes:.0f} (threshold: {zone4_threshold:.0f}), strong prevention",
+                reason=f"DM {degree_minutes:.0f}, strong prevention",
             )
 
         # PROACTIVE ZONE 5: Very strong prevention (100% of normal_max - at warning boundary)
@@ -1425,16 +1442,18 @@ class DecisionEngine:
         elif expected_dm["warning"] < degree_minutes <= zone5_threshold:
             offset = PROACTIVE_ZONE5_OFFSET
             return LayerDecision(
+                name="Proactive Z5",
                 offset=offset,
                 weight=PROACTIVE_ZONE5_WEIGHT,
-                reason=f"Proactive Z5: DM {degree_minutes:.0f} (threshold: {zone5_threshold:.0f}), approaching warning",
+                reason=f"DM {degree_minutes:.0f}, approaching warning",
             )
 
         # Outside proactive zones - let emergency/critical layers handle it
         return LayerDecision(
+            name="Proactive",
             offset=0.0,
             weight=0.0,
-            reason="Proactive prevention not needed",
+            reason="Not needed",
         )
 
     def _effect_layer(self, nibe_state, current_peak: float, current_power: float) -> LayerDecision:
@@ -1462,9 +1481,10 @@ class DecisionEngine:
         # Check if peak protection is enabled
         if not self.config.get("enable_peak_protection", True):
             return LayerDecision(
+                name="Peak",
                 offset=0.0,
                 weight=0.0,
-                reason="Peak: Disabled by user",
+                reason="Disabled by user",
             )
 
         # current_power is always provided from coordinator's peak tracking (actual measurements)
@@ -1509,43 +1529,45 @@ class DecisionEngine:
         if limit_decision.severity == "CRITICAL":
             # Already at peak - immediate action
             return LayerDecision(
+                name="Peak",
                 offset=EFFECT_OFFSET_CRITICAL,
                 weight=EFFECT_WEIGHT_CRITICAL,
-                reason=f"Peak: CRITICAL ({current_power:.1f}/{current_peak:.1f} kW, Q{current_quarter})",
+                reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
             )
         elif predicted_margin < EFFECT_MARGIN_PREDICTIVE and predicted_power_increase > 0:
             # PREDICTIVE: Will approach peak in next 15 min - act NOW
             # This is the key innovation: prevent spike before it happens
             return LayerDecision(
+                name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,
                 weight=EFFECT_WEIGHT_PREDICTIVE,
-                reason=(
-                    f"Peak: PREDICTIVE avoidance "
-                    f"(predicted {predicted_power:.1f} kW, {prediction_reason}, Q{current_quarter})"
-                ),
+                reason=f"Predictive avoidance ({prediction_reason})",
             )
         elif limit_decision.severity == "WARNING":
             # Close to peak - check if trend shows increasing demand
             if predicted_power_increase > 0:
                 # Warning + rising demand = moderate reduction
                 return LayerDecision(
+                    name="Peak",
                     offset=EFFECT_OFFSET_WARNING_RISING,
                     weight=EFFECT_WEIGHT_WARNING_RISING,
-                    reason=f"Peak: WARNING + demand rising ({prediction_reason}, Q{current_quarter})",
+                    reason=f"WARNING + demand rising ({prediction_reason})",
                 )
             else:
                 # Warning but demand stable/falling = gentle reduction
                 return LayerDecision(
+                    name="Peak",
                     offset=EFFECT_OFFSET_WARNING_STABLE,
                     weight=EFFECT_WEIGHT_WARNING_STABLE,
-                    reason=f"Peak: WARNING + demand {prediction_reason} (Q{current_quarter})",
+                    reason=f"WARNING + demand {prediction_reason}",
                 )
         else:
             # Safe margin - no action needed
             return LayerDecision(
+                name="Peak",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Peak: Safe margin ({current_power:.1f}/{current_peak:.1f} kW, Q{current_quarter})",
+                reason=f"Safe margin ({current_power:.1f}/{current_peak:.1f} kW)",
             )
 
     def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
@@ -1568,10 +1590,13 @@ class DecisionEngine:
         """
         # Skip if predictor not available or not enough data
         if not self.predictor:
-            return LayerDecision(offset=0.0, weight=0.0, reason="Predictor not initialized")
+            return LayerDecision(
+                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
+            )
 
         if len(self.predictor.state_history) < 96:  # Less than 24 hours of data
             return LayerDecision(
+                name="Learned Pre-heat",
                 offset=0.0,
                 weight=0.0,
                 reason=f"Learning: {len(self.predictor.state_history)}/96 observations",
@@ -1579,7 +1604,9 @@ class DecisionEngine:
 
         # Skip if no weather forecast available
         if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(offset=0.0, weight=0.0, reason="No weather forecast")
+            return LayerDecision(
+                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="No weather forecast"
+            )
 
         try:
             # Use UFH-type-specific forecast horizon for learned predictions
@@ -1590,7 +1617,9 @@ class DecisionEngine:
             ]
 
             if not forecast_temps:
-                return LayerDecision(offset=0.0, weight=0.0, reason="Empty weather forecast")
+                return LayerDecision(
+                    name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Empty weather forecast"
+                )
 
             # Check if pre-heating is recommended
             # Use half of prediction horizon as lookahead (balance between early and late)
@@ -1611,15 +1640,17 @@ class DecisionEngine:
                 # Weight 0.65 - slightly higher than base price layer (0.6)
                 # but lower than effect/weather layers (0.7-0.8)
                 return LayerDecision(
+                    name="Learned Pre-heat",
                     offset=preheat_decision.recommended_offset,
                     weight=LAYER_WEIGHT_PREDICTION,
-                    reason=f"Learned pre-heat: {preheat_decision.reason}",
+                    reason=preheat_decision.reason,
                 )
             else:
                 return LayerDecision(
+                    name="Learned Pre-heat",
                     offset=0.0,
                     weight=0.0,
-                    reason="Learned: No pre-heat needed",
+                    reason="No pre-heat needed",
                 )
 
         except AttributeError as err:
@@ -1632,16 +1663,18 @@ class DecisionEngine:
                 exc_info=True,
             )
             return LayerDecision(
+                name="Learned Pre-heat",
                 offset=0.0,
                 weight=0.0,
-                reason="Thermal model API error - contact support",
+                reason="Thermal model API error",
             )
         except (KeyError, ValueError, TypeError, ZeroDivisionError) as err:
             _LOGGER.warning("Prediction calculation failed: %s", err)
             return LayerDecision(
+                name="Learned Pre-heat",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Prediction error: {err}",
+                reason=f"Calculation error: {err}",
             )
 
     def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
@@ -1679,20 +1712,25 @@ class DecisionEngine:
         # Check if weather prediction is enabled
         if not self.config.get("enable_weather_prediction", True):
             return LayerDecision(
+                name="Weather Pre-heat",
                 offset=0.0,
                 weight=0.0,
-                reason="Weather: Disabled by user",
+                reason="Disabled by user",
             )
 
         if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
+            return LayerDecision(
+                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No weather data"
+            )
 
         # Check forecast for significant temperature drop
         current_outdoor = nibe_state.outdoor_temp
         forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
 
         if not forecast_hours:
-            return LayerDecision(offset=0.0, weight=0.0, reason="No forecast data")
+            return LayerDecision(
+                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No forecast data"
+            )
 
         # Find minimum temperature in forecast period
         min_temp = min(f.temperature for f in forecast_hours)
@@ -1730,19 +1768,17 @@ class DecisionEngine:
                 trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
 
             return LayerDecision(
+                name="Weather Pre-heat",
                 offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
                 weight=weather_weight,
-                reason=(
-                    f"Weather pre-heat: {trigger} → "
-                    f"+{WEATHER_GENTLE_OFFSET:.1f}°C @ weight {weather_weight:.2f} "
-                    f"(base {LAYER_WEIGHT_WEATHER_PREDICTION:.2f} × thermal_mass {self.thermal.thermal_mass:.1f})"
-                ),
+                reason=trigger,
             )
 
         return LayerDecision(
+            name="Weather Pre-heat",
             offset=0.0,
             weight=0.0,
-            reason="Weather: No pre-heating needed (forecast stable, indoor stable)",
+            reason="Forecast stable, indoor stable",
         )
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
@@ -1770,10 +1806,10 @@ class DecisionEngine:
         """
         # Check if feature is enabled
         if not self.enable_weather_compensation:
-            return LayerDecision(offset=0.0, weight=0.0, reason="Weather compensation disabled")
+            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="Disabled")
 
         if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(offset=0.0, weight=0.0, reason="No weather data")
+            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="No weather data")
 
         current_outdoor = nibe_state.outdoor_temp
         current_flow = nibe_state.flow_temp
@@ -1895,13 +1931,14 @@ class DecisionEngine:
         _LOGGER.debug("Weather compensation layer: %s", reasoning)
 
         return LayerDecision(
+            name="Math WC",
             offset=required_offset,
             weight=final_weight,
             reason=reasoning,
         )
 
     def _price_layer(self, nibe_state, price_data) -> LayerDecision:
-        """Spot price layer: Forward-looking optimization from native 15-minute GE-Spot data.
+        """Spot price layer: Forward-looking optimization from native 15-minute spot price data.
 
         Enhanced Nov 27, 2025: Added forward-looking price analysis
         - Looks ahead 4 hours for significant price changes
@@ -1910,7 +1947,7 @@ class DecisionEngine:
 
         Args:
             nibe_state: Current NIBE state (for strategic overshoot context)
-            price_data: GE-Spot price data with native 15-min intervals
+            price_data: Spot price data with native 15-min intervals
 
         Returns:
             LayerDecision with price-based offset
@@ -1918,13 +1955,14 @@ class DecisionEngine:
         # Check if price optimization is enabled
         if not self.config.get("enable_price_optimization", True):
             return LayerDecision(
+                name="Spot Price",
                 offset=0.0,
                 weight=0.0,
-                reason="Price: Disabled by user",
+                reason="Disabled by user",
             )
 
         if not price_data or not price_data.today:
-            return LayerDecision(offset=0.0, weight=0.0, reason="No price data")
+            return LayerDecision(name="Spot Price", offset=0.0, weight=0.0, reason="No price data")
 
         now = dt_util.now()
         current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
@@ -2368,9 +2406,10 @@ class DecisionEngine:
         )
 
         return LayerDecision(
+            name="Spot Price",
             offset=final_offset,
             weight=price_weight,
-            reason=f"GE-Spot Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
+            reason=f"Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
         )
 
     def _comfort_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
@@ -2403,7 +2442,7 @@ class DecisionEngine:
         Args:
             nibe_state: Current NIBE state
             weather_data: Weather forecast (for cold snap → higher heat loss)
-            price_data: GE-Spot price data (for expensive period timing)
+            price_data: Spot price data (for expensive period timing)
 
         Returns:
             LayerDecision with comfort correction
@@ -2421,7 +2460,7 @@ class DecisionEngine:
 
         if abs(temp_deviation) < dead_zone:
             # Very close to target - we're right on target
-            return LayerDecision(offset=0.0, weight=0.0, reason="Temp at target")
+            return LayerDecision(name="Comfort", offset=0.0, weight=0.0, reason="At target")
         elif abs(temp_deviation) < tolerance:
             # Within comfort zone but drifting from target
             # Gentle correction to maintain target during favorable conditions
@@ -2434,6 +2473,7 @@ class DecisionEngine:
                 reason = f"Slightly cool ({temp_deviation:.1f}°C), gentle boost"
 
             return LayerDecision(
+                name="Comfort",
                 offset=correction,
                 weight=base_weight * weight_mult,  # Mode-adjusted weight
                 reason=reason,
@@ -2559,6 +2599,7 @@ class DecisionEngine:
                         correction = -temp_deviation * COMFORT_CORRECTION_MILD
 
                         return LayerDecision(
+                            name="Comfort",
                             offset=correction,
                             weight=LAYER_WEIGHT_COMFORT_MIN,
                             reason=(
@@ -2580,6 +2621,7 @@ class DecisionEngine:
                         coast_offset = -temp_deviation * COMFORT_CORRECTION_MILD * 2  # Gentle coast
 
                         return LayerDecision(
+                            name="Comfort",
                             offset=coast_offset,
                             weight=adjusted_weight,
                             reason=(
@@ -2604,6 +2646,7 @@ class DecisionEngine:
                 )
 
                 return LayerDecision(
+                    name="Comfort",
                     offset=coast_offset,
                     weight=coast_weight,
                     reason=(
@@ -2616,6 +2659,7 @@ class DecisionEngine:
                 # Use proportional correction, not the aggressive coast offsets
                 correction = -temp_deviation * COMFORT_CORRECTION_MILD
                 return LayerDecision(
+                    name="Comfort",
                     offset=correction,
                     weight=LAYER_WEIGHT_COMFORT_HIGH,
                     reason=f"Warm: {temp_deviation:.1f}°C above target, gentle reduce",
@@ -2624,6 +2668,7 @@ class DecisionEngine:
             # Too cold, increase heating strongly
             correction = -(temp_deviation + tolerance) * 0.5
             return LayerDecision(
+                name="Comfort",
                 offset=correction,
                 weight=LAYER_WEIGHT_COMFORT_MAX,
                 reason=f"Too cold: {-temp_deviation:.1f}°C under",

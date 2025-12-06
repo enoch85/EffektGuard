@@ -1066,11 +1066,11 @@ class IntelligentDHWScheduler:
 
         # Build available quarters from price periods
         # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
-        # Use the actual datetime from GE-Spot (already timezone-aware) instead of reconstructing
+        # Use the actual datetime from spot price (already timezone-aware) instead of reconstructing
         available_quarters = []
 
         for period in price_periods:
-            # Use actual datetime from GE-Spot (already handles timezone and date correctly)
+            # Use actual datetime from spot price (already handles timezone and date correctly)
             period_time = period.start_time
 
             # Check if within lookahead window
@@ -1232,7 +1232,7 @@ class IntelligentDHWScheduler:
 
     def get_recommended_dhw_schedule(
         self,
-        price_data,  # GE-Spot data with 96 quarters
+        price_data,  # Spot price data with 96 quarters
         weather_data,  # Weather forecast
         current_dhw_temp: float,
         thermal_debt_dm: float,
@@ -1246,7 +1246,7 @@ class IntelligentDHWScheduler:
         - Weather (avoid heating before cold spells)
 
         Args:
-            price_data: GE-Spot price data
+            price_data: Spot price data
             weather_data: Weather forecast
             current_dhw_temp: Current DHW temperature
             thermal_debt_dm: Current thermal debt

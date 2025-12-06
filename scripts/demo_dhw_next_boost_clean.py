@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Test that DHW next boost time uses GE-Spot datetime directly (clean solution).
+"""Test that DHW next boost time uses spot price datetime directly (clean solution).
 
 This test verifies that the DHW next boost time sensor displays the correct
 timezone-aware datetime from the DHW optimizer, without any manual reconstruction.
+"""
 """
 
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ print("=" * 80)
 print(f"\nCurrent time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 print(f"Current time ISO: {now.isoformat()}")
 
-# Create price periods with actual GE-Spot datetime format
+# Create price periods with actual spot price datetime format
 price_periods = []
 
 # Generate quarters from 00:00 to 03:00 (just for testing)

@@ -6,7 +6,7 @@ This document provides a high-level overview of the EffektGuard system architect
 
 EffektGuard is a sophisticated Swedish heat pump optimization system with these key components:
 - **Multi-layer decision engine** with 9 priority layers
-- **Native 15-minute GE-Spot integration** for Swedish Effektavgift
+- **Native 15-minute spot price integration** for Swedish Effektavgift
 - **Context-aware thermal debt prevention** (adapts to outdoor temperature)
 - **Self-learning capabilities** with thermal prediction
 - **Effect tariff peak protection** (monthly top-3 tracking)
@@ -19,7 +19,7 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 2. **[02_emergency_thermal_debt.md](02_emergency_thermal_debt.md)** - Context-aware emergency response
 3. **[03_effect_tariff_protection.md](03_effect_tariff_protection.md)** - 15-minute peak avoidance
 4. **[04_weather_preheating.md](04_weather_preheating.md)** - Predictive pre-heating
-5. **[05_spot_price_optimization.md](05_spot_price_optimization.md)** - GE-Spot price classification
+5. **[05_spot_price_optimization.md](05_spot_price_optimization.md)** - Spot price classification
 6. **[06_learning_integration.md](06_learning_integration.md)** - Phase 6 self-learning
 7. **[07_manual_override_services.md](07_manual_override_services.md)** - Service-based control
 8. **[08_layer_priority_system.md](08_layer_priority_system.md)** - Decision aggregation
@@ -33,7 +33,7 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 - **Absolute maximum -1500 DM** never exceeded regardless of conditions
 
 ### 2. Native Swedish Integration
-- **GE-Spot provides exactly 96 quarterly periods** (15-minute intervals)
+- **Spot price integration provides exactly 96 quarterly periods** (15-minute intervals)
 - Perfect match for Swedish Effektavgift requirements
 - Day/night weighting: Full effect 06:00-22:00, 50% weight 22:00-06:00
 

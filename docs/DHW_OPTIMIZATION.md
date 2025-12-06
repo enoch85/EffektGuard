@@ -30,7 +30,7 @@ EffektGuard's DHW optimization schedules domestic hot water heating during cheap
 - ✅ **MyUplink Integration:** Direct control via `switch.temporary_lux_50004`
 - ✅ **Legionella Monitoring:** Detect NIBE's automatic boosts, don't trigger duplicates
 - ✅ **Thermal Debt Protection:** Never start DHW when space heating in emergency
-- ✅ **24h Forecast Window:** Maximize optimization with GE-Spot's 48h data
+- ✅ **24h Forecast Window:** Maximize optimization with Spot Price's 48h data
 - ✅ **BT7 Monitoring:** Track hot water temperature for intelligent decisions
 
 ---
@@ -319,7 +319,7 @@ By scheduling the 56°C hygiene boost during **cheapest electricity periods**, w
 ### 24-Hour Forecast Window
 
 **Why 24h?**
-- GE-Spot provides up to 48h price forecast
+- Spot Price provides up to 48h price forecast
 - DHW tank cools slowly (can preheat far ahead)
 - Maximizes price optimization opportunities
 - DHW heats fast (1.5h), so timing flexibility is high
@@ -365,7 +365,7 @@ DHWDemandPeriod(
 
 ### Price-Aware Scheduling
 
-**Integration with GE-Spot:**
+**Integration with Spot Price:**
 ```python
 def find_optimal_heating_time(
     demand_period: DHWDemandPeriod,
@@ -373,7 +373,7 @@ def find_optimal_heating_time(
 ) -> datetime:
     """Find cheapest 2-hour window before demand period.
     
-    Uses GE-Spot's native 15-minute intervals.
+    Uses Spot Price's native 15-minute intervals.
     """
     # Filter quarters before demand period
     valid_quarters = [
