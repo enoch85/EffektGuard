@@ -12,10 +12,10 @@
         }
       },
       "gespot": {
-        "title": "Konfigurer GE-Spot-integration",
-        "description": "Valgfrit konfigurer GE-Spot til 15-minutters spotprisoptimering.\n\n{detection_info}\n\n**Anbefalet:** Brug `current_price` sensor til realtids kvarterspriser.",
+        "title": "Konfigurer spotpris-integration",
+        "description": "Valgfrit konfigurer spotpris til 15-minutters prisoptimering.\n\n{detection_info}\n\n**Anbefalet:** Brug `current_price` sensor til realtids kvarterspriser.",
         "data": {
-          "gespot_entity": "GE-Spot Prissensor (Current Price Anbefalet)",
+          "gespot_entity": "Spotpris-sensor (Current Price Anbefalet)",
           "enable_price_optimization": "Aktiver prisoptimering"
         }
       },
@@ -30,7 +30,7 @@
     },
     "error": {
       "nibe_entity_not_found": "NIBE-enhed ikke fundet",
-      "gespot_entity_not_found": "GE-Spot-enhed ikke fundet"
+      "gespot_entity_not_found": "Spotpris-enhed ikke fundet"
     },
     "abort": {
       "nibe_not_found": "NIBE-integration ikke fundet. Installer venligst NIBE Myuplink-integration først."

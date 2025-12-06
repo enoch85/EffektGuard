@@ -2405,11 +2405,16 @@ class DecisionEngine:
             peak_cluster_reason,
         )
 
+        # Get adapter entity for display
+        adapter_entity = self.config.get("gespot_entity", "unknown")
+        # Extract short name from entity_id (e.g., "sensor.gespot_current_price_se2" -> "gespot_current_price_se2")
+        adapter_name = adapter_entity.split(".")[-1] if adapter_entity else "unknown"
+
         return LayerDecision(
             name="Spot Price",
             offset=final_offset,
             weight=price_weight,
-            reason=f"Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
+            reason=f"Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Adapter: {adapter_name} | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
         )
 
     def _comfort_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:

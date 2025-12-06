@@ -998,17 +998,14 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["decision_timestamp"] = decision.timestamp.isoformat()
                     if hasattr(decision, "offset"):
                         attrs["applied_offset"] = decision.offset
-                    # Add layer breakdown for detailed analysis
+                    # Add layer breakdown - each layer as its own attribute
                     if hasattr(decision, "layers") and decision.layers:
-                        attrs["layers"] = [
-                            {
-                                "name": layer.name,
+                        for layer in decision.layers:
+                            attrs[layer.name] = {
                                 "reason": layer.reason,
                                 "offset": layer.offset,
                                 "weight": layer.weight,
                             }
-                            for layer in decision.layers
-                        ]
 
         elif key == "optional_features_status":
             # Show detailed status of all optional features
