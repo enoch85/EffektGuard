@@ -284,11 +284,16 @@ def evaluate_airflow(
         )
 
     if deficit < AIRFLOW_INDOOR_DEFICIT_MIN:
+        # Negative deficit means indoor is above target, positive means below
+        if deficit <= 0:
+            reason = f"Already {abs(deficit):.1f}°C above target - no enhancement needed"
+        else:
+            reason = f"Only {deficit:.1f}°C below target - no enhancement needed"
         return FlowDecision(
             FlowMode.STANDARD,
             0,
             0.0,
-            f"Near target (deficit {deficit:.2f}°C) - no enhancement needed",
+            reason,
         )
 
     if state.trend_indoor > AIRFLOW_TREND_WARMING_THRESHOLD:

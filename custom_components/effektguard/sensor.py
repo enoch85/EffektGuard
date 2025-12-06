@@ -1187,17 +1187,31 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     )
 
         elif key == "airflow_enhancement":
-            # Airflow optimization attributes
+            # Airflow mode decision attributes
             if "airflow_decision" in self.coordinator.data:
                 decision = self.coordinator.data["airflow_decision"]
                 if decision:
-                    attrs["duration_minutes"] = decision.duration_minutes
-                    attrs["expected_gain_kw"] = round(decision.expected_gain_kw, 3)
                     attrs["reason"] = decision.reason
+                    attrs["duration_minutes"] = decision.duration_minutes
                     if decision.timestamp:
                         attrs["decision_time"] = decision.timestamp.isoformat()
 
-            # Show airflow optimization enabled status
+            # Flow rate configuration (user's configured values)
+            if (
+                hasattr(self.coordinator, "airflow_optimizer")
+                and self.coordinator.airflow_optimizer
+            ):
+                attrs["flow_standard_m3h"] = self.coordinator.airflow_optimizer.flow_standard
+                attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
+
+        elif key == "airflow_thermal_gain":
+            # Thermal gain statistics and breakdown
+            if "airflow_decision" in self.coordinator.data:
+                decision = self.coordinator.data["airflow_decision"]
+                if decision:
+                    attrs["mode"] = decision.mode.value
+
+            # Enhancement statistics (gain-related)
             if (
                 hasattr(self.coordinator, "airflow_optimizer")
                 and self.coordinator.airflow_optimizer
@@ -1207,29 +1221,5 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 attrs["enhance_recommendations"] = stats.get("enhance_recommendations", 0)
                 attrs["enhance_percentage"] = round(stats.get("enhance_percentage", 0.0), 1)
                 attrs["average_gain_kw"] = round(stats.get("average_gain_kw", 0.0), 3)
-
-            # Current conditions for reference
-            if "nibe" in self.coordinator.data and self.coordinator.data["nibe"]:
-                nibe = self.coordinator.data["nibe"]
-                attrs["outdoor_temp"] = nibe.outdoor_temp
-                attrs["indoor_temp"] = nibe.indoor_temp
-                attrs["compressor_hz"] = nibe.compressor_hz
-
-            # Flow rate configuration
-            if (
-                hasattr(self.coordinator, "airflow_optimizer")
-                and self.coordinator.airflow_optimizer
-            ):
-                attrs["flow_standard_m3h"] = self.coordinator.airflow_optimizer.flow_standard
-                attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
-
-        elif key == "airflow_thermal_gain":
-            # Show benefit breakdown
-            if "airflow_decision" in self.coordinator.data:
-                decision = self.coordinator.data["airflow_decision"]
-                if decision:
-                    attrs["mode"] = decision.mode.value
-                    attrs["reason"] = decision.reason
-                    attrs["duration_minutes"] = decision.duration_minutes
 
         return attrs
