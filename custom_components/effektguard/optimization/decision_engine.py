@@ -163,7 +163,12 @@ from ..const import (
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
-from .weather_layer import AdaptiveClimateSystem, WeatherCompensationCalculator
+from .weather_layer import (
+    AdaptiveClimateSystem,
+    WeatherCompensationCalculator,
+    WeatherLayerDecision,
+    WeatherPredictionLayer,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -286,6 +291,11 @@ class DecisionEngine:
             heat_loss_coeff,
             radiator_output if radiator_output else "not configured",
             heating_type,
+        )
+
+        # Weather prediction layer for proactive pre-heating
+        self.weather_prediction = WeatherPredictionLayer(
+            thermal_mass=thermal_model.thermal_mass if thermal_model else 1.0
         )
 
         # Manual override state (Phase 5 service support)
@@ -1510,29 +1520,9 @@ class DecisionEngine:
         )
 
     def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Simplified weather prediction layer - Pure forecast-based gentle pre-heating.
+        """Weather prediction layer: Proactive pre-heating based on forecast.
 
-        Philosophy (Oct 20, 2025):
-        "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
-
-        Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive
-        too late, resulting in thermal debt spirals (DM -1000 @ 04:00) followed by
-        massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
-
-        Solution: Simple proactive pre-heating:
-        1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
-        2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
-        3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
-
-        Weight scaling by thermal mass:
-        - Concrete slab (1.5): 0.85 × 1.5 = 1.275 (very high priority, 6h lag)
-        - Timber UFH (1.0): 0.85 × 1.0 = 0.85 (high priority, 2-3h lag)
-        - Radiators (0.5): 0.85 × 0.5 = 0.425 (moderate priority, <1h lag)
-
-        Real-world validation:
-        - Prevents 20:00→04:00 emergency thermal debt cycles
-        - Prevents 16:00 overshoot from overnight heating
-        - No complex calculations - just gentle constant pre-heat
+        Delegates to WeatherPredictionLayer.evaluate_layer() for the actual logic.
 
         Args:
             nibe_state: Current NIBE state
@@ -1541,76 +1531,23 @@ class DecisionEngine:
         Returns:
             LayerDecision with gentle pre-heating recommendation
         """
-        # Check if weather prediction is enabled
-        if not self.config.get("enable_weather_prediction", True):
-            return LayerDecision(
-                name="Weather Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
-
-        if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(
-                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No weather data"
-            )
-
-        # Check forecast for significant temperature drop
-        current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
-
-        if not forecast_hours:
-            return LayerDecision(
-                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No forecast data"
-            )
-
-        # Find minimum temperature in forecast period
-        min_temp = min(f.temperature for f in forecast_hours)
-        temp_drop = min_temp - current_outdoor
-
-        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
-        forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
-
-        # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
+        # Get thermal trend for the layer
         thermal_trend = self._get_thermal_trend()
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-        trend_confidence = thermal_trend.get("confidence", 0.0)
 
-        indoor_cooling = (
-            trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
-            and trend_confidence > 0.4  # Sufficient data confidence
+        # Delegate to WeatherPredictionLayer for the actual logic
+        weather_decision = self.weather_prediction.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            thermal_trend=thermal_trend,
+            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
         )
 
-        if forecast_triggered or indoor_cooling:
-            # Calculate thermal mass-adjusted weight
-            # Concrete slab: 0.85 × 1.5 = 1.275 (beats most layers except SAFETY/EFFECT_CRITICAL)
-            # Timber: 0.85 × 1.0 = 0.85 (beats price, comfort, proactive)
-            # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
-            weather_weight = min(
-                LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal.thermal_mass,
-                WEATHER_WEIGHT_CAP,  # Cap below Safety (1.0)
-            )
-
-            # Determine trigger reason
-            if forecast_triggered and indoor_cooling:
-                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
-            elif forecast_triggered:
-                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
-            else:
-                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
-
-            return LayerDecision(
-                name="Weather Pre-heat",
-                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
-                weight=weather_weight,
-                reason=trigger,
-            )
-
+        # Convert WeatherLayerDecision to LayerDecision
         return LayerDecision(
-            name="Weather Pre-heat",
-            offset=0.0,
-            weight=0.0,
-            reason="Forecast stable, indoor stable",
+            name=weather_decision.name,
+            offset=weather_decision.offset,
+            weight=weather_decision.weight,
+            reason=weather_decision.reason,
         )
 
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:

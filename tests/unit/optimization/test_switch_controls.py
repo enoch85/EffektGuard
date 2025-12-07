@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine, LayerDecision
 from custom_components.effektguard.optimization.effect_layer import EffectLayerDecision
 from custom_components.effektguard.optimization.price_layer import PriceLayerDecision
+from custom_components.effektguard.optimization.weather_layer import WeatherLayerDecision
 from custom_components.effektguard.const import (
     CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
@@ -120,6 +121,28 @@ def create_engine_mock(config_overrides=None):
     engine.thermal = MagicMock()
     engine.thermal.thermal_mass = 2.0
     engine.thermal.get_prediction_horizon = MagicMock(return_value=12.0)
+
+    # Weather prediction layer needs self.weather_prediction
+    engine.weather_prediction = MagicMock()
+    # Mock evaluate_layer to return proper WeatherLayerDecision based on enable_weather_prediction
+    if base_config.get("enable_weather_prediction", True):
+        engine.weather_prediction.evaluate_layer = MagicMock(
+            return_value=WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.5,
+                weight=0.85,
+                reason="Forecast -5.0°C drop in 12h (proactive)",
+            )
+        )
+    else:
+        engine.weather_prediction.evaluate_layer = MagicMock(
+            return_value=WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="Disabled by user",
+            )
+        )
 
     # Add tolerance (used by price layer)
     engine.tolerance = 5.0

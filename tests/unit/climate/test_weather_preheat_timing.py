@@ -11,6 +11,10 @@ from unittest.mock import MagicMock, patch
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.learning_types import ThermalSnapshot
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.weather_layer import (
+    WeatherLayerDecision,
+    WeatherPredictionLayer,
+)
 
 
 @pytest.fixture
@@ -67,6 +71,9 @@ def engine_mock():
         "enable_price_optimization": True,
         "enable_peak_protection": True,
     }
+
+    # Weather prediction layer - use real implementation for proper testing
+    engine.weather_prediction = WeatherPredictionLayer(thermal_mass=2.0)
 
     # Bind methods to instance
     engine._get_preheat_lead_time = DecisionEngine._get_preheat_lead_time.__get__(

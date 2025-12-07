@@ -22,16 +22,36 @@ from ..const import (
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     KUEHNE_COEFFICIENT,
     KUEHNE_POWER,
+    LAYER_WEIGHT_WEATHER_PREDICTION,
     RADIATOR_POWER_COEFFICIENT,
     RADIATOR_RATED_DT,
     UFH_FLOW_REDUCTION_CONCRETE,
     UFH_FLOW_REDUCTION_TIMBER,
     UFH_MIN_FLOW_TEMP_CONCRETE,
     UFH_MIN_FLOW_TEMP_TIMBER,
+    WEATHER_FORECAST_DROP_THRESHOLD,
+    WEATHER_FORECAST_HORIZON,
+    WEATHER_GENTLE_OFFSET,
+    WEATHER_INDOOR_COOLING_CONFIRMATION,
+    WEATHER_WEIGHT_CAP,
 )
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class WeatherLayerDecision:
+    """Decision from the weather prediction layer.
+
+    Encapsulates the pre-heating recommendation based on weather forecast
+    and thermal trend analysis.
+    """
+
+    name: str
+    offset: float
+    weight: float
+    reason: str
 
 
 @dataclass
@@ -539,3 +559,133 @@ class AdaptiveClimateSystem:
             "examples": self.detector.zone_info.examples,
             "user_latitude": self.latitude,
         }
+
+
+class WeatherPredictionLayer:
+    """Weather prediction layer for proactive pre-heating.
+
+    Philosophy (Oct 20, 2025):
+    "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
+
+    Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive
+    too late, resulting in thermal debt spirals (DM -1000 @ 04:00) followed by
+    massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
+
+    Solution: Simple proactive pre-heating:
+    1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
+    2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
+    3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
+    """
+
+    def __init__(self, thermal_mass: float = 1.0):
+        """Initialize weather prediction layer.
+
+        Args:
+            thermal_mass: Building thermal mass (0.5=light, 1.0=medium, 1.5=heavy)
+        """
+        self.thermal_mass = thermal_mass
+
+    def evaluate_layer(
+        self,
+        nibe_state,
+        weather_data,
+        thermal_trend: dict,
+        enable_weather_prediction: bool = True,
+    ) -> WeatherLayerDecision:
+        """Weather prediction layer: Proactive pre-heating based on forecast.
+
+        Weight scaling by thermal mass:
+        - Concrete slab (1.5): 0.85 × 1.5 = 1.275 (very high priority, 6h lag)
+        - Timber UFH (1.0): 0.85 × 1.0 = 0.85 (high priority, 2-3h lag)
+        - Radiators (0.5): 0.85 × 0.5 = 0.425 (moderate priority, <1h lag)
+
+        Real-world validation:
+        - Prevents 20:00→04:00 emergency thermal debt cycles
+        - Prevents 16:00 overshoot from overnight heating
+        - No complex calculations - just gentle constant pre-heat
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            thermal_trend: Trend data from predictor (rate_per_hour, confidence)
+            enable_weather_prediction: Whether layer is enabled by user
+
+        Returns:
+            WeatherLayerDecision with gentle pre-heating recommendation
+        """
+        # Check if weather prediction is enabled
+        if not enable_weather_prediction:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="Disabled by user",
+            )
+
+        if not weather_data or not weather_data.forecast_hours:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="No weather data",
+            )
+
+        # Check forecast for significant temperature drop
+        current_outdoor = nibe_state.outdoor_temp
+        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
+
+        if not forecast_hours:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="No forecast data",
+            )
+
+        # Find minimum temperature in forecast period
+        min_temp = min(f.temperature for f in forecast_hours)
+        temp_drop = min_temp - current_outdoor
+
+        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
+        forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
+
+        # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+        trend_confidence = thermal_trend.get("confidence", 0.0)
+
+        indoor_cooling = (
+            trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
+            and trend_confidence > 0.4  # Sufficient data confidence
+        )
+
+        if forecast_triggered or indoor_cooling:
+            # Calculate thermal mass-adjusted weight
+            # Concrete slab: 0.85 × 1.5 = 1.275 (beats most layers except SAFETY/EFFECT_CRITICAL)
+            # Timber: 0.85 × 1.0 = 0.85 (beats price, comfort, proactive)
+            # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
+            weather_weight = min(
+                LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal_mass,
+                WEATHER_WEIGHT_CAP,  # Cap below Safety (1.0)
+            )
+
+            # Determine trigger reason
+            if forecast_triggered and indoor_cooling:
+                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
+            elif forecast_triggered:
+                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
+            else:
+                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
+
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
+                weight=weather_weight,
+                reason=trigger,
+            )
+
+        return WeatherLayerDecision(
+            name="Weather Pre-heat",
+            offset=0.0,
+            weight=0.0,
+            reason="Forecast stable, indoor stable",
+        )
