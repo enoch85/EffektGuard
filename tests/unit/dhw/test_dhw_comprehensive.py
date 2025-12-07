@@ -352,7 +352,7 @@ class TestSafetyRules:
 
         # Should NOT heat during expensive period (wait for cheap)
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
     def test_no_hygiene_boost_within_14_days(self):
         """RULE 2.7: No hygiene boost if recent high-temp cycle.
@@ -437,7 +437,7 @@ class TestMaximumWaitEnforcement:
 
         # Should wait for better prices, not heat during expensive
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
     def test_max_wait_deferred_during_peak(self):
         """RULE 4: Max 36h wait does NOT override peak pricing."""
@@ -458,7 +458,7 @@ class TestMaximumWaitEnforcement:
 
         # Should definitely NOT heat during peak
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
     def test_max_wait_under_36_hours_no_heating(self):
         """DHW adequate at 48°C, under 36h wait, no heating needed."""
@@ -477,7 +477,7 @@ class TestMaximumWaitEnforcement:
         )
 
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
 
 # ==============================================================================
@@ -685,7 +685,7 @@ class TestLegionellaDetection:
         )
 
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE" in decision.priority_reason
 
 
 # ==============================================================================
@@ -746,7 +746,7 @@ class TestCheapElectricityOpportunities:
         )
 
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert "DHW_ADEQUATE" in decision.priority_reason
 
 
 # ==============================================================================

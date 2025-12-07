@@ -739,6 +739,35 @@ class IntelligentDHWScheduler:
                     )
 
         # === RULE 6: SMART WINDOW-BASED SCHEDULING ===
+        # SIMPLE FIX: If DHW is adequate, only heat during CHEAP periods
+        # This mirrors space heating logic: adequate = no urgency = wait for cheap
+        # Adequate temp = one shower guaranteed (morning/evening usage pattern)
+        if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
+            _LOGGER.info(
+                "DHW: Adequate (%.1f°C ≥ %.1f°C) but price is %s - waiting for cheap period",
+                current_dhw_temp,
+                MIN_DHW_TARGET_TEMP,
+                price_classification,
+            )
+            # Find next cheap opportunity
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt_dm,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason=f"DHW_ADEQUATE_WAITING_CHEAP_{price_classification.upper()}",
+                dm_block_threshold=dm_block_threshold,
+            )
+            return DHWScheduleDecision(
+                should_heat=False,
+                priority_reason=f"DHW_ADEQUATE_WAITING_CHEAP_{price_classification.upper()}",
+                target_temp=self.user_target_temp,
+                max_runtime_minutes=0,
+                abort_conditions=[],
+                recommended_start_time=next_opportunity,
+            )
+
         # Find the absolute cheapest window first, then check if we should heat
         optimal_window = None  # Initialize to None for fallback logic
 
@@ -883,12 +912,15 @@ class IntelligentDHWScheduler:
         Returns:
             Hours to look ahead (max 24h)
         """
+        from math import ceil
+
         next_demand = self._check_upcoming_demand_period(current_time)
 
         if next_demand:
             hours_until = next_demand["hours_until"]
             # Return hours until demand, but ensure it's at least 1h and max 24h
-            return max(DHW_SCHEDULING_WINDOW_MIN, min(int(hours_until), DHW_SCHEDULING_WINDOW_MAX))
+            # Use ceil() to avoid truncating 1.5h to 1h (bug fix)
+            return max(DHW_SCHEDULING_WINDOW_MIN, min(ceil(hours_until), DHW_SCHEDULING_WINDOW_MAX))
 
         # No upcoming demand period - look full 24 hours ahead
         return DHW_SCHEDULING_WINDOW_MAX

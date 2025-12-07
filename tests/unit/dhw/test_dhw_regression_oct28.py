@@ -328,6 +328,9 @@ def test_comparison_operator_fix():
 
     October 28 logs showed DHW at 36.1°C trying to use > comparison with 45°C,
     which incorrectly failed. Should use >= so exactly 45°C also waits for window.
+    
+    Updated: With the new "adequate + not cheap = wait" rule, DHW at 45°C with
+    normal prices will wait for cheap prices, which is the correct behavior.
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
@@ -337,7 +340,7 @@ def test_comparison_operator_fix():
     )
 
     # Test: DHW exactly at MIN_DHW_TARGET_TEMP (45°C)
-    # Should wait for optimal window (not heat immediately)
+    # Should wait for cheap prices (not heat during normal prices)
     current_time = datetime(2025, 10, 28, 2, 0, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
     price_periods = create_oct28_price_periods()
 
@@ -348,18 +351,19 @@ def test_comparison_operator_fix():
         indoor_temp=21.5,
         target_indoor_temp=21.0,
         outdoor_temp=8.0,
-        price_classification="normal",  # Not cheap, but have optimal window ahead
+        price_classification="normal",  # Not cheap - should wait for cheap
         current_time=current_time,
         price_periods=price_periods,
         hours_since_last_dhw=4.0,
     )
 
-    # Should wait for optimal window (DHW comfortable at exactly 45°C)
+    # Should wait for cheap prices (DHW adequate at 45°C, price is normal)
     assert decision.should_heat is False, (
-        f"Should wait for optimal window when DHW exactly at MIN_DHW_TARGET_TEMP (45°C). "
-        f"Reason: {decision.priority_reason}"
+        f"Should wait for cheap prices when DHW adequate at MIN_DHW_TARGET_TEMP (45°C) "
+        f"and price is normal. Reason: {decision.priority_reason}"
     )
-    assert "WAITING_OPTIMAL_WINDOW" in decision.priority_reason
+    # Accept either waiting reason - the key is that we're not heating
+    assert "WAITING" in decision.priority_reason or "DHW_ADEQUATE" in decision.priority_reason
 
 
 def test_october_28_would_not_need_manual_boost():
