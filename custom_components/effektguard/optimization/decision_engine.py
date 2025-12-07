@@ -154,6 +154,7 @@ from ..const import (
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
+from .thermal_layer import EmergencyLayer, EmergencyLayerDecision
 from .weather_layer import (
     AdaptiveClimateSystem,
     WeatherCompensationCalculator,
@@ -297,6 +298,15 @@ class DecisionEngine:
             climate_system=self.climate_system,
             weather_learner=self.weather_learner,
             weather_comp_weight=self.weather_comp_weight,
+        )
+
+        # Emergency layer for thermal debt response
+        self.emergency_layer = EmergencyLayer(
+            climate_detector=self.climate_detector,
+            price_analyzer=self.price,
+            heating_type=config.get("heating_type", "radiator"),
+            get_thermal_trend=self._get_thermal_trend,
+            get_outdoor_trend=self._get_outdoor_trend,
         )
 
         # Manual override state (Phase 5 service support)
@@ -849,296 +859,32 @@ class DecisionEngine:
     def _emergency_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
         """Emergency layer: Smart context-aware thermal debt response.
 
-        DESIGN PHILOSOPHY:
-        Instead of fixed thresholds, this layer understands what's "normal" for
-        current outdoor temperature. At -30°C in Kiruna, DM -1000 might be normal.
-        At 0°C in Malmö, DM -1000 indicates a problem.
-
-        The algorithm calculates expected DM range based on:
-        - Outdoor temperature (colder = deeper normal DM)
-        - Heat demand intensity
-        - Distance from absolute safety limit (-1500)
-
-        This automatically adapts to ANY climate without configuration:
-        - Malmö (0°C): Tight tolerances, early warnings
-        - Stockholm (-5°C): Moderate tolerances
-        - Luleå/Kiruna (-30°C): Wide tolerances, expect deep DM
-
-        Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
-        This is the hard safety limit validated by Swedish NIBE forums.
-
-        CRITICAL RULE (Nov 27, 2025):
-        Never heat when indoor temperature exceeds target + tolerance.
-        Thermal debt while overheating means "flow temp was correctly reduced".
-        Let natural cooling bring temp down first, THEN recover DM during cheap periods.
-        This prevents wasteful heating during expensive hours when house is already warm.
+        Delegates to EmergencyLayer.evaluate_layer() for the actual logic.
 
         Args:
             nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            price_data: Price data
 
         Returns:
             LayerDecision with context-aware emergency response
         """
-        degree_minutes = nibe_state.degree_minutes
-        outdoor_temp = nibe_state.outdoor_temp
-        indoor_temp = nibe_state.indoor_temp
-        target_temp = self.target_temp
-
-        # FIRST CHECK: Smart Debt Recovery (User Request Nov 29, 2025)
-        # 1. If above tolerance: Definitely stop (existing logic)
-        # 2. If at target (>= target) AND Price is NOT CHEAP: Ignore debt
-        #    "Ignore DM if the indoor temp is already at target and price is normal or expensive"
-        #    Exception: Absolute safety limit (-1500) always triggers
-
-        temp_deviation = indoor_temp - target_temp
-        tolerance = self.tolerance_range
-
-        # Case 1: Too warm (above tolerance)
-        if temp_deviation > tolerance:
-            # Too warm - emergency heating would be counterproductive
-            # DM will naturally improve as house cools and we maintain target temp later
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=0.0,
-                weight=0.0,
-                reason=f"DM {degree_minutes:.0f} but {temp_deviation:.1f}°C over target - let cool naturally",
-            )
-
-        # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
-        if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
-            # Check if price is cheap
-            is_cheap = False
-            if price_data and price_data.today:
-                now = dt_util.now()
-                current_quarter = (now.hour * 4) + (now.minute // 15)
-                # Safety check for index
-                if current_quarter < len(price_data.today):
-                    classification = self.price.get_current_classification(current_quarter)
-                    if classification == QuarterClassification.CHEAP:
-                        is_cheap = True
-
-            if not is_cheap:
-                return LayerDecision(
-                    name="Thermal Debt",
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"At target & price not cheap - ignoring DM {degree_minutes:.0f}",
-                )
-
-        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
-            # At absolute safety limit - maximum emergency response
-            # This applies regardless of outdoor temperature or conditions
-            offset = SAFETY_EMERGENCY_OFFSET
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=offset,
-                weight=1.0,
-                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit -1500",
-            )
-
-        # Calculate context-aware thresholds based on outdoor temperature
-        # Colder weather = expect deeper normal DM, so thresholds adapt
-        base_expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
-
-        # Apply thermal mass adjustment (Oct 23, 2025)
-        # High thermal mass systems need tighter thresholds to prevent v0.1.0 solar gain problem
-        # Concrete slab: 30% tighter, Timber: 15% tighter, Radiator: standard
-        heating_type = self.config.get("heating_type", "radiator")
-        expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
-        adjusted_dm_range = self._get_thermal_mass_adjusted_thresholds(
-            expected_dm_range, heating_type
-        )
-        expected_dm = {
-            "normal": adjusted_dm_range["normal_max"],  # Use deep end of normal range
-            "warning": adjusted_dm_range["warning"],  # Thermal mass adjusted warning threshold
-        }
-
-        # Distance from absolute maximum (how much safety margin remains)
-        margin_to_limit = degree_minutes - DM_THRESHOLD_AUX_LIMIT  # Positive value
-
-        # MULTI-TIER CLIMATE-AWARE CRITICAL INTERVENTION (Oct 19, 2025 redesign)
-        # THERMAL MASS ENHANCEMENT (Oct 23, 2025): Adjusted thresholds based on thermal lag
-        # Previous fixed thresholds (-800, -1000, -1200) caused false positives in Arctic climates
-        # and inadequate intervention in mild climates. New design calculates tiers dynamically
-        # based on climate-aware WARNING threshold + margin + thermal mass buffer.
-        #
-        # Examples (without thermal mass adjustment):
-        # - Paris (WARNING -350):     T1=-350,  T2=-550,  T3=-750
-        # - Stockholm (WARNING -700): T1=-700,  T2=-900,  T3=-1100
-        # - Kiruna (WARNING -1200):   T1=-1200, T2=-1400, T3=-1450 (capped)
-        #
-        # Examples (with thermal mass adjustment - concrete slab 1.3×):
-        # - Paris concrete:     T1=-455,  T2=-655,  T3=-855   (30% tighter)
-        # - Stockholm concrete: T1=-910,  T2=-1110, T3=-1310  (30% tighter)
-        # - Kiruna concrete:    T1=-1450, T2=-1450, T3=-1450  (capped at T3 max)
-        #
-        # Philosophy: Use climate zone + thermal mass knowledge to define what's "critical"
-
-        # Calculate climate-aware + thermal mass aware tier thresholds
-        warning_threshold = expected_dm["warning"]
-        t1_threshold = warning_threshold - DM_CRITICAL_T1_MARGIN  # At WARNING threshold
-        t2_threshold = warning_threshold - DM_CRITICAL_T2_MARGIN  # WARNING + 200 DM
-        t3_threshold = max(
-            warning_threshold - DM_CRITICAL_T3_MARGIN,  # WARNING + 400 DM
-            DM_CRITICAL_T3_MAX,  # Capped at -1450 (50 DM from absolute max)
+        # Delegate to EmergencyLayer for the actual logic
+        emergency_decision = self.emergency_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            price_data=price_data,
+            target_temp=self.target_temp,
+            tolerance_range=self.tolerance_range,
         )
 
-        # CRITICAL TIER 3: Most severe intervention (within 50-300 DM of absolute maximum)
-        # Applies thermal recovery damping even at T3 to prevent overshoot
-        # T3 minimum (2.0°C) ensures aggressive recovery even when damped
-        if degree_minutes <= t3_threshold:
-            base_offset = DM_CRITICAL_T3_OFFSET
-
-            # Apply thermal recovery damping (even at emergency T3 level)
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T3",
-                min_damped_offset=THERMAL_RECOVERY_T3_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} near absolute max "
-                f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T3",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T3_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # STRONG RECOVERY TIER 2: Severe thermal debt - strong recovery before reaching T3
-        # Thermal Recovery Damping (Oct 20, 2025): Prevent concrete slab overshoot
-        # Uses general _apply_thermal_recovery_damping() helper
-        if degree_minutes <= t2_threshold:
-            base_offset = DM_CRITICAL_T2_OFFSET
-
-            # Apply thermal recovery damping if house warming naturally
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T2",
-                min_damped_offset=THERMAL_RECOVERY_T2_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} approaching T3 "
-                f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T2",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T2_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # MODERATE RECOVERY TIER 1: Serious thermal debt - prevent escalation to T2
-        # Triggers at climate-aware WARNING threshold (where thermal debt becomes abnormal)
-        # Applies thermal recovery damping to prevent overshoot
-        if degree_minutes <= t1_threshold:
-            base_offset = DM_CRITICAL_T1_OFFSET
-
-            # Apply thermal recovery damping
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T1",
-                min_damped_offset=THERMAL_RECOVERY_T1_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
-                f"(threshold: {t1_threshold:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T1",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T1_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # WARNING: DM is significantly beyond expected range for this temperature
-        # Check if we're deeper than expected + safety margin
-        # No thermal recovery damping - WARNING already moderate (0.8-1.8°C)
-        if degree_minutes < expected_dm["warning"]:
-            # Beyond expected range - recovery needed
-            # Severity scales with how far beyond expected we are
-            deviation = expected_dm["warning"] - degree_minutes
-
-            # Strengthened offset calculation (Oct 19, 2025 fix)
-            # Previous formula was too weak: +0.5-2.0°C allowed DM to worsen
-            # New formula provides stronger intervention earlier
-            if deviation > WARNING_DEVIATION_THRESHOLD:  # Severe deviation beyond expected
-                offset = min(
-                    WARNING_OFFSET_MAX_SEVERE,
-                    WARNING_OFFSET_MIN_SEVERE + (deviation / WARNING_DEVIATION_DIVISOR_SEVERE),
-                )
-            else:  # Moderate deviation
-                offset = min(
-                    WARNING_OFFSET_MAX_MODERATE,
-                    WARNING_OFFSET_MIN_MODERATE + (deviation / WARNING_DEVIATION_DIVISOR_MODERATE),
-                )
-
-            # WARNING: Beyond expected range - moderate to strong recovery
-            # Philosophy: "If we don't need to heat, we shouldn't"
-            # Let weather compensation and price optimization have their say
-            # DHW blocking will fix root cause of thermal debt from DHW interference
-            percent_beyond = (
-                abs(deviation / expected_dm["warning"]) if expected_dm["warning"] else 0
-            )
-
-            reason = (
-                f"DM {degree_minutes:.0f} beyond expected for "
-                f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
-                f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f})"
-            )
-
-            return LayerDecision(
-                name="Thermal Debt Warning",
-                offset=offset,
-                weight=LAYER_WEIGHT_EMERGENCY,  # Strong suggestion, but not absolute override
-                reason=reason,
-            )
-
-        # CAUTION: DM is approaching expected limits
-        elif degree_minutes < expected_dm["normal"]:
-            # Slightly beyond normal - gentle correction
-            offset = WARNING_CAUTION_OFFSET
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=offset,
-                weight=WARNING_CAUTION_WEIGHT,
-                reason=f"DM {degree_minutes:.0f} approaching limits - monitoring",
-            )
-
-        else:
-            # DM within normal expected range for this temperature
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=0.0,
-                weight=0.0,
-                reason=f"OK (DM: {degree_minutes:.0f})",
-            )
+        # Convert EmergencyLayerDecision to LayerDecision
+        return LayerDecision(
+            name=emergency_decision.name,
+            offset=emergency_decision.offset,
+            weight=emergency_decision.weight,
+            reason=emergency_decision.reason,
+        )
 
     def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
         """Calculate expected DM range for given outdoor temperature.
