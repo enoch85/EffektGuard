@@ -52,7 +52,7 @@ from .models.nibe import (
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.decision_engine import LayerDecision, OptimizationDecision
-from .optimization.thermal_predictor import ThermalStatePredictor
+from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 
@@ -1807,7 +1807,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Returns neutral price classification to maintain safe operation
         without optimization.
         """
-        from .optimization.price_analyzer import PriceData, QuarterPeriod
+        from .optimization.price_layer import PriceData, QuarterPeriod
 
         _LOGGER.debug("Using fallback price data (no optimization)")
 

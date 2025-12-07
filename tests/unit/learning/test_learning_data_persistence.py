@@ -7,7 +7,7 @@ ensuring learning progress persists across Home Assistant restarts.
 import pytest
 from datetime import datetime, timedelta
 from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
-from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 from custom_components.effektguard.const import UFHType
 
 

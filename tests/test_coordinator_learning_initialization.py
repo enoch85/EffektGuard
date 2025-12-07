@@ -11,7 +11,7 @@ from unittest.mock import Mock
 from conftest import create_mock_hass, create_mock_entry
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
-from custom_components.effektguard.optimization.thermal_predictor import (
+from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
 )
 from custom_components.effektguard.optimization.weather_learning import (
@@ -23,7 +23,7 @@ import tempfile
 from unittest.mock import AsyncMock, Mock
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
-from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
 
 

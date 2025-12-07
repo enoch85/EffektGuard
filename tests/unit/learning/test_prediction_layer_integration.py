@@ -7,7 +7,7 @@ and provides prediction-based heating decisions.
 import pytest
 from unittest.mock import Mock
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 
 
 class TestPredictionLayerSetup:

@@ -24,9 +24,9 @@ from unittest.mock import Mock, MagicMock
 from datetime import datetime
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-from custom_components.effektguard.optimization.effect_manager import EffectManager
-from custom_components.effektguard.optimization.thermal_model import ThermalModel
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD,  # 1.5°C
     THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD,  # 1.0°C

@@ -13,7 +13,7 @@ import pytest_asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from custom_components.effektguard.optimization.effect_manager import (
+from custom_components.effektguard.optimization.effect_layer import (
     EffectManager,
     PeakEvent,
     PowerLimitDecision,

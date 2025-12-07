@@ -604,7 +604,7 @@ class TestStorageMechanismValidation:
         """Document: Effect data stored in effektguard_effect."""
         # Storage location: .storage/effektguard_effect
         # EffectManager has async_save and async_load methods
-        from custom_components.effektguard.optimization.effect_manager import EffectManager
+        from custom_components.effektguard.optimization.effect_layer import EffectManager
 
         assert hasattr(EffectManager, "async_save")
         assert hasattr(EffectManager, "async_load")
@@ -626,7 +626,7 @@ class TestThermalPredictorPersistence:
     @pytest.mark.asyncio
     async def test_thermal_predictor_to_dict_serialization(self):
         """Verify thermal predictor serializes state_history correctly."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
             ThermalSnapshot,
         )
@@ -665,7 +665,7 @@ class TestThermalPredictorPersistence:
     @pytest.mark.asyncio
     async def test_thermal_predictor_from_dict_deserialization(self):
         """Verify thermal predictor restores state_history correctly."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
         from datetime import datetime, timezone
@@ -702,7 +702,7 @@ class TestThermalPredictorPersistence:
     @pytest.mark.asyncio
     async def test_coordinator_saves_thermal_predictor_full_state(self):
         """Verify coordinator saves complete thermal predictor state."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
             ThermalSnapshot,
         )
@@ -742,7 +742,7 @@ class TestThermalPredictorPersistence:
     @pytest.mark.asyncio
     async def test_coordinator_restores_thermal_predictor_from_storage(self):
         """Verify coordinator restores thermal predictor with full state_history."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
         from datetime import datetime, timezone
@@ -783,7 +783,7 @@ class TestThermalPredictorPersistence:
     @pytest.mark.asyncio
     async def test_thermal_predictor_survives_config_reload(self):
         """Integration test: Thermal predictor state survives configuration reload."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
             ThermalSnapshot,
         )
@@ -840,7 +840,7 @@ class TestOffsetPersistence:
     @pytest.mark.asyncio
     async def test_offset_saved_after_successful_application(self):
         """Verify offset is saved to learning data after successful application."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
         from datetime import datetime, timezone
@@ -912,7 +912,7 @@ class TestOffsetPersistence:
     @pytest.mark.asyncio
     async def test_offset_persistence_across_restart_cycle(self):
         """Integration test: Offset survives full save/restore cycle."""
-        from custom_components.effektguard.optimization.thermal_predictor import (
+        from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
         from datetime import datetime, timezone

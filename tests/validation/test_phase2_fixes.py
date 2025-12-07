@@ -151,9 +151,9 @@ def test_manual_override_applies_immediately():
     Current implementation is already correct - this test verifies it stays that way.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     # Create dependencies
     hass_mock = MagicMock()
@@ -206,9 +206,9 @@ def test_manual_override_no_accumulation_between_cycles():
     Verifies no gradual accumulation - each cycle returns the exact override value.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     hass_mock = MagicMock()
     price_analyzer = PriceAnalyzer()
@@ -251,9 +251,9 @@ def test_manual_override_expires():
     We verify that duration parameter is accepted and override is initially active.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     hass_mock = MagicMock()
     price_analyzer = PriceAnalyzer()

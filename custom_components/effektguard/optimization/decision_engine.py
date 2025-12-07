@@ -179,7 +179,7 @@ from ..const import (
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
-from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
+from .weather_layer import AdaptiveClimateSystem, WeatherCompensationCalculator
 
 _LOGGER = logging.getLogger(__name__)
 

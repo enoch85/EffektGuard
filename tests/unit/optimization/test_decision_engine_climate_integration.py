@@ -13,9 +13,9 @@ import pytest
 from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.effect_manager import EffectManager
-from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-from custom_components.effektguard.optimization.thermal_model import ThermalModel
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,

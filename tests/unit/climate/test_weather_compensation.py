@@ -14,7 +14,7 @@ from custom_components.effektguard.const import (
     UFH_FLOW_REDUCTION_CONCRETE,
     UFH_FLOW_REDUCTION_TIMBER,
 )
-from custom_components.effektguard.optimization.weather_compensation import (
+from custom_components.effektguard.optimization.weather_layer import (
     FlowTempCalculation,
     WeatherCompensationCalculator,
 )

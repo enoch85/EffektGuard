@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.learning_types import ThermalSnapshot
-from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 
 
 @pytest.fixture

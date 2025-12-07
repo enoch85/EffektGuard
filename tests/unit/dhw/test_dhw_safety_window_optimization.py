@@ -14,7 +14,7 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
     DHWDemandPeriod,
 )
-from custom_components.effektguard.optimization.price_analyzer import QuarterPeriod
+from custom_components.effektguard.optimization.price_layer import QuarterPeriod
 
 
 @pytest.fixture
