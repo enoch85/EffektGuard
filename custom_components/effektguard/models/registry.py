@@ -4,8 +4,6 @@ Central registry that manages all supported heat pump models across manufacturer
 Allows lookup by model ID and provides discovery of supported models.
 """
 
-from typing import Any
-
 from .base import HeatPumpProfile
 
 

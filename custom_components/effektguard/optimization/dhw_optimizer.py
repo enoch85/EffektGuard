@@ -22,7 +22,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TypedDict
 
 from ..const import (
     COMPRESSOR_MIN_CYCLE_MINUTES,
@@ -60,6 +60,21 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DemandPeriodInfoDict(TypedDict):
+    """Information about an upcoming demand period."""
+
+    hours_until: float
+    target_temp: float
+
+
+class DHWScheduleWindowDict(TypedDict):
+    """Recommended DHW heating window."""
+
+    start_time: datetime
+    end_time: datetime
+    reason: str
 
 
 @dataclass
@@ -1213,7 +1228,7 @@ class IntelligentDHWScheduler:
 
         return result
 
-    def _check_upcoming_demand_period(self, current_time: datetime) -> dict[str, Any] | None:
+    def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
         """Check if approaching a high demand period (up to 24h ahead).
 
         Extended window: We can preheat up to 24h ahead since DHW tank
@@ -1268,7 +1283,7 @@ class IntelligentDHWScheduler:
         weather_data,  # Weather forecast
         current_dhw_temp: float,
         thermal_debt_dm: float,
-    ) -> list[dict[str, Any]]:
+    ) -> list[DHWScheduleWindowDict]:
         """Calculate recommended DHW heating schedule for next 24 hours.
 
         Finds optimal windows based on:

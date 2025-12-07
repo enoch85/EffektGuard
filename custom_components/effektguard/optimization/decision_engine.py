@@ -16,7 +16,8 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from datetime import datetime, timedelta
+from typing import Any, Optional, TypedDict
 
 from homeassistant.util import dt as dt_util
 
@@ -171,6 +172,22 @@ from .weather_layer import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class OutdoorTrendDict(TypedDict):
+    """Outdoor temperature trend from BT1 sensor."""
+
+    trend: str  # "warming", "cooling", "stable", "unknown"
+    rate_per_hour: float
+    confidence: float
+
+
+class PowerValidationDict(TypedDict, total=False):
+    """Power consumption validation result."""
+
+    valid: bool
+    warning: str | None
+    severity: str
 
 
 @dataclass
@@ -332,7 +349,7 @@ class DecisionEngine:
 
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
-        self._manual_override_until: Any = None  # datetime or None
+        self._manual_override_until: Optional[datetime] = None
 
     def _update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
@@ -359,8 +376,6 @@ class DecisionEngine:
             offset: Manual offset value (-10 to +10°C)
             duration_minutes: Duration in minutes (0 = until next cycle)
         """
-        from datetime import timedelta
-
         self._manual_override_offset = offset
 
         if duration_minutes > 0:
@@ -413,14 +428,19 @@ class DecisionEngine:
             "samples": 0,
         }
 
-    def _get_outdoor_trend(self) -> dict[str, Any]:
+    def _get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend (BT1 real-time).
 
         Returns:
             Outdoor trend data or empty if not available
         """
         if hasattr(self, "predictor") and self.predictor:
-            return self.predictor.get_outdoor_trend()
+            outdoor_trend = self.predictor.get_outdoor_trend()
+            return {
+                "trend": outdoor_trend.get("trend", "unknown"),
+                "rate_per_hour": outdoor_trend.get("rate_per_hour", 0.0),
+                "confidence": outdoor_trend.get("confidence", 0.0),
+            }
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
 
     def _apply_thermal_recovery_damping(
@@ -1394,7 +1414,7 @@ class DecisionEngine:
         self,
         current_power_kw: float,
         outdoor_temp: float,
-    ) -> dict[str, Any]:
+    ) -> PowerValidationDict:
         """Validate current power against model expectations.
 
         Args:

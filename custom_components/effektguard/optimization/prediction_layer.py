@@ -13,7 +13,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TypedDict
 
 import numpy as np
 
@@ -21,6 +21,44 @@ from ..const import DM_THRESHOLD_AUX_LIMIT, LAYER_WEIGHT_PREDICTION, SAMPLES_PER
 from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class ThermalTrendDict(TypedDict):
+    """Temperature trend analysis result."""
+
+    trend: str  # "rising", "falling", "stable", "unknown"
+    rate_per_hour: float
+    confidence: float
+    samples: int
+
+
+class OutdoorTrendDict(TypedDict):
+    """Outdoor temperature trend from BT1 sensor."""
+
+    trend: str  # "warming", "cooling", "stable", "unknown"
+    rate_per_hour: float
+    confidence: float
+    samples: int
+    temp_change_2h: float
+
+
+class ThermalSnapshotDict(TypedDict):
+    """Dictionary representation of a ThermalSnapshot for serialization."""
+
+    timestamp: str  # ISO format
+    indoor_temp: float
+    outdoor_temp: float
+    heating_offset: float
+    flow_temp: float
+    degree_minutes: float
+
+
+class PredictorStateDict(TypedDict):
+    """Serialized predictor state for persistence."""
+
+    lookback_hours: int
+    state_history: list[ThermalSnapshotDict]
+    thermal_responsiveness: float
 
 
 @dataclass
@@ -476,7 +514,7 @@ class ThermalStatePredictor:
         # Weighted combination
         return history_confidence * 0.6 + consistency * 0.4
 
-    def get_current_trend(self) -> dict[str, Any]:
+    def get_current_trend(self) -> ThermalTrendDict:
         """Get current temperature trend analysis.
 
         Returns:
@@ -487,6 +525,7 @@ class ThermalStatePredictor:
                 "trend": "unknown",
                 "rate_per_hour": 0.0,
                 "confidence": 0.0,
+                "samples": 0,
             }
 
         # Calculate temperature change over last 2 hours
@@ -519,7 +558,7 @@ class ThermalStatePredictor:
             "samples": len(self.state_history),
         }
 
-    def get_outdoor_trend(self) -> dict[str, Any]:
+    def get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend from BT1 sensor history.
 
         Real-time outdoor trend can detect weather changes BEFORE forecast updates.
@@ -533,6 +572,8 @@ class ThermalStatePredictor:
                 "trend": "unknown",
                 "rate_per_hour": 0.0,
                 "confidence": 0.0,
+                "samples": 0,
+                "temp_change_2h": 0.0,
             }
 
         # Calculate outdoor temperature change over last 2 hours
@@ -571,7 +612,7 @@ class ThermalStatePredictor:
             "temp_change_2h": outdoor_delta,
         }
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> PredictorStateDict:
         """Serialize predictor to dictionary for persistence.
 
         Returns:
@@ -594,7 +635,7 @@ class ThermalStatePredictor:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ThermalStatePredictor":
+    def from_dict(cls, data: PredictorStateDict) -> "ThermalStatePredictor":
         """Deserialize predictor from dictionary.
 
         Args:

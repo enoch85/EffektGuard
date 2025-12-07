@@ -13,7 +13,7 @@ Swedish effect tariff rules:
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TypedDict
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -45,6 +45,33 @@ from ..const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class PeakEventDict(TypedDict):
+    """Dictionary representation of a PeakEvent for serialization."""
+
+    timestamp: str  # ISO format
+    quarter_of_day: int
+    actual_power: float
+    effective_power: float
+    is_daytime: bool
+
+
+class PeakSummaryPeakDict(TypedDict):
+    """Individual peak in the monthly summary."""
+
+    timestamp: str
+    effective_power: float
+    actual_power: float
+    is_daytime: bool
+
+
+class MonthlyPeakSummaryDict(TypedDict):
+    """Summary of monthly peaks for display."""
+
+    count: int
+    highest: float
+    peaks: list[PeakSummaryPeakDict]
+
+
 @dataclass
 class PeakEvent:
     """Record of a 15-minute peak power event.
@@ -58,7 +85,7 @@ class PeakEvent:
     effective_power: float  # kW (with day/night weighting)
     is_daytime: bool
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> PeakEventDict:
         """Convert to dictionary for storage."""
         return {
             "timestamp": self.timestamp.isoformat(),
@@ -69,7 +96,7 @@ class PeakEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "PeakEvent":
+    def from_dict(cls, data: PeakEventDict) -> "PeakEvent":
         """Create from dictionary."""
         return cls(
             timestamp=dt_util.parse_datetime(data["timestamp"]),
@@ -345,7 +372,7 @@ class EffectManager:
         self._monthly_peaks = []
         self._current_peak = 0.0
 
-    def get_monthly_peak_summary(self) -> dict[str, Any]:
+    def get_monthly_peak_summary(self) -> MonthlyPeakSummaryDict:
         """Get summary of monthly peaks for display.
 
         Returns:

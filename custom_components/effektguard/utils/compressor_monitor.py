@@ -13,11 +13,27 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TypedDict
 
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class CompressorDiagnosticsDict(TypedDict):
+    """Diagnostic information for compressor troubleshooting."""
+
+    current_hz: int
+    avg_1h: float
+    avg_6h: float
+    avg_24h: float
+    max_hz_1h: int
+    max_hz_24h: int
+    time_above_80hz_minutes: float
+    time_above_100hz_minutes: float
+    risk_level: str
+    risk_reason: str
+    samples_count: int
 
 
 @dataclass
@@ -360,7 +376,7 @@ class CompressorHealthMonitor:
         else:
             return ("OK", "Compressor idle")
 
-    def get_diagnostic_info(self, stats: CompressorStats) -> dict[str, Any]:
+    def get_diagnostic_info(self, stats: CompressorStats) -> CompressorDiagnosticsDict:
         """Get diagnostic information for troubleshooting.
 
         Args:

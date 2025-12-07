@@ -13,7 +13,7 @@ Based on POST_PHASE_5_ROADMAP.md Phase 6.1 and Swedish NIBE research.
 import logging
 from collections import deque
 from datetime import datetime
-from typing import Any
+from typing import TypedDict
 
 import numpy as np
 from homeassistant.util import dt as dt_util
@@ -30,6 +30,49 @@ from ..const import (
 from .learning_types import AdaptiveThermalObservation, LearnedThermalParameters
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class LearnedParamsDict(TypedDict):
+    """Dictionary representation of learned thermal parameters."""
+
+    thermal_mass: float
+    heat_loss_coefficient: float
+    heating_efficiency: float
+    thermal_decay_rate: float
+    confidence: float
+
+
+class ThermalCharacteristicsDict(TypedDict):
+    """Current thermal model characteristics for display."""
+
+    thermal_mass: float
+    ufh_type: str
+    observations: int
+    learned_parameters: dict[str, float]
+    last_update: str | None
+    prediction_horizon: float
+
+
+class ObservationDict(TypedDict):
+    """Dictionary representation of a thermal observation."""
+
+    timestamp: str
+    indoor_temp: float
+    outdoor_temp: float
+    heating_offset: float
+    temp_change: float
+    time_delta_hours: float
+
+
+class AdaptiveModelStateDict(TypedDict):
+    """Serialized adaptive model state for persistence."""
+
+    thermal_mass: float
+    ufh_type: str
+    last_update: str | None
+    observation_count: int
+    learned_parameters: LearnedParamsDict | None
+    observations: list[ObservationDict]
 
 
 class AdaptiveThermalModel:
@@ -477,7 +520,7 @@ class AdaptiveThermalModel:
         confidence = self.learned_parameters.get("confidence", 0.0)
         return confidence >= LEARNING_CONFIDENCE_THRESHOLD
 
-    def get_thermal_characteristics(self) -> dict[str, Any]:
+    def get_thermal_characteristics(self) -> ThermalCharacteristicsDict:
         """Get current thermal model characteristics.
 
         Returns:
@@ -485,7 +528,11 @@ class AdaptiveThermalModel:
         """
         return {
             "thermal_mass": self.thermal_mass,
-            "ufh_type": self.ufh_type,
+            "ufh_type": (
+                str(self.ufh_type.value)
+                if isinstance(self.ufh_type, UFHType)
+                else str(self.ufh_type)
+            ),
             "observations": len(self.observations),
             "learned_parameters": self.learned_parameters,
             "last_update": self._last_update.isoformat() if self._last_update else None,
@@ -566,7 +613,7 @@ class AdaptiveThermalModel:
         max_preheat = desired_temp + 2.0
         return min(preheat_target, max_preheat)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> AdaptiveModelStateDict:
         """Serialize model state to dictionary for storage.
 
         Returns:
@@ -609,7 +656,7 @@ class AdaptiveThermalModel:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AdaptiveThermalModel":
+    def from_dict(cls, data: AdaptiveModelStateDict) -> "AdaptiveThermalModel":
         """Restore model state from dictionary.
 
         Args:

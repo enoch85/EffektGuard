@@ -6,7 +6,7 @@ Provides gentle steering toward target temperature even within tolerance zone.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Callable, Optional, Protocol
 
 from homeassistant.util import dt as dt_util
 
@@ -19,6 +19,7 @@ from ..const import (
     LAYER_WEIGHT_COMFORT_MIN,
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
+    OptimizationModeConfig,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
@@ -28,6 +29,20 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class ThermalModelProtocol(Protocol):
+    """Protocol for thermal model interface.
+
+    Avoids circular import with thermal_layer.py.
+    """
+
+    thermal_mass: float
+    insulation_quality: float
+
+    def get_prediction_horizon(self) -> float:
+        """Get prediction horizon in hours."""
+        ...
 
 
 @dataclass
@@ -62,8 +77,8 @@ class ComfortLayer:
     def __init__(
         self,
         get_thermal_trend: Optional[Callable[[], dict]] = None,
-        thermal_model: Any = None,
-        mode_config: Any = None,
+        thermal_model: Optional[ThermalModelProtocol] = None,
+        mode_config: Optional[OptimizationModeConfig] = None,
         tolerance_range: float = 0.5,
         target_temp: float = 21.0,
     ):

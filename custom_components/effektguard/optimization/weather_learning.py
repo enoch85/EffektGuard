@@ -12,13 +12,48 @@ Based on POST_PHASE_5_ROADMAP.md Phase 6.3 and Swedish_Climate_Adaptations.md.
 import logging
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import TypedDict
 
 import numpy as np
 
 from .learning_types import UnusualWeatherAlert, WeatherExpectation, WeatherPattern
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class SeasonalStatisticsDict(TypedDict, total=False):
+    """Statistics for a specific month."""
+
+    month: int
+    patterns: int
+    avg_temp: float | None
+    min_temp: float | None
+    max_temp: float | None
+    years: int
+    avg_range: float
+    volatility: float
+
+
+class PatternDatabaseSummaryDict(TypedDict, total=False):
+    """Summary of pattern database."""
+
+    total_patterns: int
+    periods_covered: int
+    years_covered: int
+    oldest_pattern: str | None
+    newest_pattern: str | None
+
+
+class WeatherPatternDict(TypedDict):
+    """Dictionary representation of a WeatherPattern for serialization."""
+
+    date: str  # ISO format
+    avg_temp: float
+    min_temp: float
+    max_temp: float
+    temp_range: float
+    volatility: float
+    year: int
 
 
 class WeatherPatternLearner:
@@ -310,7 +345,7 @@ class WeatherPatternLearner:
             recommendation=recommendation,
         )
 
-    def get_seasonal_statistics(self, month: int) -> dict[str, Any]:
+    def get_seasonal_statistics(self, month: int) -> SeasonalStatisticsDict:
         """Get statistical summary for a specific month.
 
         Args:
@@ -349,7 +384,7 @@ class WeatherPatternLearner:
             "volatility": float(np.mean([p.volatility for p in month_patterns])),
         }
 
-    def get_pattern_database_summary(self) -> dict[str, Any]:
+    def get_pattern_database_summary(self) -> PatternDatabaseSummaryDict:
         """Get summary of pattern database.
 
         Returns:
@@ -379,7 +414,7 @@ class WeatherPatternLearner:
             "year_range": f"{min(years)}-{max(years)}",
         }
 
-    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
+    def to_dict(self) -> dict[str, list[WeatherPatternDict]]:
         """Convert pattern database to dictionary for storage.
 
         Returns:
@@ -402,7 +437,7 @@ class WeatherPatternLearner:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, list[dict[str, Any]]]) -> "WeatherPatternLearner":
+    def from_dict(cls, data: dict[str, list[WeatherPatternDict]]) -> "WeatherPatternLearner":
         """Create WeatherPatternLearner from dictionary.
 
         Args:
