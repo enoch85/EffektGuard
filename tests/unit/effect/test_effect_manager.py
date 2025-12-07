@@ -469,13 +469,19 @@ class TestEvaluateLayer:
         timestamp = datetime(2025, 10, 14, 12, 0)
         await effect_manager.record_quarter_measurement(8.0, 48, timestamp)
 
-        # Now test with power exceeding that peak
-        decision = effect_manager.evaluate_layer(
-            current_peak=8.0,
-            current_power=8.5,  # Exceeds peak
-            thermal_trend={"rate_per_hour": 0.0},
-            enable_peak_protection=True,
-        )
+        # Mock dt_util.now() to ensure daytime (quarter calculation is correct)
+        with patch(
+            "custom_components.effektguard.optimization.effect_layer.dt_util"
+        ) as mock_dt:
+            mock_dt.now.return_value = datetime(2025, 10, 14, 12, 30)  # Daytime, Q50
+
+            # Now test with power exceeding that peak
+            decision = effect_manager.evaluate_layer(
+                current_peak=8.0,
+                current_power=8.5,  # Exceeds peak
+                thermal_trend={"rate_per_hour": 0.0},
+                enable_peak_protection=True,
+            )
 
         assert decision.offset < 0  # Negative offset to reduce heating
         assert decision.weight > 0.5  # High weight for critical

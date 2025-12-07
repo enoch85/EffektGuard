@@ -85,7 +85,27 @@ class TestProactiveLayerInit:
 
 
 class TestProactiveLayerZones:
-    """Tests for ProactiveLayer zone detection."""
+    """Tests for ProactiveLayer zone detection.
+
+    Stockholm (Cold zone) at 0°C outdoor temp:
+    - normal_max = warning = -540
+    - Z1 threshold (10%): -54
+    - Z2 threshold (30%): -162
+    - Z3 threshold (50%): -270
+    - Z4 threshold (75%): -405
+    - Z5 threshold (100%): -540 (equals warning, so Z5 has no range)
+
+    Zone ranges (condition: zone_next < dm <= zone_current):
+    - NONE: dm > -54 (healthier than Z1)
+    - Z1: -162 < dm <= -54
+    - Z2: -270 < dm <= -162
+    - Z3: -405 < dm <= -270
+    - Z4: -540 < dm <= -405
+    - Z5: warning < dm <= -540 (empty since warning == -540)
+    - NONE: dm <= warning (handed to Emergency T stages)
+
+    Emergency T stages start at WARNING (-540) and go deeper.
+    """
 
     @pytest.fixture
     def layer(self):
@@ -94,11 +114,11 @@ class TestProactiveLayerZones:
         return ProactiveLayer(climate_detector=climate_detector)
 
     def test_zone1_gentle_nudge(self, layer):
-        """Test Zone 1 provides gentle offset."""
-        # At outdoor_temp=0, normal_max is around -450 (Stockholm)
-        # Zone 1 is at 15% = -67.5
-        # Zone 2 is at 40% = -180
-        # So DM -100 should be in Zone 1
+        """Test Zone 1 provides gentle offset.
+
+        Z1 range at 0°C: -162 < dm <= -54
+        Test with DM -100 (within Z1 range)
+        """
         nibe_state = MockNibeState(degree_minutes=-100.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
@@ -112,11 +132,28 @@ class TestProactiveLayerZones:
         assert result.weight == LAYER_WEIGHT_PROACTIVE_MIN
         assert "gentle heating" in result.reason
 
+    def test_zone1_boundary_lower(self, layer):
+        """Test Z1 at lower boundary (just above Z2).
+
+        Z1 lower boundary is -162 (exclusive), so -161 should be in Z1.
+        -162 itself is the boundary, included in Z2.
+        """
+        nibe_state = MockNibeState(degree_minutes=-161.0, outdoor_temp=0.0)
+
+        result = layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=None,
+            target_temp=21.0,
+        )
+
+        assert result.zone == "Z1"
+
     def test_zone2_boost_recovery(self, layer):
-        """Test Zone 2 provides moderate offset."""
-        # Zone 2 is 40% of normal_max = -180
-        # Zone 3 is 50% of normal_max = -225
-        # DM -200 should be in Zone 2
+        """Test Zone 2 provides moderate offset.
+
+        Z2 range at 0°C: -270 < dm <= -162
+        Test with DM -200 (within Z2 range)
+        """
         nibe_state = MockNibeState(degree_minutes=-200.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
@@ -130,12 +167,25 @@ class TestProactiveLayerZones:
         assert result.weight == PROACTIVE_ZONE2_WEIGHT
         assert "boost recovery" in result.reason
 
+    def test_zone2_boundary(self, layer):
+        """Test Z2 at exact upper boundary (-162 should be in Z2)."""
+        nibe_state = MockNibeState(degree_minutes=-162.0, outdoor_temp=0.0)
+
+        result = layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=None,
+            target_temp=21.0,
+        )
+
+        assert result.zone == "Z2"
+
     def test_zone3_prevent_deeper_debt(self, layer):
-        """Test Zone 3 provides scaled offset."""
-        # Zone 3 is 50% = -225
-        # Zone 4 is 75% = -337.5
-        # DM -280 should be in Zone 3
-        nibe_state = MockNibeState(degree_minutes=-280.0, outdoor_temp=0.0)
+        """Test Zone 3 provides scaled offset.
+
+        Z3 range at 0°C: -405 < dm <= -270
+        Test with DM -300 (within Z3 range)
+        """
+        nibe_state = MockNibeState(degree_minutes=-300.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -148,15 +198,24 @@ class TestProactiveLayerZones:
         assert result.weight == PROACTIVE_ZONE3_WEIGHT
         assert "prevent deeper debt" in result.reason
 
+    def test_zone3_boundary(self, layer):
+        """Test Z3 at exact upper boundary (-270 should be in Z3)."""
+        nibe_state = MockNibeState(degree_minutes=-270.0, outdoor_temp=0.0)
+
+        result = layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=None,
+            target_temp=21.0,
+        )
+
+        assert result.zone == "Z3"
+
     def test_zone4_strong_prevention(self, layer):
-        """Test Zone 4 provides strong offset."""
-        # At outdoor_temp=0, normal_max is -540 (Stockholm)
-        # Zone 3 is at 50% = -270
-        # Zone 4 is at 75% = -405
-        # Zone 5 is at 100% = -540
-        # Zone 3 range: -405 < DM <= -270 (catches -400, -350, etc)
-        # Zone 4 range: -540 < DM <= -405 (catches -405, -450, -500)
-        # DM -450 should be in Zone 4
+        """Test Zone 4 provides strong offset.
+
+        Z4 range at 0°C: -540 < dm <= -405
+        Test with DM -450 (within Z4 range)
+        """
         nibe_state = MockNibeState(degree_minutes=-450.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
@@ -170,19 +229,9 @@ class TestProactiveLayerZones:
         assert result.weight == PROACTIVE_ZONE4_WEIGHT
         assert "strong prevention" in result.reason
 
-    def test_zone5_approaching_warning(self, layer):
-        """Test Zone 5 exists between warning and 100% of normal_max.
-
-        NOTE: In current climate zone implementation, warning == normal_max,
-        so Zone 5 has no range. This test verifies that behavior.
-        DM values at or beyond zone5_threshold go directly to "NONE"
-        because emergency layer handles values beyond warning.
-        """
-        # At 0°C Stockholm, warning = normal_max = -540
-        # Zone 5 would be between warning (-540) and zone5 (-540) - no range
-        # Values at exactly -540 fall into zone4 (zone5 < dm <= zone4)
-        # Values beyond -540 are NONE (for emergency layer)
-        nibe_state = MockNibeState(degree_minutes=-550.0, outdoor_temp=0.0)
+    def test_zone4_boundary(self, layer):
+        """Test Z4 at exact upper boundary (-405 should be in Z4)."""
+        nibe_state = MockNibeState(degree_minutes=-405.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -190,13 +239,34 @@ class TestProactiveLayerZones:
             target_temp=21.0,
         )
 
-        # Beyond warning, proactive layer returns NONE - emergency takes over
+        assert result.zone == "Z4"
+
+    def test_zone5_empty_range(self, layer):
+        """Test Zone 5 has no effective range when warning == normal_max.
+
+        Z5 range condition: warning < dm <= zone5_threshold
+        At 0°C: warning = -540, zone5_threshold = -540
+        So -540 < dm <= -540 is impossible (empty range)
+
+        DM -540 satisfies: -540 < -540 = False, so falls to NONE
+        The Z5 code EXISTS but never activates due to climate zone config.
+        """
+        nibe_state = MockNibeState(degree_minutes=-540.0, outdoor_temp=0.0)
+
+        result = layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=None,
+            target_temp=21.0,
+        )
+
+        # At exactly warning/normal_max, proactive returns NONE
+        # Emergency T1 starts at WARNING, so handoff is immediate
         assert result.zone == "NONE"
         assert result.offset == 0.0
 
     def test_no_proactive_when_dm_healthy(self, layer):
-        """Test no proactive action when DM is healthy."""
-        # DM -20 is healthier than Zone 1 threshold
+        """Test no proactive action when DM is healthy (above Z1)."""
+        # Z1 starts at -54, so -20 is healthier
         nibe_state = MockNibeState(degree_minutes=-20.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
@@ -210,10 +280,17 @@ class TestProactiveLayerZones:
         assert result.weight == 0.0
         assert "Not needed" in result.reason
 
-    def test_no_proactive_when_beyond_warning(self, layer):
-        """Test no proactive action when beyond warning (emergency takes over)."""
-        # DM -800 is beyond warning threshold (-702)
-        nibe_state = MockNibeState(degree_minutes=-800.0, outdoor_temp=0.0)
+    def test_no_proactive_beyond_warning_emergency_takes_over(self, layer):
+        """Test proactive returns NONE beyond warning - Emergency T stages handle it.
+
+        At 0°C, warning = -540
+        Emergency T1 starts at -540 (WARNING + T1_MARGIN where T1_MARGIN=0)
+        Emergency T2 starts at -740 (WARNING + 200)
+        Emergency T3 starts at -940 (WARNING + 400, capped at -1450)
+
+        DM -600 is in T1 territory (between -540 and -740)
+        """
+        nibe_state = MockNibeState(degree_minutes=-600.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
