@@ -3,6 +3,7 @@
 Models heat storage and loss characteristics for predictive control.
 Enables pre-heating and thermal energy banking strategies.
 Includes emergency thermal debt response layer (Phase 6 refactor).
+Includes proactive debt prevention layer (Phase 7 refactor).
 """
 
 import logging
@@ -25,8 +26,33 @@ from ..const import (
     DM_THERMAL_MASS_BUFFER_TIMBER,
     DM_THRESHOLD_AUX_LIMIT,
     LAYER_WEIGHT_EMERGENCY,
+    LAYER_WEIGHT_PROACTIVE_MIN,
+    MULTIPLIER_BOOST_30_PERCENT,
+    MULTIPLIER_REDUCTION_20_PERCENT,
+    PROACTIVE_ZONE1_OFFSET,
+    PROACTIVE_ZONE1_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE2_OFFSET,
+    PROACTIVE_ZONE2_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE2_WEIGHT,
+    PROACTIVE_ZONE3_OFFSET_MIN,
+    PROACTIVE_ZONE3_OFFSET_RANGE,
+    PROACTIVE_ZONE3_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE3_WEIGHT,
+    PROACTIVE_ZONE4_OFFSET,
+    PROACTIVE_ZONE4_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE4_WEIGHT,
+    PROACTIVE_ZONE5_OFFSET,
+    PROACTIVE_ZONE5_THRESHOLD_PERCENT,
+    PROACTIVE_ZONE5_WEIGHT,
     QuarterClassification,
+    RAPID_COOLING_BOOST_MAX,
+    RAPID_COOLING_BOOST_MULTIPLIER,
+    RAPID_COOLING_OUTDOOR_THRESHOLD,
+    RAPID_COOLING_THRESHOLD,
+    RAPID_COOLING_WEIGHT,
     SAFETY_EMERGENCY_OFFSET,
+    THERMAL_CHANGE_MODERATE,
+    THERMAL_CHANGE_MODERATE_COOLING,
     THERMAL_RECOVERY_DAMPING_FACTOR,
     THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD,
     THERMAL_RECOVERY_FORECAST_HORIZON,
@@ -83,6 +109,24 @@ class EmergencyLayerDecision:
     degree_minutes: float = 0.0
     threshold_used: float = 0.0
     damping_applied: bool = False
+
+
+@dataclass
+class ProactiveLayerDecision:
+    """Decision from the proactive debt prevention layer.
+
+    Encapsulates the proactive intervention with zone-based thresholds.
+    """
+
+    name: str
+    offset: float
+    weight: float
+    reason: str
+    # Additional diagnostic fields
+    zone: str = ""  # "Z1", "Z2", "Z3", "Z4", "Z5", "RAPID_COOLING", "NONE"
+    degree_minutes: float = 0.0
+    trend_rate: float = 0.0
+    forecast_validated: bool = False
 
 
 class ThermalModel:
@@ -623,3 +667,236 @@ class EmergencyLayer:
             return True
 
         return False
+
+
+class ProactiveLayer:
+    """Proactive thermal debt prevention with climate-aware thresholds.
+
+    PHILOSOPHY:
+    - Continuous modulation beats forced cycling
+    - Thermal debt from forced stops worse than running low power
+    - Prevent peaks by maintaining gentle background heating
+
+    PREDICTIVE TREND ANALYSIS:
+    Uses indoor temperature trend to detect problems 30-60 minutes before they occur.
+    Rapid cooling (-0.3°C/h or faster) combined with outdoor cold and temperature deficit
+    indicates thermal debt will develop soon - intervene proactively.
+
+    CLIMATE-AWARE DESIGN:
+    Thresholds calculated as percentages of climate-aware expected DM (normal_max):
+    - Zone 1 (15%): Early warning, gentle nudge before compressor starts
+    - Zone 2 (40%): Moderate action when compressor running
+    - Zone 3 (80%): Strong action when approaching warning threshold
+    """
+
+    def __init__(
+        self,
+        climate_detector: ClimateZoneDetector,
+        get_thermal_trend: Optional[Callable[[], dict]] = None,
+    ):
+        """Initialize proactive layer.
+
+        Args:
+            climate_detector: ClimateZoneDetector for context-aware thresholds
+            get_thermal_trend: Callable returning thermal trend dict
+        """
+        self.climate_detector = climate_detector
+        self._get_thermal_trend = get_thermal_trend or (
+            lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
+        )
+
+    def evaluate_layer(
+        self,
+        nibe_state,
+        weather_data,
+        target_temp: float,
+    ) -> ProactiveLayerDecision:
+        """Proactive debt prevention with climate-aware thresholds and trend prediction.
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data (for forecast validation)
+            target_temp: Target indoor temperature
+
+        Returns:
+            ProactiveLayerDecision with climate-aware proactive gentle heating
+        """
+        degree_minutes = nibe_state.degree_minutes
+        outdoor_temp = nibe_state.outdoor_temp
+        indoor_temp = nibe_state.indoor_temp
+
+        # Get temperature trend for predictive intervention
+        thermal_trend = self._get_thermal_trend()
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # Calculate current deficit
+        deficit = target_temp - indoor_temp
+
+        # Predict deficit in 1 hour if trend continues
+        predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
+
+        # ========================================
+        # RAPID COOLING DETECTION (Predictive)
+        # ========================================
+        if self._is_cooling_rapidly(thermal_trend):
+            if outdoor_temp < RAPID_COOLING_OUTDOOR_THRESHOLD and deficit > THERMAL_CHANGE_MODERATE:
+                boost = min(
+                    abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER,
+                    RAPID_COOLING_BOOST_MAX,
+                )
+
+                # Validate against weather forecast
+                forecast_reason = ""
+                forecast_validated = False
+                if weather_data and weather_data.forecast_hours:
+                    next_3h_temps = [h.temperature for h in weather_data.forecast_hours[:3]]
+                    if next_3h_temps:
+                        min_forecast_temp = min(next_3h_temps)
+                        temp_will_drop = min_forecast_temp < outdoor_temp - 1.0
+
+                        if temp_will_drop:
+                            boost *= MULTIPLIER_BOOST_30_PERCENT
+                            forecast_reason = " (forecast confirms cooling)"
+                            forecast_validated = True
+                        else:
+                            boost *= MULTIPLIER_REDUCTION_20_PERCENT
+                            forecast_reason = " (forecast stable, likely temporary)"
+
+                return ProactiveLayerDecision(
+                    name="Proactive",
+                    offset=boost,
+                    weight=RAPID_COOLING_WEIGHT,
+                    reason=(
+                        f"Rapid cooling ({trend_rate:.2f}°C/h), "
+                        f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
+                        f"{forecast_reason}"
+                    ),
+                    zone="RAPID_COOLING",
+                    degree_minutes=degree_minutes,
+                    trend_rate=trend_rate,
+                    forecast_validated=forecast_validated,
+                )
+
+        # Get climate-aware expected DM range for current conditions
+        expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
+
+        # Climate-aware thresholds
+        zone1_threshold = expected_dm["normal"] * PROACTIVE_ZONE1_THRESHOLD_PERCENT
+        zone2_threshold = expected_dm["normal"] * PROACTIVE_ZONE2_THRESHOLD_PERCENT
+        zone3_threshold = expected_dm["normal"] * PROACTIVE_ZONE3_THRESHOLD_PERCENT
+        zone4_threshold = expected_dm["normal"] * PROACTIVE_ZONE4_THRESHOLD_PERCENT
+        zone5_threshold = expected_dm["normal"] * PROACTIVE_ZONE5_THRESHOLD_PERCENT
+
+        # PROACTIVE ZONE 1
+        if zone2_threshold < degree_minutes <= zone1_threshold:
+            offset = PROACTIVE_ZONE1_OFFSET
+
+            if trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
+                offset *= MULTIPLIER_BOOST_30_PERCENT
+                reason_suffix = f" (trend: {trend_rate:.2f}°C/h)"
+            else:
+                reason_suffix = ""
+
+            return ProactiveLayerDecision(
+                name="Proactive Z1",
+                offset=offset,
+                weight=LAYER_WEIGHT_PROACTIVE_MIN,
+                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}",
+                zone="Z1",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
+
+        # PROACTIVE ZONE 2
+        if zone3_threshold < degree_minutes <= zone2_threshold:
+            return ProactiveLayerDecision(
+                name="Proactive Z2",
+                offset=PROACTIVE_ZONE2_OFFSET,
+                weight=PROACTIVE_ZONE2_WEIGHT,
+                reason=f"DM {degree_minutes:.0f}, boost recovery speed",
+                zone="Z2",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
+
+        # PROACTIVE ZONE 3
+        if zone4_threshold < degree_minutes <= zone3_threshold:
+            deficit_severity = (zone3_threshold - degree_minutes) / (
+                zone3_threshold - zone4_threshold
+            )
+            offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
+
+            return ProactiveLayerDecision(
+                name="Proactive Z3",
+                offset=offset,
+                weight=PROACTIVE_ZONE3_WEIGHT,
+                reason=f"DM {degree_minutes:.0f}, prevent deeper debt",
+                zone="Z3",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
+
+        # PROACTIVE ZONE 4
+        if zone5_threshold < degree_minutes <= zone4_threshold:
+            return ProactiveLayerDecision(
+                name="Proactive Z4",
+                offset=PROACTIVE_ZONE4_OFFSET,
+                weight=PROACTIVE_ZONE4_WEIGHT,
+                reason=f"DM {degree_minutes:.0f}, strong prevention",
+                zone="Z4",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
+
+        # PROACTIVE ZONE 5
+        if expected_dm["warning"] < degree_minutes <= zone5_threshold:
+            return ProactiveLayerDecision(
+                name="Proactive Z5",
+                offset=PROACTIVE_ZONE5_OFFSET,
+                weight=PROACTIVE_ZONE5_WEIGHT,
+                reason=f"DM {degree_minutes:.0f}, approaching warning",
+                zone="Z5",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
+
+        # Outside proactive zones
+        return ProactiveLayerDecision(
+            name="Proactive",
+            offset=0.0,
+            weight=0.0,
+            reason="Not needed",
+            zone="NONE",
+            degree_minutes=degree_minutes,
+            trend_rate=trend_rate,
+        )
+
+    def _is_cooling_rapidly(
+        self, thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD
+    ) -> bool:
+        """Check if house is cooling rapidly.
+
+        Args:
+            thermal_trend: Trend data
+            threshold: Cooling rate threshold (°C/h, negative)
+
+        Returns:
+            True if cooling faster than threshold
+        """
+        return thermal_trend.get("rate_per_hour", 0.0) < threshold
+
+    def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict:
+        """Calculate expected DM range for given outdoor temperature.
+
+        Args:
+            outdoor_temp: Current outdoor temperature (°C)
+
+        Returns:
+            Dictionary with normal and warning thresholds
+        """
+        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+
+        return {
+            "normal": dm_range["normal_max"],
+            "warning": dm_range["warning"],
+        }
