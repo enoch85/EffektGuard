@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine, LayerDecision
 from custom_components.effektguard.optimization.effect_layer import EffectLayerDecision
+from custom_components.effektguard.optimization.price_layer import PriceLayerDecision
 from custom_components.effektguard.const import (
     CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
@@ -83,6 +84,25 @@ def create_engine_mock(config_overrides=None):
     engine.price = MagicMock()
     engine.price.get_current_classification = MagicMock(return_value=QuarterClassification.NORMAL)
     engine.price.get_forecast_price_increase = MagicMock(return_value=1.0)
+    # Mock evaluate_layer to return proper PriceLayerDecision based on enable_price_optimization
+    if base_config.get("enable_price_optimization", True):
+        engine.price.evaluate_layer = MagicMock(
+            return_value=PriceLayerDecision(
+                name="Spot Price",
+                offset=-2.0,
+                weight=0.8,
+                reason="Q32: NORMAL (day) | Adapter: test | Horizon: 4.0h",
+            )
+        )
+    else:
+        engine.price.evaluate_layer = MagicMock(
+            return_value=PriceLayerDecision(
+                name="Spot Price",
+                offset=0.0,
+                weight=0.0,
+                reason="Disabled by user",
+            )
+        )
 
     # Weather layer needs self.predictor and self.thermal
     engine.predictor = MagicMock()
@@ -103,6 +123,9 @@ def create_engine_mock(config_overrides=None):
 
     # Add tolerance (used by price layer)
     engine.tolerance = 5.0
+
+    # Add target_temp (used by price layer delegation)
+    engine.target_temp = 21.0
 
     # Add mode_config (used by price and comfort layers)
     engine.mode_config = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
