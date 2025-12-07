@@ -117,14 +117,6 @@ from ..const import (
     WARNING_OFFSET_MIN_SEVERE,
     WEATHER_BASE_INTENSITY_MULTIPLIER,
     WEATHER_BASE_OFFSET_MAX,
-    WEATHER_COMP_DEFER_DM_CRITICAL,
-    WEATHER_COMP_DEFER_DM_LIGHT,
-    WEATHER_COMP_DEFER_DM_MODERATE,
-    WEATHER_COMP_DEFER_DM_SIGNIFICANT,
-    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
-    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
-    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
-    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
@@ -151,7 +143,6 @@ from ..const import (
     MULTIPLIER_REDUCTION_20_PERCENT,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
-    DEFAULT_CURVE_SENSITIVITY,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
@@ -166,6 +157,8 @@ from .climate_zones import ClimateZoneDetector
 from .weather_layer import (
     AdaptiveClimateSystem,
     WeatherCompensationCalculator,
+    WeatherCompensationLayer,
+    WeatherCompensationLayerDecision,
     WeatherLayerDecision,
     WeatherPredictionLayer,
 )
@@ -296,6 +289,14 @@ class DecisionEngine:
         # Weather prediction layer for proactive pre-heating
         self.weather_prediction = WeatherPredictionLayer(
             thermal_mass=thermal_model.thermal_mass if thermal_model else 1.0
+        )
+
+        # Weather compensation layer for mathematical flow temp optimization
+        self.weather_comp_layer = WeatherCompensationLayer(
+            weather_comp=self.weather_comp,
+            climate_system=self.climate_system,
+            weather_learner=self.weather_learner,
+            weather_comp_weight=self.weather_comp_weight,
         )
 
         # Manual override state (Phase 5 service support)
@@ -1553,18 +1554,14 @@ class DecisionEngine:
     def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
         """Mathematical weather compensation layer with adaptive climate system.
 
+        Delegates to WeatherCompensationLayer.evaluate_layer() for the actual logic.
+
         Calculates optimal flow temperature using:
         - Universal flow temperature formula (validated across manufacturers)
         - Heat transfer method (if radiator specs available)
         - UFH-specific adjustments (concrete/timber)
         - Adaptive climate zones (latitude-based, globally applicable)
         - Weather learning (unusual pattern detection)
-
-        Automatically adapts to global climates:
-        - Kiruna, Sweden (-30°C) → Arctic zone → 2.5°C base margin
-        - Stockholm, Sweden (-10°C) → Cold zone → 1.0°C base margin
-        - London, UK (0°C) → Temperate zone → 0.5°C base margin
-        - Paris, France (5°C) → Mild zone → 0.0°C base margin
 
         Args:
             nibe_state: Current NIBE state
@@ -1573,137 +1570,20 @@ class DecisionEngine:
         Returns:
             LayerDecision with mathematically calculated offset
         """
-        # Check if feature is enabled
-        if not self.enable_weather_compensation:
-            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="Disabled")
-
-        if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="No weather data")
-
-        current_outdoor = nibe_state.outdoor_temp
-        current_flow = nibe_state.flow_temp
-
-        # Calculate optimal flow temperature using physics-based formulas
-        flow_calc = self.weather_comp.calculate_optimal_flow_temp(
-            indoor_setpoint=self.target_temp,
-            outdoor_temp=current_outdoor,
-            prefer_method="auto",  # Combines universal formula + heat transfer if available
+        # Delegate to WeatherCompensationLayer for the actual logic
+        comp_decision = self.weather_comp_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            target_temp=self.target_temp,
+            enable_weather_compensation=self.enable_weather_compensation,
         )
 
-        # Adaptive climate system safety adjustments
-        # Replaces hardcoded Swedish thresholds with universal climate zones + learning
-        unusual_weather = False
-        unusual_severity = 0.0
-
-        # Check for unusual weather patterns if weather learner available
-        if self.weather_learner and weather_data.forecast_hours:
-            try:
-                # Extract forecast for unusual weather detection
-                forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
-                unusual = self.weather_learner.detect_unusual_weather(
-                    current_date=dt_util.now(),
-                    forecast=forecast_temps,
-                )
-
-                if unusual.is_unusual:
-                    unusual_weather = True
-                    # Map severity string to 0.0-1.0 scale
-                    unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
-
-                    _LOGGER.info(
-                        "Unusual weather detected: %s (deviation: %.1f°C)",
-                        unusual.recommendation,
-                        unusual.deviation_from_typical,
-                    )
-            except (AttributeError, KeyError, ValueError, TypeError) as e:
-                _LOGGER.warning("Weather learning check failed: %s", e)
-
-        # Get adaptive safety margin from climate system
-        safety_margin = self.climate_system.get_safety_margin(
-            outdoor_temp=current_outdoor,
-            unusual_weather_detected=unusual_weather,
-            unusual_severity=unusual_severity,
-        )
-
-        # Apply safety margin to calculated flow temp
-        adjusted_flow_temp = flow_calc.flow_temp + safety_margin
-
-        # Calculate required offset from current flow temperature
-        # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
-        curve_sensitivity = DEFAULT_CURVE_SENSITIVITY
-        required_offset = self.weather_comp.calculate_required_offset(
-            optimal_flow_temp=adjusted_flow_temp,
-            current_flow_temp=current_flow,
-            curve_sensitivity=curve_sensitivity,
-        )
-
-        # Get dynamic weight from climate system
-        dynamic_weight = self.climate_system.get_dynamic_weight(
-            outdoor_temp=current_outdoor,
-            unusual_weather_detected=unusual_weather,
-        )
-
-        # Apply user-configured weight adjustment
-        final_weight = dynamic_weight * self.weather_comp_weight
-
-        # Defer weather compensation when thermal debt exists (Conservative strategy)
-        # Allow thermal reality (DM + comfort + proactive) to override outdoor temp optimization
-        degree_minutes = nibe_state.degree_minutes
-        if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
-            # Critical debt: 39% reduction (0.49 → 0.30)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
-            # Significant debt: 29% reduction (0.49 → 0.35)
-            defer_factor = (
-                WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            )
-            defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
-            # Moderate debt: 18% reduction (0.49 → 0.40)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
-            # Light debt: 8% reduction (0.49 → 0.45)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Light debt (DM {degree_minutes:.0f})"
-        else:
-            # No debt: full weather comp weight
-            defer_factor = 1.0
-            defer_reason = None
-
-        final_weight = final_weight * defer_factor
-
-        # Build comprehensive reasoning
-        zone_info = self.climate_system.get_climate_info()
-        reasoning_parts = [
-            f"Math WC: {flow_calc.method}",
-            f"Zone: {zone_info['name']}",
-            f"Optimal: {flow_calc.flow_temp:.1f}°C",
-        ]
-
-        if safety_margin > 0:
-            reasoning_parts.append(f"Safety: +{safety_margin:.1f}°C")
-            reasoning_parts.append(f"Adjusted: {adjusted_flow_temp:.1f}°C")
-
-        if unusual_weather:
-            reasoning_parts.append(f"Unusual weather (severity={unusual_severity:.1f})")
-
-        reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
-        reasoning_parts.append(f"Weight: {final_weight:.2f}")
-
-        if defer_reason:
-            reasoning_parts.append(f"Deferred: {defer_reason}")
-
-        reasoning = "; ".join(reasoning_parts)
-
-        _LOGGER.debug("Weather compensation layer: %s", reasoning)
-
+        # Convert WeatherCompensationLayerDecision to LayerDecision
         return LayerDecision(
-            name="Math WC",
-            offset=required_offset,
-            weight=final_weight,
-            reason=reasoning,
+            name=comp_decision.name,
+            offset=comp_decision.offset,
+            weight=comp_decision.weight,
+            reason=comp_decision.reason,
         )
 
     def _price_layer(self, nibe_state, price_data) -> LayerDecision:
