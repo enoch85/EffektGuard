@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.prediction_layer import PredictionLayerDecision
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 
@@ -42,6 +43,15 @@ def create_engine_with_predictor(hass_mock, latitude: float = 59.33):
     # Create mock thermal predictor
     thermal_predictor = MagicMock()
     thermal_predictor.state_history = [MagicMock()] * 10  # Enough data for trend
+    # Mock evaluate_layer to return proper PredictionLayerDecision
+    thermal_predictor.evaluate_layer = MagicMock(
+        return_value=PredictionLayerDecision(
+            name="Learned Pre-heat",
+            offset=0.0,
+            weight=0.0,
+            reason="No pre-heat needed",
+        )
+    )
 
     config = {
         "latitude": latitude,

@@ -11,15 +11,30 @@ Based on POST_PHASE_5_ROADMAP.md Phase 6.2 and Forum_Summary.md research.
 
 import logging
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 
-from ..const import DM_THRESHOLD_AUX_LIMIT, SAMPLES_PER_HOUR
+from ..const import DM_THRESHOLD_AUX_LIMIT, LAYER_WEIGHT_PREDICTION, SAMPLES_PER_HOUR
 from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class PredictionLayerDecision:
+    """Decision from the learned prediction layer.
+
+    Encapsulates the pre-heating recommendation based on learned
+    building thermal characteristics.
+    """
+
+    name: str
+    offset: float
+    weight: float
+    reason: str
 
 
 class ThermalStatePredictor:
@@ -286,6 +301,122 @@ class ThermalStatePredictor:
                 reason=f"Temperature predicted to remain adequate (min {min_predicted_temp:.1f}°C)",
                 hours_until_event=0,
                 target_temp=target_temp,
+            )
+
+    def evaluate_layer(
+        self,
+        nibe_state,
+        weather_data,
+        target_temp: float,
+        thermal_model,
+    ) -> PredictionLayerDecision:
+        """Prediction layer: Learned pre-heating using thermal state predictor.
+
+        Uses learned building thermal characteristics to make intelligent
+        pre-heating decisions based on predicted temperature evolution.
+
+        This layer uses actual learned thermal response rather than generic
+        thermal mass assumptions, providing more accurate pre-heating.
+
+        Phase 6 - Self-learning capability
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            target_temp: Target indoor temperature
+            thermal_model: ThermalModel instance for prediction horizon
+
+        Returns:
+            PredictionLayerDecision with learned pre-heating recommendation
+        """
+        # Skip if not enough data
+        if len(self.state_history) < 96:  # Less than 24 hours of data
+            return PredictionLayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason=f"Learning: {len(self.state_history)}/96 observations",
+            )
+
+        # Skip if no weather forecast available
+        if not weather_data or not weather_data.forecast_hours:
+            return PredictionLayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="No weather forecast",
+            )
+
+        try:
+            # Use UFH-type-specific forecast horizon for learned predictions
+            # Concrete slab: 24h, Timber: 12h, Radiators: 6h
+            prediction_horizon = int(thermal_model.get_prediction_horizon())
+            forecast_temps = [
+                hour.temperature for hour in weather_data.forecast_hours[:prediction_horizon]
+            ]
+
+            if not forecast_temps:
+                return PredictionLayerDecision(
+                    name="Learned Pre-heat",
+                    offset=0.0,
+                    weight=0.0,
+                    reason="Empty weather forecast",
+                )
+
+            # Check if pre-heating is recommended
+            # Use half of prediction horizon as lookahead (balance between early and late)
+            hours_ahead = prediction_horizon // 2
+            preheat_decision = self.should_pre_heat(
+                target_temp=target_temp,
+                hours_ahead=hours_ahead,
+                future_outdoor_temps=forecast_temps,
+                current_outdoor_temp=nibe_state.outdoor_temp,
+                current_indoor_temp=nibe_state.indoor_temp,
+                thermal_mass=thermal_model.thermal_mass,
+                insulation_quality=thermal_model.insulation_quality,
+            )
+
+            if preheat_decision.should_preheat:
+                # Thermal predictor now accounts for current overshoot as stored thermal energy
+                # The recommended_offset is already adjusted for overshoot in should_pre_heat()
+                # Weight 0.65 - slightly higher than base price layer (0.6)
+                # but lower than effect/weather layers (0.7-0.8)
+                return PredictionLayerDecision(
+                    name="Learned Pre-heat",
+                    offset=preheat_decision.recommended_offset,
+                    weight=LAYER_WEIGHT_PREDICTION,
+                    reason=preheat_decision.reason,
+                )
+            else:
+                return PredictionLayerDecision(
+                    name="Learned Pre-heat",
+                    offset=0.0,
+                    weight=0.0,
+                    reason="No pre-heat needed",
+                )
+
+        except AttributeError as err:
+            _LOGGER.error(
+                "Thermal model API compatibility error: %s. "
+                "This indicates the thermal model is missing required attributes. "
+                "Check that AdaptiveThermalModel has insulation_quality property. "
+                "Falling back to basic optimization without pre-heating.",
+                err,
+                exc_info=True,
+            )
+            return PredictionLayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="Thermal model API error",
+            )
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as err:
+            _LOGGER.warning("Prediction calculation failed: %s", err)
+            return PredictionLayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason=f"Calculation error: {err}",
             )
 
     def _calculate_thermal_responsiveness(self) -> float:

@@ -35,6 +35,8 @@ source .venv/bin/activate
 12. **Follow Home Assistant best practices** - Use official patterns, coordinator, config flow
 13. **Read NIBE documentation** - Never guess heat pump behavior, verify with research docs
 14. **Use Black formatting** - All Python code must be formatted with Black (line length 100)
+15. **No `Any` type imports** - Use specific types (dataclasses, TypedDict, Protocol, etc.)
+16. **All imports at file top** - Place all imports at the top of files to avoid circular imports
 
 ---
 
