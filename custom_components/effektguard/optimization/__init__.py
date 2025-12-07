@@ -6,12 +6,13 @@ maintaining comfort and heat pump health.
 """
 
 from .decision_engine import DecisionEngine, LayerDecision, OptimizationDecision
-from .effect_layer import EffectManager, PeakEvent
+from .effect_layer import EffectLayerDecision, EffectManager, PeakEvent
 from .price_layer import PriceAnalyzer, PriceData, QuarterPeriod
 from .thermal_layer import ThermalModel
 
 __all__ = [
     "DecisionEngine",
+    "EffectLayerDecision",
     "EffectManager",
     "LayerDecision",
     "OptimizationDecision",

@@ -14,6 +14,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine, LayerDecision
+from custom_components.effektguard.optimization.effect_layer import EffectLayerDecision
 from custom_components.effektguard.const import (
     CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
@@ -58,6 +59,25 @@ def create_engine_mock(config_overrides=None):
             should_limit=False, reduction_needed=0.0, peak_margin=0.0, reason="Normal operation"
         )
     )
+    # Mock evaluate_layer to return proper EffectLayerDecision based on enable_peak_protection
+    if base_config.get("enable_peak_protection", True):
+        engine.effect.evaluate_layer = MagicMock(
+            return_value=EffectLayerDecision(
+                name="Peak",
+                offset=0.0,
+                weight=0.0,
+                reason="Safe margin (40.0/45.0 kW)",
+            )
+        )
+    else:
+        engine.effect.evaluate_layer = MagicMock(
+            return_value=EffectLayerDecision(
+                name="Peak",
+                offset=0.0,
+                weight=0.0,
+                reason="Disabled by user",
+            )
+        )
 
     # Price layer needs self.price
     engine.price = MagicMock()

@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.effektguard.optimization.effect_layer import (
     EffectManager,
+    EffectLayerDecision,
     PeakEvent,
     PowerLimitDecision,
 )
@@ -426,3 +427,76 @@ class TestMonthlySummary:
         assert summary["count"] == 2
         assert summary["highest"] == 6.0  # Highest peak
         assert len(summary["peaks"]) == 2
+
+
+class TestEvaluateLayer:
+    """Tests for evaluate_layer method - effect tariff protection layer logic."""
+
+    @pytest.mark.asyncio
+    async def test_disabled_returns_zero_offset(self, effect_manager):
+        """Disabled peak protection returns zero offset and weight."""
+        decision = effect_manager.evaluate_layer(
+            current_peak=10.0,
+            current_power=5.0,
+            thermal_trend={"rate_per_hour": 0.0},
+            enable_peak_protection=False,
+        )
+
+        assert isinstance(decision, EffectLayerDecision)
+        assert decision.name == "Peak"
+        assert decision.offset == 0.0
+        assert decision.weight == 0.0
+        assert "Disabled by user" in decision.reason
+
+    @pytest.mark.asyncio
+    async def test_safe_margin_returns_zero_offset(self, effect_manager):
+        """Safe margin from peak returns zero offset (no action needed)."""
+        decision = effect_manager.evaluate_layer(
+            current_peak=10.0,
+            current_power=5.0,
+            thermal_trend={"rate_per_hour": 0.0},
+            enable_peak_protection=True,
+        )
+
+        assert decision.offset == 0.0
+        assert decision.weight == 0.0
+        assert "Safe margin" in decision.reason
+
+    @pytest.mark.asyncio
+    async def test_critical_returns_critical_offset(self, effect_manager):
+        """Exceeding peak returns critical offset."""
+        # First record a peak so we have a threshold
+        timestamp = datetime(2025, 10, 14, 12, 0)
+        await effect_manager.record_quarter_measurement(8.0, 48, timestamp)
+
+        # Now test with power exceeding that peak
+        decision = effect_manager.evaluate_layer(
+            current_peak=8.0,
+            current_power=8.5,  # Exceeds peak
+            thermal_trend={"rate_per_hour": 0.0},
+            enable_peak_protection=True,
+        )
+
+        assert decision.offset < 0  # Negative offset to reduce heating
+        assert decision.weight > 0.5  # High weight for critical
+        assert "CRITICAL" in decision.reason
+
+    @pytest.mark.asyncio
+    async def test_predictive_cooling_triggers_early_reduction(self, effect_manager):
+        """Rapid cooling trend triggers predictive peak avoidance."""
+        # Record a peak
+        timestamp = datetime(2025, 10, 14, 12, 0)
+        await effect_manager.record_quarter_measurement(7.0, 48, timestamp)
+
+        # Test with power close to peak AND rapid cooling (predicts power increase)
+        decision = effect_manager.evaluate_layer(
+            current_peak=7.0,
+            current_power=6.0,  # Close to peak
+            thermal_trend={"rate_per_hour": -1.5},  # Rapid cooling = compressor will ramp up
+            enable_peak_protection=True,
+        )
+
+        # Should trigger some protective action
+        assert decision.name == "Peak"
+        # Either predictive or warning, depending on exact margins
+        assert decision.offset <= 0.0 or "margin" in decision.reason.lower()

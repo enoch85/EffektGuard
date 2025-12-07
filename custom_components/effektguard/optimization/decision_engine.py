@@ -42,20 +42,6 @@ from ..const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_THERMAL_MASS_BUFFER_TIMBER,
-    EFFECT_MARGIN_PREDICTIVE,
-    EFFECT_MARGIN_WARNING,
-    EFFECT_OFFSET_CRITICAL,
-    EFFECT_OFFSET_PREDICTIVE,
-    EFFECT_OFFSET_WARNING_RISING,
-    EFFECT_OFFSET_WARNING_STABLE,
-    EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE,
-    EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE,
-    EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD,
-    EFFECT_PREDICTIVE_WARMING_DECREASE,
-    EFFECT_WEIGHT_CRITICAL,
-    EFFECT_WEIGHT_PREDICTIVE,
-    EFFECT_WEIGHT_WARNING_RISING,
-    EFFECT_WEIGHT_WARNING_STABLE,
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
     LAYER_WEIGHT_COMFORT_HIGH,
@@ -73,8 +59,6 @@ from ..const import (
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
     OVERSHOOT_PROTECTION_START,
-    PEAK_AWARE_EFFECT_THRESHOLD,
-    PEAK_AWARE_EFFECT_WEIGHT_MIN,
     PROACTIVE_ZONE1_OFFSET,
     PROACTIVE_ZONE1_THRESHOLD_PERCENT,
     PROACTIVE_ZONE2_OFFSET,
@@ -1459,13 +1443,7 @@ class DecisionEngine:
     def _effect_layer(self, nibe_state, current_peak: float, current_power: float) -> LayerDecision:
         """Effect tariff protection with PREDICTIVE peak avoidance (Phase 4).
 
-        Uses indoor temperature trend to predict heating demand in next 15 minutes.
-        Acts BEFORE power spikes instead of reacting to them.
-
-        PHILOSOPHY:
-        Traditional reactive approach waits until power is high, then reduces.
-        Predictive approach sees house cooling rapidly → knows compressor will ramp up soon
-        → reduces offset NOW before spike occurs → smoother power profile.
+        Delegates to EffectManager.evaluate_layer() for the actual logic.
 
         Args:
             nibe_state: Current NIBE state
@@ -1478,97 +1456,24 @@ class DecisionEngine:
         References:
             MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
         """
-        # Check if peak protection is enabled
-        if not self.config.get("enable_peak_protection", True):
-            return LayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
-
-        # current_power is always provided from coordinator's peak tracking (actual measurements)
-
-        # Get current quarter
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
-
-        # Check if approaching monthly 15-minute peak
-        limit_decision = self.effect.should_limit_power(current_power, current_quarter)
-
-        # PHASE 4: Get thermal trend for predictive analysis
+        # Get thermal trend for predictive analysis
         thermal_trend = self._get_thermal_trend()
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
-        # Predict power change in next 15 minutes based on indoor temperature trend
-        # When house cooling fast → heat pump will increase power soon
-        # When house warming → heat pump may reduce power
-        if trend_rate < EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD:
-            # Rapid cooling → Compressor will ramp up significantly
-            predicted_power_increase = EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE
-            prediction_reason = "cooling rapidly"
-        elif trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
-            # Moderate cooling → Slight power increase expected
-            predicted_power_increase = EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE
-            prediction_reason = "gentle cooling"
-        elif trend_rate > THERMAL_CHANGE_MODERATE:
-            # Rapid warming → Compressor may reduce
-            predicted_power_increase = EFFECT_PREDICTIVE_WARMING_DECREASE
-            prediction_reason = "warming"
-        else:
-            # Stable → No significant change expected
-            predicted_power_increase = 0.0
-            prediction_reason = "stable"
+        # Delegate to EffectManager for the actual logic
+        effect_decision = self.effect.evaluate_layer(
+            current_peak=current_peak,
+            current_power=current_power,
+            thermal_trend=thermal_trend,
+            enable_peak_protection=self.config.get("enable_peak_protection", True),
+        )
 
-        predicted_power = current_power + predicted_power_increase
-        predicted_margin = current_peak - predicted_power
-
-        # Peak protection logic with predictive enhancement
-        # Oct 19, 2025: All values now constants for test script reuse
-        # Peak costs (effect tariff) are monthly charges that accumulate - worth protecting
-        if limit_decision.severity == "CRITICAL":
-            # Already at peak - immediate action
-            return LayerDecision(
-                name="Peak",
-                offset=EFFECT_OFFSET_CRITICAL,
-                weight=EFFECT_WEIGHT_CRITICAL,
-                reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
-            )
-        elif predicted_margin < EFFECT_MARGIN_PREDICTIVE and predicted_power_increase > 0:
-            # PREDICTIVE: Will approach peak in next 15 min - act NOW
-            # This is the key innovation: prevent spike before it happens
-            return LayerDecision(
-                name="Peak",
-                offset=EFFECT_OFFSET_PREDICTIVE,
-                weight=EFFECT_WEIGHT_PREDICTIVE,
-                reason=f"Predictive avoidance ({prediction_reason})",
-            )
-        elif limit_decision.severity == "WARNING":
-            # Close to peak - check if trend shows increasing demand
-            if predicted_power_increase > 0:
-                # Warning + rising demand = moderate reduction
-                return LayerDecision(
-                    name="Peak",
-                    offset=EFFECT_OFFSET_WARNING_RISING,
-                    weight=EFFECT_WEIGHT_WARNING_RISING,
-                    reason=f"WARNING + demand rising ({prediction_reason})",
-                )
-            else:
-                # Warning but demand stable/falling = gentle reduction
-                return LayerDecision(
-                    name="Peak",
-                    offset=EFFECT_OFFSET_WARNING_STABLE,
-                    weight=EFFECT_WEIGHT_WARNING_STABLE,
-                    reason=f"WARNING + demand {prediction_reason}",
-                )
-        else:
-            # Safe margin - no action needed
-            return LayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason=f"Safe margin ({current_power:.1f}/{current_peak:.1f} kW)",
-            )
+        # Convert EffectLayerDecision to LayerDecision
+        return LayerDecision(
+            name=effect_decision.name,
+            offset=effect_decision.offset,
+            weight=effect_decision.weight,
+            reason=effect_decision.reason,
+        )
 
     def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
         """Prediction layer: Learned pre-heating using thermal state predictor.
