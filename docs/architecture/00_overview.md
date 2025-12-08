@@ -68,11 +68,7 @@ flowchart TB
         TL ~~~ CL ~~~ PrL ~~~ EfL ~~~ WL ~~~ PredL ~~~ AL ~~~ CZ
     end
 
-    Layers --> DE
-    Layers --> DHW
-    Layers --> COORD
-
-    DE ~~~ DHW ~~~ COORD
+    Layers --> DE & DHW & COORD
 
     subgraph DE["DECISION ENGINE - Space heating"]
         DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
