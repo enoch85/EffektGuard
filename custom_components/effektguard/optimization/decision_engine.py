@@ -24,6 +24,7 @@ from homeassistant.util import dt as dt_util
 from ..const import (
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
+    DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DM_CRITICAL_T1_MARGIN,
@@ -43,6 +44,8 @@ from ..const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_THERMAL_MASS_BUFFER_TIMBER,
+    THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
+    THERMAL_MASS_TIMBER_UFH_THRESHOLD,
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
     LAYER_WEIGHT_COMFORT_HIGH,
@@ -322,7 +325,25 @@ class DecisionEngine:
         # Heat loss coefficient from learned values or config, fallback to default
         heat_loss_coeff = config.get("heat_loss_coefficient", DEFAULT_HEAT_LOSS_COEFFICIENT)
         radiator_output = config.get("radiator_rated_output", None)
-        heating_type = config.get("heating_type", "radiator")  # radiator, concrete_ufh, timber
+        # Infer heating_type from thermal_mass if not explicitly set
+        # Uses THERMAL_MASS_*_THRESHOLD constants from const.py
+        thermal_mass_value = DEFAULT_THERMAL_MASS  # Fallback to default (1.0)
+        if thermal_model is not None:
+            try:
+                tm_attr = getattr(thermal_model, "thermal_mass", None)
+                if isinstance(tm_attr, (int, float)):
+                    thermal_mass_value = float(tm_attr)
+            except (TypeError, AttributeError):
+                pass  # Use default if thermal_model is mocked or has no thermal_mass
+
+        if "heating_type" in config:
+            heating_type = config["heating_type"]
+        elif thermal_mass_value >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+            heating_type = "concrete_ufh"
+        elif thermal_mass_value >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+            heating_type = "timber"
+        else:
+            heating_type = "radiator"
 
         self.weather_comp = WeatherCompensationCalculator(
             heat_loss_coefficient=heat_loss_coeff,

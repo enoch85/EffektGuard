@@ -277,8 +277,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
-        self._startup_grace_period = True  # Skip first action to allow sensors to stabilize
-        self._clock_aligned = False  # Wait for whole hour to align updates to :00, :05, :10...
+        self._startup_update_count = 0  # Count updates before ending grace period
+        self._startup_grace_updates = 2  # Require 2 updates before applying offsets
+        self._clock_aligned = False  # Wait for quarter alignment (00:10, 15:10, 30:10, 45:10)
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -342,21 +343,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return CLIMATE_CENTRAL_SWEDEN
 
     def _calculate_next_aligned_time(self) -> datetime:
-        """Calculate next 5-minute boundary + 10 seconds.
+        """Calculate next quarter boundary + 10 seconds.
+
+        Aligns to 15-minute quarter boundaries (00:10, 15:10, 30:10, 45:10)
+        to match spot price quarter intervals for optimal price optimization.
 
         Returns:
-            Next aligned datetime (e.g., 17:50:10, 17:55:10, 18:00:10)
+            Next aligned datetime
         """
         now = dt_util.now()
-        minutes_past = now.minute % UPDATE_INTERVAL_MINUTES
+        # Align to 15-minute boundaries for quarter-based spot prices
+        minutes_past = now.minute % QUARTER_INTERVAL_MINUTES
         seconds_past = now.second
 
         if minutes_past == 0 and seconds_past < 10:
-            # Within current boundary, before :10
+            # Within current quarter boundary, before :10
             seconds_to_next = 10 - seconds_past
         else:
-            # Schedule for next boundary + 10 seconds
-            minutes_to_next = UPDATE_INTERVAL_MINUTES - minutes_past
+            # Schedule for next quarter boundary + 10 seconds
+            minutes_to_next = QUARTER_INTERVAL_MINUTES - minutes_past
             seconds_to_next = (minutes_to_next * 60) - seconds_past + 10
 
         return now + timedelta(seconds=seconds_to_next)
@@ -384,9 +389,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if not self._clock_aligned:
             self._clock_aligned = True
             _LOGGER.info(
-                "Clock aligned to %s (updates every %d min at :XX:10)",
+                "Clock aligned to %s (updates at :00:10, :15:10, :30:10, :45:10)",
                 next_time.strftime("%H:%M:%S"),
-                UPDATE_INTERVAL_MINUTES,
             )
         else:
             _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
@@ -791,18 +795,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power_for_decision,  # Current whole-house power consumption
                 )
 
-                # Startup grace period: Skip first action to allow sensors/trends to stabilize
-                if self._startup_grace_period and self._first_successful_update:
+                # Startup grace period: Skip first N updates to allow sensors/trends to stabilize
+                # This prevents applying bad offsets before multi-sensor aggregation and
+                # thermal trend prediction have collected enough data
+                if self._first_successful_update:
+                    self._startup_update_count += 1
+
+                if self._startup_update_count <= self._startup_grace_updates:
                     is_grace_period = True
+                    remaining = self._startup_grace_updates - self._startup_update_count + 1
                     _LOGGER.info(
-                        "Startup grace period: Observing only. "
+                        "Startup grace period (%d update%s remaining): Observing only. "
                         "Real decision would have been: %.2f°C (%s)",
+                        remaining,
+                        "s" if remaining != 1 else "",
                         decision.offset,
                         decision.reasoning,
                     )
                     # Don't force offset to 0.0 - let the calculated value stand for reporting
                     decision.reasoning = f"[Startup Grace Period] {decision.reasoning}"
-                    self._startup_grace_period = False
 
                 _LOGGER.info(
                     "Decision: offset %.2f°C, reasoning: %s",

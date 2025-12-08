@@ -835,12 +835,12 @@ class IntelligentDHWScheduler:
                     )
 
         # === RULE 6: SMART WINDOW-BASED SCHEDULING ===
-        # SIMPLE FIX: If DHW is adequate, only heat during CHEAP periods
+        # If DHW is adequate, only heat during CHEAP periods
         # This mirrors space heating logic: adequate = no urgency = wait for cheap
         # Adequate temp = one shower guaranteed (morning/evening usage pattern)
         if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
             _LOGGER.info(
-                "DHW: Adequate (%.1f°C ≥ %.1f°C) but price is %s - waiting for cheap period",
+                "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - no heating needed",
                 current_dhw_temp,
                 MIN_DHW_TARGET_TEMP,
                 price_classification,

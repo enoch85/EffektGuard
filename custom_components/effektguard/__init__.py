@@ -21,7 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
-    BOOST_COOLDOWN_MINUTES,
+    HEATING_BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_COOLDOWN_MINUTES,
     SERVICE_RATE_LIMIT_MINUTES,
     CONF_NIBE_TEMP_LUX_ENTITY,
@@ -424,7 +424,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         Rate limited to prevent excessive calls.
         """
         # Check cooldown
-        is_allowed, remaining = _check_service_cooldown("boost_heating", BOOST_COOLDOWN_MINUTES)
+        is_allowed, remaining = _check_service_cooldown(
+            "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
+        )
         if not is_allowed:
             remaining_minutes = int(remaining / 60)
             raise ServiceValidationError(

@@ -132,7 +132,7 @@ MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
 
 # Service call rate limiting (boost, DHW, general)
-BOOST_COOLDOWN_MINUTES: Final = 45  # Prevent boost spam
+HEATING_BOOST_COOLDOWN_MINUTES: Final = 45  # Space heating boost cooldown
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
@@ -144,7 +144,6 @@ LAYER_WEIGHT_SAFETY: Final = 1.0  # Absolute priority (temp limits)
 LAYER_WEIGHT_EMERGENCY: Final = 0.8  # High priority (DM beyond expected)
 LAYER_WEIGHT_PRICE: Final = 0.8  # Strong influence - balanced with other layers (Nov 27, 2025)
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
-LAYER_WEIGHT_PROACTIVE_MAX: Final = 0.6  # Maximum proactive weight
 LAYER_WEIGHT_PREDICTION: Final = 0.65  # Prediction layer weight (Phase 6)
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
 LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
@@ -386,56 +385,12 @@ DM_THERMAL_MASS_BUFFER_CONCRETE: Final = 1.3  # 30% tighter threshold (6-12h lag
 DM_THERMAL_MASS_BUFFER_TIMBER: Final = 1.15  # 15% tighter threshold (2-4h lag)
 DM_THERMAL_MASS_BUFFER_RADIATOR: Final = 1.0  # Standard threshold (<1h lag)
 
-# ============================================================================
-# Compressor Hz Thresholds (Context-Aware)
-# ============================================================================
-# Description:
-#   Compressor frequency thresholds vary by heating mode because DHW target
-#   temperature (50°C) is significantly higher than space heating (25-35°C).
-#   Same compressor Hz at different water temperatures = different stress levels.
-#
-# Context:
-#   Space Heating (25-35°C flow temp):
-#     - 40-60 Hz: Normal operation
-#     - 80 Hz: Elevated stress (monitor)
-#     - 100 Hz: Critical stress (reduce demand)
-#
-#   DHW Heating (50°C target):
-#     - 60-80 Hz: Normal operation (higher temp requires higher Hz)
-#     - 95 Hz: Elevated stress (monitor)
-#     - 100 Hz: Critical stress (reduce demand)
-#
-# Sustained Operation Limits:
-#   - Space heating: >80 Hz for >2 hours = WARNING (system struggling)
-#   - DHW heating: >95 Hz for >30 minutes = WARNING (tank too large or broken)
-#   - Any mode: >100 Hz for >15 minutes = CRITICAL (hardware damage risk)
-#
-# Research:
-#   - NIBE F750 spec: 20-120 Hz range (nominal 40-80 Hz)
-#   - DHW cycles typically 10-15 Hz higher than space heating
-#   - Field observations: 80 Hz DHW normal, 80 Hz space heating elevated
-#
-# Reference:
-#   - IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
-# ============================================================================
-
-# Space Heating Thresholds
-COMPRESSOR_HZ_SPACE_INFO: Final = 80  # Log INFO: Elevated operation
-COMPRESSOR_HZ_SPACE_WARNING: Final = 80  # Sustained >2h = WARNING
-COMPRESSOR_HZ_SPACE_SEVERE: Final = 90  # Sustained >4h = SEVERE
-
-# DHW Heating Thresholds (higher normal due to 50°C target)
-COMPRESSOR_HZ_DHW_INFO: Final = 95  # Log INFO: Elevated operation
-COMPRESSOR_HZ_DHW_WARNING: Final = 95  # Sustained >30min = WARNING
-COMPRESSOR_HZ_DHW_SEVERE: Final = 100  # Immediate WARNING
-
-# Critical Threshold (mode-independent)
-COMPRESSOR_HZ_CRITICAL: Final = 100  # Sustained >15min = CRITICAL (any mode)
-
-# Sustained Duration Thresholds
-COMPRESSOR_HZ_SUSTAINED_SPACE_HOURS: Final = 2.0  # Space heating: 2 hours
-COMPRESSOR_HZ_SUSTAINED_DHW_MINUTES: Final = 30.0  # DHW: 30 minutes (shorter cycles)
-COMPRESSOR_HZ_SUSTAINED_CRITICAL_MINUTES: Final = 15.0  # Critical: 15 minutes (any mode)
+# Heating type inference from thermal_mass setting
+# Used when heating_type is not explicitly configured
+# Maps user's thermal_mass slider value to appropriate heating system type
+THERMAL_MASS_CONCRETE_UFH_THRESHOLD: Final = 1.5  # >= 1.5 = concrete underfloor heating
+THERMAL_MASS_TIMBER_UFH_THRESHOLD: Final = 1.2  # >= 1.2 = timber underfloor heating
+# Below 1.2 defaults to radiator heating
 
 # Tolerance range multiplier (Oct 19, 2025)
 # Scales user tolerance setting (1-10) to actual temperature range
@@ -563,15 +518,6 @@ TREND_DAMPING_WARMING: Final = 0.75  # 25% reduction when warming rapidly
 TREND_DAMPING_COOLING_BOOST: Final = 1.15  # 15% boost when cooling rapidly
 TREND_BOOST_OFFSET_LIMIT: Final = 3.0  # Don't boost if offset already high (safety)
 TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
-
-# Weather layer outdoor trend adjustments (Oct 19, 2025)
-# Adjust pre-heating lead time based on outdoor temperature trend
-WEATHER_OUTDOOR_COOLING_RAPID_THRESHOLD: Final = -0.5  # °C/h - rapid outdoor cooling
-WEATHER_OUTDOOR_COOLING_RAPID_MULT: Final = 1.5  # Extend lead time 50%
-WEATHER_OUTDOOR_COOLING_MODERATE_MULT: Final = 1.25  # Extend lead time 25%
-
-# Weather layer indoor trend adjustments (Oct 19, 2025)
-# Adjust pre-heating lead time based on indoor temperature trend
 
 # Weather prediction layer - Simplified proactive pre-heating (Oct 20, 2025)
 # Philosophy: "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
@@ -734,15 +680,6 @@ UFH_CONCRETE_PREDICTION_HORIZON: Final = (
 UFH_TIMBER_PREDICTION_HORIZON: Final = 12.0  # hours - 2-3 hour lag (increased from 6h)
 UFH_RADIATOR_PREDICTION_HORIZON: Final = 6.0  # hours - <1 hour lag (increased from 2h)
 
-# UFH comfort targets (°C)
-UFH_CONCRETE_COMFORT_TOLERANCE: Final = 0.3  # ±0.3°C for concrete slab
-UFH_TIMBER_COMFORT_TOLERANCE: Final = 0.3  # ±0.3°C for timber
-UFH_RADIATOR_COMFORT_TOLERANCE: Final = 0.2  # ±0.2°C for radiators
-
-# Optimal flow temperature deltas (°C above outdoor temp)
-# Source: Mathematical_Enhancement_Summary.md - André Kühne formula validation
-OPTIMAL_FLOW_DELTA_SPF_4: Final = 27.0  # ±3°C for SPF ≥4.0 systems
-OPTIMAL_FLOW_DELTA_SPF_35: Final = 30.0  # ±4°C for SPF ≥3.5 systems
 DEFAULT_CURVE_SENSITIVITY: Final = 1.5  # NIBE curve sensitivity (~1.5°C flow change per 1°C offset)
 
 # Weather compensation mathematical constants
@@ -758,10 +695,7 @@ UFH_MIN_FLOW_TEMP_CONCRETE: Final = 25.0  # Minimum effective concrete slab temp
 UFH_MIN_FLOW_TEMP_TIMBER: Final = 22.0  # Minimum effective timber UFH temp
 
 # Heat loss coefficient defaults (W/°C)
-# Heat loss coefficient range (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
-HEAT_LOSS_COEFFICIENT_MIN: Final = 100.0  # W/°C well-insulated house
-HEAT_LOSS_COEFFICIENT_MAX: Final = 300.0  # W/°C poorly-insulated house
 
 # Power estimation defaults (kW)
 # Used when actual power sensor unavailable - fallback values
@@ -777,11 +711,6 @@ TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 PEAK_RECORDING_MINIMUM: Final = 0.5  # kW - lowered from 1.0 for better learning
 # Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
 
-# Pump configuration - open-loop UFH requirements
-# Pump speed requirements for open-loop systems
-PUMP_MIN_SPEED_ASHP: Final = 10  # % for ASHP open-loop systems
-PUMP_MIN_SPEED_GSHP: Final = 20  # % for GSHP open-loop systems
-
 # Update intervals
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
@@ -796,7 +725,6 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 LEARNING_OBSERVATION_WINDOW: Final = 672  # 1 week of 15-minute observations
 LEARNING_MIN_OBSERVATIONS: Final = 96  # 24 hours minimum for basic learning
 LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
-LEARNING_UPDATE_INTERVAL_HOURS: Final = 24  # Re-calculate learned params daily
 
 # Swedish climate regions - SMHI historical data (1961-1990)
 # Source: Swedish_Climate_Adaptations.md
@@ -912,10 +840,6 @@ DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
 
 # DHW demand period thresholds
 DHW_URGENT_DEMAND_HOURS: Final = 0.5  # Start urgent heating 30 min before demand period
-
-# MyUplink DHW control entities (NIBE parameter IDs)
-NIBE_TEMP_LUX_ENTITY_ID: Final = "switch.temporary_lux_50004"  # Temporary lux boost
-NIBE_BT7_SENSOR_ID: Final = "sensor.bt7_hw_top_40013"  # Hot water top temperature
 
 # NIBE Power Calculation Constants (Swedish 3-phase standard)
 # All NIBE heat pumps in Sweden are 3-phase systems
@@ -1054,11 +978,6 @@ BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
 # Monthly calculation constants
 DAYS_PER_MONTH: Final = 30.0  # Average days for monthly savings calculation
 ORE_TO_SEK_CONVERSION: Final = 100.0  # Convert öre to SEK (1 SEK = 100 öre)
-
-# Heating impact factors
-HEATING_FACTOR_PER_DEGREE: Final = 0.1  # 10% power change per °C offset change
-CHEAP_PERIOD_BONUS_MULTIPLIER: Final = 1.2  # 20% bonus for strategic preheating
-EMERGENCY_HEATING_COST_FACTOR: Final = 0.7  # 30% cost recognition for unavoidable heating
 
 # Baseline tracking - exponential moving average weights
 BASELINE_EMA_WEIGHT_OLD: Final = 0.8  # 80% weight on existing baseline
