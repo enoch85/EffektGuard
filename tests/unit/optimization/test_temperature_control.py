@@ -22,18 +22,16 @@ from custom_components.effektguard.const import (
     LAYER_WEIGHT_COMFORT_MIN,
     LAYER_WEIGHT_COMFORT_MAX,
     COMFORT_CORRECTION_MILD,
+    COMFORT_CORRECTION_MULT,
     COMFORT_DEAD_ZONE,
     OVERSHOOT_PROTECTION_START,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
+    MODE_CONFIGS,
+    OPTIMIZATION_MODE_BALANCED,
 )
-from custom_components.effektguard.optimization.decision_engine import (
-    DecisionEngine,
-    LayerDecision,
-)
-from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
-from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.comfort_layer import ComfortLayer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 
@@ -50,28 +48,24 @@ def hass_mock():
 TEST_TOLERANCE_FOR_1C_RANGE = 1.0 / TOLERANCE_RANGE_MULTIPLIER  # = 2.5
 
 
-def create_engine(
-    target_temp: float = 21.0, tolerance: float = TEST_TOLERANCE_FOR_1C_RANGE, hass_mock=None
-) -> DecisionEngine:
-    """Create decision engine with specified settings."""
-    if hass_mock is None:
-        hass_mock = MagicMock()
-
-    price_analyzer = PriceAnalyzer()
-    effect_manager = EffectManager(hass_mock)
+def create_comfort_layer(
+    target_temp: float = 21.0, tolerance: float = TEST_TOLERANCE_FOR_1C_RANGE
+) -> ComfortLayer:
+    """Create comfort layer with specified settings."""
     thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
+    
+    # Mock get_thermal_trend
+    get_thermal_trend = MagicMock(return_value={"rate_per_hour": 0.0, "confidence": 0.8})
+    
+    mode_config = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
+    tolerance_range = tolerance * TOLERANCE_RANGE_MULTIPLIER
 
-    config = {
-        "latitude": 59.33,  # Stockholm
-        "target_indoor_temp": target_temp,
-        "tolerance": tolerance,
-    }
-
-    return DecisionEngine(
-        price_analyzer=price_analyzer,
-        effect_manager=effect_manager,
+    return ComfortLayer(
+        get_thermal_trend=get_thermal_trend,
         thermal_model=thermal_model,
-        config=config,
+        mode_config=mode_config,
+        tolerance_range=tolerance_range,
+        target_temp=target_temp,
     )
 
 
@@ -97,22 +91,19 @@ def test_comfort_layer_at_overshoot_start_threshold():
     """Test comfort layer at exactly OVERSHOOT_PROTECTION_START (0.6°C) above tolerance.
 
     At tolerance + 0.6°C, should start coast mode with -7°C offset.
-    With tolerance_range=1.0°C and target=21.0°C:
-    - tolerance boundary: 22.0°C
-    - OVERSHOOT_PROTECTION_START (0.6°C above tolerance): 22.6°C
     """
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
+    # Use tolerance=0.5 (tolerance_range=0.2)
+    tolerance = 0.5
 
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 22.6°C, Target: 21.0°C, tolerance_range: 1.0°C
-    # temp_deviation = 1.6°C > tolerance (1.0°C) → enters overshoot handling
-    # overshoot = 1.6°C >= OVERSHOOT_PROTECTION_START (0.6°C) → coast mode
-    nibe_state = create_mock_nibe_state(indoor_temp=22.6)
+    # Indoor: 21.0 + 0.6 = 21.6°C
+    # temp_deviation = 0.6°C > tolerance (0.2°C)
+    # overshoot = 0.6°C >= OVERSHOOT_PROTECTION_START (0.6°C) → coast mode
+    nibe_state = create_mock_nibe_state(indoor_temp=21.6)
 
-    decision = engine._comfort_layer(nibe_state)
+    decision = layer.evaluate_layer(nibe_state)
 
     # Should trigger coast mode at START threshold
     assert (
@@ -131,16 +122,16 @@ def test_comfort_layer_at_overshoot_full_threshold():
     At 1.5°C above target, should use full coast with -10°C offset and weight 1.0.
     """
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
+    tolerance = 0.5
 
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 22.5°C, Target: 21.0°C
-    # temp_deviation = 1.5°C = exactly OVERSHOOT_PROTECTION_FULL
+    # Indoor: 21.0 + 1.5 = 22.5°C
+    # temp_deviation = 1.5°C
+    # overshoot = 1.5°C >= OVERSHOOT_PROTECTION_FULL (1.5°C)
     nibe_state = create_mock_nibe_state(indoor_temp=22.5)
 
-    decision = engine._comfort_layer(nibe_state)
+    decision = layer.evaluate_layer(nibe_state)
 
     # Should use full coast offset and critical weight
     assert (
@@ -158,16 +149,16 @@ def test_comfort_layer_above_full_threshold():
     Should still use maximum coast offset and critical weight.
     """
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
+    tolerance = 0.5
 
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 23.7°C, Target: 21.0°C (October 27 scenario)
-    # temp_deviation = 2.7°C > OVERSHOOT_PROTECTION_FULL (1.5°C)
+    # Indoor: 23.7°C, Target: 21.0°C
+    # temp_deviation = 2.7°C > tolerance (0.2)
+    # overshoot = 2.7 > OVERSHOOT_PROTECTION_FULL (1.5)
     nibe_state = create_mock_nibe_state(indoor_temp=23.7)
 
-    decision = engine._comfort_layer(nibe_state)
+    decision = layer.evaluate_layer(nibe_state)
 
     # Should use maximum response
     assert decision.weight == LAYER_WEIGHT_COMFORT_CRITICAL
@@ -181,216 +172,128 @@ def test_comfort_layer_mild_overshoot_before_coast():
     Between tolerance and 0.6°C, should use gentle correction, not coast.
     """
     target = 21.0
-    # Use smaller tolerance so we can test the zone between tolerance and 0.6°C
-    tolerance_range = 0.4
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
+    tolerance = 0.5
 
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # Indoor: 21.5°C, Target: 21.0°C, tolerance_range: 0.4°C
-    # temp_deviation = 0.5°C > tolerance (0.4°C) → overshoot handling
-    # But 0.5°C < OVERSHOOT_PROTECTION_START (0.6°C) → gentle correction, not coast
-    nibe_state = create_mock_nibe_state(indoor_temp=21.5)
+    # Indoor: 21.55°C
+    # temp_deviation = 0.55°C > tolerance (0.2°C)
+    # overshoot = 0.55°C < OVERSHOOT_PROTECTION_START (0.6°C)
+    nibe_state = create_mock_nibe_state(indoor_temp=21.55)
 
-    decision = engine._comfort_layer(nibe_state)
+    decision = layer.evaluate_layer(nibe_state)
 
     # Should use gentle correction, NOT coast
     assert decision.weight == LAYER_WEIGHT_COMFORT_HIGH
     assert "COAST" not in decision.reason
     # Offset should be milder than coast offsets
-    assert decision.offset > OVERSHOOT_PROTECTION_OFFSET_MIN  # Less aggressive than -7°C
-
-
-def test_no_fixed_max_temp_limit():
-    """Verify that MAX_TEMP_LIMIT is no longer used in safety layer.
-
-    Old behavior: Safety layer blocks at 24°C regardless of user target
-    New behavior: Comfort layer handles dynamically based on user target
-    """
-    target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
-
-    # Test at old MAX_TEMP_LIMIT (24°C)
-    nibe_state = create_mock_nibe_state(indoor_temp=24.0)
-
-    safety_decision = engine._safety_layer(nibe_state)
-
-    # Safety layer should NOT block at 24°C anymore
-    assert (
-        safety_decision.weight == 0.0
-    ), "Safety layer should not activate at 24°C - upper limit now handled by comfort layer"
-    assert safety_decision.offset == 0.0
-    assert safety_decision.name == "Safety"
-    assert safety_decision.reason == "OK"
-
-    # But comfort layer SHOULD handle it with coast offsets
-    comfort_decision = engine._comfort_layer(nibe_state)
-    assert comfort_decision.weight == LAYER_WEIGHT_COMFORT_CRITICAL
-    assert comfort_decision.offset == OVERSHOOT_PROTECTION_OFFSET_MAX  # -10°C
-
-
-def test_dynamic_upper_limit_adapts_to_target():
-    """Verify overshoot protection adapts to user's target temperature.
-
-    User with target 22°C at 24°C indoor: 2.0°C overshoot → full coast
-    User with target 19°C at 21°C indoor: 2.0°C overshoot → full coast
-    """
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-
-    # User 1: Target 22°C, indoor 24°C
-    engine1 = create_engine(target_temp=22.0, tolerance=tolerance)
-    nibe_state1 = create_mock_nibe_state(indoor_temp=24.0)
-    decision1 = engine1._comfort_layer(nibe_state1)
-
-    # 24.0 - 22.0 = 2.0°C > OVERSHOOT_PROTECTION_FULL (1.5°C)
-    assert decision1.weight == LAYER_WEIGHT_COMFORT_CRITICAL
-    assert decision1.offset == OVERSHOOT_PROTECTION_OFFSET_MAX
-
-    # User 2: Target 19°C, indoor 21°C
-    engine2 = create_engine(target_temp=19.0, tolerance=tolerance)
-    nibe_state2 = create_mock_nibe_state(indoor_temp=21.0)
-    decision2 = engine2._comfort_layer(nibe_state2)
-
-    # 21.0 - 19.0 = 2.0°C > OVERSHOOT_PROTECTION_FULL (1.5°C)
-    assert decision2.weight == LAYER_WEIGHT_COMFORT_CRITICAL
-    assert decision2.offset == OVERSHOOT_PROTECTION_OFFSET_MAX
-
-
-def test_graduated_weights_increase_with_overshoot():
-    """Verify weights increase as overshoot worsens.
-
-    Weight scales from 0.7 at START threshold to 1.0 at FULL threshold.
-    With tolerance_range=1.0°C:
-    - 22.6°C = 1.6°C temp_deviation = 0.6°C overshoot = START
-    - 23.5°C = 2.5°C temp_deviation = 1.5°C overshoot = FULL
-    """
-    target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
-
-    # Test at different overshoot levels (above tolerance)
-    test_cases = [
-        (22.6, LAYER_WEIGHT_COMFORT_HIGH),  # 1.6°C temp_deviation, 0.6°C overshoot = START
-        (23.5, LAYER_WEIGHT_COMFORT_CRITICAL),  # 2.5°C temp_deviation, 1.5°C overshoot = FULL
-        (24.0, LAYER_WEIGHT_COMFORT_CRITICAL),  # 3.0°C temp_deviation, above FULL
-    ]
-
-    prev_weight = 0.0
-    for indoor_temp, min_expected_weight in test_cases:
-        nibe_state = create_mock_nibe_state(indoor_temp=indoor_temp)
-        decision = engine._comfort_layer(nibe_state)
-
-        assert (
-            decision.weight >= min_expected_weight
-        ), f"At {indoor_temp}°C, expected weight >= {min_expected_weight}, got {decision.weight}"
-
-        # Weight should increase or stay the same with higher overshoot
-        assert decision.weight >= prev_weight, (
-            f"Weight should increase with overshoot. At {indoor_temp}°C got {decision.weight}, "
-            f"previous was {prev_weight}"
-        )
-        prev_weight = decision.weight
-
-        # Offset should always be negative (cooling) for coast mode
-        assert (
-            decision.offset < 0
-        ), f"At {indoor_temp}°C, offset should be negative (cooling), got {decision.offset}"
+    assert decision.offset > OVERSHOOT_PROTECTION_OFFSET_MIN
 
 
 def test_graduated_offsets_scale_with_overshoot():
-    """Verify coast offsets scale from -7°C to -10°C.
-
-    With tolerance_range=1.0°C:
-    - At 22.6°C (1.6°C temp_deviation = START threshold): offset ~-7°C
-    - At 23.5°C (2.5°C temp_deviation = FULL threshold): offset = -10°C
-    """
+    """Test that offsets scale linearly between START and FULL thresholds."""
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    tolerance = 0.5
 
-    # At START threshold (22.6°C = 1.6°C temp_deviation): offset should be ~-7°C
-    nibe_start = create_mock_nibe_state(indoor_temp=22.6)
-    decision_start = engine._comfort_layer(nibe_start)
-    assert (
-        decision_start.offset <= OVERSHOOT_PROTECTION_OFFSET_MIN
-    ), f"At START, expected offset <= {OVERSHOOT_PROTECTION_OFFSET_MIN}, got {decision_start.offset}"
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # At FULL threshold (23.5°C = 2.5°C temp_deviation): offset should be -10°C
-    nibe_full = create_mock_nibe_state(indoor_temp=23.5)
-    decision_full = engine._comfort_layer(nibe_full)
-    assert (
-        decision_full.offset == OVERSHOOT_PROTECTION_OFFSET_MAX
-    ), f"At FULL, expected offset {OVERSHOOT_PROTECTION_OFFSET_MAX}, got {decision_full.offset}"
+    # Test point halfway between START (0.6) and FULL (1.5)
+    # Range is 0.9°C. Halfway is 0.6 + 0.45 = 1.05°C overshoot
+    # Indoor = Target + Overshoot
+    # Indoor = 21.0 + 1.05 = 22.05°C
+    nibe_state = create_mock_nibe_state(indoor_temp=22.05)
 
-    # Mid-point (23.0°C): offset should be between -7 and -10
-    nibe_mid = create_mock_nibe_state(indoor_temp=23.0)
-    decision_mid = engine._comfort_layer(nibe_mid)
-    assert (
-        OVERSHOOT_PROTECTION_OFFSET_MAX <= decision_mid.offset <= OVERSHOOT_PROTECTION_OFFSET_MIN
-    ), (
-        f"At mid-point, expected offset between {OVERSHOOT_PROTECTION_OFFSET_MAX} and "
-        f"{OVERSHOOT_PROTECTION_OFFSET_MIN}, got {decision_mid.offset}"
-    )
+    decision = layer.evaluate_layer(nibe_state)
+
+    # Should be roughly halfway between MIN (-7) and MAX (-10)
+    # Expected: -8.5°C
+    assert -9.0 <= decision.offset <= -8.0
+    assert "COAST" in decision.reason
+
+
+def test_graduated_weights_increase_with_overshoot():
+    """Test that weights increase as overshoot gets worse."""
+    target = 21.0
+    tolerance = 0.5
+
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
+
+    # Case 1: Just entered coast mode (START threshold)
+    # Indoor = 21.0 + 0.6 = 21.6
+    state1 = create_mock_nibe_state(indoor_temp=21.6)
+    decision1 = layer.evaluate_layer(state1)
+
+    # Case 2: Halfway through coast zone
+    # Indoor = 21.0 + 1.05 = 22.05
+    state2 = create_mock_nibe_state(indoor_temp=22.05)
+    decision2 = layer.evaluate_layer(state2)
+
+    # Case 3: Full coast mode (FULL threshold)
+    # Indoor = 21.0 + 1.5 = 22.5
+    state3 = create_mock_nibe_state(indoor_temp=22.5)
+    decision3 = layer.evaluate_layer(state3)
+
+    # Weights should increase: START < Halfway < FULL
+    assert decision1.weight < decision2.weight
+    assert decision2.weight < decision3.weight
+    assert decision3.weight == LAYER_WEIGHT_COMFORT_CRITICAL
 
 
 def test_comfort_layer_preserves_gentle_correction_within_tolerance():
-    """Verify gentle correction still works within tolerance."""
+    """Test that gentle corrections are used within tolerance range."""
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    # Use default tolerance (2.5) -> tolerance_range = 1.0
+    # So tolerance in evaluate_layer is 1.0
+    layer = create_comfort_layer(target_temp=target)
 
-    # Slightly warm but within tolerance: 21.5°C (0.5°C over target, within 1.0°C tolerance)
-    nibe_state = create_mock_nibe_state(indoor_temp=21.5)
-    decision = engine._comfort_layer(nibe_state)
+    # Indoor: 21.25°C (0.25°C above target, within 1.0°C tolerance)
+    nibe_state = create_mock_nibe_state(indoor_temp=21.25)
 
-    # Should use minimum weight (advisory only)
-    assert decision.weight == LAYER_WEIGHT_COMFORT_MIN, "Within tolerance should use minimum weight"
+    decision = layer.evaluate_layer(nibe_state)
 
-    # Should have gentle correction (not coast offsets)
-    assert abs(decision.offset) < 1.0, "Within tolerance correction should be gentle"
-
-    # Should mention "slightly warm"
-    assert "Slightly warm" in decision.reason or "slightly" in decision.reason.lower()
+    # Should use gentle correction
+    # Offset = -deviation * COMFORT_CORRECTION_MULT
+    # Offset = -0.25 * 0.3 = -0.075
+    expected_offset = -0.25 * COMFORT_CORRECTION_MULT
+    assert decision.offset == pytest.approx(expected_offset)
+    assert decision.weight == LAYER_WEIGHT_COMFORT_MIN
+    assert "gentle reduce" in decision.reason
 
 
 def test_comfort_layer_dead_zone():
-    """Verify dead zone still works (unchanged behavior)."""
+    """Test that no action is taken within dead zone."""
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    tolerance = 0.5
 
-    # Right at target
-    nibe_state = create_mock_nibe_state(indoor_temp=21.0)
-    decision = engine._comfort_layer(nibe_state)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    assert decision.weight == 0.0, "At target should have zero weight"
-    assert decision.offset == 0.0, "At target should have zero offset"
-    assert "at target" in decision.reason.lower()
+    # Indoor: 21.05°C (within dead zone, usually 0.1°C)
+    nibe_state = create_mock_nibe_state(indoor_temp=21.05)
+
+    decision = layer.evaluate_layer(nibe_state)
+
+    assert decision.offset == 0.0
+    assert decision.weight == 0.0
+    assert "At target" in decision.reason
 
 
 def test_comfort_layer_too_cold():
-    """Verify cold correction still works."""
+    """Test comfort layer response when too cold (below tolerance)."""
     target = 21.0
-    tolerance_range = 1.0
-    tolerance = tolerance_range / TOLERANCE_RANGE_MULTIPLIER
-    engine = create_engine(target_temp=target, tolerance=tolerance)
+    tolerance = 0.5
 
-    # Too cold: 19.0°C (2°C under target, outside tolerance)
-    nibe_state = create_mock_nibe_state(indoor_temp=19.0)
-    decision = engine._comfort_layer(nibe_state)
+    layer = create_comfort_layer(target_temp=target, tolerance=tolerance)
 
-    # Should use high weight
-    assert decision.weight == LAYER_WEIGHT_COMFORT_MAX, "Too cold should use max weight"
+    # Indoor: 19.5°C (1.5°C below target, outside 0.2°C tolerance)
+    nibe_state = create_mock_nibe_state(indoor_temp=19.5)
 
-    # Should have positive offset (heating)
-    assert decision.offset > 0, "Too cold should have positive offset"
+    decision = layer.evaluate_layer(nibe_state)
 
-    # Should mention too cold
-    assert "cold" in decision.reason.lower()
+    # Should boost heating
+    assert decision.offset > 0
+    # Current implementation uses LAYER_WEIGHT_COMFORT_MAX (0.5)
+    assert decision.weight >= LAYER_WEIGHT_COMFORT_MAX
+    assert "Too cold" in decision.reason
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

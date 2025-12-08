@@ -90,6 +90,32 @@ from .climate_zones import ClimateZoneDetector
 _LOGGER = logging.getLogger(__name__)
 
 
+def is_cooling_rapidly(thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD) -> bool:
+    """Check if house is cooling rapidly.
+
+    Args:
+        thermal_trend: Trend data
+        threshold: Cooling rate threshold (°C/h, negative)
+
+    Returns:
+        True if cooling faster than threshold
+    """
+    return thermal_trend.get("rate_per_hour", 0.0) < threshold
+
+
+def is_warming_rapidly(thermal_trend: dict, threshold: float = THERMAL_CHANGE_MODERATE) -> bool:
+    """Check if house is warming rapidly.
+
+    Args:
+        thermal_trend: Trend data
+        threshold: Warming rate threshold (°C/h, positive)
+
+    Returns:
+        True if warming faster than threshold
+    """
+    return thermal_trend.get("rate_per_hour", 0.0) > threshold
+
+
 def estimate_dm_recovery_time(current_dm: float, target_dm: float, outdoor_temp: float) -> float:
     """Estimate hours until DM recovers to target level.
 
@@ -626,8 +652,8 @@ class EmergencyLayer:
         Returns:
             Tuple of (damped_offset, damping_reason_string)
         """
-        thermal_trend = self._get_thermal_trend()
-        outdoor_trend = self._get_outdoor_trend()
+        thermal_trend = self._get_thermal_trend() or {}
+        outdoor_trend = self._get_outdoor_trend() or {}
 
         # Calculate overshoot damping factor
         overshoot_factor = 1.0
@@ -824,7 +850,7 @@ class ProactiveLayer:
         # ========================================
         # RAPID COOLING DETECTION (Predictive)
         # ========================================
-        if self._is_cooling_rapidly(thermal_trend):
+        if is_cooling_rapidly(thermal_trend):
             if outdoor_temp < RAPID_COOLING_OUTDOOR_THRESHOLD and deficit > THERMAL_CHANGE_MODERATE:
                 boost = min(
                     abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER,
@@ -956,20 +982,6 @@ class ProactiveLayer:
             degree_minutes=degree_minutes,
             trend_rate=trend_rate,
         )
-
-    def _is_cooling_rapidly(
-        self, thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD
-    ) -> bool:
-        """Check if house is cooling rapidly.
-
-        Args:
-            thermal_trend: Trend data
-            threshold: Cooling rate threshold (°C/h, negative)
-
-        Returns:
-            True if cooling faster than threshold
-        """
-        return thermal_trend.get("rate_per_hour", 0.0) < threshold
 
     def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict:
         """Calculate expected DM range for given outdoor temperature.

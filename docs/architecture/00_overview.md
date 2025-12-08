@@ -48,6 +48,56 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 - **Adaptive thermal model** adjusts thermal mass estimates
 - Uses 672 observations (1 week) minimum for learning
 
+## Layer Architecture
+
+The optimization system uses a **shared layer architecture** where reusable layer components are consumed by multiple systems:
+
+```mermaid
+flowchart TB
+    subgraph Layers["Shared Layers (Reusable)"]
+        direction LR
+        TL[ThermalLayer<br/>DM recovery, thermal debt]
+        EL[EmergencyLayer<br/>Safety gating, DHW blocking]
+        PL[ProactiveLayer<br/>Preemptive protection]
+        CL[ComfortLayer<br/>Indoor temp targeting]
+        PrL[PriceLayer<br/>Spot price analysis]
+        EfL[EffectLayer<br/>Peak power tracking]
+        WL[WeatherLayer<br/>Forecast integration]
+        PredL[PredictionLayer<br/>Trend analysis]
+    end
+
+    subgraph Consumers["Layer Consumers"]
+        DE[Decision Engine<br/>Space heating optimization]
+        DHW[DHW Optimizer<br/>Hot water scheduling]
+        COORD[Coordinator<br/>Status & display]
+    end
+
+    Layers --> DE
+    Layers --> DHW
+    Layers --> COORD
+
+    subgraph Shared["Shared Functions"]
+        F1[estimate_dm_recovery_time]
+        F2[get_thermal_debt_status]
+        F3[should_block_dhw]
+        F4[find_cheapest_window]
+    end
+
+    EL -.-> F3
+    TL -.-> F1
+    TL -.-> F2
+    PrL -.-> F4
+```
+
+### Key Integration Points
+
+| Layer | Shared By | Purpose |
+|-------|-----------|---------|
+| `EmergencyLayer` | Decision Engine, DHW Optimizer | `should_block_dhw()` gates DHW during thermal debt |
+| `ThermalLayer` | All consumers | `estimate_dm_recovery_time()`, `get_thermal_debt_status()` |
+| `PriceLayer` | Decision Engine, DHW Optimizer | `find_cheapest_window()` for cost optimization |
+| `ComfortLayer` | Decision Engine | Indoor temperature targeting and heat loss estimation |
+
 ## Production Quality Features
 
 The analysis reveals this is a **production-quality system** designed for real Swedish homes:

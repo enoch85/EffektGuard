@@ -40,6 +40,11 @@ from ..const import (
     EFFECT_OFFSET_PREDICTIVE,
     EFFECT_OFFSET_WARNING_RISING,
     EFFECT_OFFSET_WARNING_STABLE,
+    EFFECT_PEAK_MARGIN_CRITICAL,
+    EFFECT_PEAK_MARGIN_WARNING,
+    EFFECT_PEAK_OFFSET_CRITICAL,
+    EFFECT_PEAK_OFFSET_EXCEEDING,
+    EFFECT_PEAK_OFFSET_WARNING,
     EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE,
     EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE,
     EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD,
@@ -318,23 +323,23 @@ class EffectManager:
                 should_limit=True,
                 severity="CRITICAL",
                 reason=f"Exceeding peak by {-margin:.2f} kW",
-                recommended_offset=-3.0,  # Aggressive reduction
+                recommended_offset=EFFECT_PEAK_OFFSET_EXCEEDING,
             )
-        elif margin < 0.5:
-            # Within 0.5 kW - critical warning
+        elif margin < EFFECT_PEAK_MARGIN_CRITICAL:
+            # Within critical margin - critical warning
             return PowerLimitDecision(
                 should_limit=True,
                 severity="CRITICAL",
-                reason=f"Within 0.5 kW of peak (margin: {margin:.2f} kW)",
-                recommended_offset=-2.0,
+                reason=f"Within {EFFECT_PEAK_MARGIN_CRITICAL} kW of peak (margin: {margin:.2f} kW)",
+                recommended_offset=EFFECT_PEAK_OFFSET_CRITICAL,
             )
-        elif margin < 1.0:
-            # Within 1.0 kW - warning
+        elif margin < EFFECT_PEAK_MARGIN_WARNING:
+            # Within warning margin - warning
             return PowerLimitDecision(
                 should_limit=True,
                 severity="WARNING",
-                reason=f"Within 1.0 kW of peak (margin: {margin:.2f} kW)",
-                recommended_offset=-1.0,
+                reason=f"Within {EFFECT_PEAK_MARGIN_WARNING} kW of peak (margin: {margin:.2f} kW)",
+                recommended_offset=EFFECT_PEAK_OFFSET_WARNING,
             )
         else:
             # Safe margin

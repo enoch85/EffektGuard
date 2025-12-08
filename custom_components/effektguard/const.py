@@ -678,6 +678,54 @@ COMFORT_DM_COOLING_THRESHOLD: Final = (
     -200  # Block cooling corrections when DM < -200 (thermal debt accumulating)
 )
 
+# Comfort layer thermal-aware calculations (Dec 8, 2025)
+# Heat loss rate calculation: base_heat_loss = temp_diff / (insulation * HEAT_LOSS_DIVISOR)
+COMFORT_HEAT_LOSS_DIVISOR: Final = 10.0  # Divisor for simplified heat loss calculation
+COMFORT_HEAT_LOSS_FLOOR: Final = 0.3  # Minimum effective heat loss rate (°C/h)
+COMFORT_TOO_COLD_CORRECTION_MULT: Final = 0.5  # Multiplier for "too cold" correction
+
+# Effect layer peak protection margins and offsets (Dec 8, 2025)
+# Power margin thresholds for peak protection decisions (kW)
+EFFECT_PEAK_MARGIN_CRITICAL: Final = 0.5  # kW - within 0.5 kW = critical
+EFFECT_PEAK_MARGIN_WARNING: Final = 1.0  # kW - within 1.0 kW = warning
+# Recommended offsets for peak protection
+EFFECT_PEAK_OFFSET_EXCEEDING: Final = -3.0  # Aggressive reduction when exceeding peak
+EFFECT_PEAK_OFFSET_CRITICAL: Final = -2.0  # Strong reduction within 0.5 kW
+EFFECT_PEAK_OFFSET_WARNING: Final = -1.0  # Moderate reduction within 1.0 kW
+
+# Prediction layer thresholds (Dec 8, 2025)
+# Temperature trend detection thresholds
+PREDICTION_TREND_RISING_THRESHOLD: Final = 0.3  # °C delta to classify as "rising"
+PREDICTION_TREND_FALLING_THRESHOLD: Final = -0.3  # °C delta to classify as "falling"
+# Default thermal responsiveness (learned or fallback)
+PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT: Final = 0.5  # Default if not learned
+PREDICTION_THERMAL_RESPONSIVENESS_MIN: Final = 0.0  # Minimum valid responsiveness
+PREDICTION_THERMAL_RESPONSIVENESS_MAX: Final = 1.0  # Maximum valid responsiveness
+PREDICTION_MIN_HEATING_OFFSET: Final = 0.5  # Minimum offset for responsiveness learning
+# Climate-aware pre-heating comfort thresholds (°C deficit before pre-heating)
+PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD: Final = 1.0  # Allow 1.0°C deficit at <-15°C
+PREDICTION_COMFORT_THRESHOLD_COLD: Final = 0.7  # Allow 0.7°C deficit at -15°C to -5°C
+PREDICTION_COMFORT_THRESHOLD_MILD: Final = 0.5  # Allow 0.5°C deficit at >-5°C
+# Outdoor temperature boundaries for comfort threshold selection
+PREDICTION_OUTDOOR_EXTREME_COLD: Final = -15.0  # °C threshold for extreme cold
+PREDICTION_OUTDOOR_COLD: Final = -5.0  # °C threshold for cold
+# Pre-heating offset multipliers by climate
+PREDICTION_PREHEAT_MULT_EXTREME_COLD: Final = 1.2  # Conservative in extreme cold
+PREDICTION_PREHEAT_MULT_COLD: Final = 1.5  # Moderate in cold
+PREDICTION_PREHEAT_MULT_MILD: Final = 2.0  # Normal in mild
+PREDICTION_PREHEAT_MAX_EXTREME_COLD: Final = 2.0  # Max offset in extreme cold
+PREDICTION_PREHEAT_MAX_COLD: Final = 2.5  # Max offset in cold
+PREDICTION_PREHEAT_MAX_MILD: Final = 3.0  # Max offset in mild
+# Current overshoot threshold for logging thermal storage strategy
+PREDICTION_OVERSHOOT_LOG_THRESHOLD: Final = 0.1  # °C overshoot to log storage strategy
+
+# DHW optimizer space heating emergency thresholds (Dec 8, 2025)
+DHW_SPACE_HEATING_DEFICIT_THRESHOLD: Final = 0.5  # °C indoor deficit to block DHW
+DHW_SPACE_HEATING_OUTDOOR_THRESHOLD: Final = 0.0  # °C outdoor temp for emergency check
+# DHW trend-based blocking thresholds
+DHW_TREND_DEFICIT_THRESHOLD: Final = 0.3  # °C indoor deficit for trend check
+DHW_TREND_RATE_THRESHOLD: Final = -0.3  # °C/h cooling rate for trend check
+
 # UFH prediction horizons based on thermal lag research
 # Prediction horizons for different UFH types
 UFH_CONCRETE_PREDICTION_HORIZON: Final = (
@@ -819,7 +867,6 @@ DHW_PREHEAT_TARGET_OFFSET: Final = 5.0  # °C - Extra heating above target for o
 MIN_DHW_TARGET_TEMP: Final = (
     45.0  # °C - Minimum user-configurable DHW target (safety + comfort threshold)
 )
-DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 DHW_READY_THRESHOLD: Final = (
     52.0  # °C - DHW at normal target (50°C + 2°C buffer for "ready" status)
 )

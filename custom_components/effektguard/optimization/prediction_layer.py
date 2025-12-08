@@ -17,7 +17,29 @@ from typing import TypedDict
 
 import numpy as np
 
-from ..const import DM_THRESHOLD_AUX_LIMIT, LAYER_WEIGHT_PREDICTION, SAMPLES_PER_HOUR
+from ..const import (
+    DM_THRESHOLD_AUX_LIMIT,
+    LAYER_WEIGHT_PREDICTION,
+    PREDICTION_COMFORT_THRESHOLD_COLD,
+    PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD,
+    PREDICTION_COMFORT_THRESHOLD_MILD,
+    PREDICTION_MIN_HEATING_OFFSET,
+    PREDICTION_OUTDOOR_COLD,
+    PREDICTION_OUTDOOR_EXTREME_COLD,
+    PREDICTION_OVERSHOOT_LOG_THRESHOLD,
+    PREDICTION_PREHEAT_MAX_COLD,
+    PREDICTION_PREHEAT_MAX_EXTREME_COLD,
+    PREDICTION_PREHEAT_MAX_MILD,
+    PREDICTION_PREHEAT_MULT_COLD,
+    PREDICTION_PREHEAT_MULT_EXTREME_COLD,
+    PREDICTION_PREHEAT_MULT_MILD,
+    PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
+    PREDICTION_THERMAL_RESPONSIVENESS_MAX,
+    PREDICTION_THERMAL_RESPONSIVENESS_MIN,
+    PREDICTION_TREND_FALLING_THRESHOLD,
+    PREDICTION_TREND_RISING_THRESHOLD,
+    SAMPLES_PER_HOUR,
+)
 from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
 
 _LOGGER = logging.getLogger(__name__)
@@ -213,9 +235,9 @@ class ThermalStatePredictor:
         # Determine trajectory trend
         if len(predicted_temps) >= 2:
             temp_delta = predicted_temps[-1] - predicted_temps[0]
-            if temp_delta > 0.3:
+            if temp_delta > PREDICTION_TREND_RISING_THRESHOLD:
                 trend = "rising"
-            elif temp_delta < -0.3:
+            elif temp_delta < PREDICTION_TREND_FALLING_THRESHOLD:
                 trend = "falling"
             else:
                 trend = "stable"
@@ -277,37 +299,46 @@ class ThermalStatePredictor:
 
         # Swedish climate-aware comfort thresholds
         # Colder weather = wider tolerance before pre-heating
-        if current_outdoor_temp < -15:
-            # Extreme cold: Allow 1.0°C deficit before pre-heating
-            comfort_threshold = 1.0
-        elif current_outdoor_temp < -5:
-            # Cold: Allow 0.7°C deficit
-            comfort_threshold = 0.7
+        if current_outdoor_temp < PREDICTION_OUTDOOR_EXTREME_COLD:
+            # Extreme cold: Allow larger deficit before pre-heating
+            comfort_threshold = PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD
+        elif current_outdoor_temp < PREDICTION_OUTDOOR_COLD:
+            # Cold: Allow moderate deficit
+            comfort_threshold = PREDICTION_COMFORT_THRESHOLD_COLD
         else:
-            # Mild: Strict 0.5°C deficit
-            comfort_threshold = 0.5
+            # Mild: Strict deficit
+            comfort_threshold = PREDICTION_COMFORT_THRESHOLD_MILD
 
         if effective_deficit > comfort_threshold:
             # Pre-heating recommended
             # Calculate required offset to maintain comfort
             # Use effective_deficit (accounting for current overshoot as thermal storage)
             # More aggressive in extreme cold to compensate for thermal debt risk
-            if current_outdoor_temp < -15:
+            if current_outdoor_temp < PREDICTION_OUTDOOR_EXTREME_COLD:
                 # Extreme cold: Conservative pre-heating (risk of DM -1500)
-                recommended_offset = min(effective_deficit * 1.2, 2.0)
+                recommended_offset = min(
+                    effective_deficit * PREDICTION_PREHEAT_MULT_EXTREME_COLD,
+                    PREDICTION_PREHEAT_MAX_EXTREME_COLD,
+                )
                 reason = f"Extreme cold pre-heating: predicted drop {temp_deficit:.1f}°C"
-            elif current_outdoor_temp < -5:
+            elif current_outdoor_temp < PREDICTION_OUTDOOR_COLD:
                 # Cold: Moderate pre-heating
-                recommended_offset = min(effective_deficit * 1.5, 2.5)
+                recommended_offset = min(
+                    effective_deficit * PREDICTION_PREHEAT_MULT_COLD,
+                    PREDICTION_PREHEAT_MAX_COLD,
+                )
                 reason = f"Cold spell pre-heating: predicted drop {temp_deficit:.1f}°C"
             else:
                 # Mild: Normal pre-heating
-                recommended_offset = min(effective_deficit * 2.0, 3.0)
+                recommended_offset = min(
+                    effective_deficit * PREDICTION_PREHEAT_MULT_MILD,
+                    PREDICTION_PREHEAT_MAX_MILD,
+                )
                 reason = f"Pre-heating: predicted drop {temp_deficit:.1f}°C"
 
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
-            if current_overshoot > 0.1:
+            if current_overshoot > PREDICTION_OVERSHOOT_LOG_THRESHOLD:
                 reason += (
                     f" (thermal storage: +{current_overshoot:.1f}°C overshoot → coast through cold)"
                 )
@@ -466,7 +497,7 @@ class ThermalStatePredictor:
             Responsiveness factor (°C per offset per hour)
         """
         if len(self.state_history) < 8:  # Need 2+ hours
-            return 0.5  # Default
+            return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
         # Analyze temperature changes relative to offset
         responsiveness_samples = []
@@ -477,18 +508,22 @@ class ThermalStatePredictor:
 
             time_delta = (current.timestamp - prev.timestamp).total_seconds() / 3600
 
-            if time_delta > 0 and current.heating_offset > 0.5:
+            if time_delta > 0 and current.heating_offset > PREDICTION_MIN_HEATING_OFFSET:
                 temp_change = current.indoor_temp - prev.indoor_temp
                 responsiveness = temp_change / (time_delta * current.heating_offset)
 
                 # Sanity check
-                if 0 < responsiveness < 1.0:
+                if (
+                    PREDICTION_THERMAL_RESPONSIVENESS_MIN
+                    < responsiveness
+                    < PREDICTION_THERMAL_RESPONSIVENESS_MAX
+                ):
                     responsiveness_samples.append(responsiveness)
 
         if responsiveness_samples:
             return np.median(responsiveness_samples)
         else:
-            return 0.5  # Default
+            return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
     def _calculate_prediction_confidence(self) -> float:
         """Calculate confidence in predictions based on history quality.

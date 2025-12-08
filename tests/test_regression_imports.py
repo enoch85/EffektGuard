@@ -766,6 +766,90 @@ class TestConstantUsage:
 
             warnings.warn("\n".join(report_lines))
 
+    def test_no_duplicate_constants_in_const_py(self, validator):
+        """Check that const.py has no duplicate constant definitions.
+        
+        Detects:
+        1. Same constant name defined multiple times at module level
+        2. Different constant names with the same value (potential semantic duplicates)
+        
+        Skips enum class members (they can have same names like UNKNOWN in different enums).
+        """
+        const_file = COMPONENT_ROOT / "const.py"
+        content = const_file.read_text()
+        tree = ast.parse(content)
+        
+        # Track constant definitions at module level only (not inside classes)
+        constant_definitions = {}  # name -> list of line numbers
+        constant_values = {}  # name -> value (for semantic duplicate detection)
+        
+        # Get only top-level assignments (not inside class/function definitions)
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.isupper():
+                        name = target.id
+                        line = node.lineno
+                        
+                        # Track definition locations
+                        if name not in constant_definitions:
+                            constant_definitions[name] = []
+                        constant_definitions[name].append(line)
+                        
+                        # Try to extract value for semantic duplicate detection
+                        try:
+                            if isinstance(node.value, ast.Constant):
+                                constant_values[name] = node.value.value
+                            elif isinstance(node.value, ast.UnaryOp) and isinstance(node.value.op, ast.USub):
+                                if isinstance(node.value.operand, ast.Constant):
+                                    constant_values[name] = -node.value.operand.value
+                        except Exception:
+                            pass
+        
+        errors = []
+        
+        # Check for same name defined multiple times
+        for name, lines in constant_definitions.items():
+            if len(lines) > 1:
+                errors.append(f"DUPLICATE DEFINITION: {name} defined on lines {lines}")
+        
+        # Check for semantic duplicates (same value, different names)
+        # Only for numeric values to avoid false positives on strings
+        from collections import defaultdict
+        by_value = defaultdict(list)
+        for name, value in constant_values.items():
+            if isinstance(value, (int, float)):
+                by_value[value].append(name)
+        
+        semantic_duplicates = []
+        for value, names in by_value.items():
+            if len(names) > 1:
+                # Filter out intentional duplicates (e.g., LAYER_WEIGHT_SAFETY = 1.0 and others)
+                # Only flag if names are suspiciously similar
+                for i, name1 in enumerate(names):
+                    for name2 in names[i+1:]:
+                        # Check if names share significant substrings (potential duplicates)
+                        words1 = set(name1.lower().split('_'))
+                        words2 = set(name2.lower().split('_'))
+                        shared_words = words1 & words2 - {'the', 'a', 'an', 'is', 'kw', 'min', 'max'}
+                        if len(shared_words) >= 2:
+                            semantic_duplicates.append(
+                                f"POTENTIAL DUPLICATE: {name1} and {name2} both = {value}"
+                            )
+        
+        if errors:
+            pytest.fail(
+                f"Found {len(errors)} duplicate constant definitions in const.py:\n"
+                + "\n".join(errors)
+            )
+        
+        if semantic_duplicates:
+            import warnings
+            warnings.warn(
+                f"Found {len(semantic_duplicates)} potential semantic duplicates:\n"
+                + "\n".join(semantic_duplicates[:10])
+            )
+
     def test_constants_imported_correctly(self, validator):
         """Check that constants are imported from const.py, not redefined."""
         validator.find_all_python_files()

@@ -29,143 +29,94 @@ from custom_components.effektguard.const import (
 )
 
 
-def create_engine_mock(config_overrides=None):
-    """Create mocked decision engine with specific config.
-
-    Args:
-        config_overrides: Dict of config values to override defaults
-
-    Returns:
-        Mock DecisionEngine with config and bound layer methods
-    """
-    engine = MagicMock(spec=DecisionEngine)
-
+def create_engine(config_overrides=None):
+    """Create real DecisionEngine with mocked dependencies."""
+    
     # Default config (all switches ON)
     base_config = {
         "enable_peak_protection": True,
         "enable_price_optimization": True,
         "enable_weather_prediction": True,
+        "target_indoor_temp": 21.0,
+        "tolerance": 1.0,
     }
 
     # Apply overrides
     if config_overrides:
         base_config.update(config_overrides)
 
-    engine.config = base_config
-
-    # Mock dependencies that layers need when switches are ON
-    # Effect layer needs self.effect
-    engine.effect = MagicMock()
-    engine.effect.should_limit_power = MagicMock(
-        return_value=MagicMock(
-            should_limit=False, reduction_needed=0.0, peak_margin=0.0, reason="Normal operation"
-        )
+    # Mock dependencies
+    price_analyzer = MagicMock()
+    effect_manager = MagicMock()
+    thermal_model = MagicMock()
+    
+    # Create engine
+    engine = DecisionEngine(
+        price_analyzer=price_analyzer,
+        effect_manager=effect_manager,
+        thermal_model=thermal_model,
+        config=base_config,
     )
-    # Mock evaluate_layer to return proper EffectLayerDecision based on enable_peak_protection
+    
+    # Mock EffectManager behavior
     if base_config.get("enable_peak_protection", True):
-        engine.effect.evaluate_layer = MagicMock(
-            return_value=EffectLayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason="Safe margin (40.0/45.0 kW)",
-            )
+        effect_manager.evaluate_layer.return_value = EffectLayerDecision(
+            name="Peak", offset=0.0, weight=0.0, reason="Safe margin"
         )
     else:
-        engine.effect.evaluate_layer = MagicMock(
-            return_value=EffectLayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
+        effect_manager.evaluate_layer.side_effect = lambda **kwargs: (
+            EffectLayerDecision(name="Peak", offset=0.0, weight=0.0, reason="Disabled by user")
+            if not kwargs.get("enable_peak_protection") else
+            EffectLayerDecision(name="Peak", offset=0.0, weight=0.0, reason="Safe margin")
         )
 
-    # Price layer needs self.price
-    engine.price = MagicMock()
-    engine.price.get_current_classification = MagicMock(return_value=QuarterClassification.NORMAL)
-    engine.price.get_forecast_price_increase = MagicMock(return_value=1.0)
-    # Mock evaluate_layer to return proper PriceLayerDecision based on enable_price_optimization
+    # Mock PriceAnalyzer behavior
     if base_config.get("enable_price_optimization", True):
-        engine.price.evaluate_layer = MagicMock(
-            return_value=PriceLayerDecision(
-                name="Spot Price",
-                offset=-2.0,
-                weight=0.8,
-                reason="Q32: NORMAL (day) | Adapter: test | Horizon: 4.0h",
-            )
+        price_analyzer.evaluate_layer.return_value = PriceLayerDecision(
+            name="Spot Price", offset=-2.0, weight=0.8, reason="Normal"
         )
     else:
-        engine.price.evaluate_layer = MagicMock(
-            return_value=PriceLayerDecision(
-                name="Spot Price",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
+        price_analyzer.evaluate_layer.side_effect = lambda **kwargs: (
+            PriceLayerDecision(name="Spot Price", offset=0.0, weight=0.0, reason="Disabled by user")
+            if not kwargs.get("enable_price_optimization") else
+            PriceLayerDecision(name="Spot Price", offset=-2.0, weight=0.8, reason="Normal")
         )
 
-    # Weather layer needs self.predictor and self.thermal
-    engine.predictor = MagicMock()
-    engine.predictor.get_current_trend = MagicMock(
-        return_value={"trend": "stable", "rate_per_hour": 0.0, "confidence": 0.8, "samples": 8}
-    )
-    engine.predictor.get_thermal_trend = MagicMock(
-        return_value={
-            "trend": "stable",
-            "rate_per_hour": 0.0,
-            "confidence": 0.8,
-        }
-    )
-
-    engine.thermal = MagicMock()
-    engine.thermal.thermal_mass = 2.0
-    engine.thermal.get_prediction_horizon = MagicMock(return_value=12.0)
-
-    # Weather prediction layer needs self.weather_prediction
+    # Mock Weather Prediction Layer
     engine.weather_prediction = MagicMock()
-    # Mock evaluate_layer to return proper WeatherLayerDecision based on enable_weather_prediction
     if base_config.get("enable_weather_prediction", True):
-        engine.weather_prediction.evaluate_layer = MagicMock(
-            return_value=WeatherLayerDecision(
-                name="Weather Pre-heat",
-                offset=0.5,
-                weight=0.85,
-                reason="Forecast -5.0°C drop in 12h (proactive)",
-            )
+        engine.weather_prediction.evaluate_layer.return_value = WeatherLayerDecision(
+            name="Weather Pre-heat", offset=1.0, weight=0.5, reason="Cold front"
         )
     else:
-        engine.weather_prediction.evaluate_layer = MagicMock(
-            return_value=WeatherLayerDecision(
-                name="Weather Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
+        engine.weather_prediction.evaluate_layer.side_effect = lambda **kwargs: (
+            WeatherLayerDecision(name="Weather Pre-heat", offset=0.0, weight=0.0, reason="Disabled by user")
+            if not kwargs.get("enable_weather_prediction") else
+            WeatherLayerDecision(name="Weather Pre-heat", offset=1.0, weight=0.5, reason="Cold front")
         )
 
-    # Add tolerance (used by price layer)
-    engine.tolerance = 5.0
+    # Mock other layers to avoid errors
+    engine.emergency_layer = MagicMock()
+    engine.emergency_layer.evaluate_layer.return_value = LayerDecision("Emergency", 0.0, 0.0, "OK")
+    
+    engine.proactive_layer = MagicMock()
+    engine.proactive_layer.evaluate_layer.return_value = LayerDecision("Proactive", 0.0, 0.0, "OK")
+    
+    engine.comfort_layer = MagicMock()
+    engine.comfort_layer.evaluate_layer.return_value = LayerDecision("Comfort", 0.0, 0.0, "OK")
+    
+    engine.weather_comp_layer = MagicMock()
+    engine.weather_comp_layer.evaluate_layer.return_value = LayerDecision("Weather Comp", 0.0, 0.0, "OK")
+    
+    # Mock predictor (Phase 6)
+    engine.predictor = MagicMock()
+    engine.predictor.evaluate_layer.return_value = LayerDecision("Prediction", 0.0, 0.0, "OK")
 
-    # Add target_temp (used by price layer delegation)
-    engine.target_temp = 21.0
-
-    # Add mode_config (used by price and comfort layers)
-    engine.mode_config = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
-
-    # Add _get_thermal_trend method to engine
-    engine._get_thermal_trend = MagicMock(
-        return_value={
-            "trend": "stable",
-            "rate_per_hour": 0.0,  # Float, not Mock!
-            "confidence": 0.8,
-        }
-    )
-
-    # Bind real layer methods to mock engine
-    engine._effect_layer = DecisionEngine._effect_layer.__get__(engine, DecisionEngine)
-    engine._price_layer = DecisionEngine._price_layer.__get__(engine, DecisionEngine)
-    engine._weather_layer = DecisionEngine._weather_layer.__get__(engine, DecisionEngine)
+    # Mock _get_thermal_trend
+    engine._get_thermal_trend = MagicMock(return_value={})
+    
+    # Mock _safety_layer
+    engine._safety_layer = MagicMock(return_value=LayerDecision("Safety", 0.0, 0.0, "OK"))
 
     return engine
 
@@ -177,279 +128,238 @@ def nibe_state():
     state.outdoor_temp = 0.0
     state.indoor_temp = 22.0
     state.degree_minutes = -100.0
+    state.power_kw = 5.0
     return state
 
 
-@pytest.fixture
-def price_data():
-    """Mock price data."""
-    prices = MagicMock()
-    # Create mock quarters with proper price attribute
-    mock_quarters = [
-        MagicMock(classification=QuarterClassification.NORMAL, price=1.0) for _ in range(96)
-    ]
-    prices.quarters = mock_quarters
-    prices.today = mock_quarters  # Add today list (same as quarters)
-    prices.periods = 96  # Add periods count
-    prices.current_price = 1.0  # Add current price (float, not Mock)
-    return prices
-
-
-@pytest.fixture
-def weather_data():
-    """Mock weather data."""
-    weather = MagicMock()
-    weather.forecast_hours = [MagicMock(temperature=0.0) for _ in range(24)]
-    return weather
-
-
 class TestPeakProtectionSwitch:
-    """Test enable_peak_protection switch controls effect layer."""
+    """Test enable_peak_protection switch."""
 
     def test_peak_protection_off_returns_zero(self, nibe_state):
-        """Switch OFF → LayerDecision(offset=0.0, weight=0.0, reason contains 'Disabled')."""
-        engine = create_engine_mock({"enable_peak_protection": False})
-
-        decision = engine._effect_layer(nibe_state, current_peak=45.0, current_power=40.0)
-
-        assert decision.offset == 0.0
-        assert decision.weight == 0.0
-        assert "Disabled by user" in decision.reason
+        """Should return 0 offset/weight when disabled."""
+        engine = create_engine({"enable_peak_protection": False})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=45.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Peak")
+        assert layer.offset == 0.0
+        assert layer.weight == 0.0
+        assert "Disabled" in layer.reason
+        
+        # Verify flag was passed to layer
+        engine.effect.evaluate_layer.assert_called_with(
+            current_peak=40.0,
+            current_power=45.0,
+            thermal_trend=engine._get_thermal_trend.return_value,
+            enable_peak_protection=False
+        )
 
     def test_peak_protection_on_can_respond(self, nibe_state):
-        """Switch ON → layer can vote (may or may not based on conditions)."""
-        engine = create_engine_mock({"enable_peak_protection": True})
-
-        decision = engine._effect_layer(nibe_state, current_peak=45.0, current_power=40.0)
-
-        # Should NOT say "Disabled by user"
-        assert "Disabled by user" not in decision.reason
+        """Should return active decision when enabled."""
+        engine = create_engine({"enable_peak_protection": True})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=45.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Peak")
+        assert "Safe margin" in layer.reason
+        
+        engine.effect.evaluate_layer.assert_called_with(
+            current_peak=40.0,
+            current_power=45.0,
+            thermal_trend=engine._get_thermal_trend.return_value,
+            enable_peak_protection=True
+        )
 
 
 class TestPriceOptimizationSwitch:
-    """Test enable_price_optimization switch controls price layer."""
+    """Test enable_price_optimization switch."""
 
-    def test_price_optimization_off_returns_zero(self, nibe_state, price_data):
-        """Switch OFF → LayerDecision(offset=0.0, weight=0.0, reason contains 'Disabled')."""
-        engine = create_engine_mock({"enable_price_optimization": False})
+    def test_price_optimization_off_returns_zero(self, nibe_state):
+        """Should return 0 offset/weight when disabled."""
+        engine = create_engine({"enable_price_optimization": False})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Spot Price")
+        assert layer.offset == 0.0
+        assert layer.weight == 0.0
+        assert "Disabled" in layer.reason
 
-        # Set expensive prices (would normally trigger)
-        for i in range(12):
-            price_data.quarters[i].classification = QuarterClassification.EXPENSIVE
-            price_data.quarters[i].price = 5.0
-
-        decision = engine._price_layer(nibe_state, price_data)
-
-        assert decision.offset == 0.0
-        assert decision.weight == 0.0
-        assert "Disabled by user" in decision.reason
-
-    def test_price_optimization_on_can_respond(self, nibe_state, price_data):
-        """Switch ON → layer can vote."""
-        engine = create_engine_mock({"enable_price_optimization": True})
-
-        for i in range(12):
-            price_data.quarters[i].classification = QuarterClassification.EXPENSIVE
-            price_data.quarters[i].price = 5.0
-
-        decision = engine._price_layer(nibe_state, price_data)
-
-        assert "Disabled by user" not in decision.reason
+    def test_price_optimization_on_can_respond(self, nibe_state):
+        """Should return active decision when enabled."""
+        engine = create_engine({"enable_price_optimization": True})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Spot Price")
+        assert layer.offset == -2.0
+        assert layer.weight == 0.8
 
 
 class TestWeatherPredictionSwitch:
-    """Test enable_weather_prediction switch controls weather layer."""
+    """Test enable_weather_prediction switch."""
 
-    def test_weather_prediction_off_returns_zero(self, nibe_state, weather_data):
-        """Switch OFF → LayerDecision(offset=0.0, weight=0.0, reason contains 'Disabled')."""
-        engine = create_engine_mock({"enable_weather_prediction": False})
+    def test_weather_prediction_off_returns_zero(self, nibe_state):
+        """Should return 0 offset/weight when disabled."""
+        engine = create_engine({"enable_weather_prediction": False})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Weather Pre-heat")
+        assert layer.offset == 0.0
+        assert layer.weight == 0.0
+        assert "Disabled" in layer.reason
 
-        # Set cold forecast (would normally trigger pre-heating)
-        for i in range(4):
-            weather_data.forecast_hours[i].temperature = 0.0
-        for i in range(4, 12):
-            weather_data.forecast_hours[i].temperature = -10.0
-
-        decision = engine._weather_layer(nibe_state, weather_data)
-
-        assert decision.offset == 0.0
-        assert decision.weight == 0.0
-        assert "Disabled by user" in decision.reason
-
-    def test_weather_prediction_on_can_respond(self, nibe_state, weather_data):
-        """Switch ON → layer can vote."""
-        engine = create_engine_mock({"enable_weather_prediction": True})
-
-        for i in range(4):
-            weather_data.forecast_hours[i].temperature = 0.0
-        for i in range(4, 12):
-            weather_data.forecast_hours[i].temperature = -10.0
-
-        decision = engine._weather_layer(nibe_state, weather_data)
-
-        assert "Disabled by user" not in decision.reason
+    def test_weather_prediction_on_can_respond(self, nibe_state):
+        """Should return active decision when enabled."""
+        engine = create_engine({"enable_weather_prediction": True})
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
+        )
+        
+        layer = next(l for l in decision.layers if l.name == "Weather Pre-heat")
+        assert layer.offset == 1.0
+        assert layer.weight == 0.5
 
 
 class TestAllSwitchesOff:
-    """Test behavior when all optimization switches are disabled."""
+    """Test behavior when all optional features are disabled."""
 
-    def test_all_switches_off_all_layers_return_zero(self, nibe_state, price_data, weather_data):
-        """All switches OFF → all layers return zero."""
-        engine = create_engine_mock(
-            {
-                "enable_peak_protection": False,
-                "enable_price_optimization": False,
-                "enable_weather_prediction": False,
-            }
+    def test_all_switches_off_all_layers_return_zero(self, nibe_state):
+        """All optional layers should be disabled."""
+        engine = create_engine({
+            "enable_peak_protection": False,
+            "enable_price_optimization": False,
+            "enable_weather_prediction": False,
+        })
+        
+        decision = engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
         )
-
-        # Test each layer
-        peak_decision = engine._effect_layer(nibe_state, 45.0, 40.0)
-        assert peak_decision.offset == 0.0 and peak_decision.weight == 0.0
-
-        price_decision = engine._price_layer(nibe_state, price_data)
-        assert price_decision.offset == 0.0 and price_decision.weight == 0.0
-
-        weather_decision = engine._weather_layer(nibe_state, weather_data)
-        assert weather_decision.offset == 0.0 and weather_decision.weight == 0.0
-
-
-class TestSwitchToggling:
-    """Test toggling switches changes layer behavior."""
-
-    def test_peak_protection_toggle_changes_behavior(self, nibe_state):
-        """Toggling peak protection switch changes effect layer response."""
-        # ON
-        engine_on = create_engine_mock({"enable_peak_protection": True})
-        decision_on = engine_on._effect_layer(nibe_state, 45.0, 40.0)
-
-        # OFF
-        engine_off = create_engine_mock({"enable_peak_protection": False})
-        decision_off = engine_off._effect_layer(nibe_state, 45.0, 40.0)
-
-        # OFF must return zero
-        assert decision_off.offset == 0.0
-        assert decision_off.weight == 0.0
-        assert "Disabled by user" in decision_off.reason
-
-        # ON must NOT say disabled
-        assert "Disabled by user" not in decision_on.reason
-
-    def test_price_optimization_toggle_changes_behavior(self, nibe_state, price_data):
-        """Toggling price optimization switch changes price layer response."""
-        for i in range(4):
-            price_data.quarters[i].classification = QuarterClassification.EXPENSIVE
-            price_data.quarters[i].price = 5.0
-
-        # ON
-        engine_on = create_engine_mock({"enable_price_optimization": True})
-        decision_on = engine_on._price_layer(nibe_state, price_data)
-
-        # OFF
-        engine_off = create_engine_mock({"enable_price_optimization": False})
-        decision_off = engine_off._price_layer(nibe_state, price_data)
-
-        # OFF must return zero
-        assert decision_off.offset == 0.0
-        assert decision_off.weight == 0.0
-        assert "Disabled by user" in decision_off.reason
-
-        # ON must NOT say disabled
-        assert "Disabled by user" not in decision_on.reason
-
-    def test_weather_prediction_toggle_changes_behavior(self, nibe_state, weather_data):
-        """Toggling weather prediction switch changes weather layer response."""
-        for i in range(4):
-            weather_data.forecast_hours[i].temperature = 0.0
-        for i in range(4, 12):
-            weather_data.forecast_hours[i].temperature = -10.0
-
-        # ON
-        engine_on = create_engine_mock({"enable_weather_prediction": True})
-        decision_on = engine_on._weather_layer(nibe_state, weather_data)
-
-        # OFF
-        engine_off = create_engine_mock({"enable_weather_prediction": False})
-        decision_off = engine_off._weather_layer(nibe_state, weather_data)
-
-        # OFF must return zero
-        assert decision_off.offset == 0.0
-        assert decision_off.weight == 0.0
-        assert "Disabled by user" in decision_off.reason
-
-        # ON must NOT say disabled
-        assert "Disabled by user" not in decision_on.reason
+        
+        peak = next(l for l in decision.layers if l.name == "Peak")
+        price = next(l for l in decision.layers if l.name == "Spot Price")
+        weather = next(l for l in decision.layers if l.name == "Weather Pre-heat")
+        
+        assert peak.offset == 0.0 and "Disabled" in peak.reason
+        assert price.offset == 0.0 and "Disabled" in price.reason
+        assert weather.offset == 0.0 and "Disabled" in weather.reason
 
 
 class TestSwitchDefaults:
-    """Test switch default behavior."""
+    """Test default values for switches."""
 
-    def test_switches_default_to_true(self, nibe_state, price_data, weather_data):
-        """When not specified in config, switches default to True (enabled)."""
-        # Create engine with empty config (no switches specified)
-        engine = create_engine_mock({})  # Use helper that adds all mocks
+    def test_switches_default_to_true(self, nibe_state):
+        """Switches should default to True if missing from config."""
+        # Create engine with minimal config
+        base_config = {
+            "target_indoor_temp": 21.0,
+            "tolerance": 1.0,
+        }
+        
+        price_analyzer = MagicMock()
+        effect_manager = MagicMock()
+        thermal_model = MagicMock()
+        
+        engine = DecisionEngine(
+            price_analyzer=price_analyzer,
+            effect_manager=effect_manager,
+            thermal_model=thermal_model,
+            config=base_config,
+        )
+        
+        # Mock layers with proper return values (LayerDecision objects)
+        engine.emergency_layer = MagicMock()
+        engine.emergency_layer.evaluate_layer.return_value = LayerDecision("Emergency", 0.0, 0.0, "OK")
+        
+        engine.proactive_layer = MagicMock()
+        engine.proactive_layer.evaluate_layer.return_value = LayerDecision("Proactive", 0.0, 0.0, "OK")
+        
+        engine.comfort_layer = MagicMock()
+        engine.comfort_layer.evaluate_layer.return_value = LayerDecision("Comfort", 0.0, 0.0, "OK")
+        
+        engine.weather_comp_layer = MagicMock()
+        engine.weather_comp_layer.evaluate_layer.return_value = LayerDecision("Weather Comp", 0.0, 0.0, "OK")
+        
+        engine.weather_prediction = MagicMock()
+        engine.weather_prediction.evaluate_layer.return_value = LayerDecision("Weather Pre-heat", 0.0, 0.0, "OK")
+        
+        # Mock EffectManager (engine.effect)
+        engine.effect.evaluate_layer.return_value = LayerDecision("Peak", 0.0, 0.0, "OK")
+        
+        # Mock PriceAnalyzer (engine.price)
+        engine.price.evaluate_layer.return_value = LayerDecision("Spot Price", 0.0, 0.0, "OK")
+        
+        # Mock predictor (Phase 6)
+        engine.predictor = MagicMock()
+        engine.predictor.evaluate_layer.return_value = LayerDecision("Prediction", 0.0, 0.0, "OK")
 
-        # All layers should work (not disabled)
-        peak_decision = engine._effect_layer(nibe_state, 45.0, 40.0)
-        assert "Disabled by user" not in peak_decision.reason
+        engine._get_thermal_trend = MagicMock(return_value={})
+        engine._safety_layer = MagicMock(return_value=LayerDecision("Safety", 0.0, 0.0, "OK"))
+        
+        # Run decision
+        engine.calculate_decision(
+            nibe_state=nibe_state,
+            price_data=None,
+            weather_data=None,
+            current_peak=40.0,
+            current_power=5.0
+        )
+        
+        # Verify defaults passed to layers
+        # Effect
+        engine.effect.evaluate_layer.assert_called()
+        args = engine.effect.evaluate_layer.call_args[1]
+        assert args["enable_peak_protection"] is True
+        
+        # Price
+        engine.price.evaluate_layer.assert_called()
+        args = engine.price.evaluate_layer.call_args[1]
+        assert args["enable_price_optimization"] is True
+        
+        # Weather
+        engine.weather_prediction.evaluate_layer.assert_called()
+        args = engine.weather_prediction.evaluate_layer.call_args[1]
+        assert args["enable_weather_prediction"] is True
 
-        price_decision = engine._price_layer(nibe_state, price_data)
-        assert "Disabled by user" not in price_decision.reason
-
-        weather_decision = engine._weather_layer(nibe_state, weather_data)
-        assert "Disabled by user" not in weather_decision.reason
-
-    def test_explicit_false_overrides_default(self, nibe_state):
-        """Explicit False should override default True."""
-        engine = create_engine_mock({"enable_peak_protection": False})
-
-        decision = engine._effect_layer(nibe_state, 45.0, 40.0)
-
-        assert decision.offset == 0.0
-        assert decision.weight == 0.0
-        assert "Disabled by user" in decision.reason
-
-
-class TestMasterSwitch:
-    """Test master enable_optimization switch (tested at coordinator level)."""
-
-    def test_master_switch_config_key(self):
-        """Master switch configuration key is 'enable_optimization'."""
-        assert CONF_ENABLE_OPTIMIZATION == "enable_optimization"
-
-    def test_master_switch_blocks_optimization_at_coordinator_level(self):
-        """Master switch is checked in coordinator._async_update_data(), not decision_engine.
-
-        When enable_optimization=False:
-        - Coordinator does NOT call engine.calculate_decision()
-        - No offset changes are applied
-        - System maintains current offset
-
-        This is by design - master switch prevents optimization at coordinator level.
-        Individual layer switches are checked within decision_engine.
-        """
-        # This test documents the architecture
-        # Actual testing is done in coordinator tests
-        pass
-
-
-class TestDHWSwitch:
-    """Test enable_hot_water_optimization switch (tested at coordinator level)."""
-
-    def test_dhw_switch_config_key(self):
-        """DHW optimization configuration key is 'enable_hot_water_optimization'."""
-        assert CONF_ENABLE_HOT_WATER_OPTIMIZATION == "enable_hot_water_optimization"
-
-    def test_dhw_switch_blocks_dhw_optimization_at_coordinator_level(self):
-        """DHW switch is checked in coordinator, not decision_engine.
-
-        When enable_hot_water_optimization=False:
-        - Coordinator does NOT call DHW optimization logic
-        - DHW blocking is not applied
-        - DHW runs normally without optimization
-
-        This is by design - DHW optimization is separate from heating curve optimization.
-        """
-        # This test documents the architecture
-        # Actual testing is done in coordinator DHW tests
-        pass
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

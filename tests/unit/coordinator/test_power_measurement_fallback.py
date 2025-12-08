@@ -15,6 +15,11 @@ from datetime import datetime
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.const import (
+    POWER_STANDBY_KW,
+    COMPRESSOR_POWER_MIN_KW,
+    COMPRESSOR_POWER_MAX_KW,
+)
 
 
 class TestCompressorHzPowerEstimation:
@@ -30,7 +35,7 @@ class TestCompressorHzPowerEstimation:
         power = effect_manager.estimate_power_from_compressor(
             compressor_hz=0, outdoor_temp=5.0
         )
-        assert power == 0.1  # Standby power
+        assert power == POWER_STANDBY_KW  # Standby power
 
     def test_minimum_compressor_20hz(self, effect_manager):
         """Test power estimation at minimum compressor frequency (20 Hz)."""
@@ -38,7 +43,7 @@ class TestCompressorHzPowerEstimation:
             compressor_hz=20, outdoor_temp=5.0
         )
         # At 20 Hz: base ~1.5-2.0 kW
-        assert power >= 1.5
+        assert power >= COMPRESSOR_POWER_MIN_KW
         assert power <= 2.5
 
     def test_mid_range_compressor_50hz(self, effect_manager):
@@ -95,7 +100,7 @@ class TestCompressorHzPowerEstimation:
         power = effect_manager.estimate_power_from_compressor(
             compressor_hz=0, outdoor_temp=5.0
         )
-        assert power == 0.1
+        assert power == POWER_STANDBY_KW
 
 
 class TestPowerMeasurementPriority:

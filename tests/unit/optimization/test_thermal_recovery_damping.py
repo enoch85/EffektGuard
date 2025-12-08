@@ -103,7 +103,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Should apply standard damping (0.6)
         expected = DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_DAMPING_FACTOR  # 2.5 * 0.6 = 1.5
@@ -134,7 +140,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR = 7.0 * 0.4 = 2.8
         # Clamped to max(2.8, THERMAL_RECOVERY_T2_MIN_OFFSET=1.5) = 2.8
@@ -168,7 +180,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Full offset, no damping
         assert decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
@@ -200,7 +218,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # No damping (safety: fighting cold spell)
         assert decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
@@ -229,7 +253,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # No damping (insufficient confidence)
         assert decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
@@ -264,7 +294,13 @@ class TestDampingConditions:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, cold_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=cold_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # No damping (cold weather coming, need to prepare!)
         assert decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
@@ -297,7 +333,13 @@ class TestTierSpecificBehavior:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Should be >= T1 minimum
         assert decision.offset >= THERMAL_RECOVERY_T1_MIN_OFFSET
@@ -327,7 +369,13 @@ class TestTierSpecificBehavior:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Even with damping, should be >= T3 minimum (2.0°C)
         assert decision.offset >= THERMAL_RECOVERY_T3_MIN_OFFSET
@@ -366,7 +414,13 @@ class TestRealWorldScenario:
             timestamp=datetime.now(),
         )
 
-        night_decision = decision_engine._emergency_layer(night_state, stable_weather_forecast)
+        night_decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=night_state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # MORNING: Solar gain warming
         decision_engine.predictor.get_current_trend.return_value = {
@@ -388,7 +442,13 @@ class TestRealWorldScenario:
             timestamp=datetime.now() + timedelta(hours=6),
         )
 
-        morning_decision = decision_engine._emergency_layer(morning_state, stable_weather_forecast)
+        morning_decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=morning_state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Verify transition
         # Night: Full T2 offset (no damping)
@@ -434,7 +494,13 @@ class TestEdgeCases:
             timestamp=datetime.now(),
         )
 
-        decision = engine._emergency_layer(state, stable_weather_forecast)
+        decision = engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=engine.target_temp,
+            tolerance_range=engine.tolerance_range,
+        )
 
         # Should use full offset (safe fallback)
         assert decision.offset == pytest.approx(DM_CRITICAL_T2_OFFSET, abs=0.01)
@@ -463,7 +529,13 @@ class TestEdgeCases:
             timestamp=datetime.now(),
         )
 
-        decision = decision_engine._emergency_layer(state, stable_weather_forecast)
+        decision = decision_engine.emergency_layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=stable_weather_forecast,
+            price_data=None,
+            target_temp=decision_engine.target_temp,
+            tolerance_range=decision_engine.tolerance_range,
+        )
 
         # Should apply damping (>= threshold)
         expected = DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_DAMPING_FACTOR

@@ -161,6 +161,8 @@ from .thermal_layer import (
     EmergencyLayerDecision,
     ProactiveLayer,
     ProactiveLayerDecision,
+    is_cooling_rapidly,
+    is_warming_rapidly,
 )
 from .weather_layer import (
     AdaptiveClimateSystem,
@@ -468,285 +470,6 @@ class DecisionEngine:
             }
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
 
-    def _apply_thermal_recovery_damping(
-        self,
-        base_offset: float,
-        tier_name: str,
-        min_damped_offset: float,
-        weather_data=None,
-        current_outdoor_temp: float | None = None,
-        indoor_temp: float | None = None,
-        target_temp: float | None = None,
-    ) -> tuple[float, str]:
-        """Apply thermal recovery damping when house warming naturally or overshooting.
-
-        Prevents concrete slab thermal overshoot during recovery periods.
-        When T1/T2/T3 active AND (house warming from solar OR already overshooting),
-        reduce offset to prevent excessive heat storage in thermal mass.
-
-        Args:
-            base_offset: Original recovery offset (e.g., 2.5°C for T2)
-            tier_name: Recovery tier name for logging (e.g., "STRONG RECOVERY")
-            min_damped_offset: Minimum allowed offset after damping (safety floor)
-            weather_data: Weather forecast data (optional, for cold weather check)
-            current_outdoor_temp: Current outdoor temperature (°C)
-            indoor_temp: Current indoor temperature (°C) for overshoot detection
-            target_temp: Target indoor temperature (°C) for overshoot detection
-
-        Returns:
-            Tuple of (damped_offset, damping_reason_string)
-            If no damping applied: (base_offset, "")
-
-        Damping Conditions:
-            Warming-based (original logic):
-                1. Indoor warming >= 0.3°C/h (significant solar gain)
-                2. Outdoor not dropping < -0.5°C/h (not fighting cold spell)
-                3. Sufficient trend confidence >= 0.4 (~1 hour data)
-                4. Weather forecast NOT showing significant cold within 6 hours
-
-            Overshoot-based (NEW - Oct 23, 2025):
-                If indoor_temp > target_temp:
-                    Severe ≥1.5°C: 80% strength (0.8 multiplier)
-                    Moderate ≥1.0°C: 90% strength (0.9 multiplier)
-                    Mild ≥0.5°C: 95% strength (0.95 multiplier)
-                Overshoot damping multiplies with warming damping for compound effect
-
-        Example:
-            T2 base offset 2.5°C + warming 0.4°C/h + stable forecast → damped to 1.5°C (60%)
-            OR: T2 base 2.5°C + 2.0°C overshoot → damped to 2.0°C (80% strength)
-            OR: Both warming + overshoot → compound: 2.5°C × 0.6 × 0.8 = 1.2°C
-        """
-        thermal_trend = self._get_thermal_trend()
-        outdoor_trend = self._get_outdoor_trend()
-
-        # Calculate overshoot damping factor (independent of warming)
-        overshoot_factor = 1.0  # Default: no overshoot penalty
-        overshoot_reason = ""
-
-        if indoor_temp is not None and target_temp is not None:
-            overshoot = indoor_temp - target_temp
-            if overshoot >= THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD:  # ≥1.5°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING  # 0.8
-                overshoot_reason = f"severe overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:  # ≥1.0°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING  # 0.9
-                overshoot_reason = f"moderate overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD:  # ≥0.5°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING  # 0.95
-                overshoot_reason = f"mild overshoot +{overshoot:.1f}°C"
-
-        # Check if we have sufficient trend confidence
-        if thermal_trend.get("confidence", 0.0) < THERMAL_RECOVERY_MIN_CONFIDENCE:
-            # Even without trend data, apply overshoot damping if present
-            if overshoot_factor < 1.0:
-                damped_offset = base_offset * overshoot_factor
-                damped_offset = max(damped_offset, min_damped_offset)
-
-                _LOGGER.info(
-                    "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
-                    tier_name,
-                    overshoot_reason,
-                    base_offset,
-                    damped_offset,
-                    overshoot_factor,
-                    min_damped_offset,
-                )
-
-                return damped_offset, overshoot_reason
-
-            return base_offset, ""
-
-        warming_rate = thermal_trend.get("rate_per_hour", 0.0)
-        outdoor_rate = outdoor_trend.get("rate_per_hour", 0.0)
-
-        # Check weather forecast for incoming cold
-        # If significant cold is coming within 6 hours, don't damp - we need the heat!
-        if weather_data and weather_data.forecast_hours and current_outdoor_temp is not None:
-            # Check next 6 hours for significant temperature drop
-            forecast_horizon = int(THERMAL_RECOVERY_FORECAST_HORIZON)
-            forecast_temps = [h.temperature for h in weather_data.forecast_hours[:forecast_horizon]]
-
-            if forecast_temps:
-                min_forecast_temp = min(forecast_temps)
-                forecast_drop = min_forecast_temp - current_outdoor_temp
-
-                if forecast_drop < THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD:
-                    # Significant cold coming - don't damp, we need to prepare!
-                    _LOGGER.info(
-                        "%s: Cold weather forecast (%.1f°C drop to %.1f°C within %dh), "
-                        "maintaining full offset %.2f°C",
-                        tier_name,
-                        abs(forecast_drop),
-                        min_forecast_temp,
-                        forecast_horizon,
-                        base_offset,
-                    )
-                    return base_offset, ""
-
-        # Apply damping if:
-        # 1. Indoor warming significantly (>0.3°C/h = solar gain detected)
-        # 2. Outdoor not rapidly dropping (not fighting cold spell)
-        # 3. Forecast stable (no significant cold incoming)
-        if (
-            warming_rate >= THERMAL_RECOVERY_WARMING_THRESHOLD
-            and outdoor_rate >= THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD
-        ):
-            # Choose damping factor based on warming intensity
-            if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD:  # Rapid warming >0.5°C/h
-                warming_factor = THERMAL_RECOVERY_RAPID_FACTOR  # 0.4 = reduce to 40%
-                warming_reason = f"rapid warming {warming_rate:.2f}°C/h"
-            else:  # Moderate warming 0.3-0.5°C/h
-                warming_factor = THERMAL_RECOVERY_DAMPING_FACTOR  # 0.6 = reduce to 60%
-                warming_reason = f"warming {warming_rate:.2f}°C/h"
-
-            # Combine warming and overshoot damping (multiply factors)
-            combined_factor = warming_factor * overshoot_factor
-
-            # Build comprehensive damping reason
-            if overshoot_reason:
-                damping_reason = f"{warming_reason} + {overshoot_reason}"
-            else:
-                damping_reason = warming_reason
-
-            # Apply combined damping but maintain safety minimum
-            damped_offset = base_offset * combined_factor
-            damped_offset = max(damped_offset, min_damped_offset)
-
-            _LOGGER.info(
-                "%s thermal recovery damping: %s, "
-                "offset %.2f°C → %.2f°C (warming %.2f × overshoot %.2f = %.2f, min %.1f°C)",
-                tier_name,
-                damping_reason,
-                base_offset,
-                damped_offset,
-                warming_factor,
-                overshoot_factor,
-                combined_factor,
-                min_damped_offset,
-            )
-
-            return damped_offset, damping_reason
-
-        # No warming-based damping, but apply overshoot damping if present
-        if overshoot_factor < 1.0:
-            damped_offset = base_offset * overshoot_factor
-            damped_offset = max(damped_offset, min_damped_offset)
-
-            _LOGGER.info(
-                "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
-                tier_name,
-                overshoot_reason,
-                base_offset,
-                damped_offset,
-                overshoot_factor,
-                min_damped_offset,
-            )
-
-            return damped_offset, overshoot_reason
-
-        return base_offset, ""
-
-    def _is_cooling_rapidly(
-        self, thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD
-    ) -> bool:
-        """Check if house is cooling rapidly.
-
-        Args:
-            thermal_trend: Trend data from _get_thermal_trend()
-            threshold: Cooling rate threshold (°C/h, negative)
-
-        Returns:
-            True if cooling faster than threshold
-        """
-        return thermal_trend.get("rate_per_hour", 0.0) < threshold
-
-    def _is_warming_rapidly(
-        self, thermal_trend: dict, threshold: float = THERMAL_CHANGE_MODERATE
-    ) -> bool:
-        """Check if house is warming rapidly.
-
-        Args:
-            thermal_trend: Trend data from _get_thermal_trend()
-            threshold: Warming rate threshold (°C/h, positive)
-
-        Returns:
-            True if warming faster than threshold
-        """
-        return thermal_trend.get("rate_per_hour", 0.0) > threshold
-
-    def _get_preheat_lead_time(self) -> float:
-        """Get required pre-heating lead time based on heating system type.
-
-        Lead time is the hours needed to warm house before cold arrives.
-        Based on thermal lag of heating system.
-
-        Returns:
-            Lead time in hours
-        """
-        # Get prediction horizon (based on UFH type from thermal model)
-        horizon = self.thermal.get_prediction_horizon()
-
-        # Lead time = 50% of prediction horizon
-        # Concrete UFH: 12h horizon → 6h lead time
-        # Timber UFH: 6h horizon → 3h lead time
-        # Radiator: 2h horizon → 1h lead time
-        lead_time = horizon * WEATHER_PREDICTION_LEAD_TIME_FACTOR
-
-        return lead_time
-
-    def _calculate_preheat_intensity(
-        self,
-        temp_drop: float,
-        thermal_trend: dict,
-        indoor_deficit: float,
-    ) -> tuple[float, str]:
-        """Calculate adaptive pre-heating intensity (Phase 3.3).
-
-        Modulates pre-heating strength based on indoor state and trend to prevent
-        over-heating when house already warm, or boost when house struggling.
-
-        Args:
-            temp_drop: Forecasted outdoor temperature drop (°C)
-            thermal_trend: Indoor temperature trend data
-            indoor_deficit: Current indoor temp below target (°C)
-
-        Returns:
-            Tuple of (offset, reasoning)
-
-        References:
-            MASTER_IMPLEMENTATION_PLAN.md: Phase 3.3 - Adaptive Pre-Heat Intensity
-        """
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-
-        # Base intensity from forecast
-        base_intensity = abs(temp_drop) / WEATHER_TEMP_DROP_DIVISOR
-        base_offset = min(
-            base_intensity * WEATHER_BASE_INTENSITY_MULTIPLIER, WEATHER_BASE_OFFSET_MAX
-        )
-
-        # Modulate based on indoor state and trend
-        if (
-            indoor_deficit > WEATHER_INTENSITY_AGGRESSIVE_DEFICIT
-            and trend_rate < THERMAL_CHANGE_MODERATE_COOLING
-        ):
-            intensity_factor = WEATHER_INTENSITY_AGGRESSIVE_FACTOR
-            reason = "aggressive: already cooling below target"
-        elif indoor_deficit < RAPID_COOLING_THRESHOLD and trend_rate > COMFORT_DEAD_ZONE:
-            intensity_factor = WEATHER_INTENSITY_GENTLE_FACTOR
-            reason = "gentle: already warm and rising"
-        elif (
-            abs(indoor_deficit) < COMFORT_DEAD_ZONE
-            and abs(trend_rate) < WEATHER_INTENSITY_STABLE_RATE
-        ):
-            intensity_factor = WEATHER_INTENSITY_NORMAL_FACTOR
-            reason = "normal: stable at target"
-        else:
-            intensity_factor = WEATHER_INTENSITY_MODERATE_FACTOR
-            reason = "moderate: mixed conditions"
-
-        final_offset = base_offset * intensity_factor
-        return final_offset, reason
-
     def calculate_decision(
         self,
         nibe_state,
@@ -810,25 +533,135 @@ class DecisionEngine:
                     validation["warning"],
                 )
 
+        # Update comfort layer with current state before evaluation
+        self.comfort_layer.mode_config = self.mode_config
+        self.comfort_layer.tolerance_range = self.tolerance_range
+        self.comfort_layer.target_temp = self.target_temp
+
         # Calculate all layer decisions (ordered by priority)
+        # Note: We call evaluate_layer() directly on layer objects instead of using wrappers
+
+        # 1. Safety Layer (Inline)
+        safety_decision = self._safety_layer(nibe_state)
+
+        # 2. Emergency Layer
+        emergency_decision = self.emergency_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            price_data=price_data,
+            target_temp=self.target_temp,
+            tolerance_range=self.tolerance_range,
+        )
+
+        # 3. Proactive Layer
+        proactive_decision = self.proactive_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            target_temp=self.target_temp,
+        )
+
+        # 4. Effect Layer
+        effect_result = self.effect.evaluate_layer(
+            current_peak=current_peak,
+            current_power=current_power,
+            thermal_trend=self._get_thermal_trend(),
+            enable_peak_protection=self.config.get("enable_peak_protection", True),
+        )
+        effect_decision = LayerDecision(
+            name=effect_result.name,
+            offset=effect_result.offset,
+            weight=effect_result.weight,
+            reason=effect_result.reason,
+        )
+
+        # 5. Prediction Layer
+        if self.predictor:
+            pred_result = self.predictor.evaluate_layer(
+                nibe_state=nibe_state,
+                weather_data=weather_data,
+                target_temp=self.target_temp,
+                thermal_model=self.thermal,
+            )
+            prediction_decision = LayerDecision(
+                name=pred_result.name,
+                offset=pred_result.offset,
+                weight=pred_result.weight,
+                reason=pred_result.reason,
+            )
+        else:
+            prediction_decision = LayerDecision(
+                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
+            )
+
+        # 6. Weather Compensation Layer
+        comp_result = self.weather_comp_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            target_temp=self.target_temp,
+            enable_weather_compensation=self.enable_weather_compensation,
+        )
+        comp_decision = LayerDecision(
+            name=comp_result.name,
+            offset=comp_result.offset,
+            weight=comp_result.weight,
+            reason=comp_result.reason,
+        )
+
+        # 7. Weather Prediction Layer
+        weather_result = self.weather_prediction.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            thermal_trend=self._get_thermal_trend(),
+            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
+        )
+        weather_decision = LayerDecision(
+            name=weather_result.name,
+            offset=weather_result.offset,
+            weight=weather_result.weight,
+            reason=weather_result.reason,
+        )
+
+        # 8. Price Layer
+        price_result = self.price.evaluate_layer(
+            nibe_state=nibe_state,
+            price_data=price_data,
+            thermal_mass=self.thermal.thermal_mass if self.thermal else 1.0,
+            target_temp=self.target_temp,
+            tolerance=self.tolerance,
+            mode_config=self.mode_config,
+            gespot_entity=self.config.get("gespot_entity", "unknown"),
+            enable_price_optimization=self.config.get("enable_price_optimization", True),
+        )
+        price_decision = LayerDecision(
+            name=price_result.name,
+            offset=price_result.offset,
+            weight=price_result.weight,
+            reason=price_result.reason,
+        )
+
+        # 9. Comfort Layer
+        comfort_result = self.comfort_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            price_data=price_data,
+        )
+        comfort_decision = LayerDecision(
+            name=comfort_result.name,
+            offset=comfort_result.offset,
+            weight=comfort_result.weight,
+            reason=comfort_result.reason,
+        )
+
         layers = [
-            self._safety_layer(nibe_state),
-            self._emergency_layer(
-                nibe_state, weather_data, price_data
-            ),  # Pass price for smart recovery
-            self._proactive_debt_prevention_layer(
-                nibe_state, weather_data
-            ),  # Phase 3.2: Pass weather_data for forecast validation
-            self._effect_layer(
-                nibe_state, current_peak, current_power
-            ),  # Pass actual whole-house power
-            self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
-            self._weather_compensation_layer(
-                nibe_state, weather_data
-            ),  # Mathematical WC with Swedish adaptations
-            self._weather_layer(nibe_state, weather_data),  # Simple pre-heating logic
-            self._price_layer(nibe_state, price_data),
-            self._comfort_layer(nibe_state, weather_data, price_data),
+            safety_decision,
+            emergency_decision,
+            proactive_decision,
+            effect_decision,
+            prediction_decision,
+            comp_decision,
+            weather_decision,
+            price_decision,
+            comfort_decision,
         ]
 
         # Aggregate layers with priority weighting
@@ -838,7 +671,7 @@ class DecisionEngine:
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
-        if self._is_warming_rapidly(thermal_trend):
+        if is_warming_rapidly(thermal_trend):
             # House warming rapidly
             if raw_offset > 0:
                 # Heating + Warming -> Damp to prevent overshoot
@@ -850,7 +683,7 @@ class DecisionEngine:
                 damping_factor = TREND_DAMPING_NEUTRAL
                 reason_suffix = ""
 
-        elif self._is_cooling_rapidly(thermal_trend):
+        elif is_cooling_rapidly(thermal_trend):
             # House cooling rapidly
             if raw_offset > 0:
                 # Heating + Cooling -> Boost to prevent undershoot
@@ -921,378 +754,6 @@ class DecisionEngine:
                 weight=0.0,
                 reason="OK",
             )
-
-    def _emergency_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
-        """Emergency layer: Smart context-aware thermal debt response.
-
-        Delegates to EmergencyLayer.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-            price_data: Price data
-
-        Returns:
-            LayerDecision with context-aware emergency response
-        """
-        # Delegate to EmergencyLayer for the actual logic
-        emergency_decision = self.emergency_layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            price_data=price_data,
-            target_temp=self.target_temp,
-            tolerance_range=self.tolerance_range,
-        )
-
-        # Convert EmergencyLayerDecision to LayerDecision
-        return LayerDecision(
-            name=emergency_decision.name,
-            offset=emergency_decision.offset,
-            weight=emergency_decision.weight,
-            reason=emergency_decision.reason,
-        )
-
-    def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
-        """Calculate expected DM range for given outdoor temperature.
-
-        CLIMATE-AWARE ADAPTATION:
-        Uses ClimateZoneDetector to get context-aware DM thresholds based on:
-        1. Climate zone (Extreme Cold → Standard) provides base expectations
-        2. Current outdoor temperature adjusts thresholds dynamically
-        3. Automatically adapts from Arctic (-30°C) to mild climates (5°C)
-
-        Examples:
-        - Kiruna (Extreme Cold, -30°C): DM -800 to -1200 is normal
-        - Stockholm (Cold, -10°C): DM -450 to -700 is normal
-        - Copenhagen (Moderate Cold, 0°C): DM -300 to -500 is normal
-
-        This replaces hardcoded temperature bands with universal climate-aware logic.
-
-        Args:
-            outdoor_temp: Current outdoor temperature (°C)
-
-        Returns:
-            Dictionary with:
-            - normal: Expected normal operating DM
-            - warning: Start warning/recovery at this DM
-
-        References:
-            - climate_zones.py: ClimateZoneDetector implementation
-            - IMPLEMENTATION_PLAN/FUTURE/CLIMATE_ZONE_DM_INTEGRATION.md
-        """
-        # Use climate zone detector to get context-aware DM range
-        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
-
-        _LOGGER.debug(
-            "Expected DM for %s zone at %.1f°C: normal %.0f to %.0f, warning %.0f",
-            self.climate_detector.zone_info.name,
-            outdoor_temp,
-            dm_range["normal_min"],
-            dm_range["normal_max"],
-            dm_range["warning"],
-        )
-
-        return {
-            "normal": dm_range["normal_max"],  # Use deep end of normal range
-            "warning": dm_range["warning"],  # Warning threshold
-        }
-
-    def _get_thermal_mass_adjusted_thresholds(
-        self,
-        base_thresholds: dict,
-        heating_type: str,
-    ) -> dict:
-        """Adjust DM thresholds based on thermal mass (prevents overshoot with lag).
-
-        High thermal mass systems need tighter thresholds because:
-        - Long thermal lag (6+ hours for concrete slab)
-        - Current DM doesn't immediately affect indoor temperature
-        - Solar gain can mask underlying thermal debt accumulation
-        - Need larger buffer to handle sunset/weather changes
-
-        Args:
-            base_thresholds: Climate-aware thresholds from ClimateZoneDetector
-                {"normal_min": -60, "normal_max": -276, "warning": -276, "critical": -1500}
-            heating_type: Heating system type ("concrete_ufh", "timber", "radiator", etc.)
-
-        Returns:
-            Adjusted thresholds with thermal mass buffer applied
-
-        Example:
-            Stockholm at 10°C → base warning -276
-            Concrete slab:      -276 × 1.3 = -359 (tighter)
-            Timber:             -276 × 1.15 = -317 (moderate)
-            Radiator:           -276 × 1.0 = -276 (standard)
-
-        Notes:
-            - Critical threshold (-1500) never adjusted (absolute maximum)
-            - Prevents v0.1.0 failure mode (DM -700 during solar gain)
-            - Maintains thermal buffer for forecast uncertainty
-
-        Research:
-            - v0.1.0 case: DM -700 allowed → 1.5°C drop at sunset
-            - Concrete lag: 6-12 hours observed in production systems
-
-        References:
-            IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
-        """
-        # Get multiplier based on heating type
-        if heating_type in ("concrete_ufh", "concrete_slab"):
-            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE  # 1.3
-        elif heating_type in ("timber", "timber_ufh"):
-            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER  # 1.15
-        else:  # radiator or unknown (conservative default)
-            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR  # 1.0
-
-        # Apply multiplier to thresholds (more negative = tighter)
-        adjusted = {
-            "normal_min": base_thresholds["normal_min"] * multiplier,
-            "normal_max": base_thresholds["normal_max"] * multiplier,
-            "warning": base_thresholds["warning"] * multiplier,
-            "critical": base_thresholds["critical"],  # Never adjust absolute maximum
-        }
-
-        _LOGGER.debug(
-            "Thermal mass adjusted thresholds: heating type '%s' (multiplier %.2f) "
-            "→ warning %.0f (base: %.0f), critical %.0f",
-            heating_type,
-            multiplier,
-            adjusted["warning"],
-            base_thresholds["warning"],
-            adjusted["critical"],
-        )
-
-        return adjusted
-
-    def _proactive_debt_prevention_layer(self, nibe_state, weather_data=None) -> LayerDecision:
-        """Proactive thermal debt prevention with climate-aware thresholds and trend prediction.
-
-        Delegates to ProactiveLayer.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data (optional, for forecast validation)
-
-        Returns:
-            LayerDecision with climate-aware proactive gentle heating
-
-        References:
-            thermal_layer.py: ProactiveLayer class for full implementation
-        """
-        result = self.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            target_temp=self.target_temp,
-        )
-        return LayerDecision(
-            name=result.name,
-            offset=result.offset,
-            weight=result.weight,
-            reason=result.reason,
-        )
-
-    def _effect_layer(self, nibe_state, current_peak: float, current_power: float) -> LayerDecision:
-        """Effect tariff protection with PREDICTIVE peak avoidance (Phase 4).
-
-        Delegates to EffectManager.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            current_peak: Current monthly peak (kW) - from peak_this_month sensor
-            current_power: Current whole-house power consumption (kW) - from peak_today sensor
-
-        Returns:
-            LayerDecision with predictive peak protection
-
-        References:
-            MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
-        """
-        # Get thermal trend for predictive analysis
-        thermal_trend = self._get_thermal_trend()
-
-        # Delegate to EffectManager for the actual logic
-        effect_decision = self.effect.evaluate_layer(
-            current_peak=current_peak,
-            current_power=current_power,
-            thermal_trend=thermal_trend,
-            enable_peak_protection=self.config.get("enable_peak_protection", True),
-        )
-
-        # Convert EffectLayerDecision to LayerDecision
-        return LayerDecision(
-            name=effect_decision.name,
-            offset=effect_decision.offset,
-            weight=effect_decision.weight,
-            reason=effect_decision.reason,
-        )
-
-    def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Prediction layer: Learned pre-heating using thermal state predictor.
-
-        Delegates to ThermalStatePredictor.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with learned pre-heating recommendation
-        """
-        # Skip if predictor not available
-        if not self.predictor:
-            return LayerDecision(
-                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
-            )
-
-        # Delegate to ThermalStatePredictor for the actual logic
-        prediction_decision = self.predictor.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            target_temp=self.target_temp,
-            thermal_model=self.thermal,
-        )
-
-        # Convert PredictionLayerDecision to LayerDecision
-        return LayerDecision(
-            name=prediction_decision.name,
-            offset=prediction_decision.offset,
-            weight=prediction_decision.weight,
-            reason=prediction_decision.reason,
-        )
-
-    def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Weather prediction layer: Proactive pre-heating based on forecast.
-
-        Delegates to WeatherPredictionLayer.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with gentle pre-heating recommendation
-        """
-        # Get thermal trend for the layer
-        thermal_trend = self._get_thermal_trend()
-
-        # Delegate to WeatherPredictionLayer for the actual logic
-        weather_decision = self.weather_prediction.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            thermal_trend=thermal_trend,
-            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
-        )
-
-        # Convert WeatherLayerDecision to LayerDecision
-        return LayerDecision(
-            name=weather_decision.name,
-            offset=weather_decision.offset,
-            weight=weather_decision.weight,
-            reason=weather_decision.reason,
-        )
-
-    def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Mathematical weather compensation layer with adaptive climate system.
-
-        Delegates to WeatherCompensationLayer.evaluate_layer() for the actual logic.
-
-        Calculates optimal flow temperature using:
-        - Universal flow temperature formula (validated across manufacturers)
-        - Heat transfer method (if radiator specs available)
-        - UFH-specific adjustments (concrete/timber)
-        - Adaptive climate zones (latitude-based, globally applicable)
-        - Weather learning (unusual pattern detection)
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with mathematically calculated offset
-        """
-        # Delegate to WeatherCompensationLayer for the actual logic
-        comp_decision = self.weather_comp_layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            target_temp=self.target_temp,
-            enable_weather_compensation=self.enable_weather_compensation,
-        )
-
-        # Convert WeatherCompensationLayerDecision to LayerDecision
-        return LayerDecision(
-            name=comp_decision.name,
-            offset=comp_decision.offset,
-            weight=comp_decision.weight,
-            reason=comp_decision.reason,
-        )
-
-    def _price_layer(self, nibe_state, price_data) -> LayerDecision:
-        """Spot price layer: Forward-looking optimization from native 15-minute spot price data.
-
-        Delegates to PriceAnalyzer.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state (for strategic overshoot context)
-            price_data: Spot price data with native 15-min intervals
-
-        Returns:
-            LayerDecision with price-based offset
-        """
-        # Get thermal mass from thermal model
-        thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
-
-        # Delegate to PriceAnalyzer for the actual logic
-        price_decision = self.price.evaluate_layer(
-            nibe_state=nibe_state,
-            price_data=price_data,
-            thermal_mass=thermal_mass,
-            target_temp=self.target_temp,
-            tolerance=self.tolerance,
-            mode_config=self.mode_config,
-            gespot_entity=self.config.get("gespot_entity", "unknown"),
-            enable_price_optimization=self.config.get("enable_price_optimization", True),
-        )
-
-        # Convert PriceLayerDecision to LayerDecision
-        return LayerDecision(
-            name=price_decision.name,
-            offset=price_decision.offset,
-            weight=price_decision.weight,
-            reason=price_decision.reason,
-        )
-
-    def _comfort_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
-        """Comfort layer: Reactive adjustment to maintain comfort.
-
-        Delegates to ComfortLayer.evaluate_layer() for the actual logic.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast (for cold snap → higher heat loss)
-            price_data: Spot price data (for expensive period timing)
-
-        Returns:
-            LayerDecision with comfort correction
-
-        References:
-            comfort_layer.py: ComfortLayer class for full implementation
-        """
-        # Update comfort layer with current state before evaluation
-        self.comfort_layer.mode_config = self.mode_config
-        self.comfort_layer.tolerance_range = self.tolerance_range
-        self.comfort_layer.target_temp = self.target_temp
-
-        result = self.comfort_layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            price_data=price_data,
-        )
-        return LayerDecision(
-            name=result.name,
-            offset=result.offset,
-            weight=result.weight,
-            reason=result.reason,
-        )
 
     def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
         """Aggregate layer decisions into final offset.

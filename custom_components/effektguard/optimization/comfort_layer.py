@@ -13,6 +13,9 @@ from homeassistant.util import dt as dt_util
 from ..const import (
     COMFORT_CORRECTION_MILD,
     COMFORT_CORRECTION_MULT,
+    COMFORT_HEAT_LOSS_DIVISOR,
+    COMFORT_HEAT_LOSS_FLOOR,
+    COMFORT_TOO_COLD_CORRECTION_MULT,
     LAYER_WEIGHT_COMFORT_CRITICAL,
     LAYER_WEIGHT_COMFORT_HIGH,
     LAYER_WEIGHT_COMFORT_MAX,
@@ -188,7 +191,7 @@ class ComfortLayer:
 
         else:
             # Too cold, increase heating strongly
-            correction = -(temp_deviation + tolerance) * 0.5
+            correction = -(temp_deviation + tolerance) * COMFORT_TOO_COLD_CORRECTION_MULT
             return ComfortLayerDecision(
                 name="Comfort",
                 offset=correction,
@@ -233,7 +236,7 @@ class ComfortLayer:
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
         temp_diff = indoor_temp - outdoor_temp
-        base_heat_loss = temp_diff / (insulation * 10)
+        base_heat_loss = temp_diff / (insulation * COMFORT_HEAT_LOSS_DIVISOR)
 
         # Check weather forecast for upcoming cold
         forecast_heat_loss = base_heat_loss
@@ -243,14 +246,14 @@ class ComfortLayer:
             if forecast_temps:
                 forecast_min_outdoor = min(forecast_temps)
                 future_temp_diff = indoor_temp - forecast_min_outdoor
-                forecast_heat_loss = future_temp_diff / (insulation * 10)
+                forecast_heat_loss = future_temp_diff / (insulation * COMFORT_HEAT_LOSS_DIVISOR)
 
         # Use the WORSE of current trend or forecast-based loss
         effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)
 
         # Safety: minimum loss rate
         if effective_heat_loss <= 0.01:
-            effective_heat_loss = 0.3
+            effective_heat_loss = COMFORT_HEAT_LOSS_FLOOR
 
         # Calculate buffer duration
         buffer_hours = overshoot / effective_heat_loss

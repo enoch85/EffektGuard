@@ -43,7 +43,11 @@ from ..const import (
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_SCHEDULING_WINDOW_MAX,
     DHW_SCHEDULING_WINDOW_MIN,
+    DHW_SPACE_HEATING_DEFICIT_THRESHOLD,
+    DHW_SPACE_HEATING_OUTDOOR_THRESHOLD,
     DHW_TARGET_HIGH_DEMAND,
+    DHW_TREND_DEFICIT_THRESHOLD,
+    DHW_TREND_RATE_THRESHOLD,
     DHW_URGENT_DEMAND_HOURS,
     DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
@@ -529,7 +533,10 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
-        if indoor_deficit > 0.5 and outdoor_temp < 0:
+        if (
+            indoor_deficit > DHW_SPACE_HEATING_DEFICIT_THRESHOLD
+            and outdoor_temp < DHW_SPACE_HEATING_OUTDOOR_THRESHOLD
+        ):
             # Find next opportunity using centralized logic
             next_opportunity = self._find_next_dhw_opportunity(
                 current_time=current_time,
@@ -1283,7 +1290,10 @@ class IntelligentDHWScheduler:
             zone_name = climate_zone_name or "Unknown"
 
         # Block DHW if indoor cooling rapidly AND below target
-        if indoor_deficit > 0.3 and thermal_trend_rate < -0.3:
+        if (
+            indoor_deficit > DHW_TREND_DEFICIT_THRESHOLD
+            and thermal_trend_rate < DHW_TREND_RATE_THRESHOLD
+        ):
             planning_summary = (
                 f"⚠️ DHW Blocked - Space Heating Priority\n"
                 f"Indoor: {indoor_temp:.1f}°C (target {target_indoor:.1f}°C)\n"
