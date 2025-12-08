@@ -44,7 +44,43 @@ _LOGGER = logging.getLogger(__name__)
 # Re-export from adapters for convenience
 from ..adapters.gespot_adapter import PriceData, QuarterPeriod
 
-__all__ = ["PriceAnalyzer", "PriceData", "PriceLayerDecision", "QuarterPeriod"]
+__all__ = [
+    "PriceAnalyzer",
+    "PriceData",
+    "PriceLayerDecision",
+    "QuarterPeriod",
+    "get_fallback_prices",
+]
+
+
+def get_fallback_prices() -> PriceData:
+    """Get fallback price data when spot price unavailable.
+
+    Returns neutral price classification to maintain safe operation
+    without optimization. All periods are set to price=1.0 (normalized).
+
+    Moved from coordinator._get_fallback_prices for shared reuse.
+
+    Returns:
+        PriceData with 96 neutral-priced quarters for today, empty tomorrow
+    """
+    _LOGGER.debug("Creating fallback price data (no optimization)")
+
+    # Create neutral periods - all classified as "normal"
+    fallback_periods = []
+    base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for quarter in range(96):  # 96 quarters per day (15-min intervals)
+        hour = quarter // 4
+        minute = (quarter % 4) * 15
+        start_time = base_date.replace(hour=hour, minute=minute)
+        fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
+
+    return PriceData(
+        today=fallback_periods,
+        tomorrow=[],
+        has_tomorrow=False,
+    )
 
 
 @dataclass

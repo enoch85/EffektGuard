@@ -53,7 +53,7 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
         if "airflow_optimization" in user_input:
             validated.update(user_input["airflow_optimization"])
 
-        # Also handle flat structure (backward compatibility)
+        # Handle direct keys (when input comes without section wrappers)
         for key, value in user_input.items():
             if key not in [
                 "optimization_settings",

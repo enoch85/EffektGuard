@@ -91,8 +91,8 @@ class AdaptiveThermalModel:
     - Adapts to Nordic thermal dynamics
 
     API Compatibility with ThermalModel:
-        This class provides the same interface as ThermalModel for backward
-        compatibility and seamless integration with DecisionEngine.
+        This class provides the same interface as ThermalModel for
+        polymorphic use with DecisionEngine.
 
         Core attributes:
         - thermal_mass: float (direct attribute, read/write)
@@ -753,7 +753,7 @@ class AdaptiveThermalModel:
         Notes:
             This allows manual configuration to seed the learning process.
             As observations accumulate, learned values take precedence.
-            Maintains backward compatibility with ThermalModel API.
+            Method signature matches ThermalModel for polymorphic use.
 
         References:
             - CONFIG_RELOAD._CHANGES.md: Runtime config update pattern

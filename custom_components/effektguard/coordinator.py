@@ -51,8 +51,13 @@ from .models.nibe import (
     NibeS1155Profile,
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
-from .optimization.decision_engine import LayerDecision, OptimizationDecision
+from .optimization.decision_engine import (
+    LayerDecision,
+    OptimizationDecision,
+    get_safe_default_decision,
+)
 from .optimization.prediction_layer import ThermalStatePredictor
+from .optimization.price_layer import get_fallback_prices
 from .optimization.thermal_layer import get_thermal_debt_status
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
@@ -728,10 +733,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             else:
                 _LOGGER.debug("Spot price data empty, using fallback prices")
-                price_data = self._get_fallback_prices()
+                price_data = get_fallback_prices()
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Price data unavailable, using fallback: %s", err)
-            price_data = self._get_fallback_prices()
+            price_data = get_fallback_prices()
 
         # Weather forecast
         try:
@@ -803,7 +808,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as err:
                 _LOGGER.error("Optimization failed: %s", err)
                 # Fall back to safe operation (no offset)
-                decision = self._get_safe_default_decision()
+                decision = get_safe_default_decision()
 
         # Update current state
         self.current_offset = decision.offset
@@ -1045,9 +1050,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_result = await self._calculate_dhw_recommendation(
                     nibe_data, price_data, weather_data, current_dhw_temp, now_time
                 )
-                dhw_recommendation = dhw_result["recommendation"]
-                dhw_planning_summary = dhw_result["summary"]
-                dhw_planning_details = dhw_result["details"]
+                dhw_recommendation = dhw_result.recommendation
+                dhw_planning_summary = dhw_result.summary
+                dhw_planning_details = dhw_result.details
 
                 # Use the optimizer's recommended start time (timezone-aware from spot price)
                 dhw_next_boost = dhw_planning_details.get("recommended_start_time")
@@ -1065,11 +1070,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Core heating optimization continues to work
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
-            if self.entry.data.get("enable_hot_water_optimization", False) and dhw_result.get(
-                "decision"
-            ):
+            if self.entry.data.get("enable_hot_water_optimization", False) and dhw_result.decision:
                 await self._apply_dhw_control(
-                    dhw_result["decision"],  # Reuse decision from recommendation
+                    dhw_result.decision,  # Reuse decision from recommendation
                     current_dhw_temp,
                     now_time,
                 )
@@ -1246,13 +1249,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             weather_current_temp=weather_current_temp,
         )
 
-        # Convert DHWRecommendation to dict for backward compatibility
-        return {
-            "recommendation": result.recommendation,
-            "summary": result.summary,
-            "details": result.details,
-            "decision": result.decision,
-        }
+        return result
 
     async def _get_last_dhw_heating_time(self) -> datetime | None:
         """Get timestamp when temporary lux was last activated.
@@ -1557,51 +1554,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 is_lux_on,
                 decision.priority_reason,
             )
-
-    def _get_fallback_prices(self):
-        """Get fallback price data when spot price unavailable.
-
-        Returns neutral price classification to maintain safe operation
-        without optimization.
-        """
-        from .optimization.price_layer import PriceData, QuarterPeriod
-
-        _LOGGER.debug("Using fallback price data (no optimization)")
-
-        # Create neutral periods - all classified as "normal"
-        fallback_periods = []
-        base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-        for quarter in range(96):  # 96 quarters per day (15-min intervals)
-            hour = quarter // 4
-            minute = (quarter % 4) * 15
-            start_time = base_date.replace(hour=hour, minute=minute)
-            fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
-
-        return PriceData(
-            today=fallback_periods,
-            tomorrow=[],
-            has_tomorrow=False,
-        )
-
-    def _get_safe_default_decision(self):
-        """Get safe default decision when optimization fails.
-
-        Returns zero offset to maintain current operation without changes.
-        """
-        _LOGGER.debug("Using safe default decision (no changes)")
-
-        return OptimizationDecision(
-            offset=0.0,
-            layers=[
-                LayerDecision(
-                    offset=0.0,
-                    weight=1.0,
-                    reason="Safe mode: optimization unavailable",
-                )
-            ],
-            reasoning="Safe mode active - maintaining current operation",
-        )
 
     async def _update_peak_tracking(self, nibe_data) -> None:
         """Update peak power tracking for effect tariff optimization.

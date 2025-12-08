@@ -215,6 +215,31 @@ class OptimizationDecision:
     reasoning: str = ""
 
 
+def get_safe_default_decision() -> OptimizationDecision:
+    """Get safe default decision when optimization fails.
+
+    Returns zero offset to maintain current operation without changes.
+    Used as fallback when optimization engine encounters errors.
+
+    Moved from coordinator._get_safe_default_decision for shared reuse.
+
+    Returns:
+        OptimizationDecision with 0.0 offset and safe mode reasoning
+    """
+    return OptimizationDecision(
+        offset=0.0,
+        layers=[
+            LayerDecision(
+                name="Safe Mode",
+                offset=0.0,
+                weight=1.0,
+                reason="Safe mode: optimization unavailable",
+            )
+        ],
+        reasoning="Safe mode active - maintaining current operation",
+    )
+
+
 class DecisionEngine:
     """Multi-layer optimization decision engine.
 

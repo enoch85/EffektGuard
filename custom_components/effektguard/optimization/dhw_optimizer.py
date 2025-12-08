@@ -1584,18 +1584,6 @@ class IntelligentDHWScheduler:
 
         return None
 
-    def record_legionella_boost(self, boost_time: datetime) -> None:
-        """Record successful Legionella boost completion.
-
-        DEPRECATED: Use update_bt7_temperature() instead for automatic detection.
-        This method kept for backward compatibility.
-
-        Args:
-            boost_time: When boost was completed
-        """
-        self.last_legionella_boost = boost_time
-        _LOGGER.info("Legionella boost manually recorded at %s", boost_time)
-
     def get_recommended_dhw_schedule(
         self,
         price_data,  # Spot price data with 96 quarters
