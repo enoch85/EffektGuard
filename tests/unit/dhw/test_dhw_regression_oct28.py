@@ -27,6 +27,14 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
+from tests.conftest import create_mock_price_analyzer
+
+
+def create_dhw_scheduler(**kwargs):
+    """Create DHW scheduler with mock price_analyzer."""
+    if "price_analyzer" not in kwargs:
+        kwargs["price_analyzer"] = create_mock_price_analyzer()
+    return IntelligentDHWScheduler(**kwargs)
 
 
 def create_oct28_price_periods():
@@ -111,7 +119,7 @@ def test_oct28_failure_scenario_at_03_45():
     # Setup: Moderate Cold zone (Malmö/Southern Sweden)
     climate_detector = ClimateZoneDetector(latitude=55.60)  # Malmö
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
-    scheduler = IntelligentDHWScheduler(
+    scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
     )
@@ -168,7 +176,7 @@ def test_oct28_at_04_00_exactly():
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
-    scheduler = IntelligentDHWScheduler(
+    scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
     )
@@ -216,7 +224,7 @@ def test_oct28_at_03_50_also_within_window():
     """At 03:50 (10 min before window), should also heat with new 15-min buffer."""
     climate_detector = ClimateZoneDetector(latitude=55.60)
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
-    scheduler = IntelligentDHWScheduler(
+    scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
     )
@@ -256,7 +264,7 @@ def test_rule1_blocks_at_warning_threshold():
     even though spare capacity check has been deleted.
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
-    scheduler = IntelligentDHWScheduler(climate_detector=climate_detector)
+    scheduler = create_dhw_scheduler(climate_detector=climate_detector)
 
     # Get warning threshold for conditions
     dm_range = climate_detector.get_expected_dm_range(-1.0)
@@ -334,7 +342,7 @@ def test_comparison_operator_fix():
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
-    scheduler = IntelligentDHWScheduler(
+    scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
     )
@@ -374,7 +382,7 @@ def test_october_28_would_not_need_manual_boost():
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
     demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
-    scheduler = IntelligentDHWScheduler(
+    scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
     )

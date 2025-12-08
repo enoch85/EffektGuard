@@ -34,6 +34,16 @@ from custom_components.effektguard.const import (
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
 from custom_components.effektguard.optimization.thermal_layer import get_thermal_debt_status
+from tests.conftest import create_mock_price_analyzer
+
+
+def create_dhw_scheduler(**kwargs):
+    """Create DHW scheduler with mock price_analyzer."""
+    from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
+
+    if "price_analyzer" not in kwargs:
+        kwargs["price_analyzer"] = create_mock_price_analyzer()
+    return IntelligentDHWScheduler(**kwargs)
 
 
 class TestGetThermalDebtStatus:
@@ -84,11 +94,7 @@ class TestDHWOptimizerFormatPlanningSummary:
     @pytest.fixture
     def scheduler(self):
         """Create a basic DHW scheduler instance."""
-        from custom_components.effektguard.optimization.dhw_optimizer import (
-            IntelligentDHWScheduler,
-        )
-
-        return IntelligentDHWScheduler()
+        return create_dhw_scheduler()
 
     def test_formats_basic_summary(self, scheduler):
         """Test basic summary formatting."""
@@ -187,11 +193,7 @@ class TestDHWOptimizerCheckAbortConditions:
     @pytest.fixture
     def scheduler(self):
         """Create a basic DHW scheduler instance."""
-        from custom_components.effektguard.optimization.dhw_optimizer import (
-            IntelligentDHWScheduler,
-        )
-
-        return IntelligentDHWScheduler()
+        return create_dhw_scheduler()
 
     def test_no_abort_when_no_conditions(self, scheduler):
         """Test no abort when abort_conditions is empty."""
@@ -404,11 +406,7 @@ class TestDHWOptimizerCalculateRecommendation:
     @pytest.fixture
     def scheduler(self):
         """Create a basic DHW scheduler instance."""
-        from custom_components.effektguard.optimization.dhw_optimizer import (
-            IntelligentDHWScheduler,
-        )
-
-        return IntelligentDHWScheduler()
+        return create_dhw_scheduler()
 
     def test_returns_dhw_recommendation_dataclass(self, scheduler):
         """Test that calculate_recommendation returns DHWRecommendation."""
@@ -655,14 +653,11 @@ class TestDhwOptimizerEmergencyLayerIntegration:
 
     def test_scheduler_delegates_recovery_time_estimation(self):
         """Test that _estimate_dm_recovery_time delegates to shared function."""
-        from custom_components.effektguard.optimization.dhw_optimizer import (
-            IntelligentDHWScheduler,
-        )
         from custom_components.effektguard.optimization.thermal_layer import (
             estimate_dm_recovery_time,
         )
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Both should return the same result
         scheduler_result = scheduler._estimate_dm_recovery_time(

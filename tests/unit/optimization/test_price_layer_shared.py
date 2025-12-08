@@ -17,6 +17,7 @@ from custom_components.effektguard.optimization.price_layer import (
     QuarterPeriod,
 )
 from custom_components.effektguard.const import (
+    DHW_NORMAL_RUNTIME_MINUTES,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
@@ -120,7 +121,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=periods,
-            duration_minutes=45,  # 3 quarters
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,  # 3 quarters
             lookahead_hours=2.0,
         )
 
@@ -140,7 +141,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=periods,
-            duration_minutes=45,  # 3 quarters
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,  # 3 quarters
             lookahead_hours=1.0,
         )
 
@@ -154,7 +155,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=[],
-            duration_minutes=45,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
             lookahead_hours=2.0,
         )
 
@@ -172,7 +173,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=periods,
-            duration_minutes=45,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
             lookahead_hours=1.0,  # Only 1 hour = 4 quarters
         )
 
@@ -192,7 +193,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=periods,
-            duration_minutes=45,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
             lookahead_hours=2.0,
             current_price=100.0,
         )
@@ -212,7 +213,7 @@ class TestFindCheapestWindow:
         result = analyzer.find_cheapest_window(
             current_time=now,
             price_periods=periods,
-            duration_minutes=45,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
             lookahead_hours=2.0,
         )
 
@@ -384,13 +385,8 @@ class TestGetPriceForecast:
 class TestDHWOptimizerIntegration:
     """Tests for DHW optimizer using shared price_analyzer."""
 
-    def test_dhw_optimizer_uses_shared_find_cheapest_window(self):
-        """Test DHW optimizer delegates to shared method when price_analyzer provided."""
-        from custom_components.effektguard.optimization.dhw_optimizer import (
-            IntelligentDHWScheduler,
-        )
-
-        # Create analyzer and mock the method
+    def test_price_analyzer_find_cheapest_window(self):
+        """Test PriceAnalyzer.find_cheapest_window() finds cheapest period."""
         analyzer = PriceAnalyzer()
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
@@ -401,24 +397,21 @@ class TestDHWOptimizerIntegration:
             start_time = now + timedelta(minutes=15 * i)
             periods.append(QuarterPeriod(start_time=start_time, price=price))
 
-        # Initialize with price_analyzer
-        scheduler = IntelligentDHWScheduler(
-            price_analyzer=analyzer,
-        )
-
-        result = scheduler.find_cheapest_dhw_window(
+        # Use PriceAnalyzer directly (the shared layer)
+        result = analyzer.find_cheapest_window(
             current_time=now,
-            lookahead_hours=2,
-            dhw_duration_minutes=45,
             price_periods=periods,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+            lookahead_hours=2.0,
         )
 
         assert result is not None
         # Should find cheapest window at Q2-4 (prices 20, 20, 20)
-        assert result["avg_price"] == pytest.approx(20.0, rel=0.01)
+        assert result.avg_price == pytest.approx(20.0, rel=0.01)
 
-    def test_dhw_optimizer_fallback_without_price_analyzer(self):
-        """Test DHW optimizer falls back to original implementation."""
+    def test_dhw_optimizer_uses_price_analyzer_internally(self):
+        """Test DHW optimizer uses price_analyzer for window search in should_start_dhw()."""
+        from unittest.mock import MagicMock
         from custom_components.effektguard.optimization.dhw_optimizer import (
             IntelligentDHWScheduler,
         )
@@ -432,16 +425,31 @@ class TestDHWOptimizerIntegration:
             start_time = now + timedelta(minutes=15 * i)
             periods.append(QuarterPeriod(start_time=start_time, price=price))
 
-        # Initialize WITHOUT price_analyzer
-        scheduler = IntelligentDHWScheduler()
+        # Create mock price_analyzer
+        mock_analyzer = MagicMock()
+        mock_analyzer.find_cheapest_window.return_value = CheapestWindowResult(
+            start_time=now + timedelta(minutes=30),
+            end_time=now + timedelta(minutes=75),
+            quarters=[2, 3, 4],
+            avg_price=20.0,
+            hours_until=0.5,
+        )
 
-        result = scheduler.find_cheapest_dhw_window(
+        # Initialize with mock price_analyzer
+        scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
+
+        # Call should_start_dhw which internally uses price_analyzer
+        decision = scheduler.should_start_dhw(
+            current_dhw_temp=40.0,
+            space_heating_demand_kw=1.0,
+            thermal_debt_dm=-100,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="normal",
             current_time=now,
-            lookahead_hours=2,
-            dhw_duration_minutes=45,
             price_periods=periods,
         )
 
-        assert result is not None
-        # Should still find cheapest window using fallback
-        assert result["avg_price"] == pytest.approx(20.0, rel=0.01)
+        # Verify price_analyzer.find_cheapest_window was called
+        mock_analyzer.find_cheapest_window.assert_called()

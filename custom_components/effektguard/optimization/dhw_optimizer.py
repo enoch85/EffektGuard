@@ -566,32 +566,32 @@ class IntelligentDHWScheduler:
             if can_defer_for_peak:
                 # Find optimal window to heat during cheaper period
                 # This prevents just "waiting and hoping" - actively schedule for best price
-                if price_periods:
-                    lookahead_hours = self.get_lookahead_hours(current_time)
-                    optimal_window = self.find_cheapest_dhw_window(
+                if price_periods and self.price_analyzer:
+                    lookahead_hours = self._get_lookahead_hours(current_time)
+                    optimal_window = self.price_analyzer.find_cheapest_window(
                         current_time=current_time,
-                        lookahead_hours=lookahead_hours,
-                        dhw_duration_minutes=45,  # DHW heating takes ~45 min
                         price_periods=price_periods,
+                        duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        lookahead_hours=lookahead_hours,
                     )
 
-                    if optimal_window and optimal_window["hours_until"] <= 0.17:  # Within 10 min
+                    if optimal_window and optimal_window.hours_until <= 0.17:  # Within 10 min
                         # Optimal window is NOW - heat immediately despite expensive current price
                         _LOGGER.info(
                             "DHW safety: In optimal window at %s (%.1före/kWh) - heating now",
-                            optimal_window["start_time"].strftime("%H:%M"),
-                            optimal_window["avg_price"],
+                            optimal_window.start_time.strftime("%H:%M"),
+                            optimal_window.avg_price,
                         )
                         return DHWScheduleDecision(
                             should_heat=True,
-                            priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
+                            priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                             target_temp=DHW_SAFETY_MIN,
                             max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                             abort_conditions=[
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
                             ],
-                            recommended_start_time=optimal_window["start_time"],
+                            recommended_start_time=optimal_window.start_time,
                         )
                     elif optimal_window:
                         # Wait for upcoming cheap window
@@ -599,17 +599,17 @@ class IntelligentDHWScheduler:
                             "DHW safety defer: temp %.1f°C (safe >= %.1f°C), next window at %s (%.1fh, %.1före/kWh)",
                             current_dhw_temp,
                             DHW_SAFETY_CRITICAL,
-                            optimal_window["start_time"].strftime("%H:%M"),
-                            optimal_window["hours_until"],
-                            optimal_window["avg_price"],
+                            optimal_window.start_time.strftime("%H:%M"),
+                            optimal_window.hours_until,
+                            optimal_window.avg_price,
                         )
                         return DHWScheduleDecision(
                             should_heat=False,
-                            priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                            priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
                             target_temp=self.user_target_temp,
                             max_runtime_minutes=0,
                             abort_conditions=[],
-                            recommended_start_time=optimal_window["start_time"],
+                            recommended_start_time=optimal_window.start_time,
                         )
 
                 # No optimal window found - just defer (fallback to old behavior)
@@ -862,13 +862,13 @@ class IntelligentDHWScheduler:
 
         if current_dhw_temp < (self.user_target_temp + 5.0):
             # Use window-based scheduling if price data available
-            if price_periods:
-                lookahead_hours = self.get_lookahead_hours(current_time)
-                optimal_window = self.find_cheapest_dhw_window(
+            if price_periods and self.price_analyzer:
+                lookahead_hours = self._get_lookahead_hours(current_time)
+                optimal_window = self.price_analyzer.find_cheapest_window(
                     current_time=current_time,
-                    lookahead_hours=lookahead_hours,
-                    dhw_duration_minutes=45,
                     price_periods=price_periods,
+                    duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                    lookahead_hours=lookahead_hours,
                 )
 
                 if optimal_window is None:
@@ -892,26 +892,26 @@ class IntelligentDHWScheduler:
                 # STEP 1: Check if we're in the optimal window (within 15 min of start)
                 # Use 15 min buffer to accommodate 15-minute coordinator cycle
                 # This ensures we catch the window even if update happens at 3:45, 3:50, or 3:55
-                elif optimal_window["hours_until"] <= 0.25:  # 15 minutes
+                elif optimal_window.hours_until <= 0.25:  # 15 minutes
                     # This is the optimal time! Heat regardless of spare capacity
                     # Trust the window optimizer - it found the absolute cheapest period
                     # RULE 1 already protects against critical thermal debt
                     _LOGGER.info(
                         "DHW: Heating in optimal window at %s (%.1före/kWh), DM=%.0f",
-                        optimal_window["start_time"].strftime("%H:%M"),
-                        optimal_window["avg_price"],
+                        optimal_window.start_time.strftime("%H:%M"),
+                        optimal_window.avg_price,
                         thermal_debt_dm,
                     )
                     return DHWScheduleDecision(
                         should_heat=True,
-                        priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
+                        priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                         target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                         abort_conditions=[
                             f"thermal_debt < {dm_abort_threshold:.0f}",
                             f"indoor_temp < {target_indoor_temp - 0.5}",
                         ],
-                        recommended_start_time=optimal_window["start_time"],
+                        recommended_start_time=optimal_window.start_time,
                     )
 
                 # Wait for better window ahead (if DHW still comfortable)
@@ -921,17 +921,17 @@ class IntelligentDHWScheduler:
                         "DHW: Comfortable (%.1f°C ≥ %.1f°C), waiting for optimal window at %s (%.1fh, %.1före/kWh)",
                         current_dhw_temp,
                         MIN_DHW_TARGET_TEMP,
-                        optimal_window["start_time"].strftime("%H:%M"),
-                        optimal_window["hours_until"],
-                        optimal_window["avg_price"],
+                        optimal_window.start_time.strftime("%H:%M"),
+                        optimal_window.hours_until,
+                        optimal_window.avg_price,
                     )
                     return DHWScheduleDecision(
                         should_heat=False,
-                        priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                        priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
-                        recommended_start_time=optimal_window["start_time"],
+                        recommended_start_time=optimal_window.start_time,
                     )
 
             # Fallback: No price data AND no optimal window ahead
@@ -990,29 +990,31 @@ class IntelligentDHWScheduler:
             recommended_start_time=next_opportunity,
         )
 
-    def get_lookahead_hours(self, current_time: datetime) -> int:
+    def _get_lookahead_hours(self, current_time: datetime) -> float:
         """Calculate how far ahead to look for cheap DHW windows.
 
-        Returns hours until next demand period (capped at 24h), or 24h if no demand period.
+        Uses shared PriceAnalyzer.calculate_lookahead_hours() for consistent
+        behavior with space heating optimization.
 
         Args:
             current_time: Current datetime
 
         Returns:
-            Hours to look ahead (max 24h)
+            Hours to look ahead (1-24h range)
         """
-        from math import ceil
-
         next_demand = self._check_upcoming_demand_period(current_time)
+        next_demand_hours = next_demand["hours_until"] if next_demand else None
 
-        if next_demand:
-            hours_until = next_demand["hours_until"]
-            # Return hours until demand, but ensure it's at least 1h and max 24h
-            # Use ceil() to avoid truncating 1.5h to 1h (bug fix)
-            return max(DHW_SCHEDULING_WINDOW_MIN, min(ceil(hours_until), DHW_SCHEDULING_WINDOW_MAX))
+        if self.price_analyzer:
+            return self.price_analyzer.calculate_lookahead_hours(
+                heating_type="dhw",
+                next_demand_hours=next_demand_hours,
+            )
 
-        # No upcoming demand period - look full 24 hours ahead
-        return DHW_SCHEDULING_WINDOW_MAX
+        # Fallback if no price_analyzer
+        if next_demand_hours is not None:
+            return max(1.0, min(next_demand_hours, 24.0))
+        return 24.0
 
     def _estimate_dm_recovery_time(
         self, current_dm: float, target_dm: float, outdoor_temp: float
@@ -1075,16 +1077,16 @@ class IntelligentDHWScheduler:
             opportunities.append(current_time + timedelta(hours=recovery_hours))
 
         # 2. Next cheap price window
-        if price_periods:
-            lookahead_hours = self.get_lookahead_hours(current_time)
-            cheap_window = self.find_cheapest_dhw_window(
+        if price_periods and self.price_analyzer:
+            lookahead_hours = self._get_lookahead_hours(current_time)
+            cheap_window = self.price_analyzer.find_cheapest_window(
                 current_time=current_time,
-                lookahead_hours=lookahead_hours,
-                dhw_duration_minutes=45,
                 price_periods=price_periods,
+                duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                lookahead_hours=lookahead_hours,
             )
             if cheap_window:
-                opportunities.append(cheap_window["start_time"])
+                opportunities.append(cheap_window.start_time)
 
         # 3. Temperature cooling estimate (when will DHW need heating)
         temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
@@ -1104,196 +1106,6 @@ class IntelligentDHWScheduler:
             return next_opportunity
         else:
             return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
-
-    def find_cheapest_dhw_window(
-        self,
-        current_time: datetime,
-        lookahead_hours: int,
-        dhw_duration_minutes: int,
-        price_periods: list,
-    ) -> dict | None:
-        """Find cheapest continuous window for DHW heating.
-
-        Uses sliding window algorithm to find the absolute cheapest continuous
-        period for DHW heating within the lookahead window. DHW heating is
-        time-shiftable (can wait for cheaper prices) but requires a continuous
-        window since we can't split heating across gaps.
-
-        Implementation:
-        - Typical duration: 45 minutes (3 quarters, faster than space heating)
-        - Shifts window within lookahead period (up to next demand period)
-        - Must be continuous 15-minute periods (no gaps)
-        - Finds absolute cheapest average price (not just "cheap" classification)
-
-        Phase 11: Delegates to shared PriceAnalyzer.find_cheapest_window() when
-        price_analyzer is provided, ensuring consistent window search behavior
-        with space heating optimization.
-
-        Args:
-            current_time: Current timestamp
-            lookahead_hours: How far ahead to search
-            dhw_duration_minutes: DHW heating duration (typically 45 min)
-            price_periods: Combined list of today + tomorrow QuarterPeriod objects
-
-        Returns:
-            {
-                "start_time": datetime,
-                "end_time": datetime,
-                "quarters": [Q30, Q31, Q32],
-                "avg_price": float,
-                "hours_until": float,
-            }
-            or None if insufficient data
-        """
-        # Phase 11: Use shared PriceAnalyzer method when available
-        if self.price_analyzer is not None:
-            result = self.price_analyzer.find_cheapest_window(
-                current_time=current_time,
-                price_periods=price_periods,
-                duration_minutes=dhw_duration_minutes,
-                lookahead_hours=float(lookahead_hours),
-            )
-            if result is None:
-                return None
-
-            # Convert CheapestWindowResult to dict for backward compatibility
-            return {
-                "start_time": result.start_time,
-                "end_time": result.end_time,
-                "quarters": result.quarters,
-                "avg_price": result.avg_price,
-                "hours_until": result.hours_until,
-            }
-
-        # Fallback: Original implementation for backward compatibility
-        from math import ceil
-
-        if not price_periods:
-            _LOGGER.warning("No price data available for DHW window search")
-            return None
-
-        # Convert duration to quarters (45 min = 3 quarters)
-        quarters_needed = ceil(dhw_duration_minutes / 15)
-
-        # Filter to lookahead window
-        end_time = current_time + timedelta(hours=lookahead_hours)
-
-        # Build available quarters from price periods
-        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
-        # Use the actual datetime from spot price (already timezone-aware) instead of reconstructing
-        available_quarters = []
-
-        for period in price_periods:
-            # Use actual datetime from spot price (already handles timezone and date correctly)
-            period_time = period.start_time
-
-            # Check if within lookahead window
-            if period_time >= current_time and period_time < end_time:
-                # Calculate quarter ID based on actual datetime to distinguish duplicates
-                days_ahead = (period_time.date() - current_time.date()).days
-                quarter_id = period.quarter_of_day + (days_ahead * 96)
-
-                available_quarters.append(
-                    {
-                        "start": period_time,
-                        "end": period_time + timedelta(minutes=15),
-                        "quarter": quarter_id,
-                        "price": period.price,
-                    }
-                )
-
-        if len(available_quarters) < quarters_needed:
-            _LOGGER.warning(
-                "Not enough price data for DHW window search: %d quarters available, %d needed",
-                len(available_quarters),
-                quarters_needed,
-            )
-            return None
-
-        _LOGGER.debug(
-            "DHW window search: %d quarters available, need %d quarters (%d min), lookahead %.1fh",
-            len(available_quarters),
-            quarters_needed,
-            dhw_duration_minutes,
-            lookahead_hours,
-        )
-
-        # Sliding window to find cheapest continuous period
-        lowest_price = None
-        lowest_index = None
-        window_candidates = []  # Track all valid windows for debugging
-
-        for i in range(len(available_quarters) - quarters_needed + 1):
-            window = available_quarters[i : i + quarters_needed]
-
-            # Verify continuity (15-min gaps)
-            is_continuous = True
-            for j in range(len(window) - 1):
-                time_gap = (window[j + 1]["start"] - window[j]["end"]).total_seconds()
-                if abs(time_gap) > 1:  # Allow 1 second tolerance
-                    is_continuous = False
-                    break
-
-            if not is_continuous:
-                continue
-
-            window_avg = sum(q["price"] for q in window) / quarters_needed
-
-            # Track this candidate
-            window_candidates.append(
-                {
-                    "start": window[0]["start"],
-                    "avg_price": window_avg,
-                    "hours_until": (window[0]["start"] - current_time).total_seconds() / 3600,
-                }
-            )
-
-            if lowest_price is None or window_avg < lowest_price:
-                lowest_price = window_avg
-                lowest_index = i
-
-        # Log all candidates for debugging
-        if window_candidates:
-            _LOGGER.debug(
-                "DHW window candidates found: %d windows evaluated",
-                len(window_candidates),
-            )
-            # Show top 5 cheapest
-            sorted_candidates = sorted(window_candidates, key=lambda x: x["avg_price"])
-            for idx, candidate in enumerate(sorted_candidates[:5], 1):
-                _LOGGER.debug(
-                    "  #%d: %.1före/kWh at %s (%.1fh away)%s",
-                    idx,
-                    candidate["avg_price"],
-                    candidate["start"].strftime("%H:%M"),
-                    candidate["hours_until"],
-                    " ← SELECTED" if idx == 1 else "",
-                )
-
-        if lowest_index is None:
-            _LOGGER.error("Could not find continuous DHW window (unexpected)")
-            return None
-
-        optimal_window = available_quarters[lowest_index : lowest_index + quarters_needed]
-
-        result = {
-            "start_time": optimal_window[0]["start"],
-            "end_time": optimal_window[-1]["end"],
-            "quarters": [q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
-            "avg_price": lowest_price,
-            "hours_until": (optimal_window[0]["start"] - current_time).total_seconds() / 3600,
-        }
-
-        _LOGGER.info(
-            "DHW optimal window selected: %s (Q%d-Q%d) @ %.1före/kWh, %.1fh away",
-            result["start_time"].strftime("%H:%M"),
-            result["quarters"][0],
-            result["quarters"][-1],
-            result["avg_price"],
-            result["hours_until"],
-        )
-
-        return result
 
     def format_planning_summary(
         self,

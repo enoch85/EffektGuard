@@ -28,6 +28,7 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
     DHWDemandPeriod,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
+from tests.conftest import create_mock_price_analyzer
 
 
 # ==============================================================================
@@ -39,7 +40,10 @@ from custom_components.effektguard.optimization.climate_zones import ClimateZone
 def scheduler_with_climate():
     """Scheduler with climate zone detector (Stockholm)."""
     climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm
-    scheduler = IntelligentDHWScheduler(climate_detector=climate_detector)
+    mock_analyzer = create_mock_price_analyzer()
+    scheduler = IntelligentDHWScheduler(
+        climate_detector=climate_detector, price_analyzer=mock_analyzer
+    )
     scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
     return scheduler
 
@@ -47,7 +51,8 @@ def scheduler_with_climate():
 @pytest.fixture
 def scheduler_no_climate():
     """Scheduler without climate zone detector (fallback thresholds)."""
-    scheduler = IntelligentDHWScheduler()
+    mock_analyzer = create_mock_price_analyzer()
+    scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
     scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
     return scheduler
 

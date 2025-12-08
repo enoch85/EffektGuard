@@ -72,15 +72,94 @@ def create_mock_quarters(base_time: datetime, prices: list[float]) -> list[Quart
     return quarters
 
 
+def create_mock_price_analyzer():
+    """Create a mock PriceAnalyzer for testing DHW optimizer.
+
+    Returns a MagicMock that provides the find_cheapest_window and
+    calculate_lookahead_hours methods required by DHW optimizer.
+    """
+    from custom_components.effektguard.optimization.price_layer import CheapestWindowResult
+
+    mock_analyzer = MagicMock()
+
+    def mock_find_cheapest_window(current_time, price_periods, duration_minutes, lookahead_hours):
+        """Mock implementation that finds cheapest window."""
+        from math import ceil
+
+        if not price_periods:
+            return None
+
+        quarters_needed = ceil(duration_minutes / 15)
+        end_time = current_time + timedelta(hours=lookahead_hours)
+
+        # Filter to lookahead window
+        available = [
+            p for p in price_periods if p.start_time >= current_time and p.start_time < end_time
+        ]
+
+        if len(available) < quarters_needed:
+            return None
+
+        # Find cheapest continuous window
+        lowest_price = None
+        best_start_idx = None
+
+        for i in range(len(available) - quarters_needed + 1):
+            window = available[i : i + quarters_needed]
+            avg_price = sum(p.price for p in window) / quarters_needed
+            if lowest_price is None or avg_price < lowest_price:
+                lowest_price = avg_price
+                best_start_idx = i
+
+        if best_start_idx is None:
+            return None
+
+        window = available[best_start_idx : best_start_idx + quarters_needed]
+        return CheapestWindowResult(
+            start_time=window[0].start_time,
+            end_time=window[-1].start_time + timedelta(minutes=15),
+            quarters=[best_start_idx + j for j in range(quarters_needed)],
+            avg_price=lowest_price,
+            hours_until=(window[0].start_time - current_time).total_seconds() / 3600,
+        )
+
+    def mock_calculate_lookahead_hours(heating_type, thermal_mass=1.0, next_demand_hours=None):
+        """Mock implementation for lookahead calculation."""
+        if heating_type == "dhw":
+            if next_demand_hours is not None:
+                return max(1.0, min(next_demand_hours, 24.0))
+            return 24.0
+        return 4.0 * thermal_mass  # space heating
+
+    mock_analyzer.find_cheapest_window.side_effect = mock_find_cheapest_window
+    mock_analyzer.calculate_lookahead_hours.side_effect = mock_calculate_lookahead_hours
+    return mock_analyzer
+
+
+def create_dhw_scheduler(**kwargs):
+    """Create DHW scheduler with mock price_analyzer.
+
+    All DHW schedulers need price_analyzer - layers are required, not optional.
+    """
+    if "price_analyzer" not in kwargs:
+        kwargs["price_analyzer"] = create_mock_price_analyzer()
+    return IntelligentDHWScheduler(**kwargs)
+
+
 @pytest.fixture
 def scheduler_with_morning_demand():
     """Scheduler with morning shower demand at 7 AM."""
+    from tests.conftest import create_mock_price_analyzer
+
     demand_period = DHWDemandPeriod(
         start_hour=7,
         target_temp=55.0,
         duration_hours=2,
     )
-    scheduler = IntelligentDHWScheduler(demand_periods=[demand_period])
+    mock_analyzer = create_mock_price_analyzer()
+    scheduler = IntelligentDHWScheduler(
+        demand_periods=[demand_period], price_analyzer=mock_analyzer
+    )
     scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
     return scheduler
 
@@ -108,7 +187,7 @@ class TestSafetyRules:
 
     def test_critical_thermal_debt_blocks_dhw(self):
         """RULE 1: Critical thermal debt blocks DHW to protect space heating."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL,  # Even critically low!
@@ -126,7 +205,7 @@ class TestSafetyRules:
 
     def test_space_heating_emergency_blocks_dhw(self):
         """RULE 2: Space heating emergency blocks DHW."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN + 2.0,  # Just above minimum
@@ -144,7 +223,7 @@ class TestSafetyRules:
 
     def test_dhw_safety_minimum_forces_heating(self):
         """RULE 3: DHW below safety minimum forces heating (Legionella risk)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # 33°C - Below safety minimum!
@@ -175,7 +254,7 @@ class TestSafetyRules:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -205,7 +284,7 @@ class TestSafetyRules:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -229,7 +308,7 @@ class TestSafetyRules:
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
         """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # For defer to work: temp >= DHW_SAFETY_CRITICAL AND price expensive/peak AND DM > block+20
         # With fallback thresholds: block=-340, so need DM > -320 (healthy)
@@ -252,7 +331,7 @@ class TestSafetyRules:
         """RULE 4: High space heating demand delays DHW."""
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -280,7 +359,7 @@ class TestSafetyRules:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
 
         # Simulate last Legionella boost was 15 days ago
@@ -306,7 +385,7 @@ class TestSafetyRules:
 
         If last_legionella_boost is None (never tracked), trigger hygiene boost.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # last_legionella_boost is None (never set)
         assert scheduler.last_legionella_boost is None
@@ -333,7 +412,7 @@ class TestSafetyRules:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
 
         # 15 days since last boost, but expensive price
@@ -361,7 +440,7 @@ class TestSafetyRules:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
 
         # Last boost was only 10 days ago (within 14-day window)
@@ -395,7 +474,7 @@ class TestMaximumWaitEnforcement:
         """RULE 4: Max 36h wait enforces DHW heating during cheap/normal prices only."""
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 20, 12, 0)
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -420,7 +499,7 @@ class TestMaximumWaitEnforcement:
 
     def test_max_wait_deferred_during_expensive(self):
         """RULE 4: Max 36h wait does NOT override expensive pricing."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Even with max wait exceeded, expensive pricing blocks
         decision = scheduler.should_start_dhw(
@@ -441,7 +520,7 @@ class TestMaximumWaitEnforcement:
 
     def test_max_wait_deferred_during_peak(self):
         """RULE 4: Max 36h wait does NOT override peak pricing."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Even with max wait exceeded, peak pricing blocks
         decision = scheduler.should_start_dhw(
@@ -462,7 +541,7 @@ class TestMaximumWaitEnforcement:
 
     def test_max_wait_under_36_hours_no_heating(self):
         """DHW adequate at 48°C, under 36h wait, no heating needed."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=MIN_DHW_TARGET_TEMP + 3.0,  # Adequate
@@ -544,7 +623,10 @@ class TestWindowBasedScheduling:
         """Finds tomorrow's cheaper prices across day boundary."""
         from zoneinfo import ZoneInfo
 
-        scheduler = IntelligentDHWScheduler()
+        from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+
+        # Use PriceAnalyzer directly (the layer that provides window search)
+        analyzer = PriceAnalyzer()
         current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Today evening: expensive
@@ -557,24 +639,26 @@ class TestWindowBasedScheduling:
 
         all_quarters = today_quarters + tomorrow_quarters
 
-        # Find cheapest window
-        optimal_window = scheduler.find_cheapest_dhw_window(
+        # Find cheapest window using the layer directly
+        optimal_window = analyzer.find_cheapest_window(
             current_time=current_time,
-            lookahead_hours=8,
-            dhw_duration_minutes=45,
             price_periods=all_quarters,
+            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+            lookahead_hours=8.0,
         )
 
         assert optimal_window is not None
-        assert optimal_window["avg_price"] < 40.0  # Should find tomorrow's cheap prices
-        assert optimal_window["hours_until"] > 0  # In the future
+        assert optimal_window.avg_price < 40.0  # Should find tomorrow's cheap prices
+        assert optimal_window.hours_until > 0  # In the future
 
     def test_waits_for_optimal_window(self):
         """Waits for better window if DHW comfortable."""
         from datetime import timedelta
         from zoneinfo import ZoneInfo
 
-        scheduler = IntelligentDHWScheduler()
+        # Create scheduler with mock price analyzer (required for window search)
+        mock_analyzer = create_mock_price_analyzer()
+        scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
         current_time = datetime(2025, 10, 17, 23, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -609,7 +693,9 @@ class TestWindowBasedScheduling:
         from datetime import timedelta
         from zoneinfo import ZoneInfo
 
-        scheduler = IntelligentDHWScheduler()
+        # Create scheduler with mock price analyzer (required for window search)
+        mock_analyzer = create_mock_price_analyzer()
+        scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
         current_time = datetime(2025, 10, 18, 4, 0, tzinfo=ZoneInfo("Europe/Stockholm"))
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -646,7 +732,7 @@ class TestLegionellaDetection:
 
     def test_detects_legionella_boost_completion(self):
         """Detects when NIBE's automatic Legionella boost completes."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         now = datetime.now()
 
         # Build up temperature history showing Legionella boost
@@ -667,7 +753,7 @@ class TestLegionellaDetection:
 
     def test_dhw_adequate_after_legionella(self):
         """DHW adequate after Legionella boost, no heating needed."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         now = datetime.now()
 
         # Simulate completed Legionella boost
@@ -706,7 +792,7 @@ class TestCheapElectricityOpportunities:
         """
         from datetime import timedelta
 
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
 
         # Set recent Legionella boost so hygiene boost doesn't trigger
@@ -732,7 +818,7 @@ class TestCheapElectricityOpportunities:
 
     def test_no_heat_when_dhw_adequate(self):
         """RULE 8: No heating when DHW adequate."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=MIN_DHW_TARGET_TEMP + 3.0,  # Adequate
@@ -784,7 +870,7 @@ class TestIntegrationScenarios:
 
     def test_cold_weather_priority(self):
         """Cold weather: space heating takes priority over DHW."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=MIN_DHW_TARGET_TEMP - 1.0,  # Low but not critical

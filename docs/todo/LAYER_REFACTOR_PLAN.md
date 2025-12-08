@@ -898,21 +898,32 @@ def should_start_dhw(self, ...):
     )
 ```
 
-#### Step 11.6: Refactor `price_layer.evaluate_layer()` to Use Shared Methods
+#### Step 11.6: Refactor `price_layer.evaluate_layer()` to Use Shared Methods ✅ COMPLETED
+
+**Implemented:** Refactored `evaluate_layer()` to use `get_price_forecast()` for shared forecast logic.
+
+**Changes:**
+- Replaced ~150 lines of inline forecast logic with call to `get_price_forecast()`
+- Uses `PriceForecast` dataclass for volatility, run length, peak cluster detection
+- Keeps evaluate_layer-specific logic: `remaining_cheap_quarters`, forecast adjustments, offset calculations
+- Reduced `price_layer.py` from 1317 to 1199 lines (-118 lines)
 
 ```python
 # price_layer.py - AFTER refactor
 
 def evaluate_layer(self, ...):
-    # BEFORE: Inline forecast logic (~100 lines)
-    
-    # AFTER: Use shared method
+    # Use shared method for forecast analysis
     forecast = self.get_price_forecast(current_quarter, price_data, forecast_hours)
     
-    if classification == QuarterClassification.CHEAP:
-        if forecast.next_expensive_quarters_away and forecast.expensive_period_duration >= 3:
-            # Pre-heat decision using shared forecast data
-            ...
+    # Extract shared forecast data
+    is_volatile = forecast.is_volatile
+    in_peak_cluster = forecast.in_peak_cluster
+    current_run_length = forecast.current_run_length
+    
+    # Use forecast data for cheap/expensive period detection
+    cheap_quarters_away = forecast.next_cheap_quarters_away
+    expensive_quarters_away = forecast.next_expensive_quarters_away
+    ...
 ```
 
 ### Updated Layer Reuse Matrix
