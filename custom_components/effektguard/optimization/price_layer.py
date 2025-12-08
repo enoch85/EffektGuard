@@ -6,6 +6,8 @@ periods for optimization decisions.
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from math import ceil
 
 import numpy as np
 
@@ -45,12 +47,62 @@ _LOGGER = logging.getLogger(__name__)
 from ..adapters.gespot_adapter import PriceData, QuarterPeriod
 
 __all__ = [
+    "CheapestWindowResult",
     "PriceAnalyzer",
     "PriceData",
+    "PriceForecast",
     "PriceLayerDecision",
     "QuarterPeriod",
     "get_fallback_prices",
 ]
+
+
+@dataclass
+class CheapestWindowResult:
+    """Result of cheapest continuous window search.
+
+    Used by both DHW optimizer (45-min window) and space heating
+    pre-heat planning (2-4h window).
+
+    Extracted from dhw_optimizer.find_cheapest_dhw_window() for shared reuse.
+    """
+
+    start_time: datetime
+    end_time: datetime
+    quarters: list[int]  # List of quarter IDs in window
+    avg_price: float  # Average price in window (öre/kWh)
+    hours_until: float  # Hours from current_time until window starts
+    savings_vs_current: float | None = None  # % cheaper than current price (optional)
+
+
+@dataclass
+class PriceForecast:
+    """Forward-looking price analysis result.
+
+    Consolidated forecast logic used by:
+    - Space heating: Pre-heat before expensive, reduce before cheap
+    - DHW: Wait for cheap if adequate, heat now if urgent
+
+    Extracted from price_layer.evaluate_layer() for shared reuse.
+    """
+
+    # Cheap period info
+    next_cheap_quarters_away: int | None  # Quarters until next cheap period (None if not found)
+    cheap_period_duration: int  # Duration in quarters of the cheap period
+    cheap_price_ratio: float  # Price ratio vs current (e.g., 0.6 = 40% cheaper)
+
+    # Expensive period info
+    next_expensive_quarters_away: int | None  # Quarters until next expensive period
+    expensive_period_duration: int  # Duration in quarters of the expensive period
+    expensive_price_ratio: float  # Price ratio vs current (e.g., 1.5 = 50% more expensive)
+
+    # Volatility detection
+    is_volatile: bool  # True if current run is too brief for effective heating
+    current_run_length: int  # Duration of current classification run (quarters)
+    volatile_reason: str  # Human-readable explanation
+
+    # Cluster detection
+    in_peak_cluster: bool  # True when EXPENSIVE sandwiched between PEAKs
 
 
 def get_fallback_prices() -> PriceData:
@@ -341,6 +393,423 @@ class PriceAnalyzer:
                 return 96 + quarter  # Offset by 96 for tomorrow
 
         return None
+
+    def find_cheapest_window(
+        self,
+        current_time: datetime,
+        price_periods: list[QuarterPeriod],
+        duration_minutes: int,
+        lookahead_hours: float,
+        current_price: float | None = None,
+    ) -> CheapestWindowResult | None:
+        """Find cheapest continuous window for heating.
+
+        Sliding window algorithm extracted from dhw_optimizer.find_cheapest_dhw_window()
+        for shared reuse by both DHW and space heating optimization.
+
+        Implementation:
+        - Converts duration to 15-minute quarters
+        - Filters periods within lookahead window
+        - Uses sliding window to find absolute cheapest continuous period
+        - Calculates savings vs current price if provided
+
+        Used by:
+        - DHW: Find 45-min window (3 quarters) for DHW heating
+        - Space heating: Find optimal pre-heating window (2-4h) before expensive period
+
+        Args:
+            current_time: Search start timestamp
+            price_periods: Combined today + tomorrow QuarterPeriod objects
+            duration_minutes: Required heating duration (e.g., 45 for DHW, 120 for pre-heat)
+            lookahead_hours: How far ahead to search
+            current_price: Current period price for savings calculation (optional)
+
+        Returns:
+            CheapestWindowResult or None if insufficient data
+        """
+        if not price_periods:
+            _LOGGER.warning("No price data available for cheapest window search")
+            return None
+
+        # Convert duration to quarters (45 min = 3 quarters)
+        quarters_needed = ceil(duration_minutes / 15)
+
+        # Filter to lookahead window
+        end_time = current_time + timedelta(hours=lookahead_hours)
+
+        # Build available quarters from price periods
+        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
+        available_quarters = []
+
+        for period in price_periods:
+            # Use actual datetime from spot price (already handles timezone and date correctly)
+            period_time = period.start_time
+
+            # Check if within lookahead window
+            if period_time >= current_time and period_time < end_time:
+                # Calculate quarter ID based on actual datetime to distinguish duplicates
+                days_ahead = (period_time.date() - current_time.date()).days
+                quarter_id = period.quarter_of_day + (days_ahead * 96)
+
+                available_quarters.append(
+                    {
+                        "start": period_time,
+                        "end": period_time + timedelta(minutes=15),
+                        "quarter": quarter_id,
+                        "price": period.price,
+                    }
+                )
+
+        if len(available_quarters) < quarters_needed:
+            _LOGGER.warning(
+                "Not enough price data for window search: %d quarters available, %d needed",
+                len(available_quarters),
+                quarters_needed,
+            )
+            return None
+
+        _LOGGER.debug(
+            "Cheapest window search: %d quarters available, need %d quarters (%d min), "
+            "lookahead %.1fh",
+            len(available_quarters),
+            quarters_needed,
+            duration_minutes,
+            lookahead_hours,
+        )
+
+        # Sliding window to find cheapest continuous period
+        lowest_price = None
+        lowest_index = None
+        window_candidates = []  # Track all valid windows for debugging
+
+        for i in range(len(available_quarters) - quarters_needed + 1):
+            window = available_quarters[i : i + quarters_needed]
+
+            # Verify continuity (15-min gaps)
+            is_continuous = True
+            for j in range(len(window) - 1):
+                time_gap = (window[j + 1]["start"] - window[j]["end"]).total_seconds()
+                if abs(time_gap) > 1:  # Allow 1 second tolerance
+                    is_continuous = False
+                    break
+
+            if not is_continuous:
+                continue
+
+            window_avg = sum(q["price"] for q in window) / quarters_needed
+
+            # Track this candidate
+            window_candidates.append(
+                {
+                    "start": window[0]["start"],
+                    "avg_price": window_avg,
+                    "hours_until": (window[0]["start"] - current_time).total_seconds() / 3600,
+                }
+            )
+
+            if lowest_price is None or window_avg < lowest_price:
+                lowest_price = window_avg
+                lowest_index = i
+
+        # Log candidates for debugging
+        if window_candidates:
+            _LOGGER.debug(
+                "Window candidates found: %d windows evaluated",
+                len(window_candidates),
+            )
+            # Show top 5 cheapest
+            sorted_candidates = sorted(window_candidates, key=lambda x: x["avg_price"])
+            for idx, candidate in enumerate(sorted_candidates[:5], 1):
+                _LOGGER.debug(
+                    "  #%d: %.1före/kWh at %s (%.1fh away)%s",
+                    idx,
+                    candidate["avg_price"],
+                    candidate["start"].strftime("%H:%M"),
+                    candidate["hours_until"],
+                    " ← SELECTED" if idx == 1 else "",
+                )
+
+        if lowest_index is None:
+            _LOGGER.debug("Could not find continuous window")
+            return None
+
+        optimal_window = available_quarters[lowest_index : lowest_index + quarters_needed]
+
+        # Calculate savings vs current price if provided
+        savings_vs_current = None
+        if current_price is not None and current_price > 0:
+            savings_vs_current = (1 - lowest_price / current_price) * 100
+
+        result = CheapestWindowResult(
+            start_time=optimal_window[0]["start"],
+            end_time=optimal_window[-1]["end"],
+            quarters=[q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
+            avg_price=lowest_price,
+            hours_until=(optimal_window[0]["start"] - current_time).total_seconds() / 3600,
+            savings_vs_current=savings_vs_current,
+        )
+
+        _LOGGER.info(
+            "Optimal window: %s (Q%d-Q%d) @ %.1före/kWh, %.1fh away%s",
+            result.start_time.strftime("%H:%M"),
+            result.quarters[0],
+            result.quarters[-1],
+            result.avg_price,
+            result.hours_until,
+            f", {savings_vs_current:.0f}% savings" if savings_vs_current else "",
+        )
+
+        return result
+
+    def calculate_lookahead_hours(
+        self,
+        heating_type: str,
+        thermal_mass: float = 1.0,
+        next_demand_hours: float | None = None,
+    ) -> float:
+        """Calculate dynamic lookahead horizon for price forecast.
+
+        Shared calculation for both space heating and DHW optimization.
+
+        Args:
+            heating_type: "space" for space heating, "dhw" for domestic hot water
+            thermal_mass: Building thermal mass multiplier (0.5-2.0, space heating only)
+            next_demand_hours: Hours until next DHW demand period (DHW only)
+
+        Returns:
+            Lookahead hours (adaptive based on context):
+            - Space heating: Base hours × thermal_mass (2-8h range)
+            - DHW: Hours until next demand period (capped at 24h)
+        """
+        if heating_type == "space":
+            return PRICE_FORECAST_BASE_HORIZON * thermal_mass
+        else:  # dhw
+            if next_demand_hours is not None:
+                return max(1.0, min(next_demand_hours, 24.0))
+            return 24.0  # Default full day lookahead
+
+    def get_price_forecast(
+        self,
+        current_quarter: int,
+        price_data: PriceData,
+        lookahead_hours: float = 4.0,
+    ) -> PriceForecast:
+        """Analyze upcoming price periods for optimization decisions.
+
+        Consolidated forecast logic used by:
+        - price_layer.evaluate_layer(): Space heating decisions
+        - dhw_optimizer.should_start_dhw(): DHW decisions
+        - coordinator._calculate_dhw_recommendation(): User-facing summary
+
+        Extracted from evaluate_layer() for shared reuse.
+
+        Args:
+            current_quarter: Current 15-min period (0-95)
+            price_data: Today + tomorrow prices
+            lookahead_hours: How far ahead to analyze (scales with thermal_mass)
+
+        Returns:
+            PriceForecast with detailed upcoming period info
+        """
+        if not price_data or not price_data.today:
+            return PriceForecast(
+                next_cheap_quarters_away=None,
+                cheap_period_duration=0,
+                cheap_price_ratio=1.0,
+                next_expensive_quarters_away=None,
+                expensive_period_duration=0,
+                expensive_price_ratio=1.0,
+                is_volatile=False,
+                current_run_length=0,
+                volatile_reason="",
+                in_peak_cluster=False,
+            )
+
+        # Bound check quarter index (safety)
+        if current_quarter >= len(price_data.today):
+            current_quarter = min(current_quarter, len(price_data.today) - 1)
+
+        current_period = price_data.today[current_quarter]
+        current_price = current_period.price
+        current_classification = self.get_current_classification(current_quarter)
+
+        # Initialize forecast result values
+        cheap_quarters_away = None
+        cheap_duration = 0
+        cheap_ratio = 1.0
+        expensive_quarters_away = None
+        expensive_duration = 0
+        expensive_ratio = 1.0
+        current_run_length = 1
+
+        # Build list of upcoming periods
+        forecast_quarters = int(lookahead_hours * 4)
+        lookahead_end = min(current_quarter + forecast_quarters, 96)
+        upcoming_periods = price_data.today[current_quarter + 1 : lookahead_end]
+
+        # Include tomorrow's periods if near end of day
+        if price_data.has_tomorrow and lookahead_end >= 96:
+            remaining_quarters = forecast_quarters - (96 - current_quarter - 1)
+            upcoming_periods.extend(price_data.tomorrow[:remaining_quarters])
+
+        # Analyze upcoming periods if we have data
+        if upcoming_periods and current_price > 0:
+            # Find cheap and expensive periods
+            min_price = min(p.price for p in upcoming_periods)
+            max_price = max(p.price for p in upcoming_periods)
+
+            min_idx = next(i for i, p in enumerate(upcoming_periods) if p.price == min_price)
+            max_idx = next(i for i, p in enumerate(upcoming_periods) if p.price == max_price)
+
+            # Calculate price ratios
+            cheap_ratio = min_price / current_price
+            expensive_ratio = max_price / current_price
+
+            # Count consecutive quarters around min price meeting CHEAP threshold
+            if cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                cheap_quarters_away = min_idx + 1  # +1 because we skip current
+                cheap_duration = 1
+                for i in range(min_idx + 1, len(upcoming_periods)):
+                    if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
+                        cheap_duration += 1
+                    else:
+                        break
+                for i in range(min_idx - 1, -1, -1):
+                    if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
+                        cheap_duration += 1
+                    else:
+                        break
+
+            # Count consecutive quarters around max price meeting EXPENSIVE threshold
+            if expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
+                expensive_quarters_away = max_idx + 1  # +1 because we skip current
+                expensive_duration = 1
+                for i in range(max_idx + 1, len(upcoming_periods)):
+                    if (
+                        upcoming_periods[i].price / current_price
+                        > PRICE_FORECAST_EXPENSIVE_THRESHOLD
+                    ):
+                        expensive_duration += 1
+                    else:
+                        break
+                for i in range(max_idx - 1, -1, -1):
+                    if (
+                        upcoming_periods[i].price / current_price
+                        > PRICE_FORECAST_EXPENSIVE_THRESHOLD
+                    ):
+                        expensive_duration += 1
+                    else:
+                        break
+
+        # Calculate current run length (volatility detection)
+        # Scan backwards
+        for offset in range(1, 96):
+            check_quarter = current_quarter - offset
+            if check_quarter < 0:
+                break
+            check_class = self.get_current_classification(check_quarter)
+            if check_class == current_classification:
+                current_run_length += 1
+            else:
+                break
+
+        # Scan forwards
+        for offset in range(1, 96):
+            check_quarter = current_quarter + offset
+            if check_quarter < 96:
+                check_class = self.get_current_classification(check_quarter)
+            elif price_data.has_tomorrow:
+                tomorrow_quarter = check_quarter - 96
+                if tomorrow_quarter < 96:
+                    check_class = self.get_tomorrow_classification(tomorrow_quarter)
+                else:
+                    break
+            else:
+                break
+
+            if check_class == current_classification:
+                current_run_length += 1
+            else:
+                break
+
+        # Volatility detection
+        is_volatile = False
+        volatile_reason = ""
+        beneficial_classifications = [
+            QuarterClassification.VERY_CHEAP,
+            QuarterClassification.CHEAP,
+        ]
+
+        is_brief_run = current_run_length < PRICE_FORECAST_MIN_DURATION
+        if is_brief_run and current_classification != QuarterClassification.PEAK:
+            is_volatile = True
+            volatile_reason = (
+                f"Price volatile: {current_classification.name} "
+                f"{current_run_length * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
+            )
+
+        # PEAK cluster detection
+        in_peak_cluster = False
+        cluster_break_classifications = [
+            QuarterClassification.VERY_CHEAP,
+            QuarterClassification.CHEAP,
+        ]
+
+        if (
+            current_classification
+            in [QuarterClassification.EXPENSIVE, QuarterClassification.NORMAL]
+            and is_volatile
+        ):
+            has_peak_before = False
+            for back_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
+                check_quarter = current_quarter - back_offset
+                if check_quarter < 0:
+                    break
+                check_class = self.get_current_classification(check_quarter)
+                if check_class == QuarterClassification.PEAK:
+                    has_peak_before = True
+                    break
+                if check_class in cluster_break_classifications:
+                    break
+
+            has_peak_after = False
+            if has_peak_before:
+                for fwd_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
+                    check_quarter = current_quarter + fwd_offset
+                    if check_quarter >= 96:
+                        if price_data.has_tomorrow:
+                            tomorrow_quarter = check_quarter - 96
+                            check_class = self.get_tomorrow_classification(tomorrow_quarter)
+                        else:
+                            break
+                    else:
+                        check_class = self.get_current_classification(check_quarter)
+
+                    if check_class is None:
+                        break
+                    if check_class == QuarterClassification.PEAK:
+                        has_peak_after = True
+                        break
+                    if check_class in cluster_break_classifications:
+                        break
+
+            if has_peak_before and has_peak_after:
+                in_peak_cluster = True
+                is_volatile = False  # No longer volatile when part of PEAK cluster
+                volatile_reason = ""
+
+        return PriceForecast(
+            next_cheap_quarters_away=cheap_quarters_away,
+            cheap_period_duration=cheap_duration,
+            cheap_price_ratio=cheap_ratio,
+            next_expensive_quarters_away=expensive_quarters_away,
+            expensive_period_duration=expensive_duration,
+            expensive_price_ratio=expensive_ratio,
+            is_volatile=is_volatile,
+            current_run_length=current_run_length,
+            volatile_reason=volatile_reason,
+            in_peak_cluster=in_peak_cluster,
+        )
 
     def evaluate_layer(
         self,

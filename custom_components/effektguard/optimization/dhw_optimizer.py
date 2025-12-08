@@ -57,6 +57,7 @@ from ..const import (
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
 from .thermal_layer import estimate_dm_recovery_time
+from .price_layer import CheapestWindowResult, PriceAnalyzer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -203,6 +204,7 @@ class IntelligentDHWScheduler:
         climate_detector=None,  # Climate zone detector for dynamic thresholds
         user_target_temp: float | None = None,  # User-configured DHW target temperature
         emergency_layer=None,  # Optional EmergencyLayer for shared DM blocking logic
+        price_analyzer: PriceAnalyzer | None = None,  # Optional for shared price logic
     ):
         """Initialize DHW scheduler.
 
@@ -213,10 +215,14 @@ class IntelligentDHWScheduler:
             emergency_layer: Optional EmergencyLayer for shared thermal debt blocking logic.
                 If provided, uses emergency_layer.should_block_dhw() for consistent
                 behavior with space heating optimization.
+            price_analyzer: Optional PriceAnalyzer for shared price forecast logic.
+                If provided, uses price_analyzer.find_cheapest_window() for consistent
+                window search with space heating optimization.
         """
         self.demand_periods = demand_periods or []
         self.climate_detector = climate_detector
         self.emergency_layer = emergency_layer
+        self.price_analyzer = price_analyzer
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
@@ -245,6 +251,9 @@ class IntelligentDHWScheduler:
                 DM_DHW_BLOCK_FALLBACK,
                 DM_DHW_ABORT_FALLBACK,
             )
+
+        if self.price_analyzer:
+            _LOGGER.info("DHW optimizer initialized with shared PriceAnalyzer for window search")
 
     def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
         """Update BT7/BT6 temperature history and detect NIBE's Legionella boost.
@@ -1116,6 +1125,10 @@ class IntelligentDHWScheduler:
         - Must be continuous 15-minute periods (no gaps)
         - Finds absolute cheapest average price (not just "cheap" classification)
 
+        Phase 11: Delegates to shared PriceAnalyzer.find_cheapest_window() when
+        price_analyzer is provided, ensuring consistent window search behavior
+        with space heating optimization.
+
         Args:
             current_time: Current timestamp
             lookahead_hours: How far ahead to search
@@ -1132,6 +1145,27 @@ class IntelligentDHWScheduler:
             }
             or None if insufficient data
         """
+        # Phase 11: Use shared PriceAnalyzer method when available
+        if self.price_analyzer is not None:
+            result = self.price_analyzer.find_cheapest_window(
+                current_time=current_time,
+                price_periods=price_periods,
+                duration_minutes=dhw_duration_minutes,
+                lookahead_hours=float(lookahead_hours),
+            )
+            if result is None:
+                return None
+
+            # Convert CheapestWindowResult to dict for backward compatibility
+            return {
+                "start_time": result.start_time,
+                "end_time": result.end_time,
+                "quarters": result.quarters,
+                "avg_price": result.avg_price,
+                "hours_until": result.hours_until,
+            }
+
+        # Fallback: Original implementation for backward compatibility
         from math import ceil
 
         if not price_periods:

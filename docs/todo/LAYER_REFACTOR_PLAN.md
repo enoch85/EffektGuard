@@ -686,7 +686,27 @@ Move `_estimate_dm_recovery_time()` → `thermal_layer.estimate_dm_recovery_time
 
 ---
 
-## Phase 11: Price Forecast Sharing Analysis
+## Phase 11: Price Forecast Sharing Analysis ✅ COMPLETED
+
+**Completed:** January 2025
+
+### What Was Implemented
+
+1. **CheapestWindowResult dataclass** - Shared result type for window search
+2. **PriceForecast dataclass** - Forward-looking price analysis result
+3. **PriceAnalyzer.find_cheapest_window()** - Sliding window algorithm extracted from DHW
+4. **PriceAnalyzer.get_price_forecast()** - Consolidated forecast logic
+5. **PriceAnalyzer.calculate_lookahead_hours()** - Unified lookahead calculation
+6. **DHW optimizer integration** - Accepts `price_analyzer` parameter, delegates to shared methods
+7. **Coordinator update** - Passes `decision_engine.price` to DHW optimizer
+
+### Files Changed
+
+- `optimization/price_layer.py` - Added dataclasses and methods
+- `optimization/dhw_optimizer.py` - Added `price_analyzer` parameter, delegation
+- `optimization/__init__.py` - Added exports for new types
+- `coordinator.py` - Pass `price_analyzer` to DHW optimizer
+- `tests/unit/optimization/test_price_layer_shared.py` - New tests
 
 ### Current State: Duplicated Price Logic
 
