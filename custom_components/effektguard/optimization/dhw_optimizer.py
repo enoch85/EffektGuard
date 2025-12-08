@@ -60,7 +60,7 @@ from ..const import (
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
 from .thermal_layer import estimate_dm_recovery_time
-from .price_layer import CheapestWindowResult, PriceAnalyzer
+from .price_layer import PriceAnalyzer
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -13,7 +13,6 @@ Usage:
 
 import argparse
 import ast
-import os
 import re
 import sys
 from collections import defaultdict
@@ -136,6 +135,7 @@ def find_unused_constants(
             with open(file, "r") as f:
                 all_code += f.read() + "\n"
         except Exception:
+            # Skip files that can't be read (permissions, encoding issues)
             pass
     
     # Optionally include tests and scripts
@@ -147,6 +147,7 @@ def find_unused_constants(
                 with open(file, "r") as f:
                     all_code += f.read() + "\n"
             except Exception:
+                # Skip files that can't be read (permissions, encoding issues)
                 pass
     
     # Read const.py to check for building block usage (constants used to derive others)
@@ -155,6 +156,7 @@ def find_unused_constants(
         with open(const_file, "r") as f:
             const_code = f.read()
     except Exception:
+        # Skip if const.py can't be read
         pass
     
     # Check each constant

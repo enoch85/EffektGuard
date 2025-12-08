@@ -158,12 +158,10 @@ from ..const import (
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
-from .comfort_layer import ComfortLayer, ComfortLayerDecision
+from .comfort_layer import ComfortLayer
 from .thermal_layer import (
     EmergencyLayer,
-    EmergencyLayerDecision,
     ProactiveLayer,
-    ProactiveLayerDecision,
     is_cooling_rapidly,
     is_warming_rapidly,
 )
@@ -171,8 +169,6 @@ from .weather_layer import (
     AdaptiveClimateSystem,
     WeatherCompensationCalculator,
     WeatherCompensationLayer,
-    WeatherCompensationLayerDecision,
-    WeatherLayerDecision,
     WeatherPredictionLayer,
 )
 

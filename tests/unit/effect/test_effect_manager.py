@@ -17,7 +17,6 @@ from custom_components.effektguard.optimization.effect_layer import (
     EffectManager,
     EffectLayerDecision,
     PeakEvent,
-    PowerLimitDecision,
 )
 
 

@@ -52,13 +52,12 @@ from .models.nibe import (
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.decision_engine import (
-    LayerDecision,
     OptimizationDecision,
     get_safe_default_decision,
 )
 from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.price_layer import get_fallback_prices
-from .optimization.thermal_layer import get_thermal_debt_status
+
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 

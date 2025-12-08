@@ -438,7 +438,7 @@ class TestDHWOptimizerIntegration:
         scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
 
         # Call should_start_dhw which internally uses price_analyzer
-        decision = scheduler.should_start_dhw(
+        _ = scheduler.should_start_dhw(
             current_dhw_temp=40.0,
             space_heating_demand_kw=1.0,
             thermal_debt_dm=-100,
