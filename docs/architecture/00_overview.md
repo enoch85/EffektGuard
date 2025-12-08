@@ -50,53 +50,52 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 
 ## Layer Architecture
 
-The optimization system uses a **shared layer architecture** where reusable layer components are consumed by multiple systems:
+The optimization system uses a **shared layer architecture** where reusable layer components are created once and shared across consumers:
 
 ```mermaid
 flowchart TB
-    subgraph Layers["Shared Layers (Reusable)"]
-        direction LR
-        TL[ThermalLayer<br/>DM recovery, thermal debt]
-        EL[EmergencyLayer<br/>Safety gating, DHW blocking]
-        PL[ProactiveLayer<br/>Preemptive protection]
-        CL[ComfortLayer<br/>Indoor temp targeting]
-        PrL[PriceLayer<br/>Spot price analysis]
-        EfL[EffectLayer<br/>Peak power tracking]
-        WL[WeatherLayer<br/>Forecast integration]
-        PredL[PredictionLayer<br/>Trend analysis]
-    end
-
-    subgraph Consumers["Layer Consumers"]
-        DE[Decision Engine<br/>Space heating optimization]
-        DHW[DHW Optimizer<br/>Hot water scheduling]
-        COORD[Coordinator<br/>Status & display]
+    subgraph Layers["LAYERS (shared, reusable)"]
+        direction TB
+        TL["<b>thermal_layer.py</b><br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time()<br/>+ get_thermal_debt_status()"]
+        CL["<b>comfort_layer.py</b><br/>→ ComfortLayer"]
+        PrL["<b>price_layer.py</b><br/>→ PriceAnalyzer<br/>+ find_cheapest_window()"]
+        EfL["<b>effect_layer.py</b><br/>→ EffectManager"]
+        WL["<b>weather_layer.py</b><br/>→ WeatherLayer"]
+        PredL["<b>prediction_layer.py</b><br/>→ ThermalStatePredictor"]
     end
 
     Layers --> DE
-    Layers --> DHW
-    Layers --> COORD
 
-    subgraph Shared["Shared Functions"]
-        F1[estimate_dm_recovery_time]
-        F2[get_thermal_debt_status]
-        F3[should_block_dhw]
-        F4[find_cheapest_window]
+    subgraph DE["DECISION ENGINE (space heating)"]
+        DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
+        DE2["Uses: PriceAnalyzer, EffectManager"]
+        DE3["Exposes: emergency_layer, price for sharing"]
     end
 
-    EL -.-> F3
-    TL -.-> F1
-    TL -.-> F2
-    PrL -.-> F4
+    DE --> DHW
+
+    subgraph DHW["DHW OPTIMIZER (DHW scheduling)"]
+        DHW1["Receives: emergency_layer (shared from DecisionEngine)"]
+        DHW2["Receives: price_analyzer (shared from DecisionEngine)"]
+        DHW3["Uses: estimate_dm_recovery_time(), find_cheapest_window()"]
+    end
+
+    DHW --> COORD
+
+    subgraph COORD["COORDINATOR"]
+        COORD1["Creates DecisionEngine (with all layers)"]
+        COORD2["Creates DHWOptimizer (with shared layers)"]
+        COORD3["Uses get_thermal_debt_status() for display"]
+        COORD4["Uses ThermalStatePredictor for predictions"]
+    end
 ```
 
-### Key Integration Points
+### Layer Sharing Flow
 
-| Layer | Shared By | Purpose |
-|-------|-----------|---------|
-| `EmergencyLayer` | Decision Engine, DHW Optimizer | `should_block_dhw()` gates DHW during thermal debt |
-| `ThermalLayer` | All consumers | `estimate_dm_recovery_time()`, `get_thermal_debt_status()` |
-| `PriceLayer` | Decision Engine, DHW Optimizer | `find_cheapest_window()` for cost optimization |
-| `ComfortLayer` | Decision Engine | Indoor temperature targeting and heat loss estimation |
+1. **Coordinator** creates `DecisionEngine` which instantiates all layers
+2. **DecisionEngine** exposes `emergency_layer` and `price` (PriceAnalyzer) as properties
+3. **Coordinator** passes these shared instances to `DHWOptimizer`
+4. **DHWOptimizer** uses shared layers to gate DHW during thermal debt and find cheap windows
 
 ## Production Quality Features
 
