@@ -72,22 +72,21 @@ flowchart TB
     Layers --> DHW
     Layers --> COORD
 
+    DE ~~~ DHW ~~~ COORD
+
     subgraph DE["DECISION ENGINE - Space heating"]
-        DE0[" "]
         DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
         DE2["Uses: PriceAnalyzer, EffectManager, WeatherLayer"]
         DE3["Exposes: emergency_layer, price for sharing"]
     end
 
     subgraph DHW["DHW OPTIMIZER - Water heating"]
-        DHW0[" "]
         DHW1["Receives: emergency_layer #40;shared from DecisionEngine#41;"]
         DHW2["Receives: price_analyzer #40;shared from DecisionEngine#41;"]
         DHW3["Uses: estimate_dm_recovery_time#40;#41;, find_cheapest_window#40;#41;"]
     end
 
     subgraph COORD["COORDINATOR"]
-        COORD0[" "]
         COORD1["Creates DecisionEngine #40;with all layers#41;"]
         COORD2["Creates DHWOptimizer #40;with shared layers#41;"]
         COORD3["Uses get_thermal_debt_status#40;#41; for display"]
