@@ -8,7 +8,7 @@ maintaining comfort and heat pump health.
 from .decision_engine import DecisionEngine, LayerDecision, OptimizationDecision
 from .effect_layer import EffectLayerDecision, EffectManager, PeakEvent
 from .price_layer import PriceAnalyzer, PriceData, QuarterPeriod
-from .thermal_layer import ThermalModel
+from .thermal_layer import ThermalModel, estimate_dm_recovery_time, get_thermal_debt_status
 
 __all__ = [
     "DecisionEngine",
@@ -21,4 +21,6 @@ __all__ = [
     "PriceData",
     "QuarterPeriod",
     "ThermalModel",
+    "estimate_dm_recovery_time",
+    "get_thermal_debt_status",
 ]

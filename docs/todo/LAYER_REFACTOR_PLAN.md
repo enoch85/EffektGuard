@@ -498,7 +498,23 @@ No new shared state needed - existing architecture supports this.
 
 ---
 
-## Phase 10: DHW Layer Sharing Analysis
+## Phase 10: DHW Layer Sharing Analysis ✅ COMPLETED
+
+### Results Achieved
+- `dhw_optimizer.py`: Now uses `EmergencyLayer.should_block_dhw()` for consistent thermal debt blocking
+- `estimate_dm_recovery_time()`: Extracted to `thermal_layer.py` for shared reuse
+- All 1046 tests passing (+7 new tests)
+
+### What Was Changed
+
+| Change | Location | Description |
+|--------|----------|-------------|
+| Added `estimate_dm_recovery_time()` | `thermal_layer.py` | Shared DM recovery estimation function |
+| Added `emergency_layer` parameter | `IntelligentDHWScheduler.__init__` | Optional EmergencyLayer for shared DM blocking |
+| Updated `should_start_dhw()` | `dhw_optimizer.py` | Uses `emergency_layer.should_block_dhw()` when available |
+| Updated coordinator | `coordinator.py` | Passes `decision_engine.emergency_layer` to DHW optimizer |
+| Updated exports | `optimization/__init__.py` | Exports `estimate_dm_recovery_time`, `get_thermal_debt_status` |
+| Added tests | `test_shared_layer_methods.py` | Tests for `estimate_dm_recovery_time` and EmergencyLayer integration |
 
 ### Goal
 Make DHW optimizer reuse the same layer logic as space heating to ensure consistent behavior.
@@ -512,7 +528,7 @@ Make DHW optimizer reuse the same layer logic as space heating to ensure consist
 | Price classification | ~10 | `price_layer.get_current_classification()` | ✅ YES | Already used |
 | Find next cheap period | ~30 | `price_layer.get_next_cheap_period()` | ✅ YES | Already exists |
 | Window-based scheduling | ~150 | NEW in `price_layer.py` | 🔄 EXTRACT | DHW has better impl |
-| DM recovery estimation | ~50 | NEW in `thermal_layer.py` | 🔄 EXTRACT | Useful for space too |
+| DM recovery estimation | ~50 | NEW in `thermal_layer.py` | ✅ DONE | Shared function added |
 | Demand period detection | ~60 | DHW-specific | ❌ NO | DHW-only concept |
 | Legionella detection | ~100 | DHW-specific | ❌ NO | DHW-only concept |
 

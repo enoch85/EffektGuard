@@ -517,3 +517,163 @@ class TestDHWOptimizerCalculateRecommendation:
         assert "DHW Planning Summary" in result.summary
         assert "42.0°C" in result.summary
         assert "CHEAP" in result.summary
+
+
+class TestEstimateDmRecoveryTime:
+    """Tests for shared estimate_dm_recovery_time function.
+
+    Phase 10: Moved from dhw_optimizer._estimate_dm_recovery_time to thermal_layer
+    for shared reuse between DHW and space heating.
+    """
+
+    def test_recovery_time_basic(self):
+        """Test basic DM recovery estimation."""
+        from custom_components.effektguard.optimization.thermal_layer import (
+            estimate_dm_recovery_time,
+        )
+
+        # 100 DM deficit at mild temp (>5°C)
+        # Rate is 40 DM/h at mild, so 100/40 = 2.5h
+        result = estimate_dm_recovery_time(
+            current_dm=-400,
+            target_dm=-300,
+            outdoor_temp=10.0,
+        )
+
+        # Should be around 2.5 hours at mild conditions
+        assert 1.0 < result < 5.0
+
+    def test_recovery_time_cold_weather(self):
+        """Test slower recovery in cold weather."""
+        from custom_components.effektguard.optimization.thermal_layer import (
+            estimate_dm_recovery_time,
+        )
+
+        # Same deficit at different temperatures
+        mild_result = estimate_dm_recovery_time(-400, -300, outdoor_temp=10.0)
+        cold_result = estimate_dm_recovery_time(-400, -300, outdoor_temp=2.0)
+        very_cold_result = estimate_dm_recovery_time(-400, -300, outdoor_temp=-5.0)
+
+        # Recovery should be slower in colder weather
+        assert very_cold_result > cold_result
+        assert cold_result > mild_result
+
+    def test_recovery_time_minimum_clamping(self):
+        """Test minimum recovery time clamping at 0.5h."""
+        from custom_components.effektguard.optimization.thermal_layer import (
+            estimate_dm_recovery_time,
+        )
+
+        # Very small deficit that would calculate to <0.5h
+        result = estimate_dm_recovery_time(
+            current_dm=-100,
+            target_dm=-99,  # 1 DM deficit
+            outdoor_temp=10.0,
+        )
+
+        # Should be clamped to minimum 0.5h
+        assert result >= 0.5
+
+    def test_recovery_time_maximum_clamping(self):
+        """Test maximum recovery time clamping at 12h."""
+        from custom_components.effektguard.optimization.thermal_layer import (
+            estimate_dm_recovery_time,
+        )
+        from custom_components.effektguard.const import DM_RECOVERY_MAX_HOURS
+
+        # Very large deficit at very cold temp
+        result = estimate_dm_recovery_time(
+            current_dm=-1500,
+            target_dm=-200,  # 1300 DM deficit
+            outdoor_temp=-20.0,
+        )
+
+        # Should be clamped to maximum
+        assert result <= DM_RECOVERY_MAX_HOURS
+
+
+class TestDhwOptimizerEmergencyLayerIntegration:
+    """Tests for DHW optimizer using shared EmergencyLayer.
+
+    Phase 10: DHW optimizer now accepts optional emergency_layer parameter
+    to use shared thermal debt blocking logic.
+    """
+
+    @pytest.fixture
+    def emergency_layer(self):
+        """Create an EmergencyLayer for testing."""
+        from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
+        from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
+
+        climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm
+        return EmergencyLayer(
+            climate_detector=climate_detector,
+            price_analyzer=None,
+            heating_type="radiator",
+        )
+
+    def test_scheduler_accepts_emergency_layer(self, emergency_layer):
+        """Test that scheduler accepts emergency_layer parameter."""
+        from custom_components.effektguard.optimization.dhw_optimizer import (
+            IntelligentDHWScheduler,
+        )
+
+        scheduler = IntelligentDHWScheduler(
+            emergency_layer=emergency_layer,
+        )
+
+        assert scheduler.emergency_layer is emergency_layer
+
+    def test_scheduler_uses_emergency_layer_for_blocking(self, emergency_layer):
+        """Test that scheduler uses emergency_layer.should_block_dhw()."""
+        from datetime import datetime
+
+        from custom_components.effektguard.optimization.dhw_optimizer import (
+            IntelligentDHWScheduler,
+        )
+
+        scheduler = IntelligentDHWScheduler(
+            emergency_layer=emergency_layer,
+        )
+
+        # Test with thermal debt that should be blocked
+        # EmergencyLayer blocks at T2 threshold (warning - 200 DM margin)
+        result = scheduler.should_start_dhw(
+            current_dhw_temp=45.0,
+            space_heating_demand_kw=1.0,
+            thermal_debt_dm=-1400,  # Deep thermal debt, should be blocked
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=0.0,
+            price_classification="normal",
+            current_time=datetime.now(),
+        )
+
+        # Should be blocked due to thermal debt
+        assert result.should_heat is False
+        assert result.priority_reason == "CRITICAL_THERMAL_DEBT"
+
+    def test_scheduler_delegates_recovery_time_estimation(self):
+        """Test that _estimate_dm_recovery_time delegates to shared function."""
+        from custom_components.effektguard.optimization.dhw_optimizer import (
+            IntelligentDHWScheduler,
+        )
+        from custom_components.effektguard.optimization.thermal_layer import (
+            estimate_dm_recovery_time,
+        )
+
+        scheduler = IntelligentDHWScheduler()
+
+        # Both should return the same result
+        scheduler_result = scheduler._estimate_dm_recovery_time(
+            current_dm=-400,
+            target_dm=-300,
+            outdoor_temp=5.0,
+        )
+        shared_result = estimate_dm_recovery_time(
+            current_dm=-400,
+            target_dm=-300,
+            outdoor_temp=5.0,
+        )
+
+        assert scheduler_result == shared_result

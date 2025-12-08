@@ -168,11 +168,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             )
 
-        # Pass climate detector from decision engine to DHW optimizer for dynamic thresholds
+        # Pass climate detector and emergency layer from decision engine to DHW optimizer
+        # Phase 10: EmergencyLayer provides consistent thermal debt blocking logic
         self.dhw_optimizer = IntelligentDHWScheduler(
             demand_periods=demand_periods,
             climate_detector=decision_engine.climate_detector,
             user_target_temp=dhw_target_temp,
+            emergency_layer=decision_engine.emergency_layer,
         )
 
         # Savings calculator

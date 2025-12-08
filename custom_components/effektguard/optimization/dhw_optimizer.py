@@ -48,10 +48,6 @@ from ..const import (
     DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
-    DM_RECOVERY_MAX_HOURS,
-    DM_RECOVERY_RATE_COLD,
-    DM_RECOVERY_RATE_MILD,
-    DM_RECOVERY_RATE_VERY_COLD,
     DM_RECOVERY_SAFETY_BUFFER,
     DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
@@ -60,6 +56,7 @@ from ..const import (
     SPACE_HEATING_DEMAND_LOW_THRESHOLD,
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
+from .thermal_layer import estimate_dm_recovery_time
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -194,6 +191,10 @@ class IntelligentDHWScheduler:
     DHW blocking thresholds are now dynamic based on climate zone and outdoor temperature.
     Uses ClimateZoneDetector to determine appropriate DM thresholds for current conditions.
     Fallback constants from const.py used only if climate detector unavailable.
+
+    SHARED LAYER REUSE (Phase 10):
+    When emergency_layer is provided, uses EmergencyLayer.should_block_dhw() for
+    consistent thermal debt blocking logic with space heating optimization.
     """
 
     def __init__(
@@ -201,6 +202,7 @@ class IntelligentDHWScheduler:
         demand_periods: list[DHWDemandPeriod] | None = None,
         climate_detector=None,  # Climate zone detector for dynamic thresholds
         user_target_temp: float | None = None,  # User-configured DHW target temperature
+        emergency_layer=None,  # Optional EmergencyLayer for shared DM blocking logic
     ):
         """Initialize DHW scheduler.
 
@@ -208,9 +210,13 @@ class IntelligentDHWScheduler:
             demand_periods: User-defined high demand periods (e.g., morning showers)
             climate_detector: Optional ClimateZoneDetector for dynamic DM thresholds
             user_target_temp: User-configured DHW target temperature (°C)
+            emergency_layer: Optional EmergencyLayer for shared thermal debt blocking logic.
+                If provided, uses emergency_layer.should_block_dhw() for consistent
+                behavior with space heating optimization.
         """
         self.demand_periods = demand_periods or []
         self.climate_detector = climate_detector
+        self.emergency_layer = emergency_layer
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
@@ -223,7 +229,11 @@ class IntelligentDHWScheduler:
         else:
             self.user_target_temp = DEFAULT_DHW_TARGET_TEMP
 
-        if self.climate_detector:
+        if self.emergency_layer:
+            _LOGGER.info(
+                "DHW optimizer initialized with shared EmergencyLayer for thermal debt blocking"
+            )
+        elif self.climate_detector:
             _LOGGER.info(
                 "DHW optimizer initialized with climate-aware thresholds: %s zone",
                 self.climate_detector.zone_info.name,
@@ -427,11 +437,40 @@ class IntelligentDHWScheduler:
         """
         indoor_deficit = target_indoor_temp - indoor_temp
 
-        # Get climate-aware DM thresholds based on current outdoor temperature
-        if self.climate_detector:
+        # Determine DM blocking using shared EmergencyLayer or fallback to local logic
+        # Phase 10: EmergencyLayer provides consistent thermal mass-adjusted thresholds
+        should_block_for_thermal_debt = False
+        dm_block_threshold: float
+        dm_abort_threshold: float
+
+        if self.emergency_layer:
+            # Use shared EmergencyLayer for consistent thermal debt blocking
+            should_block_for_thermal_debt = self.emergency_layer.should_block_dhw(
+                thermal_debt_dm, outdoor_temp
+            )
+            # Get thresholds from emergency layer's climate detector for logging/abort conditions
+            if self.emergency_layer.climate_detector:
+                dm_thresholds = self.emergency_layer.climate_detector.get_expected_dm_range(
+                    outdoor_temp
+                )
+                dm_block_threshold = dm_thresholds["warning"]
+                dm_abort_threshold = dm_thresholds["warning"] - 80
+            else:
+                dm_block_threshold = DM_DHW_BLOCK_FALLBACK
+                dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+
+            _LOGGER.debug(
+                "DHW using shared EmergencyLayer: should_block=%s, DM=%.0f, outdoor=%.1f°C",
+                should_block_for_thermal_debt,
+                thermal_debt_dm,
+                outdoor_temp,
+            )
+        elif self.climate_detector:
+            # Fallback to local climate detector
             dm_thresholds = self.climate_detector.get_expected_dm_range(outdoor_temp)
             dm_block_threshold = dm_thresholds["warning"]  # Use warning threshold for blocking
             dm_abort_threshold = dm_thresholds["warning"] - 80  # 80 DM buffer before critical
+            should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
             _LOGGER.debug(
                 "DHW DM thresholds for %.1f°C (zone: %s): block=%.0f, abort=%.0f",
@@ -444,14 +483,20 @@ class IntelligentDHWScheduler:
             # Fallback to fixed thresholds from const.py if climate detector unavailable
             dm_block_threshold = DM_DHW_BLOCK_FALLBACK
             dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+            should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
-        if thermal_debt_dm <= dm_block_threshold:
+        if should_block_for_thermal_debt:
             _LOGGER.warning(
-                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ warning=%.0f (zone: %s, outdoor: %.1f°C)",
+                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ threshold (zone: %s, outdoor: %.1f°C)",
                 thermal_debt_dm,
-                dm_block_threshold,
-                self.climate_detector.zone_info.name if self.climate_detector else "unknown",
+                (
+                    self.emergency_layer.climate_detector.zone_info.name
+                    if self.emergency_layer and self.emergency_layer.climate_detector
+                    else (
+                        self.climate_detector.zone_info.name if self.climate_detector else "unknown"
+                    )
+                ),
                 outdoor_temp,
             )
             # Find next opportunity using centralized logic
@@ -965,9 +1010,8 @@ class IntelligentDHWScheduler:
     ) -> float:
         """Estimate hours until DM recovers to target level.
 
-        Uses simplified thermal model:
-        - Space heating improves DM at ~20-40 DM/hour (depends on outdoor temp)
-        - Colder outdoor → slower recovery
+        Delegates to shared estimate_dm_recovery_time() in thermal_layer.py
+        for consistent behavior with space heating optimization.
 
         Args:
             current_dm: Current degree minutes value (negative)
@@ -976,39 +1020,8 @@ class IntelligentDHWScheduler:
 
         Returns:
             Estimated hours until recovery (minimum 0.5h, maximum 12h)
-
-        References:
-            - Thermal debt analysis: DM recovery varies with heating capacity
-            - Conservative estimates prevent false promises to user
         """
-        dm_deficit = target_dm - current_dm  # e.g., -350 - (-435) = 85
-
-        # Recovery rate depends on outdoor temp (from const.py)
-        if outdoor_temp > 5:
-            recovery_rate = DM_RECOVERY_RATE_MILD
-        elif outdoor_temp > 0:
-            recovery_rate = DM_RECOVERY_RATE_COLD
-        else:
-            recovery_rate = DM_RECOVERY_RATE_VERY_COLD
-
-        hours = dm_deficit / recovery_rate
-
-        # Constrain to reasonable range (from const.py)
-        # Min: DHW_COOLING_RATE (0.5h) - reuse existing constant
-        # Max: DM_RECOVERY_MAX_HOURS (12h)
-        estimated_hours = max(DHW_COOLING_RATE, min(hours, DM_RECOVERY_MAX_HOURS))
-
-        _LOGGER.debug(
-            "DM recovery estimate: %.0f DM deficit / %.0f DM/h = %.1fh "
-            "(outdoor: %.1f°C, constrained: %.1fh)",
-            dm_deficit,
-            recovery_rate,
-            hours,
-            outdoor_temp,
-            estimated_hours,
-        )
-
-        return estimated_hours
+        return estimate_dm_recovery_time(current_dm, target_dm, outdoor_temp)
 
     def _find_next_dhw_opportunity(
         self,

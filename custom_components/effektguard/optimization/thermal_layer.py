@@ -79,10 +79,64 @@ from ..const import (
     WARNING_OFFSET_MAX_SEVERE,
     WARNING_OFFSET_MIN_MODERATE,
     WARNING_OFFSET_MIN_SEVERE,
+    # DM recovery constants (shared with dhw_optimizer)
+    DM_RECOVERY_MAX_HOURS,
+    DM_RECOVERY_RATE_COLD,
+    DM_RECOVERY_RATE_MILD,
+    DM_RECOVERY_RATE_VERY_COLD,
 )
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def estimate_dm_recovery_time(current_dm: float, target_dm: float, outdoor_temp: float) -> float:
+    """Estimate hours until DM recovers to target level.
+
+    Shared function for use by both DHW optimizer and space heating logic.
+    Uses simplified thermal model based on outdoor temperature.
+
+    Args:
+        current_dm: Current degree minutes value (negative)
+        target_dm: Target DM to reach (less negative)
+        outdoor_temp: Current outdoor temperature for recovery rate
+
+    Returns:
+        Estimated hours until recovery (minimum 0.5h, maximum 12h)
+
+    References:
+        - Thermal debt analysis: DM recovery varies with heating capacity
+        - Conservative estimates prevent false promises to user
+        - Moved from dhw_optimizer._estimate_dm_recovery_time for shared reuse
+    """
+    dm_deficit = target_dm - current_dm  # e.g., -350 - (-435) = 85
+
+    # Recovery rate depends on outdoor temp (from const.py)
+    if outdoor_temp > 5:
+        recovery_rate = DM_RECOVERY_RATE_MILD
+    elif outdoor_temp > 0:
+        recovery_rate = DM_RECOVERY_RATE_COLD
+    else:
+        recovery_rate = DM_RECOVERY_RATE_VERY_COLD
+
+    hours = dm_deficit / recovery_rate
+
+    # Constrain to reasonable range
+    # Min: 0.5h - minimum meaningful recovery period
+    # Max: DM_RECOVERY_MAX_HOURS (12h)
+    estimated_hours = max(0.5, min(hours, DM_RECOVERY_MAX_HOURS))
+
+    _LOGGER.debug(
+        "DM recovery estimate: %.0f DM deficit / %.0f DM/h = %.1fh "
+        "(outdoor: %.1f°C, constrained: %.1fh)",
+        dm_deficit,
+        recovery_rate,
+        hours,
+        outdoor_temp,
+        estimated_hours,
+    )
+
+    return estimated_hours
 
 
 def get_thermal_debt_status(thermal_debt: float, dm_thresholds: dict) -> str:
