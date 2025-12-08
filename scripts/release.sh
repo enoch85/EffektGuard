@@ -321,8 +321,9 @@ function remove_beta_releases {
     
     info_log "Searching for beta releases for version ${base_version}..."
     
-    # List all releases and filter for beta versions
-    local beta_releases=$(gh release list --limit 100 | grep "${base_version}-beta" | awk '{print $1}' || true)
+    # List all releases and filter for beta versions using JSON output for reliable parsing
+    # The default tabular output has variable-width columns making awk unreliable
+    local beta_releases=$(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep "${base_version}-beta" || true)
     
     if [[ -z "$beta_releases" ]]; then
         info_log "No beta releases found for ${base_version}"
