@@ -396,3 +396,124 @@ class TestThermalDebtStatusEdgeCases:
 
         assert "OK" in result
         assert "800" in result  # 100 - (-700) = 800 margin
+
+
+class TestDHWOptimizerCalculateRecommendation:
+    """Tests for IntelligentDHWScheduler.calculate_recommendation()."""
+
+    @pytest.fixture
+    def scheduler(self):
+        """Create a basic DHW scheduler instance."""
+        from custom_components.effektguard.optimization.dhw_optimizer import (
+            IntelligentDHWScheduler,
+        )
+
+        return IntelligentDHWScheduler()
+
+    def test_returns_dhw_recommendation_dataclass(self, scheduler):
+        """Test that calculate_recommendation returns DHWRecommendation."""
+        from datetime import datetime
+
+        from custom_components.effektguard.optimization.dhw_optimizer import DHWRecommendation
+
+        result = scheduler.calculate_recommendation(
+            current_dhw_temp=45.0,
+            thermal_debt=-200,
+            space_heating_demand=1.5,
+            outdoor_temp=5.0,
+            indoor_temp=21.5,
+            target_indoor=21.0,
+            price_classification="normal",
+            current_time=datetime.now(),
+            price_periods=None,
+            hours_since_last_dhw=12.0,
+        )
+
+        assert isinstance(result, DHWRecommendation)
+        assert result.recommendation
+        assert result.summary
+        assert isinstance(result.details, dict)
+
+    def test_blocks_dhw_when_indoor_cooling_rapidly(self, scheduler):
+        """Test DHW is blocked when indoor temp is cooling rapidly."""
+        from datetime import datetime
+
+        result = scheduler.calculate_recommendation(
+            current_dhw_temp=45.0,
+            thermal_debt=-200,
+            space_heating_demand=2.0,
+            outdoor_temp=0.0,
+            indoor_temp=20.5,  # Below target
+            target_indoor=21.0,
+            price_classification="cheap",
+            current_time=datetime.now(),
+            price_periods=None,
+            hours_since_last_dhw=8.0,
+            thermal_trend_rate=-0.5,  # Cooling rapidly
+        )
+
+        assert "Block" in result.recommendation or "INDOOR_COOLING" in result.details.get(
+            "priority_reason", ""
+        )
+        assert result.details["should_heat"] is False
+
+    def test_includes_thermal_debt_status_in_details(self, scheduler):
+        """Test thermal debt status is included in details."""
+        from datetime import datetime
+
+        result = scheduler.calculate_recommendation(
+            current_dhw_temp=45.0,
+            thermal_debt=-200,
+            space_heating_demand=1.0,
+            outdoor_temp=5.0,
+            indoor_temp=21.5,
+            target_indoor=21.0,
+            price_classification="normal",
+            current_time=datetime.now(),
+            price_periods=None,
+            hours_since_last_dhw=12.0,
+        )
+
+        assert "thermal_debt_status" in result.details
+        assert "OK" in result.details["thermal_debt_status"]
+
+    def test_includes_climate_zone_in_details(self, scheduler):
+        """Test climate zone is included in details."""
+        from datetime import datetime
+
+        result = scheduler.calculate_recommendation(
+            current_dhw_temp=45.0,
+            thermal_debt=-200,
+            space_heating_demand=1.0,
+            outdoor_temp=5.0,
+            indoor_temp=21.5,
+            target_indoor=21.0,
+            price_classification="normal",
+            current_time=datetime.now(),
+            price_periods=None,
+            hours_since_last_dhw=12.0,
+            climate_zone_name="Nordic",
+        )
+
+        assert result.details.get("climate_zone") == "Nordic"
+
+    def test_formats_planning_summary(self, scheduler):
+        """Test planning summary is properly formatted."""
+        from datetime import datetime
+
+        result = scheduler.calculate_recommendation(
+            current_dhw_temp=42.0,
+            thermal_debt=-200,
+            space_heating_demand=1.5,
+            outdoor_temp=5.0,
+            indoor_temp=21.5,
+            target_indoor=21.0,
+            price_classification="CHEAP",
+            current_time=datetime.now(),
+            price_periods=None,
+            hours_since_last_dhw=12.0,
+        )
+
+        assert "DHW Planning Summary" in result.summary
+        assert "42.0°C" in result.summary
+        assert "CHEAP" in result.summary

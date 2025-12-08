@@ -278,19 +278,24 @@ thermal_predictor.py   492  →   prediction_layer.py   ~600
 ## Phase 9: Coordinator Refactor ✅ COMPLETED
 
 ### Results Achieved
-- `coordinator.py`: **2551 → 2335 lines** (-216 lines)
+- `coordinator.py`: **2551 → 2219 lines** (-332 lines)
 - Methods moved to layer files for shared reuse
-- All tests passing (1034 tests)
+- All tests passing (1039 tests)
 
 ### What Was Moved
 
 | Method | From | To | Lines |
 |--------|------|-----|-------|
+| `_calculate_dhw_recommendation` | coordinator.py | dhw_optimizer.py | ~180 |
 | `_format_dhw_planning_summary` | coordinator.py | dhw_optimizer.py | ~60 |
 | `_check_dhw_abort_conditions` | coordinator.py | dhw_optimizer.py | ~50 |
 | `_estimate_power_consumption` | coordinator.py | effect_layer.py | ~40 |
 | `_estimate_power_from_compressor` | coordinator.py | effect_layer.py | ~50 |
 | `_get_thermal_debt_status` | coordinator.py | thermal_layer.py | ~20 |
+
+### New Classes Added
+- `DHWRecommendation` dataclass in dhw_optimizer.py - Complete recommendation result
+- `IntelligentDHWScheduler.calculate_recommendation()` - Pure logic method
 
 ### New Constants Added to `const.py`
 - `COMPRESSOR_HZ_MIN`, `COMPRESSOR_HZ_RANGE` - Compressor frequency bounds
@@ -299,14 +304,16 @@ thermal_predictor.py   492  →   prediction_layer.py   ~600
 - `POWER_STANDBY_KW` - Standby power for idle compressor
 
 ### Tests Created
-- `tests/unit/test_shared_layer_methods.py` - 27 tests for new layer methods
+- `tests/unit/test_shared_layer_methods.py` - 32 tests for new layer methods
 - `tests/validation/test_dhw_abort_and_override.py` - DHW abort conditions
 - `tests/validation/test_event_listener_integration.py` - HA event integration
 
-### Why Not More?
-The remaining `_calculate_dhw_recommendation` (~200 lines) is tightly coupled to
-Home Assistant-specific features (persistent_notification, hass, entry.data) and
-is better left as coordinator glue code.
+### Refactor Pattern Used
+The `_calculate_dhw_recommendation` was refactored using a thin wrapper pattern:
+1. Coordinator gathers HA-specific data (entry.data, notifications, history)
+2. Calls `dhw_optimizer.calculate_recommendation()` with all data as parameters
+3. Pure logic in dhw_optimizer returns `DHWRecommendation` dataclass
+4. Coordinator handles HA-specific side effects (notifications)
 
 ### Current State
 - `coordinator.py`: **2551 lines** (largest file in codebase)
@@ -336,14 +343,14 @@ These are core coordinator responsibilities that require Home Assistant context:
 
 #### CAN MOVE to Layer Files
 
-| Method | Lines | Target | Shared By |
-|--------|-------|--------|-----------|
-| `_calculate_dhw_recommendation` | ~200 | `dhw_optimizer.py` | Coordinator only |
-| `_format_dhw_planning_summary` | ~60 | `dhw_optimizer.py` | Coordinator only |
-| `_check_dhw_abort_conditions` | ~50 | `dhw_optimizer.py` | Coordinator only |
-| `_get_thermal_debt_status` | ~20 | `thermal_layer.py` | Coordinator, Sensors |
-| `_estimate_power_consumption` | ~40 | `effect_layer.py` | Coordinator, Peak tracking |
-| `_estimate_power_from_compressor` | ~50 | `effect_layer.py` | Coordinator, Peak tracking |
+| Method | Lines | Target | Status |
+|--------|-------|--------|--------|
+| `_calculate_dhw_recommendation` | ~200 | `dhw_optimizer.py` | ✅ MOVED |
+| `_format_dhw_planning_summary` | ~60 | `dhw_optimizer.py` | ✅ MOVED |
+| `_check_dhw_abort_conditions` | ~50 | `dhw_optimizer.py` | ✅ MOVED |
+| `_get_thermal_debt_status` | ~20 | `thermal_layer.py` | ✅ MOVED |
+| `_estimate_power_consumption` | ~40 | `effect_layer.py` | ✅ MOVED |
+| `_estimate_power_from_compressor` | ~50 | `effect_layer.py` | ✅ MOVED |
 | `_apply_airflow_decision` | ~80 | Keep (HA entity control) | - |
 | `_apply_dhw_control` | ~130 | Keep (HA entity control) | - |
 | `_update_peak_tracking` | ~180 | Already delegated to `EffectManager` | - |

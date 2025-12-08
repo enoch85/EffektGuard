@@ -125,6 +125,24 @@ class DHWScheduleDecision:
 
 
 @dataclass
+class DHWRecommendation:
+    """Complete DHW recommendation result.
+
+    Contains all information needed for display and control:
+    - Human-readable recommendation and summary
+    - Machine-readable planning details
+    - Raw decision for control logic
+
+    Moved from coordinator._calculate_dhw_recommendation for shared reuse.
+    """
+
+    recommendation: str  # Human-readable recommendation text
+    summary: str  # Multi-line planning summary for display
+    details: dict  # Machine-readable planning details
+    decision: DHWScheduleDecision | None  # Raw decision for control logic
+
+
+@dataclass
 class DHWDemandPeriod:
     """User-defined high DHW demand period."""
 
@@ -1343,6 +1361,191 @@ class IntelligentDHWScheduler:
                     continue
 
         return False, None
+
+    def calculate_recommendation(
+        self,
+        current_dhw_temp: float,
+        thermal_debt: float,
+        space_heating_demand: float,
+        outdoor_temp: float,
+        indoor_temp: float,
+        target_indoor: float,
+        price_classification: str,
+        current_time: datetime,
+        price_periods: list | None,
+        hours_since_last_dhw: float,
+        thermal_trend_rate: float = 0.0,
+        climate_zone_name: str | None = None,
+        weather_current_temp: float | None = None,
+    ) -> DHWRecommendation:
+        """Calculate complete DHW heating recommendation.
+
+        Pure logic moved from coordinator._calculate_dhw_recommendation.
+        Takes all data as parameters (no HA dependencies), returns structured result.
+
+        The coordinator should:
+        1. Gather all HA-specific data (entry.data, notifications, history)
+        2. Call this method with gathered data
+        3. Handle HA-specific side effects (notifications)
+
+        Args:
+            current_dhw_temp: Current DHW temperature (°C)
+            thermal_debt: Current degree minutes (DM)
+            space_heating_demand: Current heating power (kW)
+            outdoor_temp: Current outdoor temperature (°C)
+            indoor_temp: Current indoor temperature (°C)
+            target_indoor: Target indoor temperature (°C)
+            price_classification: Price classification (cheap/normal/expensive/peak)
+            current_time: Current datetime
+            price_periods: Price period list for window scheduling
+            hours_since_last_dhw: Hours since last DHW heating
+            thermal_trend_rate: Indoor temp change rate (°C/hour)
+            climate_zone_name: Climate zone name for display
+            weather_current_temp: Current weather temp for opportunity detection
+
+        Returns:
+            DHWRecommendation with recommendation, summary, details, and decision
+        """
+        indoor_deficit = max(0.0, target_indoor - indoor_temp)
+
+        # Get DM thresholds from climate detector or use fallback
+        if self.climate_detector:
+            dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+            dm_thresholds = {
+                "block": dm_range["warning"],
+                "abort": dm_range["critical"],
+            }
+            zone_name = climate_zone_name or self.climate_detector.zone_info.name
+        else:
+            dm_thresholds = {
+                "block": DM_DHW_BLOCK_FALLBACK,
+                "abort": DM_DHW_ABORT_FALLBACK,
+            }
+            zone_name = climate_zone_name or "Unknown"
+
+        # Block DHW if indoor cooling rapidly AND below target
+        if indoor_deficit > 0.3 and thermal_trend_rate < -0.3:
+            planning_summary = (
+                f"⚠️ DHW Blocked - Space Heating Priority\n"
+                f"Indoor: {indoor_temp:.1f}°C (target {target_indoor:.1f}°C)\n"
+                f"Trend: Cooling {abs(thermal_trend_rate):.2f}°C/hour\n"
+                f"Reason: Prevent further indoor temperature drop"
+            )
+
+            recommendation = (
+                f"Block DHW - Indoor temp falling rapidly ({thermal_trend_rate:.2f}°C/h), "
+                f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
+            )
+
+            return DHWRecommendation(
+                recommendation=recommendation,
+                summary=planning_summary,
+                details={
+                    "should_heat": False,
+                    "priority_reason": "INDOOR_COOLING_RAPIDLY",
+                    "current_temperature": current_dhw_temp,
+                    "target_temperature": 50.0,
+                    "indoor_temp": indoor_temp,
+                    "indoor_trend": thermal_trend_rate,
+                    "indoor_deficit": indoor_deficit,
+                },
+                decision=None,
+            )
+
+        # Get decision from should_start_dhw
+        decision = self.should_start_dhw(
+            current_dhw_temp=current_dhw_temp,
+            space_heating_demand_kw=space_heating_demand,
+            thermal_debt_dm=thermal_debt,
+            indoor_temp=indoor_temp,
+            target_indoor_temp=target_indoor,
+            outdoor_temp=outdoor_temp,
+            price_classification=price_classification,
+            current_time=current_time,
+            price_periods=price_periods,
+            hours_since_last_dhw=hours_since_last_dhw,
+        )
+
+        # Build detailed planning attributes
+        from .thermal_layer import get_thermal_debt_status
+
+        planning_details = {
+            "should_heat": decision.should_heat,
+            "priority_reason": decision.priority_reason,
+            "current_temperature": current_dhw_temp,
+            "target_temperature": decision.target_temp,
+            "thermal_debt": thermal_debt,
+            "thermal_debt_threshold_block": dm_thresholds["block"],
+            "thermal_debt_threshold_abort": dm_thresholds["abort"],
+            "thermal_debt_status": get_thermal_debt_status(thermal_debt, dm_thresholds),
+            "space_heating_demand_kw": round(space_heating_demand, 2),
+            "current_price_classification": price_classification,
+            "outdoor_temperature": outdoor_temp,
+            "indoor_temperature": indoor_temp,
+            "climate_zone": zone_name,
+            "recommended_start_time": decision.recommended_start_time,
+        }
+
+        # Check for weather opportunity
+        weather_opportunity = None
+        if weather_current_temp is not None and self.climate_detector:
+            zone_avg = self.climate_detector.zone_info.winter_avg_low
+            temp_deviation = outdoor_temp - zone_avg
+            if temp_deviation > 5.0:
+                weather_opportunity = (
+                    f"Unusually warm (+{temp_deviation:.1f}°C), good for DHW heating"
+                )
+                planning_details["weather_opportunity"] = weather_opportunity
+
+        # Convert decision to human-readable recommendation
+        if not decision.should_heat:
+            if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
+                recommendation = (
+                    f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {zone_name})"
+                )
+            elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
+                recommendation = f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
+            elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
+                recommendation = f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
+            elif decision.priority_reason == "DHW_ADEQUATE":
+                recommendation = f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+            else:
+                recommendation = "Wait - Conditions not optimal"
+        else:
+            # Should heat - give specific recommendation
+            if decision.priority_reason == "DHW_SAFETY_MINIMUM":
+                recommendation = (
+                    f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < {DHW_SAFETY_MIN}°C)"
+                )
+            elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
+                recommendation = f"Heat now - Cheap electricity ({price_classification})"
+            elif decision.priority_reason.startswith("URGENT_DEMAND"):
+                recommendation = "Heat now - Demand period approaching"
+            elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
+                recommendation = f"Heat now - Pre-heating for demand ({price_classification})"
+            elif decision.priority_reason == "NORMAL_DHW_HEATING":
+                recommendation = f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+            else:
+                recommendation = f"Heat recommended - Target: {decision.target_temp:.0f}°C"
+
+        # Build human-readable planning summary
+        planning_summary = self.format_planning_summary(
+            recommendation=recommendation,
+            current_temp=current_dhw_temp,
+            target_temp=decision.target_temp,
+            thermal_debt=thermal_debt,
+            dm_thresholds=dm_thresholds,
+            space_heating_demand=space_heating_demand,
+            price_classification=price_classification,
+            weather_opportunity=weather_opportunity,
+        )
+
+        return DHWRecommendation(
+            recommendation=recommendation,
+            summary=planning_summary,
+            details=planning_details,
+            decision=decision,
+        )
 
     def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
         """Check if approaching a high demand period (up to 24h ahead).

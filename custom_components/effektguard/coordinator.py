@@ -1168,6 +1168,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     ) -> dict[str, Any]:
         """Calculate DHW heating recommendation with detailed planning.
 
+        Thin wrapper that gathers HA-specific data and delegates to
+        dhw_optimizer.calculate_recommendation() for pure logic.
+
         Args:
             nibe_data: Current NIBE state
             price_data: Spot price data
@@ -1178,7 +1181,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Returns:
             Dictionary with recommendation text and detailed planning info
         """
-        # Get current price classification
+        # Gather HA-specific data
+        target_indoor = self.entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
+        hours_since_last = await self._calculate_hours_since_last_dhw()
+
+        # Get thermal trend from predictor
+        thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # Get price classification
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         price_classification = (
             self.engine.price.get_current_classification(current_quarter)
@@ -1186,188 +1197,61 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else "normal"
         )
 
-        # Get thermal debt
-        thermal_debt = nibe_data.degree_minutes if nibe_data else DM_THRESHOLD_START
+        # Get price periods
+        price_periods = []
+        if price_data:
+            price_periods = price_data.today + price_data.tomorrow
 
-        # Calculate space heating demand - use actual power sensor reading
-        # This is the REAL current heating demand, not an estimate
+        # Extract basic data from NIBE state
+        thermal_debt = nibe_data.degree_minutes if nibe_data else DM_THRESHOLD_START
         space_heating_demand = (
             nibe_data.power_kw if nibe_data and nibe_data.power_kw is not None else 0.0
         )
-
-        # Get outdoor temp
         outdoor_temp = nibe_data.outdoor_temp if nibe_data else 0.0
-
-        # Get indoor temperature and target
         indoor_temp = nibe_data.indoor_temp if nibe_data else DEFAULT_INDOOR_TEMP
-        target_indoor = self.entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
-        indoor_deficit = max(0.0, target_indoor - indoor_temp)
 
-        # Get indoor temperature trend for predictive DHW blocking
-        thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-
-        # NEW: Block DHW if indoor cooling rapidly AND below target
-        # Prevents DHW from causing comfort issues when house already struggling
-        if indoor_deficit > 0.3 and trend_rate < -0.3:
-            # House is below target AND cooling rapidly
-            # DHW would make this worse - block it
-            planning_summary = (
-                f"⚠️ DHW Blocked - Space Heating Priority\n"
-                f"Indoor: {indoor_temp:.1f}°C (target {target_indoor:.1f}°C)\n"
-                f"Trend: Cooling {abs(trend_rate):.2f}°C/hour\n"
-                f"Reason: Prevent further indoor temperature drop"
-            )
-
-            recommendation = (
-                f"Block DHW - Indoor temp falling rapidly ({trend_rate:.2f}°C/h), "
-                f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
-            )
-
-            return {
-                "recommendation": recommendation,
-                "summary": planning_summary,
-                "details": {
-                    "should_heat": False,
-                    "priority_reason": "INDOOR_COOLING_RAPIDLY",
-                    "current_temperature": current_dhw_temp,
-                    "target_temperature": 50.0,
-                    "indoor_temp": indoor_temp,
-                    "indoor_trend": trend_rate,
-                    "indoor_deficit": indoor_deficit,
-                },
-            }
-
-        # Get climate zone DM thresholds from climate detector
-        # Climate detector is REQUIRED - don't use arbitrary fallback values
+        # Get climate zone name
+        climate_zone_name = None
         if self.engine.climate_detector:
-            dm_range = self.engine.climate_detector.get_expected_dm_range(outdoor_temp)
-            dm_thresholds = {
-                "block": dm_range["warning"],  # Block DHW at warning threshold
-                "abort": dm_range["critical"],  # Abort DHW at critical threshold (always -1500)
-            }
-            climate_zone = self.engine.climate_detector.zone_info
+            climate_zone_name = self.engine.climate_detector.zone_info.name
         else:
-            # Climate detector not initialized - use balanced fallback thresholds
-            # -340/-500 provides reasonable DHW operation while maintaining safety margin
-            _LOGGER.warning(
-                "Climate detector not initialized - using balanced fallback DM thresholds "
-                "(block: %d, abort: %d). Configure latitude in EffektGuard settings for "
-                "accurate climate-aware thresholds.",
-                DM_DHW_BLOCK_FALLBACK,
-                DM_DHW_ABORT_FALLBACK,
-            )
-            dm_thresholds = {
-                "block": DM_DHW_BLOCK_FALLBACK,  # -340: Never start DHW below this
-                "abort": DM_DHW_ABORT_FALLBACK,  # -500: Abort DHW if reached during run
-            }
-            climate_zone = None
-
-            # Show persistent notification in UI
+            # Show HA notification for missing climate detector
             self.hass.components.persistent_notification.async_create(
                 "EffektGuard could not detect your climate zone. "
                 "Using balanced thermal debt thresholds. "
                 "Configure latitude in integration settings for optimal climate-aware operation.",
                 title="EffektGuard Configuration Recommended",
                 notification_id="effektguard_climate_detection_missing",
-            )  # Get hours since last DHW heating for max wait check
-        hours_since_last = await self._calculate_hours_since_last_dhw()
+            )
 
-        # Get price periods for window-based scheduling
-        price_periods = []
-        if price_data:
-            price_periods = price_data.today + price_data.tomorrow
+        # Get weather current temp for opportunity detection
+        weather_current_temp = None
+        if weather_data and hasattr(weather_data, "current_temp"):
+            weather_current_temp = weather_data.current_temp
 
-        # Get recommendation from optimizer
-        decision = self.dhw_optimizer.should_start_dhw(
+        # Call pure logic in dhw_optimizer
+        result = self.dhw_optimizer.calculate_recommendation(
             current_dhw_temp=current_dhw_temp,
-            space_heating_demand_kw=space_heating_demand,
-            thermal_debt_dm=thermal_debt,
-            indoor_temp=indoor_temp,
-            target_indoor_temp=target_indoor,
+            thermal_debt=thermal_debt,
+            space_heating_demand=space_heating_demand,
             outdoor_temp=outdoor_temp,
+            indoor_temp=indoor_temp,
+            target_indoor=target_indoor,
             price_classification=price_classification,
             current_time=now_time,
             price_periods=price_periods,
             hours_since_last_dhw=hours_since_last,
+            thermal_trend_rate=trend_rate,
+            climate_zone_name=climate_zone_name,
+            weather_current_temp=weather_current_temp,
         )
 
-        # Build detailed planning attributes
-        planning_details = {
-            "should_heat": decision.should_heat,
-            "priority_reason": decision.priority_reason,
-            "current_temperature": current_dhw_temp,
-            "target_temperature": decision.target_temp,
-            "thermal_debt": thermal_debt,
-            "thermal_debt_threshold_block": dm_thresholds["block"],
-            "thermal_debt_threshold_abort": dm_thresholds["abort"],
-            "thermal_debt_status": get_thermal_debt_status(thermal_debt, dm_thresholds),
-            "space_heating_demand_kw": round(space_heating_demand, 2),
-            "current_price_classification": price_classification,
-            "outdoor_temperature": outdoor_temp,
-            "indoor_temperature": indoor_temp,
-            "climate_zone": climate_zone.name if climate_zone else "Unknown",
-            "recommended_start_time": decision.recommended_start_time,  # From optimizer
-        }
-
-        # Check for weather opportunity
-        if weather_data and hasattr(weather_data, "current_temp"):
-            # Unusually warm weather is good for DHW
-            zone_avg = climate_zone.winter_avg_low if climate_zone else 0.0
-            temp_deviation = outdoor_temp - zone_avg
-            if temp_deviation > 5.0:
-                planning_details["weather_opportunity"] = (
-                    f"Unusually warm (+{temp_deviation:.1f}°C), good for DHW heating"
-                )
-
-        # Convert decision to human-readable recommendation
-        if not decision.should_heat:
-            if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
-                recommendation = f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {planning_details['climate_zone']})"
-            elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
-                recommendation = f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
-            elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
-                recommendation = f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
-            elif decision.priority_reason == "DHW_ADEQUATE":
-                recommendation = f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
-            else:
-                recommendation = "Wait - Conditions not optimal"
-
-        else:
-            # Should heat - give specific recommendation
-            if decision.priority_reason == "DHW_SAFETY_MINIMUM":
-                recommendation = (
-                    f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < {DHW_SAFETY_MIN}°C)"
-                )
-            elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
-                recommendation = f"Heat now - Cheap electricity ({price_classification})"
-            elif decision.priority_reason.startswith("URGENT_DEMAND"):
-                recommendation = "Heat now - Demand period approaching"
-            elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
-                recommendation = f"Heat now - Pre-heating for demand ({price_classification})"
-            elif decision.priority_reason == "NORMAL_DHW_HEATING":
-                recommendation = f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
-            else:
-                recommendation = f"Heat recommended - Target: {decision.target_temp:.0f}°C"
-
-        # Build human-readable planning summary
-        planning_summary = self.dhw_optimizer.format_planning_summary(
-            recommendation=recommendation,
-            current_temp=current_dhw_temp,
-            target_temp=decision.target_temp,
-            thermal_debt=thermal_debt,
-            dm_thresholds=dm_thresholds,
-            space_heating_demand=space_heating_demand,
-            price_classification=price_classification,
-            weather_opportunity=planning_details.get("weather_opportunity"),
-        )
-
-        # Return combined result with both machine-readable and human-readable data
+        # Convert DHWRecommendation to dict for backward compatibility
         return {
-            "recommendation": recommendation,
-            "summary": planning_summary,
-            "details": planning_details,
-            "decision": decision,  # Include raw decision for control logic
+            "recommendation": result.recommendation,
+            "summary": result.summary,
+            "details": result.details,
+            "decision": result.decision,
         }
 
     async def _get_last_dhw_heating_time(self) -> datetime | None:
