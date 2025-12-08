@@ -6,9 +6,7 @@ Tests the priority cascade for power measurement:
 3. Compressor Hz estimation - PRIORITY 3 for display/debugging
 4. Fallback estimation - PRIORITY 4 last resort
 
-Also tests _estimate_power_from_compressor() frequency-based power calculation.
-
-Based on: coordinator.py _update_peak_tracking() changes (lines 1137-1324)
+Power estimation methods are in effect_layer.py and tested in test_shared_layer_methods.py.
 """
 
 import pytest
@@ -16,103 +14,88 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 
 class TestCompressorHzPowerEstimation:
-    """Test _estimate_power_from_compressor() method."""
+    """Test estimate_power_from_compressor() via EffectManager."""
 
-    def test_zero_hz_returns_standby_power(self, coordinator):
+    @pytest.fixture
+    def effect_manager(self, hass):
+        """Create an EffectManager instance."""
+        return EffectManager(hass)
+
+    def test_zero_hz_returns_standby_power(self, effect_manager):
         """Test that 0 Hz returns standby power (0.1 kW)."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 0
-        nibe_data.outdoor_temp = 5.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=0, outdoor_temp=5.0
+        )
         assert power == 0.1  # Standby power
 
-    def test_minimum_compressor_20hz(self, coordinator):
+    def test_minimum_compressor_20hz(self, effect_manager):
         """Test power estimation at minimum compressor frequency (20 Hz)."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 20
-        nibe_data.outdoor_temp = 5.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=20, outdoor_temp=5.0
+        )
         # At 20 Hz: base ~1.5-2.0 kW
         assert power >= 1.5
         assert power <= 2.5
 
-    def test_mid_range_compressor_50hz(self, coordinator):
+    def test_mid_range_compressor_50hz(self, effect_manager):
         """Test power estimation at mid-range frequency (50 Hz)."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 50
-        nibe_data.outdoor_temp = 0.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=50, outdoor_temp=0.0
+        )
         # At 50 Hz with 0°C: ~4-5 kW
         assert power >= 3.5
         assert power <= 5.5
 
-    def test_maximum_compressor_80hz(self, coordinator):
+    def test_maximum_compressor_80hz(self, effect_manager):
         """Test power estimation at maximum frequency (80 Hz)."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 80
-        nibe_data.outdoor_temp = -10.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=80, outdoor_temp=-10.0
+        )
         # At 80 Hz with -10°C: ~6.5-8.5 kW
         assert power >= 6.0
         assert power <= 9.0
 
-    def test_cold_weather_increases_power(self, coordinator):
+    def test_cold_weather_increases_power(self, effect_manager):
         """Test that colder outdoor temp increases power for same Hz."""
-        nibe_data_mild = MagicMock()
-        nibe_data_mild.compressor_frequency = 50
-        nibe_data_mild.outdoor_temp = 5.0
-
-        nibe_data_cold = MagicMock()
-        nibe_data_cold.compressor_frequency = 50
-        nibe_data_cold.outdoor_temp = -15.0
-
-        power_mild = coordinator._estimate_power_from_compressor(nibe_data_mild)
-        power_cold = coordinator._estimate_power_from_compressor(nibe_data_cold)
-
+        power_mild = effect_manager.estimate_power_from_compressor(
+            compressor_hz=50, outdoor_temp=5.0
+        )
+        power_cold = effect_manager.estimate_power_from_compressor(
+            compressor_hz=50, outdoor_temp=-15.0
+        )
         # Same Hz but colder temp = more power needed
         assert power_cold > power_mild
 
-    def test_extreme_cold_applies_max_factor(self, coordinator):
+    def test_extreme_cold_applies_max_factor(self, effect_manager):
         """Test that extreme cold (<-15°C) applies maximum temp factor."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 50
-        nibe_data.outdoor_temp = -20.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=50, outdoor_temp=-20.0
+        )
         # Extreme cold should apply 1.3x factor
         # Base at 50 Hz: ~3.5 kW, with 1.3x = ~4.55 kW
         assert power >= 4.0
         assert power <= 6.0
 
-    def test_mild_weather_no_temp_factor(self, coordinator):
+    def test_mild_weather_no_temp_factor(self, effect_manager):
         """Test that mild weather (>0°C) applies no temp factor."""
-        nibe_data = MagicMock()
-        nibe_data.compressor_frequency = 50
-        nibe_data.outdoor_temp = 10.0
-
-        power = coordinator._estimate_power_from_compressor(nibe_data)
-
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=50, outdoor_temp=10.0
+        )
         # Mild weather: temp_factor = 1.0, so base power only
         # Base at 50 Hz: ~3.5-4.5 kW
         assert power >= 3.0
         assert power <= 5.0
 
-    def test_none_nibe_data_returns_zero(self, coordinator):
-        """Test that None nibe_data returns 0."""
-        power = coordinator._estimate_power_from_compressor(None)
-        assert power == 0.0
+    def test_zero_hz_compressor_returns_standby(self, effect_manager):
+        """Test that 0 Hz compressor returns standby power."""
+        power = effect_manager.estimate_power_from_compressor(
+            compressor_hz=0, outdoor_temp=5.0
+        )
+        assert power == 0.1
 
 
 class TestPowerMeasurementPriority:
@@ -181,50 +164,25 @@ class TestPowerMeasurementPriority:
         assert coordinator.peak_today <= 6.5
 
     @pytest.mark.asyncio
-    async def test_priority_3_compressor_hz_when_no_currents(
-        self, coordinator_without_external_meter
-    ):
-        """Test that compressor Hz estimation is used when no current sensors.
+    async def test_priority_3_compressor_hz_when_no_currents(self):
+        """Test that compressor Hz estimation works with EffectManager.
 
-        NOTE: Current implementation has a bug - it looks for 'compressor_frequency'
-        attribute but NibeState has 'compressor_hz'. This test documents the bug.
+        Uses EffectManager.estimate_power_from_compressor() which takes
+        compressor_hz and outdoor_temp as direct parameters for a clean API.
         """
-        coordinator = coordinator_without_external_meter
+        effect_manager = EffectManager(MagicMock())
 
-        # Mock NIBE data with only compressor Hz
-        nibe_data = NibeState(
-            outdoor_temp=-5.0,
-            indoor_temp=21.0,
-            supply_temp=40.0,
-            return_temp=35.0,
-            degree_minutes=-100.0,
-            current_offset=1.0,
-            is_heating=True,
-            is_hot_water=False,
-            timestamp=datetime.now(),
-            phase1_current=None,  # No current sensors
-            phase2_current=None,
-            phase3_current=None,
+        # Test estimation at 50 Hz, -5°C outdoor
+        # Mid-range Hz should give mid-range power
+        estimated_power = effect_manager.estimate_power_from_compressor(
             compressor_hz=50,
+            outdoor_temp=-5.0,
         )
 
-        # NOTE: Due to bug in _estimate_power_from_compressor, it looks for
-        # 'compressor_frequency' attribute but NibeState has 'compressor_hz'.
-        # So it returns 0 (not found) which gives standby power 0.1 kW.
-        # This is a known bug to be fixed in production code.
-        estimated_power = coordinator._estimate_power_from_compressor(nibe_data)
-
-        # Currently returns standby power due to attribute name mismatch
-        assert estimated_power == 0.1  # Standby (bug: should be ~4-5 kW)
-
-        # Workaround: Add compressor_frequency attribute to fix estimation
-        nibe_data.compressor_frequency = 50  # Add missing attribute
-        estimated_power_fixed = coordinator._estimate_power_from_compressor(nibe_data)
-
-        # Now it should work correctly
-        assert estimated_power_fixed >= 4.0
-        assert estimated_power_fixed <= 5.5
-        print(f"Priority 3 (Hz): Fixed estimation at 50 Hz, -5°C = {estimated_power_fixed:.2f} kW")
+        # At 50 Hz and -5°C (cold), expect ~4-5 kW
+        assert estimated_power >= 4.0
+        assert estimated_power <= 5.5
+        print(f"Priority 3 (Hz): Estimation at 50 Hz, -5°C = {estimated_power:.2f} kW")
 
     @pytest.mark.asyncio
     async def test_priority_4_fallback_estimation(self, coordinator_without_external_meter):
@@ -432,6 +390,7 @@ def coordinator_with_external_meter():
     """Create coordinator with external power meter configured."""
     from unittest.mock import MagicMock
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
 
     hass = MagicMock()
     hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
@@ -441,8 +400,10 @@ def coordinator_with_external_meter():
     gespot_adapter = MagicMock()
     weather_adapter = MagicMock()
     decision_engine = MagicMock()
-    effect_manager = MagicMock()
-    effect_manager.async_save = AsyncMock()
+
+    # Use real EffectManager for power estimation tests
+    effect_manager = EffectManager(hass)
+
     entry = MagicMock()
     entry.data = {}
     entry.options = {}
@@ -468,6 +429,7 @@ def coordinator_without_external_meter():
     """Create coordinator without external power meter."""
     from unittest.mock import MagicMock
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
 
     hass = MagicMock()
     hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
@@ -481,8 +443,10 @@ def coordinator_without_external_meter():
     gespot_adapter = MagicMock()
     weather_adapter = MagicMock()
     decision_engine = MagicMock()
-    effect_manager = MagicMock()
-    effect_manager.async_save = AsyncMock()
+
+    # Use real EffectManager for power estimation tests
+    effect_manager = EffectManager(hass)
+
     entry = MagicMock()
     entry.data = {}
     entry.options = {}
@@ -508,6 +472,7 @@ def coordinator():
     """Create basic coordinator for testing."""
     from unittest.mock import MagicMock
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
 
     hass = MagicMock()
     hass.config.latitude = 59.33  # Stockholm latitude for climate zone detection
@@ -516,8 +481,10 @@ def coordinator():
     gespot_adapter = MagicMock()
     weather_adapter = MagicMock()
     decision_engine = MagicMock()
-    effect_manager = MagicMock()
-    effect_manager.async_save = AsyncMock()
+
+    # Use real EffectManager for power estimation tests
+    effect_manager = EffectManager(hass)
+
     entry = MagicMock()
     entry.data = {}
     entry.options = {}

@@ -57,6 +57,8 @@ from ..const import (
     MIN_DHW_TARGET_TEMP,
     SPACE_HEATING_DEMAND_DROP_HOURS,
     SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
+    SPACE_HEATING_DEMAND_LOW_THRESHOLD,
+    SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1227,6 +1229,120 @@ class IntelligentDHWScheduler:
         )
 
         return result
+
+    def format_planning_summary(
+        self,
+        recommendation: str,
+        current_temp: float,
+        target_temp: float,
+        thermal_debt: float,
+        dm_thresholds: dict,
+        space_heating_demand: float,
+        price_classification: str,
+        weather_opportunity: str | None,
+    ) -> str:
+        """Format human-readable DHW planning summary.
+
+        Moved from coordinator._format_dhw_planning_summary for shared reuse.
+
+        Args:
+            recommendation: Base recommendation text
+            current_temp: Current DHW temperature
+            target_temp: Target DHW temperature
+            thermal_debt: Current thermal debt (DM)
+            dm_thresholds: Thermal debt thresholds (block, abort)
+            space_heating_demand: Current heating demand in kW
+            price_classification: Current price classification
+            weather_opportunity: Weather opportunity text if any
+
+        Returns:
+            Multi-line human-readable summary
+        """
+        lines = []
+        lines.append("DHW Planning Summary")
+        lines.append("=" * 40)
+        lines.append(f"Current: {current_temp:.1f}°C -> Target: {target_temp:.0f}°C")
+        lines.append(f"Price: {price_classification}")
+
+        # Thermal debt status
+        if thermal_debt < dm_thresholds.get("abort", DM_DHW_ABORT_FALLBACK):
+            status_text = f"CRITICAL (DM {thermal_debt:.0f})"
+        elif thermal_debt < dm_thresholds.get("block", DM_DHW_BLOCK_FALLBACK):
+            status_text = f"WARNING (DM {thermal_debt:.0f})"
+        else:
+            status_text = f"OK (DM {thermal_debt:.0f})"
+        lines.append(f"Thermal Debt: {status_text}")
+
+        # Space heating status
+        if space_heating_demand > SPACE_HEATING_DEMAND_HIGH_THRESHOLD:
+            lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
+        elif space_heating_demand > SPACE_HEATING_DEMAND_MODERATE_THRESHOLD:
+            lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
+        elif space_heating_demand > SPACE_HEATING_DEMAND_LOW_THRESHOLD:
+            lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")
+        else:
+            lines.append(f"Heating Demand: MINIMAL ({space_heating_demand:.1f} kW)")
+
+        # Weather opportunity
+        if weather_opportunity:
+            lines.append(f"Weather: {weather_opportunity}")
+
+        lines.append("")
+        lines.append(f"Recommendation: {recommendation}")
+
+        return "\n".join(lines)
+
+    def check_abort_conditions(
+        self,
+        abort_conditions: list[str],
+        thermal_debt: float,
+        indoor_temp: float,
+        target_indoor: float,
+    ) -> tuple[bool, str | None]:
+        """Check if any DHW abort conditions are triggered.
+
+        Moved from coordinator._check_dhw_abort_conditions for shared reuse.
+
+        Abort conditions are returned by DHW optimizer to monitor during active heating.
+        If triggered, we should stop DHW heating early to prioritize space heating.
+
+        Args:
+            abort_conditions: List of condition strings from DHW decision
+                Examples: ["thermal_debt < -500", "indoor_temp < 21.5"]
+            thermal_debt: Current degree minutes (DM) value
+            indoor_temp: Current indoor temperature
+            target_indoor: Target indoor temperature (currently unused but kept for future)
+
+        Returns:
+            Tuple of (should_abort, reason_str)
+            - should_abort: True if any condition triggered
+            - reason_str: Human-readable abort reason or None
+        """
+        if not abort_conditions:
+            return False, None
+
+        for condition in abort_conditions:
+            # Parse and evaluate "thermal_debt < THRESHOLD" condition
+            if "thermal_debt <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if thermal_debt < threshold:
+                        return True, f"Thermal debt {thermal_debt:.0f} < {threshold:.0f}"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+            # Parse and evaluate "indoor_temp < THRESHOLD" condition
+            elif "indoor_temp <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if indoor_temp < threshold:
+                        return True, f"Indoor {indoor_temp:.1f}°C < {threshold:.1f}°C"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+        return False, None
 
     def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
         """Check if approaching a high demand period (up to 24h ahead).

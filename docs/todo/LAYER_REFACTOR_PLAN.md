@@ -275,7 +275,38 @@ thermal_predictor.py   492  →   prediction_layer.py   ~600
 
 ---
 
-## Phase 9: Coordinator Refactor (Future)
+## Phase 9: Coordinator Refactor ✅ COMPLETED
+
+### Results Achieved
+- `coordinator.py`: **2551 → 2335 lines** (-216 lines)
+- Methods moved to layer files for shared reuse
+- All tests passing (1034 tests)
+
+### What Was Moved
+
+| Method | From | To | Lines |
+|--------|------|-----|-------|
+| `_format_dhw_planning_summary` | coordinator.py | dhw_optimizer.py | ~60 |
+| `_check_dhw_abort_conditions` | coordinator.py | dhw_optimizer.py | ~50 |
+| `_estimate_power_consumption` | coordinator.py | effect_layer.py | ~40 |
+| `_estimate_power_from_compressor` | coordinator.py | effect_layer.py | ~50 |
+| `_get_thermal_debt_status` | coordinator.py | thermal_layer.py | ~20 |
+
+### New Constants Added to `const.py`
+- `COMPRESSOR_HZ_MIN`, `COMPRESSOR_HZ_RANGE` - Compressor frequency bounds
+- `COMPRESSOR_POWER_MIN_KW`, `COMPRESSOR_POWER_MAX_KW` - Power range
+- `COMPRESSOR_TEMP_*_THRESHOLD/FACTOR` - Temperature-based power adjustments
+- `POWER_STANDBY_KW` - Standby power for idle compressor
+
+### Tests Created
+- `tests/unit/test_shared_layer_methods.py` - 27 tests for new layer methods
+- `tests/validation/test_dhw_abort_and_override.py` - DHW abort conditions
+- `tests/validation/test_event_listener_integration.py` - HA event integration
+
+### Why Not More?
+The remaining `_calculate_dhw_recommendation` (~200 lines) is tightly coupled to
+Home Assistant-specific features (persistent_notification, hass, entry.data) and
+is better left as coordinator glue code.
 
 ### Current State
 - `coordinator.py`: **2551 lines** (largest file in codebase)

@@ -1021,6 +1021,37 @@ BASELINE_EMA_WEIGHT_NEW: Final = 0.2  # 20% weight on new observation
 # F750: typically 2-7 kW depending on outdoor temp and compressor frequency
 DEFAULT_HEAT_PUMP_POWER_KW: Final = 4.0  # Mid-range estimate for average conditions
 
+# Power estimation constants (moved from coordinator for shared reuse)
+# Standby power when compressor not running
+POWER_STANDBY_KW: Final = 0.1
+
+# Temperature-based power multipliers for basic estimation
+POWER_TEMP_VERY_COLD_THRESHOLD: Final = -10.0  # °C
+POWER_TEMP_COLD_THRESHOLD: Final = 0.0  # °C
+POWER_MULTIPLIER_VERY_COLD: Final = 1.3  # <-10°C
+POWER_MULTIPLIER_COLD: Final = 1.1  # -10 to 0°C
+POWER_MULTIPLIER_MILD: Final = 1.0  # >0°C
+
+# Compressor frequency-based power estimation
+# Based on typical NIBE F750 performance curves:
+# - 20 Hz (minimum): ~1.5-2.0 kW
+# - 50 Hz (mid): ~3.5-4.5 kW
+# - 80 Hz (maximum): ~6.0-7.0 kW
+COMPRESSOR_HZ_MIN: Final = 20
+COMPRESSOR_HZ_RANGE: Final = 60  # 80-20
+COMPRESSOR_POWER_MIN_KW: Final = 1.5
+COMPRESSOR_POWER_RANGE_KW: Final = 5.0  # 6.5-1.5
+COMPRESSOR_POWER_MAX_KW: Final = 6.5
+
+# Temperature factor for compressor power estimation
+COMPRESSOR_TEMP_EXTREME_COLD_THRESHOLD: Final = -15.0
+COMPRESSOR_TEMP_COLD_THRESHOLD: Final = -5.0
+COMPRESSOR_TEMP_COOL_THRESHOLD: Final = 0.0
+COMPRESSOR_TEMP_FACTOR_EXTREME_COLD: Final = 1.3
+COMPRESSOR_TEMP_FACTOR_COLD: Final = 1.2
+COMPRESSOR_TEMP_FACTOR_COOL: Final = 1.1
+COMPRESSOR_TEMP_FACTOR_MILD: Final = 1.0
+
 
 class OptimizationMode(StrEnum):
     """Optimization mode options."""

@@ -20,8 +20,21 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPRESSOR_HZ_MIN,
+    COMPRESSOR_HZ_RANGE,
+    COMPRESSOR_POWER_MAX_KW,
+    COMPRESSOR_POWER_MIN_KW,
+    COMPRESSOR_POWER_RANGE_KW,
+    COMPRESSOR_TEMP_COLD_THRESHOLD,
+    COMPRESSOR_TEMP_COOL_THRESHOLD,
+    COMPRESSOR_TEMP_EXTREME_COLD_THRESHOLD,
+    COMPRESSOR_TEMP_FACTOR_COLD,
+    COMPRESSOR_TEMP_FACTOR_COOL,
+    COMPRESSOR_TEMP_FACTOR_EXTREME_COLD,
+    COMPRESSOR_TEMP_FACTOR_MILD,
     DAYTIME_END_QUARTER,
     DAYTIME_START_QUARTER,
+    DEFAULT_HEAT_PUMP_POWER_KW,
     EFFECT_MARGIN_PREDICTIVE,
     EFFECT_OFFSET_CRITICAL,
     EFFECT_OFFSET_PREDICTIVE,
@@ -36,6 +49,12 @@ from ..const import (
     EFFECT_WEIGHT_WARNING_RISING,
     EFFECT_WEIGHT_WARNING_STABLE,
     PEAK_RECORDING_MINIMUM,
+    POWER_MULTIPLIER_COLD,
+    POWER_MULTIPLIER_MILD,
+    POWER_MULTIPLIER_VERY_COLD,
+    POWER_STANDBY_KW,
+    POWER_TEMP_COLD_THRESHOLD,
+    POWER_TEMP_VERY_COLD_THRESHOLD,
     STORAGE_KEY,
     STORAGE_VERSION,
     THERMAL_CHANGE_MODERATE,
@@ -398,6 +417,90 @@ class EffectManager:
                 for p in self._monthly_peaks
             ],
         }
+
+    def estimate_power_consumption(
+        self,
+        is_heating: bool,
+        outdoor_temp: float,
+    ) -> float:
+        """Estimate heat pump power consumption from state.
+
+        Moved from coordinator._estimate_power_consumption for shared reuse.
+        Basic estimation based on heating status and outdoor temperature.
+
+        Args:
+            is_heating: Whether compressor is currently heating
+            outdoor_temp: Current outdoor temperature (°C)
+
+        Returns:
+            Estimated power consumption in kW
+        """
+        if not is_heating:
+            return POWER_STANDBY_KW
+
+        # Adjust for outdoor temperature - colder = more power needed
+        if outdoor_temp < POWER_TEMP_VERY_COLD_THRESHOLD:
+            return DEFAULT_HEAT_PUMP_POWER_KW * POWER_MULTIPLIER_VERY_COLD
+        elif outdoor_temp < POWER_TEMP_COLD_THRESHOLD:
+            return DEFAULT_HEAT_PUMP_POWER_KW * POWER_MULTIPLIER_COLD
+        else:
+            return DEFAULT_HEAT_PUMP_POWER_KW * POWER_MULTIPLIER_MILD
+
+    def estimate_power_from_compressor(
+        self,
+        compressor_hz: int,
+        outdoor_temp: float,
+    ) -> float:
+        """Estimate heat pump power from compressor frequency and outdoor temperature.
+
+        Moved from coordinator._estimate_power_from_compressor for shared reuse.
+        More accurate estimation when we know compressor is running.
+        Used for smart fallback when grid meter shows solar/battery offset.
+
+        Based on typical NIBE F750 performance curves:
+        - 20 Hz (minimum): ~1.5-2.0 kW
+        - 50 Hz (mid): ~3.5-4.5 kW
+        - 80 Hz (maximum): ~6.0-7.0 kW
+
+        Args:
+            compressor_hz: Current compressor frequency (Hz)
+            outdoor_temp: Current outdoor temperature (°C)
+
+        Returns:
+            Estimated power consumption in kW
+        """
+        if compressor_hz == 0:
+            return POWER_STANDBY_KW
+
+        # Base power from frequency (linear approximation)
+        # 20-80 Hz range maps to ~1.5-6.5 kW
+        base_from_hz = COMPRESSOR_POWER_MIN_KW + (compressor_hz - COMPRESSOR_HZ_MIN) * (
+            COMPRESSOR_POWER_RANGE_KW / COMPRESSOR_HZ_RANGE
+        )
+        base_from_hz = max(COMPRESSOR_POWER_MIN_KW, min(base_from_hz, COMPRESSOR_POWER_MAX_KW))
+
+        # Temperature adjustment (colder = more power needed for same output)
+        if outdoor_temp < COMPRESSOR_TEMP_EXTREME_COLD_THRESHOLD:
+            temp_factor = COMPRESSOR_TEMP_FACTOR_EXTREME_COLD
+        elif outdoor_temp < COMPRESSOR_TEMP_COLD_THRESHOLD:
+            temp_factor = COMPRESSOR_TEMP_FACTOR_COLD
+        elif outdoor_temp < COMPRESSOR_TEMP_COOL_THRESHOLD:
+            temp_factor = COMPRESSOR_TEMP_FACTOR_COOL
+        else:
+            temp_factor = COMPRESSOR_TEMP_FACTOR_MILD
+
+        estimated = base_from_hz * temp_factor
+
+        _LOGGER.debug(
+            "Power estimation: %d Hz at %.1f°C → %.2f kW (base: %.2f, temp_factor: %.2f)",
+            compressor_hz,
+            outdoor_temp,
+            estimated,
+            base_from_hz,
+            temp_factor,
+        )
+
+        return estimated
 
     def evaluate_layer(
         self,

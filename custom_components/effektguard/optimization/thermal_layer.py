@@ -85,6 +85,38 @@ from .climate_zones import ClimateZoneDetector
 _LOGGER = logging.getLogger(__name__)
 
 
+def get_thermal_debt_status(thermal_debt: float, dm_thresholds: dict) -> str:
+    """Get human-readable thermal debt status.
+
+    Moved from coordinator._get_thermal_debt_status for shared reuse.
+    Provides consistent status descriptions across all components.
+
+    Args:
+        thermal_debt: Current thermal debt (DM)
+        dm_thresholds: Thresholds for climate zone with keys:
+            - "block": DHW blocking threshold (warning level)
+            - "abort": DHW abort threshold (critical level)
+            - "critical": Optional, alias for abort
+            - "warning": Optional, alias for block
+
+    Returns:
+        Status string with margin information
+    """
+    # Support both naming conventions
+    abort_threshold = dm_thresholds.get("abort") or dm_thresholds.get("critical", -1500)
+    block_threshold = dm_thresholds.get("block") or dm_thresholds.get("warning", -700)
+
+    if thermal_debt < abort_threshold:
+        margin = abs(thermal_debt - abort_threshold)
+        return f"CRITICAL - {margin:.0f} DM past abort threshold"
+    elif thermal_debt < block_threshold:
+        margin = abs(thermal_debt - block_threshold)
+        return f"WARNING - {margin:.0f} DM from block threshold"
+    else:
+        margin = thermal_debt - block_threshold
+        return f"OK - {margin:.0f} DM safety margin"
+
+
 class PriceAnalyzerProtocol(Protocol):
     """Protocol for price analyzer interface."""
 

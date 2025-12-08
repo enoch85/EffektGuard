@@ -53,6 +53,7 @@ from .models.nibe import (
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.decision_engine import LayerDecision, OptimizationDecision
 from .optimization.prediction_layer import ThermalStatePredictor
+from .optimization.thermal_layer import get_thermal_debt_status
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 
@@ -1300,7 +1301,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "thermal_debt": thermal_debt,
             "thermal_debt_threshold_block": dm_thresholds["block"],
             "thermal_debt_threshold_abort": dm_thresholds["abort"],
-            "thermal_debt_status": self._get_thermal_debt_status(thermal_debt, dm_thresholds),
+            "thermal_debt_status": get_thermal_debt_status(thermal_debt, dm_thresholds),
             "space_heating_demand_kw": round(space_heating_demand, 2),
             "current_price_classification": price_classification,
             "outdoor_temperature": outdoor_temp,
@@ -1350,7 +1351,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 recommendation = f"Heat recommended - Target: {decision.target_temp:.0f}°C"
 
         # Build human-readable planning summary
-        planning_summary = self._format_dhw_planning_summary(
+        planning_summary = self.dhw_optimizer.format_planning_summary(
             recommendation=recommendation,
             current_temp=current_dhw_temp,
             target_temp=decision.target_temp,
@@ -1368,84 +1369,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "details": planning_details,
             "decision": decision,  # Include raw decision for control logic
         }
-
-    def _format_dhw_planning_summary(
-        self,
-        recommendation: str,
-        current_temp: float,
-        target_temp: float,
-        thermal_debt: float,
-        dm_thresholds: dict,
-        space_heating_demand: float,
-        price_classification: str,
-        weather_opportunity: Optional[str],
-    ) -> str:
-        """Format human-readable DHW planning summary.
-
-        Args:
-            recommendation: Base recommendation text
-            current_temp: Current DHW temperature
-            target_temp: Target DHW temperature
-            thermal_debt: Current thermal debt (DM)
-            dm_thresholds: Thermal debt thresholds
-            space_heating_demand: Current heating demand in kW
-            price_classification: Current price classification
-            weather_opportunity: Weather opportunity text if any
-
-        Returns:
-            Multi-line human-readable summary
-        """
-        lines = []
-        lines.append("DHW Planning Summary")
-        lines.append("=" * 40)
-        lines.append(f"Current: {current_temp:.1f}°C -> Target: {target_temp:.0f}°C")
-        lines.append(f"Price: {price_classification}")
-
-        # Thermal debt status
-        if thermal_debt < dm_thresholds["abort"]:
-            status_text = f"CRITICAL (DM {thermal_debt:.0f})"
-        elif thermal_debt < dm_thresholds["block"]:
-            status_text = f"WARNING (DM {thermal_debt:.0f})"
-        else:
-            status_text = f"OK (DM {thermal_debt:.0f})"
-        lines.append(f"Thermal Debt: {status_text}")
-
-        # Space heating status
-        if space_heating_demand > SPACE_HEATING_DEMAND_MODERATE_THRESHOLD:
-            lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
-        elif space_heating_demand > SPACE_HEATING_DEMAND_LOW_THRESHOLD:
-            lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
-        else:
-            lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")
-
-        # Weather opportunity
-        if weather_opportunity:
-            lines.append(f"Weather: {weather_opportunity}")
-
-        lines.append("")
-        lines.append(f"Recommendation: {recommendation}")
-
-        return "\n".join(lines)
-
-    def _get_thermal_debt_status(self, thermal_debt: float, dm_thresholds: dict) -> str:
-        """Get human-readable thermal debt status.
-
-        Args:
-            thermal_debt: Current thermal debt (DM)
-            dm_thresholds: Thresholds for climate zone
-
-        Returns:
-            Status string
-        """
-        if thermal_debt < dm_thresholds["abort"]:
-            margin = abs(thermal_debt - dm_thresholds["abort"])
-            return f"CRITICAL - {margin:.0f} DM from abort threshold"
-        elif thermal_debt < dm_thresholds["block"]:
-            margin = abs(thermal_debt - dm_thresholds["block"])
-            return f"WARNING - {margin:.0f} DM from block threshold"
-        else:
-            margin = thermal_debt - dm_thresholds["block"]
-            return f"OK - {margin:.0f} DM safety margin"
 
     async def _get_last_dhw_heating_time(self) -> datetime | None:
         """Get timestamp when temporary lux was last activated.
@@ -1522,56 +1445,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return self._last_dhw_control_time
 
         return None
-
-    def _check_dhw_abort_conditions(
-        self,
-        abort_conditions: list[str],
-        thermal_debt: float,
-        indoor_temp: float,
-        target_indoor: float,
-    ) -> tuple[bool, str | None]:
-        """Check if any DHW abort conditions are triggered.
-
-        Abort conditions are returned by DHW optimizer to monitor during active heating.
-        If triggered, we should stop DHW heating early to prioritize space heating.
-
-        Args:
-            abort_conditions: List of condition strings from DHW decision
-                Examples: ["thermal_debt < -500", "indoor_temp < 21.5"]
-            thermal_debt: Current degree minutes (DM) value
-            indoor_temp: Current indoor temperature
-            target_indoor: Target indoor temperature
-
-        Returns:
-            Tuple of (should_abort, reason_str)
-            - should_abort: True if any condition triggered
-            - reason_str: Human-readable abort reason or None
-        """
-        if not abort_conditions:
-            return False, None
-
-        for condition in abort_conditions:
-            # Parse and evaluate "thermal_debt < THRESHOLD" condition
-            if "thermal_debt <" in condition:
-                try:
-                    threshold = float(condition.split("<")[1].strip())
-                    if thermal_debt < threshold:
-                        return True, f"Thermal debt {thermal_debt:.0f} < {threshold:.0f}"
-                except (ValueError, IndexError) as err:
-                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
-                    continue
-
-            # Parse and evaluate "indoor_temp < THRESHOLD" condition
-            elif "indoor_temp <" in condition:
-                try:
-                    threshold = float(condition.split("<")[1].strip())
-                    if indoor_temp < threshold:
-                        return True, f"Indoor {indoor_temp:.1f}°C < {threshold:.1f}°C"
-                except (ValueError, IndexError) as err:
-                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
-                    continue
-
-        return False, None
 
     async def _calculate_hours_since_last_dhw(self) -> float:
         """Calculate hours since last DHW heating.
@@ -1719,7 +1592,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
         # thermal_debt and indoor_temp from coordinator data (same as used in decision calculation)
         if is_lux_on and decision.abort_conditions:
-            should_abort, abort_reason = self._check_dhw_abort_conditions(
+            should_abort, abort_reason = self.dhw_optimizer.check_abort_conditions(
                 decision.abort_conditions,
                 thermal_debt,
                 indoor_temp,
@@ -1928,7 +1801,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Only used for display/debugging when no real measurements available
             # WARNING: Never record estimated peaks - billing must use real measurements only
             if current_power is None and nibe_data.compressor_hz:
-                current_power = self._estimate_power_from_compressor(
+                current_power = self.effect.estimate_power_from_compressor(
                     nibe_data.compressor_hz, nibe_data.outdoor_temp
                 )
                 _LOGGER.debug(
@@ -1943,7 +1816,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Only for display when nothing else available
             # WARNING: Never record estimated peaks
             if current_power is None:
-                current_power = self._estimate_power_consumption(nibe_data)
+                is_heating = getattr(nibe_data, "is_heating", False)
+                outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
+                current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
                 _LOGGER.warning(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
@@ -1962,7 +1837,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if is_heating and compressor_hz > 20:
                     # Compressor running significantly but meter shows low reading
                     # This indicates solar/battery offsetting grid import
-                    estimated_power = self._estimate_power_from_compressor(nibe_data)
+                    estimated_power = self.effect.estimate_power_from_compressor(
+                        compressor_hz, getattr(nibe_data, "outdoor_temp", 0.0)
+                    )
 
                     if estimated_power > 1.0:  # Estimated power seems reasonable
                         _LOGGER.info(
@@ -2037,99 +1914,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to update peak tracking: %s", err)
-
-    def _estimate_power_consumption(self, nibe_data) -> float:
-        """Estimate heat pump power consumption from state.
-
-        Estimates based on:
-        - Compressor status
-        - Supply/return temperature difference
-        - Typical heat pump power ratings
-
-        Returns:
-            Estimated power consumption in kW
-        """
-        # Placeholder implementation - will be enhanced in Phase 2
-        # For now, return a basic estimate based on compressor status
-
-        if not nibe_data:
-            return 0.0
-
-        # Basic estimation:
-        # - Compressor on: ~3-5 kW (depending on outdoor temp)
-        # - Compressor off: ~0.1 kW (standby)
-        is_heating = getattr(nibe_data, "is_heating", False)
-
-        if is_heating:
-            # Rough estimation: colder outdoor = higher power
-            outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
-            base_power = DEFAULT_HEAT_PUMP_POWER_KW  # kW baseline from const.py
-
-            # Adjust for outdoor temperature
-            # Colder = more power needed
-            if outdoor_temp < -10:
-                return base_power * 1.3
-            elif outdoor_temp < 0:
-                return base_power * 1.1
-            else:
-                return base_power
-        else:
-            return 0.1  # Standby power
-
-    def _estimate_power_from_compressor(self, nibe_data) -> float:
-        """Estimate heat pump power from compressor frequency and outdoor temperature.
-
-        More accurate estimation when we know compressor is running.
-        Used for smart fallback when grid meter shows solar/battery offset.
-
-        Args:
-            nibe_data: Current NIBE state with compressor frequency
-
-        Returns:
-            Estimated power consumption in kW
-        """
-        if not nibe_data:
-            return 0.0
-
-        compressor_hz = getattr(nibe_data, "compressor_frequency", 0)
-        outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
-
-        if compressor_hz == 0:
-            return 0.1  # Standby
-
-        # F750 power estimation based on compressor frequency and outdoor temp
-        # Based on typical NIBE F750 performance curves:
-        # - 20 Hz (minimum): ~1.5-2.0 kW
-        # - 50 Hz (mid): ~3.5-4.5 kW
-        # - 80 Hz (maximum): ~6.0-7.0 kW
-
-        # Base power from frequency (linear approximation)
-        # 20-80 Hz range maps to ~1.5-6.5 kW
-        base_from_hz = 1.5 + (compressor_hz - 20) * (5.0 / 60)  # Linear interpolation
-        base_from_hz = max(1.5, min(base_from_hz, 6.5))  # Clamp to reasonable range
-
-        # Temperature adjustment (colder = more power needed for same output)
-        if outdoor_temp < -15:
-            temp_factor = 1.3
-        elif outdoor_temp < -5:
-            temp_factor = 1.2
-        elif outdoor_temp < 0:
-            temp_factor = 1.1
-        else:
-            temp_factor = 1.0
-
-        estimated = base_from_hz * temp_factor
-
-        _LOGGER.debug(
-            "Power estimation: %d Hz at %.1f°C → %.2f kW (base: %.2f, temp_factor: %.2f)",
-            compressor_hz,
-            outdoor_temp,
-            estimated,
-            base_from_hz,
-            temp_factor,
-        )
-
-        return estimated
 
     async def async_set_offset(self, offset: float) -> None:
         """Apply heating curve offset to NIBE system.
