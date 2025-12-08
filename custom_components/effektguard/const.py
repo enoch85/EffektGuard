@@ -7,12 +7,6 @@ from typing import Final
 # Domain
 DOMAIN: Final = "effektguard"
 
-# DEBUG MODE - Force outdoor temperature for testing
-# Set to None to disable, or a float value to override outdoor temp
-# Example: DEBUG_FORCE_OUTDOOR_TEMP = -5.0 to test cold weather behavior
-# WARNING: Only for development/testing! Remove for production.
-DEBUG_FORCE_OUTDOOR_TEMP: Final = None  # Set to -5.0 to test
-
 # Configuration keys
 CONF_NIBE_ENTITY: Final = "nibe_entity"
 CONF_GESPOT_ENTITY: Final = "gespot_entity"

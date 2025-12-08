@@ -26,7 +26,6 @@ from typing import TypedDict
 
 from ..const import (
     COMPRESSOR_MIN_CYCLE_MINUTES,
-    DEBUG_FORCE_OUTDOOR_TEMP,
     DEFAULT_DHW_TARGET_TEMP,
     DHW_COOLING_RATE,
     DHW_EXTENDED_RUNTIME_MINUTES,
