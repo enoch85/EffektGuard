@@ -4,7 +4,6 @@ Phase 7 of layer refactoring: Proactive thermal debt prevention layer extraction
 """
 
 from dataclasses import dataclass
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,10 +16,6 @@ from custom_components.effektguard.const import (
     PROACTIVE_ZONE3_WEIGHT,
     PROACTIVE_ZONE4_OFFSET,
     PROACTIVE_ZONE4_WEIGHT,
-    PROACTIVE_ZONE5_OFFSET,
-    PROACTIVE_ZONE5_WEIGHT,
-    RAPID_COOLING_OUTDOOR_THRESHOLD,
-    RAPID_COOLING_THRESHOLD,
     RAPID_COOLING_WEIGHT,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector

@@ -7,12 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import pytest
-
 from custom_components.effektguard.const import (
-    DM_CRITICAL_T1_MARGIN,
     DM_CRITICAL_T2_MARGIN,
-    DM_CRITICAL_T3_MAX,
     DM_THRESHOLD_AUX_LIMIT,
     QuarterClassification,
     SAFETY_EMERGENCY_OFFSET,

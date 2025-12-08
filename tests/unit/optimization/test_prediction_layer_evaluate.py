@@ -11,7 +11,6 @@ from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
     PredictionLayerDecision,
 )
-from custom_components.effektguard.const import LAYER_WEIGHT_PREDICTION
 
 
 @pytest.fixture

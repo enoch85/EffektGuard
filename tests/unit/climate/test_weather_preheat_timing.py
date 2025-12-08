@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.weather_layer import (
     WeatherPredictionLayer,
-    WeatherLayerDecision,
 )
 from custom_components.effektguard.const import (
     WEATHER_FORECAST_DROP_THRESHOLD,

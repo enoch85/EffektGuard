@@ -5,7 +5,6 @@ Phase 2 of layer refactor: Tests for the extracted price layer evaluation logic.
 
 import pytest
 from unittest.mock import MagicMock
-from datetime import datetime
 
 from custom_components.effektguard.optimization.price_layer import (
     PriceAnalyzer,
@@ -17,7 +16,6 @@ from custom_components.effektguard.const import (
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
     QuarterClassification,
-    LAYER_WEIGHT_PRICE,
 )
 
 

@@ -18,7 +18,6 @@ from typing import TypedDict
 import numpy as np
 
 from ..const import (
-    DM_THRESHOLD_AUX_LIMIT,
     LAYER_WEIGHT_PREDICTION,
     PREDICTION_COMFORT_THRESHOLD_COLD,
     PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD,

@@ -18,7 +18,6 @@ from custom_components.effektguard.optimization.effect_layer import EffectManage
 from custom_components.effektguard.const import (
     POWER_STANDBY_KW,
     COMPRESSOR_POWER_MIN_KW,
-    COMPRESSOR_POWER_MAX_KW,
 )
 
 

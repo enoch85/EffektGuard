@@ -583,7 +583,7 @@ class EmergencyLayer:
                 classification = self.price_analyzer.get_current_classification(current_quarter)
                 return classification == QuarterClassification.CHEAP
         except (AttributeError, IndexError, TypeError):
-            pass
+            pass  # Price data unavailable or malformed - return False (default to not cheap)
 
         return False
 

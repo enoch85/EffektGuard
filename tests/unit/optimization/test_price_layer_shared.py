@@ -5,7 +5,6 @@ calculate_lookahead_hours() shared methods.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
 
 import pytest
 

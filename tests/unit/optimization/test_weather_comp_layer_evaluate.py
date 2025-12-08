@@ -5,23 +5,18 @@ Phase 5 of layer refactoring: Mathematical weather compensation extraction.
 
 from dataclasses import dataclass
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from custom_components.effektguard.const import (
-    DEFAULT_CURVE_SENSITIVITY,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     WEATHER_COMP_DEFER_DM_CRITICAL,
     WEATHER_COMP_DEFER_DM_LIGHT,
-    WEATHER_COMP_DEFER_DM_MODERATE,
-    WEATHER_COMP_DEFER_DM_SIGNIFICANT,
     WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
-    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
 )
 from custom_components.effektguard.optimization.weather_layer import (
     AdaptiveClimateSystem,
-    FlowTempCalculation,
     WeatherCompensationCalculator,
     WeatherCompensationLayer,
     WeatherCompensationLayerDecision,

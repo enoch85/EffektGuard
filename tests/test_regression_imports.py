@@ -804,7 +804,7 @@ class TestConstantUsage:
                                 if isinstance(node.value.operand, ast.Constant):
                                     constant_values[name] = -node.value.operand.value
                         except Exception:
-                            pass
+                            pass  # Skip values we can't extract - not all AST nodes are simple constants
         
         errors = []
         
