@@ -55,14 +55,13 @@ The optimization system uses a **shared layer architecture** where reusable laye
 ```mermaid
 flowchart TB
     subgraph Layers["LAYERS - shared, reusable"]
-        TL["thermal_layer.py → EmergencyLayer, ProactiveLayer + estimate_dm_recovery_time#40;#41; + get_thermal_debt_status#40;#41;"]
-        CL["comfort_layer.py → ComfortLayer"]
-        PrL["price_layer.py → PriceAnalyzer + find_cheapest_window#40;#41;"]
-        EfL["effect_layer.py → EffectManager"]
-        WL["weather_layer.py → WeatherLayer"]
-        PredL["prediction_layer.py → ThermalStatePredictor"]
-        AL["adaptive_learning.py → AdaptiveLearning"]
-        CZ["climate_zones.py → ClimateZoneDetector"]
+        direction LR
+        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
+        CL["comfort_layer.py<br/>→ ComfortLayer"]
+        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ find_cheapest_window#40;#41;"]
+        EfL["effect_layer.py<br/>→ EffectManager"]
+        WL["weather_layer.py<br/>→ WeatherLayer"]
+        PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
     end
 
     Layers --> DE
