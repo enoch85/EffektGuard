@@ -55,15 +55,19 @@ The optimization system uses a **shared layer architecture** where reusable laye
 ```mermaid
 flowchart TB
     subgraph Layers["LAYERS - shared, reusable"]
-        direction LR
-        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
-        CL["comfort_layer.py<br/>→ ComfortLayer"]
-        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ find_cheapest_window#40;#41;"]
-        EfL["effect_layer.py<br/>→ EffectManager"]
-        WL["weather_layer.py<br/>→ WeatherLayer"]
-        PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
-        AL["adaptive_learning.py<br/>→ AdaptiveLearning"]
-        CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
+        direction TB
+        subgraph Row1[" "]
+            TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
+            CL["comfort_layer.py<br/>→ ComfortLayer"]
+            PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ find_cheapest_window#40;#41;"]
+            EfL["effect_layer.py<br/>→ EffectManager"]
+        end
+        subgraph Row2[" "]
+            WL["weather_layer.py<br/>→ WeatherLayer"]
+            PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
+            AL["adaptive_learning.py<br/>→ AdaptiveLearning"]
+            CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
+        end
     end
 
     Layers --> DE
