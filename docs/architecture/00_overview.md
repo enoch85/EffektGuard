@@ -64,17 +64,34 @@ flowchart TB
         PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
         AL["adaptive_learning.py<br/>→ AdaptiveLearning"]
         CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
+        
+        TL ~~~ CL ~~~ PrL ~~~ EfL ~~~ WL ~~~ PredL ~~~ AL ~~~ CZ
     end
 
     Layers --> DE
-    Layers --> DHW
-    Layers --> COORD
 
-    DE["DECISION ENGINE - space heating<br/>Creates: EmergencyLayer, ProactiveLayer, ComfortLayer<br/>Uses: PriceAnalyzer, EffectManager, WeatherLayer<br/>Exposes: emergency_layer, price for sharing"]
+    subgraph DE["DECISION ENGINE - space heating"]
+        DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
+        DE2["Uses: PriceAnalyzer, EffectManager, WeatherLayer"]
+        DE3["Exposes: emergency_layer, price for sharing"]
+    end
 
-    DHW["DHW OPTIMIZER - DHW scheduling<br/>Receives: emergency_layer, price_analyzer #40;shared#41;<br/>Uses: estimate_dm_recovery_time#40;#41;, find_cheapest_window#40;#41;"]
+    DE --> DHW
 
-    COORD["COORDINATOR<br/>Creates DecisionEngine #40;with all layers#41;<br/>Creates DHWOptimizer #40;with shared layers#41;<br/>Uses get_thermal_debt_status#40;#41; for display"]
+    subgraph DHW["DHW OPTIMIZER - DHW scheduling"]
+        DHW1["Receives: emergency_layer #40;shared from DecisionEngine#41;"]
+        DHW2["Receives: price_analyzer #40;shared from DecisionEngine#41;"]
+        DHW3["Uses: estimate_dm_recovery_time#40;#41;, find_cheapest_window#40;#41;"]
+    end
+
+    DHW --> COORD
+
+    subgraph COORD["COORDINATOR"]
+        COORD1["Creates DecisionEngine #40;with all layers#41;"]
+        COORD2["Creates DHWOptimizer #40;with shared layers#41;"]
+        COORD3["Uses get_thermal_debt_status#40;#41; for display"]
+        COORD4["Uses ThermalStatePredictor for predictions"]
+    end
 ```
 
 ### Layer Sharing Flow
