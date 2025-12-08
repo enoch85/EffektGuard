@@ -647,10 +647,19 @@ PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive peri
 # WEIGHT REDUCTION: 0.8 → 0.24 (70% reduction during volatility)
 PRICE_VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility (0.8 → 0.24)
 
-# Price classification base offsets (Dec 3, 2025)
+# Price classification percentile thresholds (Dec 8, 2025)
+# Define the boundaries between price classifications
+PRICE_PERCENTILE_VERY_CHEAP: Final = 10  # Bottom 10% = VERY_CHEAP
+PRICE_PERCENTILE_CHEAP: Final = 25  # 10-25% = CHEAP
+PRICE_PERCENTILE_NORMAL: Final = 75  # 25-75% = NORMAL
+PRICE_PERCENTILE_EXPENSIVE: Final = 90  # 75-90% = EXPENSIVE
+# Above 90% = PEAK
+
+# Price classification base offsets (Dec 3, 2025, updated Dec 8, 2025)
 # Used by price_analyzer.py get_base_offset() for spot price optimization
 # These are base values before daytime multiplier (1.5x for EXPENSIVE during 06:00-22:00)
-PRICE_OFFSET_CHEAP: Final = 3.0  # °C - pre-heat opportunity, charge thermal battery
+PRICE_OFFSET_VERY_CHEAP: Final = 4.0  # °C - exceptional prices, aggressive pre-heating!
+PRICE_OFFSET_CHEAP: Final = 1.5  # °C - good prices, moderate pre-heating (reduced from 3.0)
 PRICE_OFFSET_NORMAL: Final = 0.0  # °C - maintain current heating
 PRICE_OFFSET_EXPENSIVE: Final = -1.0  # °C - conserve, reduce heating
 PRICE_OFFSET_PEAK: Final = MIN_OFFSET  # Maximum reduction (coast through expensive period)
@@ -1026,9 +1035,17 @@ class QuarterClassification(StrEnum):
     """Price period classification based on spot prices.
 
     Can represent hourly or 15-minute (quarterly) periods depending on price data granularity.
+
+    Classifications (Dec 8, 2025):
+        VERY_CHEAP: Bottom 10% (P10) - Exceptional prices, aggressive pre-heating
+        CHEAP: 10-25% (P10-P25) - Good prices, moderate pre-heating
+        NORMAL: 25-75% (P25-P75) - Average prices, maintain
+        EXPENSIVE: 75-90% (P75-P90) - High prices, reduce heating
+        PEAK: Top 10% (P90+) - Critical prices, maximum reduction
     """
 
-    CHEAP = "cheap"
+    VERY_CHEAP = "very_cheap"  # Bottom 10% - exceptional prices
+    CHEAP = "cheap"  # 10-25% - good prices
     NORMAL = "normal"
     EXPENSIVE = "expensive"
     PEAK = "peak"

@@ -456,10 +456,11 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             # Create yo-yo pattern: PEAK, CHEAP, PEAK, CHEAP, PEAK
             # This simulates the actual volatile behavior user experienced
+            # Use 35.0 for CHEAP (between P10=27 and P25=45, not VERY_CHEAP)
             if q % 2 == 0:
                 period.price = 85.0  # PEAK (>P90=77)
             else:
-                period.price = 25.0  # CHEAP (<P25=45)
+                period.price = 35.0  # CHEAP (P10<35<P25, not VERY_CHEAP)
             period.is_daytime = True
             period.quarter_of_day = q
             price_periods.append(period)
@@ -468,10 +469,11 @@ class TestVolatileWeightReduction:
         for q in range(82, 86):
             period = MagicMock()
             # More yo-yo: EXPENSIVE, CHEAP pattern
+            # Use 35.0 for CHEAP (between P10=27 and P25=45, not VERY_CHEAP)
             if q % 2 == 0:
                 period.price = 80.0  # PEAK
             else:
-                period.price = 30.0  # CHEAP
+                period.price = 35.0  # CHEAP (P10<35<P25, not VERY_CHEAP)
             period.is_daytime = False
             period.quarter_of_day = q
             price_periods.append(period)

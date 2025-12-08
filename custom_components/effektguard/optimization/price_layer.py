@@ -25,6 +25,11 @@ from ..const import (
     PRICE_OFFSET_EXPENSIVE,
     PRICE_OFFSET_NORMAL,
     PRICE_OFFSET_PEAK,
+    PRICE_OFFSET_VERY_CHEAP,
+    PRICE_PERCENTILE_CHEAP,
+    PRICE_PERCENTILE_EXPENSIVE,
+    PRICE_PERCENTILE_NORMAL,
+    PRICE_PERCENTILE_VERY_CHEAP,
     PRICE_PRE_PEAK_OFFSET,
     PRICE_TOLERANCE_FACTOR_MAX,
     PRICE_TOLERANCE_FACTOR_MIN,
@@ -120,16 +125,16 @@ class PriceAnalyzer:
         # Extract prices for percentile calculation
         prices = [p.price for p in periods]
 
-        # Calculate percentiles
-        p25 = np.percentile(prices, 25)
-        p50 = np.percentile(prices, 50)
-        p75 = np.percentile(prices, 75)
-        p90 = np.percentile(prices, 90)
+        # Calculate percentiles using configurable thresholds
+        p10 = np.percentile(prices, PRICE_PERCENTILE_VERY_CHEAP)
+        p25 = np.percentile(prices, PRICE_PERCENTILE_CHEAP)
+        p75 = np.percentile(prices, PRICE_PERCENTILE_NORMAL)
+        p90 = np.percentile(prices, PRICE_PERCENTILE_EXPENSIVE)
 
         _LOGGER.debug(
-            "Price percentiles - P25: %.3f, P50: %.3f, P75: %.3f, P90: %.3f",
+            "Price percentiles - P10: %.3f, P25: %.3f, P75: %.3f, P90: %.3f",
+            p10,
             p25,
-            p50,
             p75,
             p90,
         )
@@ -145,9 +150,13 @@ class PriceAnalyzer:
             return {period.quarter_of_day: QuarterClassification.NORMAL for period in periods}
 
         # Classify each period
+        # Order: VERY_CHEAP (bottom 10%) -> CHEAP (10-25%) -> NORMAL (25-75%) ->
+        #        EXPENSIVE (75-90%) -> PEAK (top 10%)
         classifications = {}
         for period in periods:
-            if period.price <= p25:
+            if period.price <= p10:
+                classification = QuarterClassification.VERY_CHEAP
+            elif period.price <= p25:
                 classification = QuarterClassification.CHEAP
             elif period.price <= p75:
                 classification = QuarterClassification.NORMAL
@@ -173,11 +182,12 @@ class PriceAnalyzer:
 
         Args:
             quarter: Quarter of day (0-95, where 0 = 00:00-00:15)
-            classification: CHEAP/NORMAL/EXPENSIVE/PEAK
+            classification: VERY_CHEAP/CHEAP/NORMAL/EXPENSIVE/PEAK
             is_daytime: True if 06:00-22:00 (full effect tariff weight)
 
         Returns offset in °C (before tolerance scaling):
-            CHEAP: +3.0 (pre-heat opportunity, charge thermal battery!)
+            VERY_CHEAP: +4.0 (exceptional prices, aggressive pre-heating!)
+            CHEAP: +1.5 (pre-heat opportunity, charge thermal battery)
             NORMAL: 0.0 (maintain)
             EXPENSIVE: -1.0 (conserve), -1.5 during daytime
             PEAK: -10.0 (maximum reduction, coast through expensive period)
@@ -191,9 +201,11 @@ class PriceAnalyzer:
             - Daytime (06:00-22:00): Full weight, EXPENSIVE gets 1.5x multiplier
             - Nighttime (22:00-06:00): Standard weight
 
-        Note: CHEAP includes negative prices (you get paid to heat!)
+        Note: VERY_CHEAP includes negative prices (you get paid to heat!)
         """
-        if classification == QuarterClassification.CHEAP:
+        if classification == QuarterClassification.VERY_CHEAP:
+            offset = PRICE_OFFSET_VERY_CHEAP
+        elif classification == QuarterClassification.CHEAP:
             offset = PRICE_OFFSET_CHEAP
         elif classification == QuarterClassification.NORMAL:
             offset = PRICE_OFFSET_NORMAL
@@ -237,7 +249,7 @@ class PriceAnalyzer:
         return len(self._classifications_tomorrow) > 0
 
     def get_next_cheap_period(self, current_quarter: int) -> int | None:
-        """Find next cheap period after current quarter.
+        """Find next cheap or very cheap period after current quarter.
 
         Useful for pre-heating scheduling.
 
@@ -245,16 +257,20 @@ class PriceAnalyzer:
             current_quarter: Current quarter of day (0-95)
 
         Returns:
-            Quarter number of next cheap period, or None if none found
+            Quarter number of next cheap/very cheap period, or None if none found
         """
+        beneficial_classifications = [
+            QuarterClassification.VERY_CHEAP,
+            QuarterClassification.CHEAP,
+        ]
         # Search today's periods
         for quarter in range(current_quarter + 1, 96):
-            if self._classifications_today.get(quarter) == QuarterClassification.CHEAP:
+            if self._classifications_today.get(quarter) in beneficial_classifications:
                 return quarter
 
         # Search tomorrow's periods if available
         for quarter in range(96):
-            if self._classifications_tomorrow.get(quarter) == QuarterClassification.CHEAP:
+            if self._classifications_tomorrow.get(quarter) in beneficial_classifications:
                 return 96 + quarter  # Offset by 96 for tomorrow
 
         return None
@@ -358,6 +374,12 @@ class PriceAnalyzer:
         volatile_reason = ""
         in_peak_cluster = False  # True when EXPENSIVE is sandwiched between PEAKs
 
+        # Classifications that benefit from heating (used in multiple places)
+        beneficial_classifications = [
+            QuarterClassification.VERY_CHEAP,
+            QuarterClassification.CHEAP,
+        ]
+
         # Forward-looking price analysis - horizon scales with thermal mass
         # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
         # Calculate horizon based on thermal mass (higher mass = longer lookahead)
@@ -419,13 +441,13 @@ class PriceAnalyzer:
             min_price_ratio = min(p.price for p in upcoming_periods) / current_price
             max_price_ratio = max(p.price for p in upcoming_periods) / current_price
 
-            # Check if current CHEAP period is too brief for meaningful heating (Nov 29, 2025)
+            # Check if current CHEAP/VERY_CHEAP period is too brief for meaningful heating
             # Compressor needs ~45min to efficiently use cheap electricity
-            if classification == QuarterClassification.CHEAP:
-                # Count remaining consecutive CHEAP quarters (including current)
+            if classification in beneficial_classifications:
+                # Count remaining consecutive beneficial quarters (including current)
                 remaining_cheap_quarters = 1
                 for q in range(current_quarter + 1, 96):
-                    if self.get_current_classification(q) == QuarterClassification.CHEAP:
+                    if self.get_current_classification(q) in beneficial_classifications:
                         remaining_cheap_quarters += 1
                     else:
                         break
@@ -437,7 +459,7 @@ class PriceAnalyzer:
                     and self.has_tomorrow_prices()
                 ):
                     for q in range(96):
-                        if self.get_tomorrow_classification(q) == QuarterClassification.CHEAP:
+                        if self.get_tomorrow_classification(q) in beneficial_classifications:
                             remaining_cheap_quarters += 1
                         else:
                             break
@@ -501,6 +523,10 @@ class PriceAnalyzer:
                 # Check if we're sandwiched between PEAK quarters
                 # Scan backwards to find if there's a PEAK within the cluster window
                 has_peak_before = False
+                cluster_break_classifications = [
+                    QuarterClassification.VERY_CHEAP,
+                    QuarterClassification.CHEAP,
+                ]
                 for back_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
                     check_quarter = current_quarter - back_offset
                     if check_quarter < 0:
@@ -509,8 +535,8 @@ class PriceAnalyzer:
                     if check_class == QuarterClassification.PEAK:
                         has_peak_before = True
                         break
-                    # Stop if we hit CHEAP - that breaks the cluster
-                    if check_class == QuarterClassification.CHEAP:
+                    # Stop if we hit CHEAP/VERY_CHEAP - that breaks the cluster
+                    if check_class in cluster_break_classifications:
                         break
 
                 # Scan forwards to find if there's a PEAK within the cluster window
@@ -533,8 +559,8 @@ class PriceAnalyzer:
                         if check_class == QuarterClassification.PEAK:
                             has_peak_after = True
                             break
-                        # Stop if we hit CHEAP - that breaks the cluster
-                        if check_class == QuarterClassification.CHEAP:
+                        # Stop if we hit CHEAP/VERY_CHEAP - that breaks the cluster
+                        if check_class in cluster_break_classifications:
                             break
 
                 # If sandwiched between PEAKs, inherit PEAK behavior
@@ -545,14 +571,14 @@ class PriceAnalyzer:
             if is_volatile:
                 quarters_left = (
                     min(remaining_cheap_quarters, current_run_length)
-                    if classification == QuarterClassification.CHEAP
+                    if classification in beneficial_classifications
                     else current_run_length
                 )
                 volatile_reason = f" | Price volatile: {classification.name} {quarters_left * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
 
             # Apply normal forecast logic regardless of volatility
             # Volatility will reduce weight, not block smart decisions
-            if classification == QuarterClassification.CHEAP:
+            if classification in beneficial_classifications:
                 # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
                 # Only act if expensive period is at least 45min in future (same as duration filter)
                 if (
@@ -682,10 +708,10 @@ class PriceAnalyzer:
                 base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
                 pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
 
-        # Skip heating boost for volatile CHEAP periods (Nov 29, 2025)
+        # Skip heating boost for volatile CHEAP/VERY_CHEAP periods
         # Compressor needs ~45min to be efficient - don't boost for short dips
-        if is_volatile and classification == QuarterClassification.CHEAP and base_offset > 0:
-            base_offset = 0.0  # Treat as NORMAL instead of CHEAP
+        if is_volatile and classification in beneficial_classifications and base_offset > 0:
+            base_offset = 0.0  # Treat as NORMAL instead of CHEAP/VERY_CHEAP
 
         # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)
         # Linear interpolation: 0.5 → 0.2 (conservative), 3.0 → 1.0 (full offset)
@@ -740,13 +766,13 @@ class PriceAnalyzer:
         # This ensures peak avoidance overrides all other layers except safety
         # PEAK cluster: EXPENSIVE quarters between PEAKs also get PEAK treatment
         #
-        # Dec 5, 2025: Only reduce weight for volatile CHEAP periods, not EXPENSIVE
-        # Volatility logic was designed to prevent oscillation during short CHEAP dips
+        # Dec 5, 2025: Only reduce weight for volatile CHEAP/VERY_CHEAP periods, not EXPENSIVE
+        # Volatility logic was designed to prevent oscillation during short cheap dips
         # But we WANT strong price influence during EXPENSIVE periods to reduce heating
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority - override all other layers
-        elif is_volatile and classification == QuarterClassification.CHEAP:
-            # Only reduce weight for volatile CHEAP periods (prevent ramp-up for brief dips)
+        elif is_volatile and classification in beneficial_classifications:
+            # Only reduce weight for volatile CHEAP/VERY_CHEAP periods (prevent ramp-up for brief dips)
             # EXPENSIVE periods keep full weight even if volatile - we want to reduce heating!
             price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
         else:
