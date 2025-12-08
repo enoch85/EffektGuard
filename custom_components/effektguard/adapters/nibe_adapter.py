@@ -30,7 +30,6 @@ from ..const import (
     CONF_INDOOR_TEMP_METHOD,
     CONF_NIBE_ENTITY,
     CONF_POWER_SENSOR_ENTITY,
-    DEBUG_FORCE_OUTDOOR_TEMP,
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
@@ -139,15 +138,6 @@ class NibeAdapter:
         outdoor_temp = await self._read_entity_float(
             self._entity_cache.get("outdoor_temp"), default=0.0
         )
-
-        # DEBUG: Override outdoor temperature if configured
-        if DEBUG_FORCE_OUTDOOR_TEMP is not None:
-            _LOGGER.warning(
-                "🔧 DEBUG MODE: Forcing outdoor temp %.1f°C → %.1f°C (DEBUG_FORCE_OUTDOOR_TEMP)",
-                outdoor_temp,
-                DEBUG_FORCE_OUTDOOR_TEMP,
-            )
-            outdoor_temp = DEBUG_FORCE_OUTDOOR_TEMP
 
         indoor_temp = await self._read_entity_float(
             self._entity_cache.get("indoor_temp"), default=DEFAULT_INDOOR_TEMP

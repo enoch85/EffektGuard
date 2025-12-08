@@ -29,6 +29,7 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
     DHWScheduleDecision,
     IntelligentDHWScheduler,
 )
+from tests.conftest import create_mock_price_analyzer
 
 # DHW heating time constants (from research: enoch85 case study)
 DHW_HEATING_TIME_HOURS = 1.5  # Typical DHW tank heat-up time
@@ -38,6 +39,13 @@ DHW_HEATING_TIME_MAX_HOURS = 2.0  # Maximum heating time
 # Calculated test thresholds based on fallback constants
 # The "concerning" threshold is block + 20 (used in deferral logic)
 DM_CONCERNING_THRESHOLD = DM_DHW_BLOCK_FALLBACK + 20  # -340 + 20 = -320
+
+
+def create_dhw_scheduler(**kwargs):
+    """Create DHW scheduler with mock price_analyzer."""
+    if "price_analyzer" not in kwargs:
+        kwargs["price_analyzer"] = create_mock_price_analyzer()
+    return IntelligentDHWScheduler(**kwargs)
 
 
 class TestDHWSafetyConstants:
@@ -57,7 +65,7 @@ class TestDHWSafetyConstants:
     def test_scheduler_uses_constants(self):
         """Test that DHWScheduler uses constants from const.py directly."""
         # Constants are now imported directly in dhw_optimizer, not class variables
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
         # Verify scheduler can be instantiated (uses constants internally)
         assert scheduler is not None
 
@@ -67,7 +75,7 @@ class TestDHWCriticalTemperature:
 
     def test_always_heat_below_critical_degrees(self):
         """Test that DHW always heats when below DHW_SAFETY_CRITICAL (safety override)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL - 1.0,  # Below critical threshold
@@ -85,7 +93,7 @@ class TestDHWCriticalTemperature:
 
     def test_critical_overrides_expensive_price(self):
         """Test that critical temp overrides expensive pricing."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL - 2.0,  # Critically low
@@ -103,7 +111,7 @@ class TestDHWCriticalTemperature:
 
     def test_critical_thermal_debt_blocks_all_dhw_even_at_30(self):
         """Test that critical thermal debt blocks ALL DHW heating."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Rule 1: thermal_debt_dm <= dm_block_threshold blocks DHW
         # dm_block_threshold is from DM_DHW_BLOCK_FALLBACK constant
@@ -137,7 +145,7 @@ class TestDHWDeferralRange:
 
         With fallback: dm_block_threshold = -240, so check is: DM > -220
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 1.0,  # In deferral range (just below safety min)
@@ -163,7 +171,7 @@ class TestDHWDeferralRange:
 
         With DM_DHW_BLOCK_FALLBACK = -240, threshold is -220.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 3.0,  # Lower in deferral range
@@ -182,7 +190,7 @@ class TestDHWDeferralRange:
 
     def test_defer_prevents_peak_during_expensive_hour_with_healthy_dm(self):
         """Test deferring expensive electricity with healthy thermal debt."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 3.0,  # In deferral range
@@ -201,7 +209,7 @@ class TestDHWDeferralRange:
 
     def test_no_defer_at_34_degrees_cheap_price(self):
         """Test that DHW at 34°C heats during cheap period (no deferral needed)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 1.0,  # In deferral range
@@ -219,7 +227,7 @@ class TestDHWDeferralRange:
 
     def test_no_defer_at_mid_range_normal_price(self):
         """Test that DHW in mid-range heats during normal period."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 1.0,  # In deferral range
@@ -249,7 +257,7 @@ class TestDHWBoundaryConditions:
         With fallback dm_block_threshold = -340, threshold is -320.
         DM must be < -320 to prevent deferral (bad debt).
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL,  # Exactly at critical threshold
@@ -268,7 +276,7 @@ class TestDHWBoundaryConditions:
 
     def test_just_below_critical_always_heats(self):
         """Test that just below DHW_SAFETY_CRITICAL always heats (below critical threshold)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_CRITICAL - 0.1,  # Just below critical
@@ -287,7 +295,7 @@ class TestDHWBoundaryConditions:
 
     def test_exactly_at_safety_min_behavior(self):
         """Test behavior at exactly DHW_SAFETY_MIN (at safety minimum)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN,  # Exactly at safety minimum
@@ -308,7 +316,7 @@ class TestDHWBoundaryConditions:
 
     def test_just_above_safety_min(self):
         """Test that just above DHW_SAFETY_MIN doesn't trigger safety minimum."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN + 0.1,  # Above safety minimum
@@ -333,7 +341,7 @@ class TestDHWDeferralPreventsPeakBilling:
 
         Requires healthy thermal debt (> -320 with fallback) to safely defer.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Scenario: Mid-range DHW, expensive electricity, healthy DM
         decision = scheduler.should_start_dhw(
@@ -353,7 +361,7 @@ class TestDHWDeferralPreventsPeakBilling:
 
     def test_heat_when_cheap_even_if_in_deferral_range(self):
         """Test that DHW heats during cheap period even in deferral range."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 3.0,  # In deferral range
@@ -375,7 +383,7 @@ class TestDHWDeferralWithThermalDebt:
 
     def test_no_defer_with_critical_thermal_debt(self):
         """Test that critical thermal debt prevents all DHW heating (Rule 1)."""
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # In deferral range
@@ -398,7 +406,7 @@ class TestDHWDeferralWithThermalDebt:
         Thermal debt is healthy when > (dm_block_threshold + 20).
         With fallback -240, that's > -220.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 2.0,  # In deferral range
@@ -432,7 +440,7 @@ class TestDHWDeferralWithThermalDebt:
 
         Test adjusted to use temperature in deferral range for new thresholds.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=DHW_SAFETY_MIN - 1.0,  # In deferral range with new thresholds
@@ -488,7 +496,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         - Heating time: 1.5 hours (would overlap with peak)
         - Decision: DEFER until after peak
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # Current time: 16:00, peak at 17:00
         current_time = datetime(2025, 10, 17, 16, 0)
@@ -525,7 +533,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         - Heating time: 1.5 hours (done by 23:30)
         - Decision: HEAT NOW (safe window)
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         current_time = datetime(2025, 10, 17, 22, 0)
 
@@ -585,7 +593,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         - DHW temp: Below critical threshold
         - Decision: HEAT NOW (safety override, even during peak)
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         current_time = datetime(2025, 10, 17, 16, 0)
 
@@ -610,7 +618,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         If heating will take 2 hours, abort conditions should be checked
         more strictly to prevent long expensive heating cycles.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         current_time = datetime(2025, 10, 17, 14, 0)
 
@@ -644,7 +652,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         Note: DHW well above safety min won't heat.
         Need to be in the opportunity range for opportunistic heating.
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         current_time = datetime(2025, 10, 17, 15, 0)
 
@@ -674,7 +682,7 @@ class TestDHWHeatingTimeAndPeakAvoidance:
         - If we heat now: 16:45 + 1.5h = 18:15 (right in peak!)
         - Better: Wait until 20:00, heat 20:00-21:30 (off-peak)
         """
-        scheduler = IntelligentDHWScheduler()
+        scheduler = create_dhw_scheduler()
 
         # 16:45 - end of workday, peak starts in 15 min
         current_time = datetime(2025, 10, 17, 16, 45)

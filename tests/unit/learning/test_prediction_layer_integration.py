@@ -7,7 +7,7 @@ and provides prediction-based heating decisions.
 import pytest
 from unittest.mock import Mock
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.thermal_predictor import ThermalStatePredictor
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 
 
 class TestPredictionLayerSetup:
@@ -56,17 +56,6 @@ class TestPredictionLayerSetup:
 class TestPredictionLayerMethod:
     """Test the _prediction_layer method exists and works."""
 
-    def test_has_prediction_layer_method(self):
-        """Test decision engine has _prediction_layer method."""
-        engine = DecisionEngine(
-            price_analyzer=Mock(),
-            effect_manager=Mock(),
-            thermal_model=Mock(),
-            config={},
-        )
-
-        assert hasattr(engine, "_prediction_layer")
-        assert callable(engine._prediction_layer)
 
     def test_prediction_layer_returns_decision(self):
         """Test prediction layer returns valid LayerDecision."""
@@ -86,7 +75,12 @@ class TestPredictionLayerMethod:
         mock_nibe.degree_minutes = -150
 
         # Get prediction layer decision
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         # Should return valid decision
         assert decision is not None
@@ -104,17 +98,31 @@ class TestPredictionLayerMethod:
             thermal_predictor=None,
         )
 
+        # Configure mocks to return valid LayerDecision-like objects
+        mock_decision = Mock()
+        mock_decision.offset = 0.0
+        mock_decision.weight = 0.0
+        mock_decision.reason = "Mock"
+        
+        engine.price.evaluate_layer.return_value = mock_decision
+        engine.effect.evaluate_layer.return_value = mock_decision
+
         mock_nibe = Mock()
         mock_nibe.indoor_temp = 21.0
         mock_nibe.outdoor_temp = -5.0
-        mock_nibe.degree_minutes = -150
+        mock_nibe.degree_minutes = 0  # Set to 0 to avoid ProactiveLayer interference
 
         # Should not crash, return neutral decision
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.calculate_decision(mock_nibe, None, None, 0.0, 0.0)
 
         assert decision is not None
         # With no predictor, should return neutral/minimal offset
-        assert decision.offset == 0.0 or decision.weight == 0.0
+        
+        # Verify Prediction layer decision specifically
+        prediction_layer = next(l for l in decision.layers if l.name == "Prediction" or l.name == "Learned Pre-heat")
+        assert prediction_layer.reason == "Predictor not initialized"
+        assert prediction_layer.offset == 0.0
+        assert prediction_layer.weight == 0.0
 
     def test_prediction_layer_handles_missing_nibe_data(self):
         """Test prediction layer handles None NIBE state."""
@@ -128,7 +136,12 @@ class TestPredictionLayerMethod:
         )
 
         # Should handle None gracefully
-        decision = engine._prediction_layer(None, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=None,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         assert decision is not None
         assert decision.offset == 0.0  # Safe default
@@ -153,7 +166,12 @@ class TestPredictionLayerDecisionStructure:
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = -150
 
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         assert hasattr(decision, "offset")
         assert isinstance(decision.offset, (int, float))
@@ -174,7 +192,12 @@ class TestPredictionLayerDecisionStructure:
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = -150
 
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         assert hasattr(decision, "weight")
         assert isinstance(decision.weight, (int, float))
@@ -196,7 +219,12 @@ class TestPredictionLayerDecisionStructure:
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = -150
 
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         assert hasattr(decision, "reason")
         assert isinstance(decision.reason, str)
@@ -267,7 +295,12 @@ class TestAdaptiveThermalModelIntegration:
         mock_nibe.degree_minutes = -150
 
         # Should not raise AttributeError on insulation_quality
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
 
         # Should return valid decision
         assert decision is not None
@@ -316,7 +349,12 @@ class TestAdaptiveThermalModelIntegration:
         mock_nibe.degree_minutes = -150
 
         # Should work without AttributeError
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
         assert decision is not None
 
     def test_config_reload_pattern_with_adaptive_model(self):
@@ -359,7 +397,12 @@ class TestAdaptiveThermalModelIntegration:
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = -150
 
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
         assert decision is not None
 
     def test_insufficient_learning_data_uses_manual_config(self):
@@ -395,5 +438,10 @@ class TestAdaptiveThermalModelIntegration:
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = -150
 
-        decision = engine._prediction_layer(mock_nibe, None)
+        decision = engine.predictor.evaluate_layer(
+            nibe_state=mock_nibe,
+            weather_data=None,
+            target_temp=engine.target_temp,
+            thermal_model=engine.thermal,
+        )
         assert decision is not None

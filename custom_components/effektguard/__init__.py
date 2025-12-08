@@ -21,7 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
-    BOOST_COOLDOWN_MINUTES,
+    HEATING_BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_COOLDOWN_MINUTES,
     SERVICE_RATE_LIMIT_MINUTES,
     CONF_NIBE_TEMP_LUX_ENTITY,
@@ -246,9 +246,9 @@ async def _create_coordinator(
     from .adapters.nibe_adapter import NibeAdapter
     from .adapters.weather_adapter import WeatherAdapter
     from .optimization.decision_engine import DecisionEngine
-    from .optimization.effect_manager import EffectManager
-    from .optimization.price_analyzer import PriceAnalyzer
-    from .optimization.thermal_model import ThermalModel
+    from .optimization.effect_layer import EffectManager
+    from .optimization.price_layer import PriceAnalyzer
+    from .optimization.thermal_layer import ThermalModel
 
     # Create data adapters
     nibe_adapter = NibeAdapter(hass, entry.data)
@@ -424,7 +424,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         Rate limited to prevent excessive calls.
         """
         # Check cooldown
-        is_allowed, remaining = _check_service_cooldown("boost_heating", BOOST_COOLDOWN_MINUTES)
+        is_allowed, remaining = _check_service_cooldown(
+            "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
+        )
         if not is_allowed:
             remaining_minutes = int(remaining / 60)
             raise ServiceValidationError(

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Test script to verify DHW day boundary fix."""
 from datetime import datetime, timedelta
+from custom_components.effektguard.const import DHW_NORMAL_RUNTIME_MINUTES
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
 
@@ -59,7 +60,9 @@ def main():
     print("DHW DAY BOUNDARY FIX VERIFICATION")
     print("=" * 80)
 
-    scheduler = IntelligentDHWScheduler()
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+
+    analyzer = PriceAnalyzer()
     current_time = datetime(2025, 10, 23, 23, 45)  # 23:45 today
 
     quarters = create_test_quarters()
@@ -70,25 +73,25 @@ def main():
     for q in quarters:
         print(f"  Q{q.quarter_of_day:2d} ({q.hour:02d}:{q.minute:02d}): {q.price:5.1f} öre/kWh")
 
-    # Find cheapest window
-    print("\nSearching for cheapest 45-minute DHW window...")
-    optimal_window = scheduler.find_cheapest_dhw_window(
+    # Find cheapest window using PriceAnalyzer directly
+    print(f"\nSearching for cheapest {DHW_NORMAL_RUNTIME_MINUTES}-minute DHW window...")
+    optimal_window = analyzer.find_cheapest_window(
         current_time=current_time,
-        lookahead_hours=8,
-        dhw_duration_minutes=45,
         price_periods=quarters,
+        duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+        lookahead_hours=8.0,
     )
 
     if optimal_window:
         print(f"\n✓ Optimal window found:")
-        print(f"  Start time: {optimal_window['start_time'].strftime('%Y-%m-%d %H:%M')}")
-        print(f"  End time: {optimal_window['end_time'].strftime('%Y-%m-%d %H:%M')}")
-        print(f"  Quarters: {optimal_window['quarters']}")
-        print(f"  Average price: {optimal_window['avg_price']:.2f} öre/kWh")
-        print(f"  Hours until: {optimal_window['hours_until']:.2f}h")
+        print(f"  Start time: {optimal_window.start_time.strftime('%Y-%m-%d %H:%M')}")
+        print(f"  End time: {optimal_window.end_time.strftime('%Y-%m-%d %H:%M')}")
+        print(f"  Quarters: {optimal_window.quarters}")
+        print(f"  Average price: {optimal_window.avg_price:.2f} öre/kWh")
+        print(f"  Hours until: {optimal_window.hours_until:.2f}h")
 
         # Verify it found tomorrow's cheap prices (should be around Q0-Q2, price ~5-6 öre)
-        if optimal_window["avg_price"] < 10.0 and optimal_window["hours_until"] > 0:
+        if optimal_window.avg_price < 10.0 and optimal_window.hours_until > 0:
             print("\n✅ SUCCESS! Found tomorrow's cheap window (not today's expensive Q95)")
             print("   The day boundary fix is working correctly!")
             return 0
@@ -96,7 +99,7 @@ def main():
             print("\n❌ FAILED! Window seems wrong")
             print(f"   Expected: price < 10 öre, hours_until > 0")
             print(
-                f"   Got: price = {optimal_window['avg_price']:.1f} öre, hours_until = {optimal_window['hours_until']:.1f}h"
+                f"   Got: price = {optimal_window.avg_price:.1f} öre, hours_until = {optimal_window.hours_until:.1f}h"
             )
             return 1
     else:

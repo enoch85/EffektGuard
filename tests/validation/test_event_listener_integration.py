@@ -1,4 +1,11 @@
-"""Tests for Phase 1 critical fixes."""
+"""Tests for event listener integration and recorder usage.
+
+Validates:
+- Event listener setup without deprecated event_filter parameter
+- Power sensor state change listeners
+- DHW history retrieval using recorder executor
+- Graceful handling when recorder unavailable
+"""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -246,17 +246,7 @@ class ClimateZoneDetector:
         normal_max = max(normal_max, DM_ABSOLUTE_MAXIMUM + 50)
         warning = max(warning, DM_ABSOLUTE_MAXIMUM + 50)
 
-        _LOGGER.debug(
-            "DM range for %.1f°C (zone avg: %.1f°C, delta: %.1f°C): "
-            "normal %.0f to %.0f, warning %.0f, critical %.0f",
-            outdoor_temp,
-            self.zone_info.winter_avg_low,
-            temp_delta,
-            normal_min,
-            normal_max,
-            warning,
-            DM_ABSOLUTE_MAXIMUM,
-        )
+        # Debug logging removed to reduce spam - this is called multiple times per update
 
         return {
             "normal_min": normal_min,

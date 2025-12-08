@@ -11,10 +11,10 @@ flowchart TD
     end
 
     subgraph "Context-Aware Analysis"
-        D[Calculate Expected DM Range]
-        E[Outdoor > 0°C:<br/>Expected: -600 DM<br/>Warning: -800 DM]
-        F[Outdoor -10 to 0°C:<br/>Expected: -800 DM<br/>Warning: -1000 DM]
-        G[Outdoor < -20°C:<br/>Expected: -1150 DM<br/>Warning: -1350 DM]
+        D[Calculate Expected DM Range<br/>Based on Climate Zone + Temp]
+        E[Cold Zone at -10°C:<br/>Expected: -450 to -700 DM<br/>Warning: -700 DM]
+        F[Extreme Cold Zone at -25°C:<br/>Expected: -900 to -1300 DM<br/>Warning: -1300 DM]
+        G[Adjustment: -20 DM per °C<br/>colder than zone winter avg]
         H[Distance from Absolute Max<br/>-1500 DM NEVER EXCEED]
     end
 
@@ -35,9 +35,9 @@ flowchart TD
     end
 
     subgraph "Decision Examples"
-        R[Malmö 0°C: DM -900<br/>→ WARNING: Beyond expected -800]
-        S[Stockholm -5°C: DM -900<br/>→ CAUTION: Near expected -800]  
-        T[Kiruna -25°C: DM -900<br/>→ OK: Well within expected -1150]
+        R[Stockholm -10°C: DM -900<br/>→ WARNING: Beyond -700 warning]
+        S[Stockholm 0°C: DM -500<br/>→ OK: Within adjusted range]  
+        T[Kiruna -25°C: DM -900<br/>→ OK: Well within -1300 warning]
     end
 
     %% Flow
@@ -83,38 +83,34 @@ flowchart TD
 
 ## Context-Aware Safety Philosophy
 
-### Smart Adaptation vs Fixed Thresholds
+### Climate Zone + Temperature-Based Thresholds
 
-Instead of using fixed degree minutes thresholds, EffektGuard employs **context-aware analysis** that understands what's "normal" for the current outdoor temperature:
+EffektGuard uses **climate zone detection** (based on latitude) combined with **outdoor temperature adjustment** to calculate what DM is "normal" for current conditions:
 
-- **At -30°C in Kiruna**: DM -1000 might be completely normal
-- **At 0°C in Malmö**: DM -1000 indicates a serious problem
+- **Climate zone** determines base expectations (latitude-based detection)
+- **Temperature delta** adjusts thresholds by -20 DM per °C colder than zone's winter average
+- **Absolute maximum** -1500 DM is NEVER exceeded regardless of conditions
 
-This approach automatically adapts to ANY Swedish climate without complex configuration.
+### Climate Zones (Latitude-Based)
 
-### Temperature-Based Expected Ranges
+| Zone | Latitude | Winter Avg | Base Normal Range | Base Warning |
+|------|----------|------------|-------------------|--------------|
+| Extreme Cold | 66.5°+ | -20°C | -800 to -1200 | -1200 |
+| Very Cold | 60.5°-66.5° | -15°C | -600 to -1000 | -1000 |
+| Cold | 56°-60.5° | -10°C | -450 to -700 | -700 |
+| Moderate Cold | 54.5°-56° | -1°C | -300 to -500 | -500 |
+| Standard | <54.5° | 0°C | -200 to -350 | -350 |
 
-The system calculates expected DM ranges based on outdoor temperature:
+### Temperature Adjustment Formula
 
-#### Mild Weather (> 0°C)
-- **Expected normal**: -600 DM
-- **Warning threshold**: -800 DM
-- **Rationale**: Light heat demand, DM should stay shallow
+```
+adjusted_warning = zone_warning + (outdoor_temp - zone_winter_avg) × 20
+```
 
-#### Moderate Cold (0°C to -10°C)
-- **Expected normal**: -800 DM
-- **Warning threshold**: -1000 DM
-- **Rationale**: Standard Swedish winter conditions
-
-#### Cold Weather (-10°C to -20°C)
-- **Expected normal**: -800 to -1000 DM (scales with temperature)
-- **Warning threshold**: -1200 DM
-- **Rationale**: Heavy heat demand, deeper DM expected
-
-#### Extreme Cold (< -20°C)
-- **Expected normal**: -1000 to -1150 DM
-- **Warning threshold**: -1350 DM
-- **Rationale**: Very heavy demand, very deep DM is normal
+**Example: Stockholm (Cold zone, winter avg -10°C)**
+- At -10°C: warning = -700 (no adjustment)
+- At 0°C: warning = -700 + (0 - (-10)) × 20 = -700 + 200 = -500 (shallower)
+- At -20°C: warning = -700 + (-20 - (-10)) × 20 = -700 - 200 = -900 (deeper)
 
 ### Absolute Safety Limit
 

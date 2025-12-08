@@ -22,11 +22,10 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TypedDict
 
 from ..const import (
     COMPRESSOR_MIN_CYCLE_MINUTES,
-    DEBUG_FORCE_OUTDOOR_TEMP,
     DEFAULT_DHW_TARGET_TEMP,
     DHW_COOLING_RATE,
     DHW_EXTENDED_RUNTIME_MINUTES,
@@ -43,23 +42,42 @@ from ..const import (
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_SCHEDULING_WINDOW_MAX,
     DHW_SCHEDULING_WINDOW_MIN,
+    DHW_SPACE_HEATING_DEFICIT_THRESHOLD,
+    DHW_SPACE_HEATING_OUTDOOR_THRESHOLD,
     DHW_TARGET_HIGH_DEMAND,
+    DHW_TREND_DEFICIT_THRESHOLD,
+    DHW_TREND_RATE_THRESHOLD,
     DHW_URGENT_DEMAND_HOURS,
     DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
-    DM_RECOVERY_MAX_HOURS,
-    DM_RECOVERY_RATE_COLD,
-    DM_RECOVERY_RATE_MILD,
-    DM_RECOVERY_RATE_VERY_COLD,
     DM_RECOVERY_SAFETY_BUFFER,
     DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
     SPACE_HEATING_DEMAND_DROP_HOURS,
     SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
+    SPACE_HEATING_DEMAND_LOW_THRESHOLD,
+    SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
+from .thermal_layer import estimate_dm_recovery_time
+from .price_layer import PriceAnalyzer
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DemandPeriodInfoDict(TypedDict):
+    """Information about an upcoming demand period."""
+
+    hours_until: float
+    target_temp: float
+
+
+class DHWScheduleWindowDict(TypedDict):
+    """Recommended DHW heating window."""
+
+    start_time: datetime
+    end_time: datetime
+    reason: str
 
 
 @dataclass
@@ -105,6 +123,24 @@ class DHWScheduleDecision:
 
         # If heating now, recommended_start_time should be current time or None
         # (None is acceptable for immediate heating as sensor shows "pending")
+
+
+@dataclass
+class DHWRecommendation:
+    """Complete DHW recommendation result.
+
+    Contains all information needed for display and control:
+    - Human-readable recommendation and summary
+    - Machine-readable planning details
+    - Raw decision for control logic
+
+    Moved from coordinator._calculate_dhw_recommendation for shared reuse.
+    """
+
+    recommendation: str  # Human-readable recommendation text
+    summary: str  # Multi-line planning summary for display
+    details: dict  # Machine-readable planning details
+    decision: DHWScheduleDecision | None  # Raw decision for control logic
 
 
 @dataclass
@@ -159,6 +195,10 @@ class IntelligentDHWScheduler:
     DHW blocking thresholds are now dynamic based on climate zone and outdoor temperature.
     Uses ClimateZoneDetector to determine appropriate DM thresholds for current conditions.
     Fallback constants from const.py used only if climate detector unavailable.
+
+    SHARED LAYER REUSE (Phase 10):
+    When emergency_layer is provided, uses EmergencyLayer.should_block_dhw() for
+    consistent thermal debt blocking logic with space heating optimization.
     """
 
     def __init__(
@@ -166,6 +206,8 @@ class IntelligentDHWScheduler:
         demand_periods: list[DHWDemandPeriod] | None = None,
         climate_detector=None,  # Climate zone detector for dynamic thresholds
         user_target_temp: float | None = None,  # User-configured DHW target temperature
+        emergency_layer=None,  # Optional EmergencyLayer for shared DM blocking logic
+        price_analyzer: PriceAnalyzer | None = None,  # Optional for shared price logic
     ):
         """Initialize DHW scheduler.
 
@@ -173,9 +215,17 @@ class IntelligentDHWScheduler:
             demand_periods: User-defined high demand periods (e.g., morning showers)
             climate_detector: Optional ClimateZoneDetector for dynamic DM thresholds
             user_target_temp: User-configured DHW target temperature (°C)
+            emergency_layer: Optional EmergencyLayer for shared thermal debt blocking logic.
+                If provided, uses emergency_layer.should_block_dhw() for consistent
+                behavior with space heating optimization.
+            price_analyzer: Optional PriceAnalyzer for shared price forecast logic.
+                If provided, uses price_analyzer.find_cheapest_window() for consistent
+                window search with space heating optimization.
         """
         self.demand_periods = demand_periods or []
         self.climate_detector = climate_detector
+        self.emergency_layer = emergency_layer
+        self.price_analyzer = price_analyzer
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
@@ -188,7 +238,11 @@ class IntelligentDHWScheduler:
         else:
             self.user_target_temp = DEFAULT_DHW_TARGET_TEMP
 
-        if self.climate_detector:
+        if self.emergency_layer:
+            _LOGGER.info(
+                "DHW optimizer initialized with shared EmergencyLayer for thermal debt blocking"
+            )
+        elif self.climate_detector:
             _LOGGER.info(
                 "DHW optimizer initialized with climate-aware thresholds: %s zone",
                 self.climate_detector.zone_info.name,
@@ -200,6 +254,9 @@ class IntelligentDHWScheduler:
                 DM_DHW_BLOCK_FALLBACK,
                 DM_DHW_ABORT_FALLBACK,
             )
+
+        if self.price_analyzer:
+            _LOGGER.info("DHW optimizer initialized with shared PriceAnalyzer for window search")
 
     def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
         """Update BT7/BT6 temperature history and detect NIBE's Legionella boost.
@@ -392,11 +449,40 @@ class IntelligentDHWScheduler:
         """
         indoor_deficit = target_indoor_temp - indoor_temp
 
-        # Get climate-aware DM thresholds based on current outdoor temperature
-        if self.climate_detector:
+        # Determine DM blocking using shared EmergencyLayer or fallback to local logic
+        # Phase 10: EmergencyLayer provides consistent thermal mass-adjusted thresholds
+        should_block_for_thermal_debt = False
+        dm_block_threshold: float
+        dm_abort_threshold: float
+
+        if self.emergency_layer:
+            # Use shared EmergencyLayer for consistent thermal debt blocking
+            should_block_for_thermal_debt = self.emergency_layer.should_block_dhw(
+                thermal_debt_dm, outdoor_temp
+            )
+            # Get thresholds from emergency layer's climate detector for logging/abort conditions
+            if self.emergency_layer.climate_detector:
+                dm_thresholds = self.emergency_layer.climate_detector.get_expected_dm_range(
+                    outdoor_temp
+                )
+                dm_block_threshold = dm_thresholds["warning"]
+                dm_abort_threshold = dm_thresholds["warning"] - 80
+            else:
+                dm_block_threshold = DM_DHW_BLOCK_FALLBACK
+                dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+
+            _LOGGER.debug(
+                "DHW using shared EmergencyLayer: should_block=%s, DM=%.0f, outdoor=%.1f°C",
+                should_block_for_thermal_debt,
+                thermal_debt_dm,
+                outdoor_temp,
+            )
+        elif self.climate_detector:
+            # Fallback to local climate detector
             dm_thresholds = self.climate_detector.get_expected_dm_range(outdoor_temp)
             dm_block_threshold = dm_thresholds["warning"]  # Use warning threshold for blocking
             dm_abort_threshold = dm_thresholds["warning"] - 80  # 80 DM buffer before critical
+            should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
             _LOGGER.debug(
                 "DHW DM thresholds for %.1f°C (zone: %s): block=%.0f, abort=%.0f",
@@ -409,14 +495,20 @@ class IntelligentDHWScheduler:
             # Fallback to fixed thresholds from const.py if climate detector unavailable
             dm_block_threshold = DM_DHW_BLOCK_FALLBACK
             dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+            should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
-        if thermal_debt_dm <= dm_block_threshold:
+        if should_block_for_thermal_debt:
             _LOGGER.warning(
-                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ warning=%.0f (zone: %s, outdoor: %.1f°C)",
+                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ threshold (zone: %s, outdoor: %.1f°C)",
                 thermal_debt_dm,
-                dm_block_threshold,
-                self.climate_detector.zone_info.name if self.climate_detector else "unknown",
+                (
+                    self.emergency_layer.climate_detector.zone_info.name
+                    if self.emergency_layer and self.emergency_layer.climate_detector
+                    else (
+                        self.climate_detector.zone_info.name if self.climate_detector else "unknown"
+                    )
+                ),
                 outdoor_temp,
             )
             # Find next opportunity using centralized logic
@@ -440,7 +532,10 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
-        if indoor_deficit > 0.5 and outdoor_temp < 0:
+        if (
+            indoor_deficit > DHW_SPACE_HEATING_DEFICIT_THRESHOLD
+            and outdoor_temp < DHW_SPACE_HEATING_OUTDOOR_THRESHOLD
+        ):
             # Find next opportunity using centralized logic
             next_opportunity = self._find_next_dhw_opportunity(
                 current_time=current_time,
@@ -477,32 +572,32 @@ class IntelligentDHWScheduler:
             if can_defer_for_peak:
                 # Find optimal window to heat during cheaper period
                 # This prevents just "waiting and hoping" - actively schedule for best price
-                if price_periods:
-                    lookahead_hours = self.get_lookahead_hours(current_time)
-                    optimal_window = self.find_cheapest_dhw_window(
+                if price_periods and self.price_analyzer:
+                    lookahead_hours = self._get_lookahead_hours(current_time)
+                    optimal_window = self.price_analyzer.find_cheapest_window(
                         current_time=current_time,
-                        lookahead_hours=lookahead_hours,
-                        dhw_duration_minutes=45,  # DHW heating takes ~45 min
                         price_periods=price_periods,
+                        duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        lookahead_hours=lookahead_hours,
                     )
 
-                    if optimal_window and optimal_window["hours_until"] <= 0.17:  # Within 10 min
+                    if optimal_window and optimal_window.hours_until <= 0.17:  # Within 10 min
                         # Optimal window is NOW - heat immediately despite expensive current price
                         _LOGGER.info(
                             "DHW safety: In optimal window at %s (%.1före/kWh) - heating now",
-                            optimal_window["start_time"].strftime("%H:%M"),
-                            optimal_window["avg_price"],
+                            optimal_window.start_time.strftime("%H:%M"),
+                            optimal_window.avg_price,
                         )
                         return DHWScheduleDecision(
                             should_heat=True,
-                            priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
+                            priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                             target_temp=DHW_SAFETY_MIN,
                             max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                             abort_conditions=[
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
                             ],
-                            recommended_start_time=optimal_window["start_time"],
+                            recommended_start_time=optimal_window.start_time,
                         )
                     elif optimal_window:
                         # Wait for upcoming cheap window
@@ -510,17 +605,17 @@ class IntelligentDHWScheduler:
                             "DHW safety defer: temp %.1f°C (safe >= %.1f°C), next window at %s (%.1fh, %.1före/kWh)",
                             current_dhw_temp,
                             DHW_SAFETY_CRITICAL,
-                            optimal_window["start_time"].strftime("%H:%M"),
-                            optimal_window["hours_until"],
-                            optimal_window["avg_price"],
+                            optimal_window.start_time.strftime("%H:%M"),
+                            optimal_window.hours_until,
+                            optimal_window.avg_price,
                         )
                         return DHWScheduleDecision(
                             should_heat=False,
-                            priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                            priority_reason=f"DHW_SAFETY_WAITING_WINDOW_IN_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
                             target_temp=self.user_target_temp,
                             max_runtime_minutes=0,
                             abort_conditions=[],
-                            recommended_start_time=optimal_window["start_time"],
+                            recommended_start_time=optimal_window.start_time,
                         )
 
                 # No optimal window found - just defer (fallback to old behavior)
@@ -739,12 +834,12 @@ class IntelligentDHWScheduler:
                     )
 
         # === RULE 6: SMART WINDOW-BASED SCHEDULING ===
-        # SIMPLE FIX: If DHW is adequate, only heat during CHEAP periods
+        # If DHW is adequate, only heat during CHEAP periods
         # This mirrors space heating logic: adequate = no urgency = wait for cheap
         # Adequate temp = one shower guaranteed (morning/evening usage pattern)
         if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
             _LOGGER.info(
-                "DHW: Adequate (%.1f°C ≥ %.1f°C) but price is %s - waiting for cheap period",
+                "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - no heating needed",
                 current_dhw_temp,
                 MIN_DHW_TARGET_TEMP,
                 price_classification,
@@ -773,13 +868,13 @@ class IntelligentDHWScheduler:
 
         if current_dhw_temp < (self.user_target_temp + 5.0):
             # Use window-based scheduling if price data available
-            if price_periods:
-                lookahead_hours = self.get_lookahead_hours(current_time)
-                optimal_window = self.find_cheapest_dhw_window(
+            if price_periods and self.price_analyzer:
+                lookahead_hours = self._get_lookahead_hours(current_time)
+                optimal_window = self.price_analyzer.find_cheapest_window(
                     current_time=current_time,
-                    lookahead_hours=lookahead_hours,
-                    dhw_duration_minutes=45,
                     price_periods=price_periods,
+                    duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                    lookahead_hours=lookahead_hours,
                 )
 
                 if optimal_window is None:
@@ -803,26 +898,26 @@ class IntelligentDHWScheduler:
                 # STEP 1: Check if we're in the optimal window (within 15 min of start)
                 # Use 15 min buffer to accommodate 15-minute coordinator cycle
                 # This ensures we catch the window even if update happens at 3:45, 3:50, or 3:55
-                elif optimal_window["hours_until"] <= 0.25:  # 15 minutes
+                elif optimal_window.hours_until <= 0.25:  # 15 minutes
                     # This is the optimal time! Heat regardless of spare capacity
                     # Trust the window optimizer - it found the absolute cheapest period
                     # RULE 1 already protects against critical thermal debt
                     _LOGGER.info(
                         "DHW: Heating in optimal window at %s (%.1före/kWh), DM=%.0f",
-                        optimal_window["start_time"].strftime("%H:%M"),
-                        optimal_window["avg_price"],
+                        optimal_window.start_time.strftime("%H:%M"),
+                        optimal_window.avg_price,
                         thermal_debt_dm,
                     )
                     return DHWScheduleDecision(
                         should_heat=True,
-                        priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window['quarters'][0]}_@{optimal_window['avg_price']:.1f}öre",
+                        priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                         target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                         abort_conditions=[
                             f"thermal_debt < {dm_abort_threshold:.0f}",
                             f"indoor_temp < {target_indoor_temp - 0.5}",
                         ],
-                        recommended_start_time=optimal_window["start_time"],
+                        recommended_start_time=optimal_window.start_time,
                     )
 
                 # Wait for better window ahead (if DHW still comfortable)
@@ -832,17 +927,17 @@ class IntelligentDHWScheduler:
                         "DHW: Comfortable (%.1f°C ≥ %.1f°C), waiting for optimal window at %s (%.1fh, %.1före/kWh)",
                         current_dhw_temp,
                         MIN_DHW_TARGET_TEMP,
-                        optimal_window["start_time"].strftime("%H:%M"),
-                        optimal_window["hours_until"],
-                        optimal_window["avg_price"],
+                        optimal_window.start_time.strftime("%H:%M"),
+                        optimal_window.hours_until,
+                        optimal_window.avg_price,
                     )
                     return DHWScheduleDecision(
                         should_heat=False,
-                        priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window['hours_until']:.1f}H_@{optimal_window['avg_price']:.1f}",
+                        priority_reason=f"WAITING_OPTIMAL_WINDOW_IN_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
-                        recommended_start_time=optimal_window["start_time"],
+                        recommended_start_time=optimal_window.start_time,
                     )
 
             # Fallback: No price data AND no optimal window ahead
@@ -901,38 +996,39 @@ class IntelligentDHWScheduler:
             recommended_start_time=next_opportunity,
         )
 
-    def get_lookahead_hours(self, current_time: datetime) -> int:
+    def _get_lookahead_hours(self, current_time: datetime) -> float:
         """Calculate how far ahead to look for cheap DHW windows.
 
-        Returns hours until next demand period (capped at 24h), or 24h if no demand period.
+        Uses shared PriceAnalyzer.calculate_lookahead_hours() for consistent
+        behavior with space heating optimization.
 
         Args:
             current_time: Current datetime
 
         Returns:
-            Hours to look ahead (max 24h)
+            Hours to look ahead (1-24h range)
         """
-        from math import ceil
-
         next_demand = self._check_upcoming_demand_period(current_time)
+        next_demand_hours = next_demand["hours_until"] if next_demand else None
 
-        if next_demand:
-            hours_until = next_demand["hours_until"]
-            # Return hours until demand, but ensure it's at least 1h and max 24h
-            # Use ceil() to avoid truncating 1.5h to 1h (bug fix)
-            return max(DHW_SCHEDULING_WINDOW_MIN, min(ceil(hours_until), DHW_SCHEDULING_WINDOW_MAX))
+        if self.price_analyzer:
+            return self.price_analyzer.calculate_lookahead_hours(
+                heating_type="dhw",
+                next_demand_hours=next_demand_hours,
+            )
 
-        # No upcoming demand period - look full 24 hours ahead
-        return DHW_SCHEDULING_WINDOW_MAX
+        # Fallback if no price_analyzer
+        if next_demand_hours is not None:
+            return max(1.0, min(next_demand_hours, 24.0))
+        return 24.0
 
     def _estimate_dm_recovery_time(
         self, current_dm: float, target_dm: float, outdoor_temp: float
     ) -> float:
         """Estimate hours until DM recovers to target level.
 
-        Uses simplified thermal model:
-        - Space heating improves DM at ~20-40 DM/hour (depends on outdoor temp)
-        - Colder outdoor → slower recovery
+        Delegates to shared estimate_dm_recovery_time() in thermal_layer.py
+        for consistent behavior with space heating optimization.
 
         Args:
             current_dm: Current degree minutes value (negative)
@@ -941,39 +1037,8 @@ class IntelligentDHWScheduler:
 
         Returns:
             Estimated hours until recovery (minimum 0.5h, maximum 12h)
-
-        References:
-            - Thermal debt analysis: DM recovery varies with heating capacity
-            - Conservative estimates prevent false promises to user
         """
-        dm_deficit = target_dm - current_dm  # e.g., -350 - (-435) = 85
-
-        # Recovery rate depends on outdoor temp (from const.py)
-        if outdoor_temp > 5:
-            recovery_rate = DM_RECOVERY_RATE_MILD
-        elif outdoor_temp > 0:
-            recovery_rate = DM_RECOVERY_RATE_COLD
-        else:
-            recovery_rate = DM_RECOVERY_RATE_VERY_COLD
-
-        hours = dm_deficit / recovery_rate
-
-        # Constrain to reasonable range (from const.py)
-        # Min: DHW_COOLING_RATE (0.5h) - reuse existing constant
-        # Max: DM_RECOVERY_MAX_HOURS (12h)
-        estimated_hours = max(DHW_COOLING_RATE, min(hours, DM_RECOVERY_MAX_HOURS))
-
-        _LOGGER.debug(
-            "DM recovery estimate: %.0f DM deficit / %.0f DM/h = %.1fh "
-            "(outdoor: %.1f°C, constrained: %.1fh)",
-            dm_deficit,
-            recovery_rate,
-            hours,
-            outdoor_temp,
-            estimated_hours,
-        )
-
-        return estimated_hours
+        return estimate_dm_recovery_time(current_dm, target_dm, outdoor_temp)
 
     def _find_next_dhw_opportunity(
         self,
@@ -1018,16 +1083,16 @@ class IntelligentDHWScheduler:
             opportunities.append(current_time + timedelta(hours=recovery_hours))
 
         # 2. Next cheap price window
-        if price_periods:
-            lookahead_hours = self.get_lookahead_hours(current_time)
-            cheap_window = self.find_cheapest_dhw_window(
+        if price_periods and self.price_analyzer:
+            lookahead_hours = self._get_lookahead_hours(current_time)
+            cheap_window = self.price_analyzer.find_cheapest_window(
                 current_time=current_time,
-                lookahead_hours=lookahead_hours,
-                dhw_duration_minutes=45,
                 price_periods=price_periods,
+                duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                lookahead_hours=lookahead_hours,
             )
             if cheap_window:
-                opportunities.append(cheap_window["start_time"])
+                opportunities.append(cheap_window.start_time)
 
         # 3. Temperature cooling estimate (when will DHW need heating)
         temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
@@ -1048,172 +1113,309 @@ class IntelligentDHWScheduler:
         else:
             return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
 
-    def find_cheapest_dhw_window(
+    def format_planning_summary(
         self,
-        current_time: datetime,
-        lookahead_hours: int,
-        dhw_duration_minutes: int,
-        price_periods: list,
-    ) -> dict | None:
-        """Find cheapest continuous window for DHW heating.
+        recommendation: str,
+        current_temp: float,
+        target_temp: float,
+        thermal_debt: float,
+        dm_thresholds: dict,
+        space_heating_demand: float,
+        price_classification: str,
+        weather_opportunity: str | None,
+    ) -> str:
+        """Format human-readable DHW planning summary.
 
-        Uses sliding window algorithm to find the absolute cheapest continuous
-        period for DHW heating within the lookahead window. DHW heating is
-        time-shiftable (can wait for cheaper prices) but requires a continuous
-        window since we can't split heating across gaps.
-
-        Implementation:
-        - Typical duration: 45 minutes (3 quarters, faster than space heating)
-        - Shifts window within lookahead period (up to next demand period)
-        - Must be continuous 15-minute periods (no gaps)
-        - Finds absolute cheapest average price (not just "cheap" classification)
+        Moved from coordinator._format_dhw_planning_summary for shared reuse.
 
         Args:
-            current_time: Current timestamp
-            lookahead_hours: How far ahead to search
-            dhw_duration_minutes: DHW heating duration (typically 45 min)
-            price_periods: Combined list of today + tomorrow QuarterPeriod objects
+            recommendation: Base recommendation text
+            current_temp: Current DHW temperature
+            target_temp: Target DHW temperature
+            thermal_debt: Current thermal debt (DM)
+            dm_thresholds: Thermal debt thresholds (block, abort)
+            space_heating_demand: Current heating demand in kW
+            price_classification: Current price classification
+            weather_opportunity: Weather opportunity text if any
 
         Returns:
-            {
-                "start_time": datetime,
-                "end_time": datetime,
-                "quarters": [Q30, Q31, Q32],
-                "avg_price": float,
-                "hours_until": float,
-            }
-            or None if insufficient data
+            Multi-line human-readable summary
         """
-        from math import ceil
+        lines = []
+        lines.append("DHW Planning Summary")
+        lines.append("=" * 40)
+        lines.append(f"Current: {current_temp:.1f}°C -> Target: {target_temp:.0f}°C")
+        lines.append(f"Price: {price_classification}")
 
-        if not price_periods:
-            _LOGGER.warning("No price data available for DHW window search")
-            return None
+        # Thermal debt status
+        if thermal_debt < dm_thresholds.get("abort", DM_DHW_ABORT_FALLBACK):
+            status_text = f"CRITICAL (DM {thermal_debt:.0f})"
+        elif thermal_debt < dm_thresholds.get("block", DM_DHW_BLOCK_FALLBACK):
+            status_text = f"WARNING (DM {thermal_debt:.0f})"
+        else:
+            status_text = f"OK (DM {thermal_debt:.0f})"
+        lines.append(f"Thermal Debt: {status_text}")
 
-        # Convert duration to quarters (45 min = 3 quarters)
-        quarters_needed = ceil(dhw_duration_minutes / 15)
+        # Space heating status
+        if space_heating_demand > SPACE_HEATING_DEMAND_HIGH_THRESHOLD:
+            lines.append(f"Heating Demand: HIGH ({space_heating_demand:.1f} kW)")
+        elif space_heating_demand > SPACE_HEATING_DEMAND_MODERATE_THRESHOLD:
+            lines.append(f"Heating Demand: MODERATE ({space_heating_demand:.1f} kW)")
+        elif space_heating_demand > SPACE_HEATING_DEMAND_LOW_THRESHOLD:
+            lines.append(f"Heating Demand: LOW ({space_heating_demand:.1f} kW)")
+        else:
+            lines.append(f"Heating Demand: MINIMAL ({space_heating_demand:.1f} kW)")
 
-        # Filter to lookahead window
-        end_time = current_time + timedelta(hours=lookahead_hours)
+        # Weather opportunity
+        if weather_opportunity:
+            lines.append(f"Weather: {weather_opportunity}")
 
-        # Build available quarters from price periods
-        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
-        # Use the actual datetime from spot price (already timezone-aware) instead of reconstructing
-        available_quarters = []
+        lines.append("")
+        lines.append(f"Recommendation: {recommendation}")
 
-        for period in price_periods:
-            # Use actual datetime from spot price (already handles timezone and date correctly)
-            period_time = period.start_time
+        return "\n".join(lines)
 
-            # Check if within lookahead window
-            if period_time >= current_time and period_time < end_time:
-                # Calculate quarter ID based on actual datetime to distinguish duplicates
-                days_ahead = (period_time.date() - current_time.date()).days
-                quarter_id = period.quarter_of_day + (days_ahead * 96)
+    def check_abort_conditions(
+        self,
+        abort_conditions: list[str],
+        thermal_debt: float,
+        indoor_temp: float,
+        target_indoor: float,
+    ) -> tuple[bool, str | None]:
+        """Check if any DHW abort conditions are triggered.
 
-                available_quarters.append(
-                    {
-                        "start": period_time,
-                        "end": period_time + timedelta(minutes=15),
-                        "quarter": quarter_id,
-                        "price": period.price,
-                    }
-                )
+        Moved from coordinator._check_dhw_abort_conditions for shared reuse.
 
-        if len(available_quarters) < quarters_needed:
-            _LOGGER.warning(
-                "Not enough price data for DHW window search: %d quarters available, %d needed",
-                len(available_quarters),
-                quarters_needed,
+        Abort conditions are returned by DHW optimizer to monitor during active heating.
+        If triggered, we should stop DHW heating early to prioritize space heating.
+
+        Args:
+            abort_conditions: List of condition strings from DHW decision
+                Examples: ["thermal_debt < -500", "indoor_temp < 21.5"]
+            thermal_debt: Current degree minutes (DM) value
+            indoor_temp: Current indoor temperature
+            target_indoor: Target indoor temperature (currently unused but kept for future)
+
+        Returns:
+            Tuple of (should_abort, reason_str)
+            - should_abort: True if any condition triggered
+            - reason_str: Human-readable abort reason or None
+        """
+        if not abort_conditions:
+            return False, None
+
+        for condition in abort_conditions:
+            # Parse and evaluate "thermal_debt < THRESHOLD" condition
+            if "thermal_debt <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if thermal_debt < threshold:
+                        return True, f"Thermal debt {thermal_debt:.0f} < {threshold:.0f}"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+            # Parse and evaluate "indoor_temp < THRESHOLD" condition
+            elif "indoor_temp <" in condition:
+                try:
+                    threshold = float(condition.split("<")[1].strip())
+                    if indoor_temp < threshold:
+                        return True, f"Indoor {indoor_temp:.1f}°C < {threshold:.1f}°C"
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+
+        return False, None
+
+    def calculate_recommendation(
+        self,
+        current_dhw_temp: float,
+        thermal_debt: float,
+        space_heating_demand: float,
+        outdoor_temp: float,
+        indoor_temp: float,
+        target_indoor: float,
+        price_classification: str,
+        current_time: datetime,
+        price_periods: list | None,
+        hours_since_last_dhw: float,
+        thermal_trend_rate: float = 0.0,
+        climate_zone_name: str | None = None,
+        weather_current_temp: float | None = None,
+    ) -> DHWRecommendation:
+        """Calculate complete DHW heating recommendation.
+
+        Pure logic moved from coordinator._calculate_dhw_recommendation.
+        Takes all data as parameters (no HA dependencies), returns structured result.
+
+        The coordinator should:
+        1. Gather all HA-specific data (entry.data, notifications, history)
+        2. Call this method with gathered data
+        3. Handle HA-specific side effects (notifications)
+
+        Args:
+            current_dhw_temp: Current DHW temperature (°C)
+            thermal_debt: Current degree minutes (DM)
+            space_heating_demand: Current heating power (kW)
+            outdoor_temp: Current outdoor temperature (°C)
+            indoor_temp: Current indoor temperature (°C)
+            target_indoor: Target indoor temperature (°C)
+            price_classification: Price classification (cheap/normal/expensive/peak)
+            current_time: Current datetime
+            price_periods: Price period list for window scheduling
+            hours_since_last_dhw: Hours since last DHW heating
+            thermal_trend_rate: Indoor temp change rate (°C/hour)
+            climate_zone_name: Climate zone name for display
+            weather_current_temp: Current weather temp for opportunity detection
+
+        Returns:
+            DHWRecommendation with recommendation, summary, details, and decision
+        """
+        indoor_deficit = max(0.0, target_indoor - indoor_temp)
+
+        # Get DM thresholds from climate detector or use fallback
+        if self.climate_detector:
+            dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+            dm_thresholds = {
+                "block": dm_range["warning"],
+                "abort": dm_range["critical"],
+            }
+            zone_name = climate_zone_name or self.climate_detector.zone_info.name
+        else:
+            dm_thresholds = {
+                "block": DM_DHW_BLOCK_FALLBACK,
+                "abort": DM_DHW_ABORT_FALLBACK,
+            }
+            zone_name = climate_zone_name or "Unknown"
+
+        # Block DHW if indoor cooling rapidly AND below target
+        if (
+            indoor_deficit > DHW_TREND_DEFICIT_THRESHOLD
+            and thermal_trend_rate < DHW_TREND_RATE_THRESHOLD
+        ):
+            planning_summary = (
+                f"⚠️ DHW Blocked - Space Heating Priority\n"
+                f"Indoor: {indoor_temp:.1f}°C (target {target_indoor:.1f}°C)\n"
+                f"Trend: Cooling {abs(thermal_trend_rate):.2f}°C/hour\n"
+                f"Reason: Prevent further indoor temperature drop"
             )
-            return None
 
-        _LOGGER.debug(
-            "DHW window search: %d quarters available, need %d quarters (%d min), lookahead %.1fh",
-            len(available_quarters),
-            quarters_needed,
-            dhw_duration_minutes,
-            lookahead_hours,
+            recommendation = (
+                f"Block DHW - Indoor temp falling rapidly ({thermal_trend_rate:.2f}°C/h), "
+                f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
+            )
+
+            return DHWRecommendation(
+                recommendation=recommendation,
+                summary=planning_summary,
+                details={
+                    "should_heat": False,
+                    "priority_reason": "INDOOR_COOLING_RAPIDLY",
+                    "current_temperature": current_dhw_temp,
+                    "target_temperature": 50.0,
+                    "indoor_temp": indoor_temp,
+                    "indoor_trend": thermal_trend_rate,
+                    "indoor_deficit": indoor_deficit,
+                },
+                decision=None,
+            )
+
+        # Get decision from should_start_dhw
+        decision = self.should_start_dhw(
+            current_dhw_temp=current_dhw_temp,
+            space_heating_demand_kw=space_heating_demand,
+            thermal_debt_dm=thermal_debt,
+            indoor_temp=indoor_temp,
+            target_indoor_temp=target_indoor,
+            outdoor_temp=outdoor_temp,
+            price_classification=price_classification,
+            current_time=current_time,
+            price_periods=price_periods,
+            hours_since_last_dhw=hours_since_last_dhw,
         )
 
-        # Sliding window to find cheapest continuous period
-        lowest_price = None
-        lowest_index = None
-        window_candidates = []  # Track all valid windows for debugging
+        # Build detailed planning attributes
+        from .thermal_layer import get_thermal_debt_status
 
-        for i in range(len(available_quarters) - quarters_needed + 1):
-            window = available_quarters[i : i + quarters_needed]
-
-            # Verify continuity (15-min gaps)
-            is_continuous = True
-            for j in range(len(window) - 1):
-                time_gap = (window[j + 1]["start"] - window[j]["end"]).total_seconds()
-                if abs(time_gap) > 1:  # Allow 1 second tolerance
-                    is_continuous = False
-                    break
-
-            if not is_continuous:
-                continue
-
-            window_avg = sum(q["price"] for q in window) / quarters_needed
-
-            # Track this candidate
-            window_candidates.append(
-                {
-                    "start": window[0]["start"],
-                    "avg_price": window_avg,
-                    "hours_until": (window[0]["start"] - current_time).total_seconds() / 3600,
-                }
-            )
-
-            if lowest_price is None or window_avg < lowest_price:
-                lowest_price = window_avg
-                lowest_index = i
-
-        # Log all candidates for debugging
-        if window_candidates:
-            _LOGGER.debug(
-                "DHW window candidates found: %d windows evaluated",
-                len(window_candidates),
-            )
-            # Show top 5 cheapest
-            sorted_candidates = sorted(window_candidates, key=lambda x: x["avg_price"])
-            for idx, candidate in enumerate(sorted_candidates[:5], 1):
-                _LOGGER.debug(
-                    "  #%d: %.1före/kWh at %s (%.1fh away)%s",
-                    idx,
-                    candidate["avg_price"],
-                    candidate["start"].strftime("%H:%M"),
-                    candidate["hours_until"],
-                    " ← SELECTED" if idx == 1 else "",
-                )
-
-        if lowest_index is None:
-            _LOGGER.error("Could not find continuous DHW window (unexpected)")
-            return None
-
-        optimal_window = available_quarters[lowest_index : lowest_index + quarters_needed]
-
-        result = {
-            "start_time": optimal_window[0]["start"],
-            "end_time": optimal_window[-1]["end"],
-            "quarters": [q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
-            "avg_price": lowest_price,
-            "hours_until": (optimal_window[0]["start"] - current_time).total_seconds() / 3600,
+        planning_details = {
+            "should_heat": decision.should_heat,
+            "priority_reason": decision.priority_reason,
+            "current_temperature": current_dhw_temp,
+            "target_temperature": decision.target_temp,
+            "thermal_debt": thermal_debt,
+            "thermal_debt_threshold_block": dm_thresholds["block"],
+            "thermal_debt_threshold_abort": dm_thresholds["abort"],
+            "thermal_debt_status": get_thermal_debt_status(thermal_debt, dm_thresholds),
+            "space_heating_demand_kw": round(space_heating_demand, 2),
+            "current_price_classification": price_classification,
+            "outdoor_temperature": outdoor_temp,
+            "indoor_temperature": indoor_temp,
+            "climate_zone": zone_name,
+            "recommended_start_time": decision.recommended_start_time,
         }
 
-        _LOGGER.info(
-            "DHW optimal window selected: %s (Q%d-Q%d) @ %.1före/kWh, %.1fh away",
-            result["start_time"].strftime("%H:%M"),
-            result["quarters"][0],
-            result["quarters"][-1],
-            result["avg_price"],
-            result["hours_until"],
+        # Check for weather opportunity
+        weather_opportunity = None
+        if weather_current_temp is not None and self.climate_detector:
+            zone_avg = self.climate_detector.zone_info.winter_avg_low
+            temp_deviation = outdoor_temp - zone_avg
+            if temp_deviation > 5.0:
+                weather_opportunity = (
+                    f"Unusually warm (+{temp_deviation:.1f}°C), good for DHW heating"
+                )
+                planning_details["weather_opportunity"] = weather_opportunity
+
+        # Convert decision to human-readable recommendation
+        if not decision.should_heat:
+            if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
+                recommendation = (
+                    f"Block DHW - Thermal debt warning (DM: {thermal_debt:.0f}, zone: {zone_name})"
+                )
+            elif decision.priority_reason == "SPACE_HEATING_EMERGENCY":
+                recommendation = f"Block DHW - House too cold ({indoor_temp:.1f}°C)"
+            elif decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND":
+                recommendation = f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
+            elif decision.priority_reason == "DHW_ADEQUATE":
+                recommendation = f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+            else:
+                recommendation = "Wait - Conditions not optimal"
+        else:
+            # Should heat - give specific recommendation
+            if decision.priority_reason == "DHW_SAFETY_MINIMUM":
+                recommendation = (
+                    f"Heat now - Safety minimum ({current_dhw_temp:.1f}°C < {DHW_SAFETY_MIN}°C)"
+                )
+            elif decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY":
+                recommendation = f"Heat now - Cheap electricity ({price_classification})"
+            elif decision.priority_reason.startswith("URGENT_DEMAND"):
+                recommendation = "Heat now - Demand period approaching"
+            elif decision.priority_reason.startswith("OPTIMAL_PREHEAT"):
+                recommendation = f"Heat now - Pre-heating for demand ({price_classification})"
+            elif decision.priority_reason == "NORMAL_DHW_HEATING":
+                recommendation = f"Heat now - Temperature low ({current_dhw_temp:.1f}°C)"
+            else:
+                recommendation = f"Heat recommended - Target: {decision.target_temp:.0f}°C"
+
+        # Build human-readable planning summary
+        planning_summary = self.format_planning_summary(
+            recommendation=recommendation,
+            current_temp=current_dhw_temp,
+            target_temp=decision.target_temp,
+            thermal_debt=thermal_debt,
+            dm_thresholds=dm_thresholds,
+            space_heating_demand=space_heating_demand,
+            price_classification=price_classification,
+            weather_opportunity=weather_opportunity,
         )
 
-        return result
+        return DHWRecommendation(
+            recommendation=recommendation,
+            summary=planning_summary,
+            details=planning_details,
+            decision=decision,
+        )
 
-    def _check_upcoming_demand_period(self, current_time: datetime) -> dict[str, Any] | None:
+    def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
         """Check if approaching a high demand period (up to 24h ahead).
 
         Extended window: We can preheat up to 24h ahead since DHW tank
@@ -1250,25 +1452,13 @@ class IntelligentDHWScheduler:
 
         return None
 
-    def record_legionella_boost(self, boost_time: datetime) -> None:
-        """Record successful Legionella boost completion.
-
-        DEPRECATED: Use update_bt7_temperature() instead for automatic detection.
-        This method kept for backward compatibility.
-
-        Args:
-            boost_time: When boost was completed
-        """
-        self.last_legionella_boost = boost_time
-        _LOGGER.info("Legionella boost manually recorded at %s", boost_time)
-
     def get_recommended_dhw_schedule(
         self,
         price_data,  # Spot price data with 96 quarters
         weather_data,  # Weather forecast
         current_dhw_temp: float,
         thermal_debt_dm: float,
-    ) -> list[dict[str, Any]]:
+    ) -> list[DHWScheduleWindowDict]:
         """Calculate recommended DHW heating schedule for next 24 hours.
 
         Finds optimal windows based on:

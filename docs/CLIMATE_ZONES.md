@@ -24,7 +24,7 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 **Examples:** Kiruna (SWE), Tromsø (NOR), Fairbanks (USA)
 
 **Winter characteristics:**
-- Average winter low: -30°C
+- Average winter low: -20°C
 - Severe heating demands
 - Heat pump works continuously in winter
 
@@ -93,7 +93,7 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 **Examples:** Copenhagen (DEN), Malmö (SWE), Aarhus (DEN), Helsingborg (SWE)
 
 **Winter characteristics:**
-- Average winter low: 0°C
+- Average winter low: -1°C
 - Moderate heating demands
 - Milder Nordic climate (Øresund region)
 
@@ -138,12 +138,12 @@ The base DM thresholds adjust dynamically based on current outdoor temperature:
 
 **Formula:** `adjustment = (zone_avg_winter_low - outdoor_temp) × 20 DM/°C`
 
-**Example (Stockholm - Cold Zone):**
-- Zone average: -10°C
+**Example (Stockholm - Cold Zone, winter avg -10°C):**
+- Zone winter average: -10°C
 - Current outdoor: -20°C
 - Difference: 10°C colder than average
 - Adjustment: 10 × 20 = -200 DM deeper threshold
-- Base normal max: -700 DM
+- Base warning: -700 DM
 - **Adjusted: -900 DM** (allows deeper DM in colder weather)
 
 **Conversely at 0°C:**

@@ -26,7 +26,7 @@ from custom_components.effektguard.const import (
     SERVICE_RESET_PEAK_TRACKING,
 )
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.effect_manager import EffectManager
+from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 
 @pytest.fixture
@@ -501,7 +501,7 @@ def test_decision_engine_calculate_with_manual_override():
 
 def test_effect_manager_reset_monthly_peaks():
     """Test EffectManager.reset_monthly_peaks clears all peaks."""
-    from custom_components.effektguard.optimization.effect_manager import (
+    from custom_components.effektguard.optimization.effect_layer import (
         EffectManager,
         PeakEvent,
     )

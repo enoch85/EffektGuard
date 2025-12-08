@@ -463,14 +463,6 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             try:
                 value = self.entity_description.value_fn(self.coordinator)
 
-                # Log if reasoning was truncated
-                if (
-                    self.entity_description.key == "optimization_reasoning"
-                    and isinstance(value, str)
-                    and value.endswith("...")
-                ):
-                    _LOGGER.debug("Reasoning truncated to 255 chars, full reasoning in attributes")
-
                 # Clear restored value once we have real data
                 if value is not None and self._restored_value is not None:
                     self._restored_value = None

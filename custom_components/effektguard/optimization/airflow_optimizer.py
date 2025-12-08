@@ -517,20 +517,3 @@ class AirflowOptimizer:
                 else 0.0
             ),
         }
-
-
-if __name__ == "__main__":
-    # Example: Your scenario
-    state = ThermalState(
-        temp_outdoor=0.0,
-        temp_indoor=20.5,
-        temp_target=21.0,
-        compressor_pct=80.0,  # 80 Hz ≈ 80% of ~100 Hz max
-        trend_indoor=-0.2,
-    )
-
-    decision = evaluate_airflow(state)
-    print(f"Mode: {decision.mode.value}")
-    print(f"Duration: {decision.duration_minutes} minutes")
-    print(f"Expected gain: {decision.expected_gain_kw:.2f} kW")
-    print(f"Reason: {decision.reason}")

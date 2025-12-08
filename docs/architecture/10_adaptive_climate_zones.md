@@ -30,23 +30,23 @@ flowchart TD
     
     G -->|Extract with fallback| H["latitude = config.get('latitude', 59.33)<br/>Default: Stockholm if missing"]
     
-    H -->|Create climate system| I["AdaptiveClimateSystem(<br/>  latitude=59.3293,<br/>  weather_learner=weather_learner<br/>)"]
+    H -->|Create ClimateZoneDetector| I["ClimateZoneDetector(<br/>  latitude=59.3293<br/>)"]
     
     I -->|Use absolute value| J["self.latitude = abs(59.3293) = 59.3293<br/>Handles southern hemisphere"]
     
-    J -->|Detect zone| K["self._detect_climate_zone()"]
+    J -->|Detect zone| K["self._detect_zone()"]
     
-    K -->|Check ranges in order| L{Loop through<br/>CLIMATE_ZONE_ORDER}
+    K -->|Check ranges in order| L{Loop through<br/>ZONE_ORDER}
     
-    L -->|arctic: 66.5°-90.0°| M1["66.5 <= 59.3 <= 90.0?<br/>No"]
-    L -->|subarctic: 60.5°-66.5°| M2["60.5 <= 59.3 <= 66.5?<br/>No"]
-    L -->|cold: 55.0°-60.5°| M3["55.0 <= 59.3 <= 60.5?<br/>YES!"]
+    L -->|extreme_cold: 66.5°-90.0°| M1["66.5 <= 59.3 <= 90.0?<br/>No"]
+    L -->|very_cold: 60.5°-66.5°| M2["60.5 <= 59.3 <= 66.5?<br/>No"]
+    L -->|cold: 56.0°-60.5°| M3["56.0 <= 59.3 <= 60.5?<br/>YES!"]
     
-    M3 -->|Return zone key| N["self.climate_zone = 'cold'"]
+    M3 -->|Return zone key| N["self.zone_key = 'cold'"]
     
-    N -->|Log detection| O["Logger: AdaptiveClimateSystem initialized:<br/>latitude=59.33° -> Cold Continental zone<br/>(winter avg low: -10.0°C, base safety margin: 1.0°C)"]
+    N -->|Log detection| O["Logger: Climate zone detected:<br/>Cold (Substantial winter heating demands)<br/>at latitude 59.33°N"]
     
-    O -->|Ready for use| P["self.climate_system<br/>(stored in DecisionEngine)"]
+    O -->|Ready for use| P["detector.zone_info<br/>(ClimateZoneInfo dataclass)"]
     
     style C fill:#e0e0e0,stroke:#333,color:#000
     style F fill:#d0d0d0,stroke:#333,color:#000
@@ -63,40 +63,36 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["latitude = abs(config.get('latitude', 59.33))"] -->|Examples| B["Stockholm: 59.33°<br/>Kiruna: 67.85°<br/>London: 51.51°<br/>Paris: 48.86°<br/>Singapore: 1.35°<br/>Antarctica: abs(-75°) = 75°"]
+    A["latitude = abs(config.get('latitude', 59.33))"] -->|Examples| B["Stockholm: 59.33°<br/>Kiruna: 67.85°<br/>Copenhagen: 55.68°<br/>Malmö: 55.60°<br/>Singapore: 1.35°<br/>Antarctica: abs(-75°) = 75°"]
     
-    B -->|Loop through zones| C{Check Arctic<br/>66.5° - 90.0°}
+    B -->|Loop through zones| C{Check extreme_cold<br/>66.5° - 90.0°}
     
-    C -->|67.85° YES| D1["Zone: Arctic<br/>Safety margin: +2.5°C<br/>Winter avg: -30°C"]
+    C -->|67.85° YES| D1["Zone: Extreme Cold<br/>Safety margin: +2.5°C<br/>Winter avg: -20°C"]
     C -->|75° YES| D1
-    C -->|59.33° NO| E{Check Subarctic<br/>60.5° - 66.5°}
+    C -->|59.33° NO| E{Check very_cold<br/>60.5° - 66.5°}
     
-    E -->|62.45° YES| D2["Zone: Subarctic<br/>Safety margin: +1.5°C<br/>Winter avg: -15°C"]
-    E -->|59.33° NO| F{Check Cold<br/>55.0° - 60.5°}
+    E -->|62.45° YES| D2["Zone: Very Cold<br/>Safety margin: +1.5°C<br/>Winter avg: -15°C"]
+    E -->|59.33° NO| F{Check cold<br/>56.0° - 60.5°}
     
     F -->|59.33° YES| D3["Zone: Cold<br/>Safety margin: +1.0°C<br/>Winter avg: -10°C"]
-    F -->|51.51° NO| G{Check Temperate<br/>49.0° - 55.0°}
+    F -->|55.68° NO| G{Check moderate_cold<br/>54.5° - 56.0°}
     
-    G -->|51.51° YES| D4["Zone: Temperate<br/>Safety margin: +0.5°C<br/>Winter avg: 0°C"]
-    G -->|49.0° YES boundary| D4
-    G -->|48.86° NO| H{Check Mild<br/>35.0° - 48.999°}
+    G -->|55.68° YES| D4["Zone: Moderate Cold<br/>Safety margin: +0.5°C<br/>Winter avg: -1°C"]
+    G -->|55.60° YES| D4
+    G -->|48.86° NO| H{Check standard<br/>0.0° - 54.5°}
     
-    H -->|48.86° YES| D5["Zone: Mild<br/>Safety margin: 0.0°C<br/>Winter avg: +5°C"]
-    H -->|1.35° NO| I["Outside all zones<br/>(< 35° or > 90°)"]
+    H -->|48.86° YES| D5["Zone: Standard<br/>Safety margin: 0.0°C<br/>Winter avg: +5°C"]
+    H -->|1.35° YES| D5
     
-    I -->|Fallback| J["Default: Temperate<br/>Logger.warning()<br/>'Latitude X° outside defined zones'"]
+    D1 & D2 & D3 & D4 & D5 -->|Store result| K["return zone_key"]
     
-    D1 & D2 & D3 & D4 & D5 & J -->|Store result| K["return zone_key"]
-    
-    K -->|Assign| L["self.climate_zone = zone_key"]
+    K -->|Assign| L["self.zone_key = zone_key"]
     
     style D1 fill:#e0e0e0,stroke:#333,color:#000
     style D2 fill:#d0d0d0,stroke:#333,color:#000
     style D3 fill:#c0c0c0,stroke:#333,color:#000
     style D4 fill:#b0b0b0,stroke:#333,color:#000
     style D5 fill:#a0a0a0,stroke:#333,color:#000
-    style I fill:#f0f0f0,stroke:#333,color:#000
-    style J fill:#d8d8d8,stroke:#333,color:#000
 ```
 
 ---
@@ -206,23 +202,23 @@ flowchart TD
     A["DecisionEngine.calculate_decision()"] -->|Collect all layers| B["Layer Decisions (8 total)"]
     
     B -->|Priority 1| L1["Safety Layer<br/>offset=0.0, weight=1.0<br/>reason='Temperature within limits'"]
-    B -->|Priority 2| L2["Emergency Layer<br/>offset=0.0, weight=0.9<br/>reason='DM -180 OK'"]
-    B -->|Priority 3| L3["Effect Tariff Layer<br/>offset=0.0, weight=0.8<br/>reason='Not in peak window'"]
+    B -->|Priority 2| L2["Emergency Layer<br/>offset=0.0, weight=0.8<br/>reason='DM -180 OK'"]
+    B -->|Priority 3| L3["Effect Tariff Layer<br/>offset=0.0, weight=0.65-1.0<br/>reason='Not in peak window'"]
     B -->|Priority 4| L4["Prediction Layer (Phase 6)<br/>offset=+0.5, weight=0.65<br/>reason='Pre-heat for cold'"]
     B -->|Priority 5| L5["Weather Compensation Layer<br/>offset=-0.9, weight=0.64<br/>reason='Math WC: Cold zone, -12°C'"]
-    B -->|Priority 6| L6["Weather Prediction Layer<br/>offset=0.0, weight=0.7<br/>reason='Stable forecast'"]
-    B -->|Priority 7| L7["Price Layer<br/>offset=-0.5, weight=0.6<br/>reason='Expensive period'"]
-    B -->|Priority 8| L8["Comfort Layer<br/>offset=0.0, weight=0.5<br/>reason='Indoor 21.0°C in range'"]
+    B -->|Priority 6| L6["Weather Prediction Layer<br/>offset=0.0, weight=0.85<br/>reason='Stable forecast'"]
+    B -->|Priority 7| L7["Price Layer<br/>offset=-0.5, weight=0.8<br/>reason='Expensive period'"]
+    B -->|Priority 8| L8["Comfort Layer<br/>offset=0.0, weight=0.2-1.0<br/>reason='Indoor 21.0°C in range'"]
     
     L1 & L2 & L3 & L4 & L5 & L6 & L7 & L8 -->|Weighted aggregation| C["Calculate weighted sum"]
     
     C -->|Formula| D["total_weighted_offset =<br/>Σ(layer.offset × layer.weight)"]
     
-    D -->|Calculation| E["= (0.0×1.0) + (0.0×0.9) + (0.0×0.8)<br/>  + (0.5×0.65) + (-0.9×0.64) + (0.0×0.7)<br/>  + (-0.5×0.6) + (0.0×0.5)<br/>= 0.325 - 0.576 - 0.300<br/>= -0.551"]
+    D -->|Calculation| E["= (0.0×1.0) + (0.0×0.8) + (0.0×0.65)<br/>  + (0.5×0.65) + (-0.9×0.64) + (0.0×0.85)<br/>  + (-0.5×0.8) + (0.0×0.2)<br/>= 0.325 - 0.576 - 0.400<br/>= -0.651"]
     
-    E -->|Total weights| F["total_weight = Σ(layer.weight)<br/>= 1.0 + 0.9 + 0.8 + 0.65 + 0.64 + 0.7 + 0.6 + 0.5<br/>= 5.79"]
+    E -->|Total weights| F["total_weight = Σ(layer.weight)<br/>= 1.0 + 0.8 + 0.65 + 0.65 + 0.64 + 0.85 + 0.8 + 0.2<br/>= 5.59"]
     
-    F -->|Final calculation| G["final_offset = total_weighted_offset / total_weight<br/>= -0.551 / 5.79<br/>= -0.095°C"]
+    F -->|Final calculation| G["final_offset = total_weighted_offset / total_weight<br/>= -0.651 / 5.59<br/>= -0.116°C"]
     
     G -->|Round to NIBE precision| H["rounded_offset = -0.1°C"]
     
@@ -289,32 +285,36 @@ decision_engine = DecisionEngine(
 # Extract latitude with default fallback
 latitude = config.get("latitude", 59.33)  # Default: Stockholm if missing
 
-# Create adaptive climate system
-self.climate_system = AdaptiveClimateSystem(
-    latitude=latitude,           # 59.3293 from HA config
-    weather_learner=weather_learner  # Optional Phase 6 module
-)
+# Create climate zone detector (from climate_zones.py)
+self.climate_zone_detector = ClimateZoneDetector(latitude=latitude)
+
+# Access zone info for calculations
+zone_info = self.climate_zone_detector.zone_info
+# zone_info.dm_normal_min = -450
+# zone_info.dm_normal_max = -700
+# zone_info.dm_warning_threshold = -700
+# zone_info.safety_margin_base = 1.0
 ```
 
-### 4. AdaptiveClimateSystem Initialization
+### 4. ClimateZoneDetector Initialization
 ```python
-def __init__(self, latitude: float, weather_learner: Optional = None):
-    self.latitude = abs(latitude)  # 59.3293 → 59.3293 (already positive)
-    self.weather_learner = weather_learner
-    self.climate_zone = self._detect_climate_zone()
-    
-    # Detection logic:
-    # 59.3293° falls in range (55.0°, 60.5°) → "cold" zone
-    # Zone info:
-    #   name: "Cold Continental"
-    #   winter_avg_low: -10.0°C
-    #   safety_margin_base: 1.0°C
-    #   examples: ["Stockholm (SWE)", "Oslo (NOR)", "Helsinki (FIN)"]
-    
-    _LOGGER.info(
-        "AdaptiveClimateSystem initialized: latitude=59.33° -> Cold Continental zone "
-        "(winter avg low: -10.0°C, base safety margin: 1.0°C)"
-    )
+# From climate_zones.py
+detector = ClimateZoneDetector(latitude=59.33)
+
+# Detection logic:
+# 59.33° falls in range (56.0°, 60.5°) → "cold" zone
+# Zone info:
+#   name: "Cold"
+#   description: "Substantial winter heating demands"
+#   winter_avg_low: -10.0°C
+#   safety_margin_base: 1.0°C
+#   dm_normal_range: (-450, -700)
+#   examples: ["Stockholm (SWE)", "Oslo (NOR)", "Göteborg (SWE)", "Helsinki (FIN)"]
+
+_LOGGER.info(
+    "Climate zone detected: Cold (Substantial winter heating demands) at latitude 59.33°N - "
+    "Winter avg: -10.0°C, DM normal range: -450 to -700"
+)
 ```
 
 ### 5. Runtime: Weather Compensation Layer
@@ -390,24 +390,24 @@ def _weather_compensation_layer(self, nibe_state, weather_data):
 # All layers vote (simplified):
 layers = [
     LayerDecision(offset=0.0, weight=1.0, reason="Safety: OK"),          # Safety
-    LayerDecision(offset=0.0, weight=0.9, reason="Emergency: OK"),       # Emergency
-    LayerDecision(offset=0.0, weight=0.8, reason="Effect: Not peak"),    # Effect
+    LayerDecision(offset=0.0, weight=0.8, reason="Emergency: OK"),       # Emergency
+    LayerDecision(offset=0.0, weight=0.65, reason="Effect: Not peak"),   # Effect
     LayerDecision(offset=0.5, weight=0.65, reason="Prediction: pre-heat"),  # Prediction
     LayerDecision(offset=-0.9, weight=0.64, reason="Weather comp: -12°C"),  # Weather Comp
-    LayerDecision(offset=0.0, weight=0.7, reason="Weather: Stable"),     # Weather
-    LayerDecision(offset=-0.5, weight=0.6, reason="Price: Expensive"),   # Price
-    LayerDecision(offset=0.0, weight=0.5, reason="Comfort: In range"),   # Comfort
+    LayerDecision(offset=0.0, weight=0.85, reason="Weather: Stable"),    # Weather
+    LayerDecision(offset=-0.5, weight=0.8, reason="Price: Expensive"),   # Price
+    LayerDecision(offset=0.0, weight=0.2, reason="Comfort: In range"),   # Comfort
 ]
 
 # Weighted aggregation:
 total_weighted_offset = (
-    0.0×1.0 + 0.0×0.9 + 0.0×0.8 + 0.5×0.65 + (-0.9)×0.64 + 
-    0.0×0.7 + (-0.5)×0.6 + 0.0×0.5
-) = 0.325 - 0.576 - 0.300 = -0.551
+    0.0×1.0 + 0.0×0.8 + 0.0×0.65 + 0.5×0.65 + (-0.9)×0.64 + 
+    0.0×0.85 + (-0.5)×0.8 + 0.0×0.2
+) = 0.325 - 0.576 - 0.400 = -0.651
 
-total_weight = 1.0 + 0.9 + 0.8 + 0.65 + 0.64 + 0.7 + 0.6 + 0.5 = 5.79
+total_weight = 1.0 + 0.8 + 0.65 + 0.65 + 0.64 + 0.85 + 0.8 + 0.2 = 5.59
 
-final_offset = -0.551 / 5.79 = -0.095°C
+final_offset = -0.651 / 5.59 = -0.116°C
 
 # Apply to NIBE heating curve
 climate_entity.set_offset(-0.1)  # Rounded to 0.1°C precision
@@ -416,20 +416,21 @@ climate_entity.set_offset(-0.1)  # Rounded to 0.1°C precision
 ## Climate Zone Detection Logic
 
 ```python
-def _detect_climate_zone(self) -> str:
+def _detect_zone(self) -> str:
     """Detect climate zone based on latitude."""
-    latitude = abs(self.latitude)  # Southern hemisphere support
+    # Use absolute for hemisphere independence
+    latitude = self.latitude  # Already abs() in __init__
     
-    # Check from coldest to mildest (defined in const.py CLIMATE_ZONE_ORDER)
-    for zone_key in ["arctic", "subarctic", "cold", "temperate", "mild"]:
-        zone_data = CLIMATE_ZONES[zone_key]
+    # Check from coldest to mildest (defined in ZONE_ORDER)
+    for zone_key in ["extreme_cold", "very_cold", "cold", "moderate_cold", "standard"]:
+        zone_data = HEATING_CLIMATE_ZONES[zone_key]
         lat_min, lat_max = zone_data["latitude_range"]
         
         if lat_min <= latitude <= lat_max:
             return zone_key
     
-    # Fallback for edge cases (< 35° or > 90°)
-    return "temperate"
+    # Fallback for edge cases
+    return "standard"
 ```
 
 ## Real-World Examples
@@ -438,18 +439,19 @@ def _detect_climate_zone(self) -> str:
 ```
 Initialization:
   hass.config.latitude = 67.85
-  → Detected zone: Arctic
-  → winter_avg_low: -30.0°C
+  → Detected zone: extreme_cold
+  → winter_avg_low: -20.0°C
   → safety_margin_base: 2.5°C
+  → dm_normal_range: (-800, -1200)
 
 Runtime (outdoor = -35°C, no unusual weather):
   1. Kühne formula: 42.0°C optimal flow
   2. Safety margin calculation:
-     - base: 2.5°C (Arctic)
-     - temp: (-30 - (-35)) × 0.1 = 0.5°C (colder than avg)
+     - base: 2.5°C (extreme_cold)
+     - temp: (-20 - (-35)) × 0.1 = 1.5°C (colder than avg)
      - unusual: 0.0°C (no unusual weather)
-     - total: 3.0°C
-  3. Adjusted flow: 42.0 + 3.0 = 45.0°C
+     - total: 4.0°C
+  3. Adjusted flow: 42.0 + 4.0 = 46.0°C
   4. Dynamic weight: 0.85 (very cold)
   5. Final weight: 0.85 × 0.75 = 0.6375
 
@@ -460,14 +462,15 @@ Result: Aggressive heating to prevent thermal debt in extreme cold
 ```
 Initialization:
   hass.config.latitude = 59.33
-  → Detected zone: Cold Continental
+  → Detected zone: cold
   → winter_avg_low: -10.0°C
   → safety_margin_base: 1.0°C
+  → dm_normal_range: (-450, -700)
 
 Runtime (outdoor = -10°C, no unusual weather):
   1. Kühne formula: 35.5°C optimal flow
   2. Safety margin calculation:
-     - base: 1.0°C (Cold)
+     - base: 1.0°C (cold)
      - temp: 0.0°C (at winter average)
      - unusual: 0.0°C (no unusual weather)
      - total: 1.0°C
@@ -478,40 +481,42 @@ Runtime (outdoor = -10°C, no unusual weather):
 Result: Balanced approach for typical Swedish winter
 ```
 
-### Example 3: London, UK (51.51°N, 2°C)
+### Example 3: Copenhagen, Denmark (55.68°N, 2°C)
 ```
 Initialization:
-  hass.config.latitude = 51.51
-  → Detected zone: Temperate Oceanic
-  → winter_avg_low: 0.0°C
+  hass.config.latitude = 55.68
+  → Detected zone: moderate_cold
+  → winter_avg_low: -1.0°C
   → safety_margin_base: 0.5°C
+  → dm_normal_range: (-300, -500)
 
 Runtime (outdoor = 2°C, no unusual weather):
   1. Kühne formula: 28.0°C optimal flow
   2. Safety margin calculation:
-     - base: 0.5°C (Temperate)
+     - base: 0.5°C (moderate_cold)
      - temp: 0.0°C (warmer than winter avg)
      - unusual: 0.0°C (no unusual weather)
      - total: 0.5°C
   3. Adjusted flow: 28.0 + 0.5 = 28.5°C
-  4. Dynamic weight: 0.75 (cold for London)
+  4. Dynamic weight: 0.75 (cold for Copenhagen)
   5. Final weight: 0.75 × 0.75 = 0.5625
 
-Result: Moderate heating for UK winter conditions
+Result: Moderate heating for Øresund region winter conditions
 ```
 
 ### Example 4: Paris, France (48.86°N, 8°C)
 ```
 Initialization:
   hass.config.latitude = 48.86
-  → Detected zone: Mild Oceanic
+  → Detected zone: standard
   → winter_avg_low: 5.0°C
   → safety_margin_base: 0.0°C
+  → dm_normal_range: (-200, -350)
 
 Runtime (outdoor = 8°C, no unusual weather):
   1. Kühne formula: 24.0°C optimal flow
   2. Safety margin calculation:
-     - base: 0.0°C (Mild)
+     - base: 0.0°C (standard)
      - temp: 0.0°C (warmer than winter avg)
      - unusual: 0.0°C (no unusual weather)
      - total: 0.0°C
@@ -553,13 +558,12 @@ Result: Pure mathematical optimization for mild climate
 
 **Tested with 35 comprehensive tests including 9 edge case scenarios.**
 
-#### 1. Equatorial Locations (< 35°N)
+#### 1. Equatorial Locations (< 54.5°N)
 ```python
-# Example: Singapore (1.35°N), Kuala Lumpur (3.14°N)
-latitude = 1.35
-# Result: Defaults to "temperate" zone with warning
-_LOGGER.warning("Latitude 1.35° outside defined zones, defaulting to temperate")
-# Rationale: Heat pumps rare in tropics, temperate provides moderate safety
+# Example: Singapore (1.35°N), Paris (48.86°N)
+latitude = 48.86
+# Result: Falls in "standard" zone (0.0°-54.5°)
+# Rationale: Standard zone covers all mild climates globally
 ```
 
 #### 2. Southern Hemisphere (Negative Latitude)
@@ -567,7 +571,7 @@ _LOGGER.warning("Latitude 1.35° outside defined zones, defaulting to temperate"
 # Example: Melbourne (-37.81°S), Sydney (-33.87°S)
 latitude = -37.81
 self.latitude = abs(latitude)  # Convert to 37.81°
-# Result: 37.81° → "mild" zone
+# Result: 37.81° → "standard" zone (0.0°-54.5°)
 # Rationale: Climate zones symmetric around equator for heating purposes
 ```
 
@@ -576,7 +580,7 @@ self.latitude = abs(latitude)  # Convert to 37.81°
 # Example: McMurdo Station (-77.85°S)
 latitude = -77.85
 self.latitude = abs(latitude)  # Convert to 77.85°
-# Result: 77.85° → "arctic" zone (66.5°-90.0°)
+# Result: 77.85° → "extreme_cold" zone (66.5°-90.0°)
 # Rationale: CORRECT! Antarctic bases need same heating as Arctic
 ```
 
@@ -585,17 +589,22 @@ self.latitude = abs(latitude)  # Convert to 77.85°
 # Arctic Circle (66.5°N) - exactly at boundary
 latitude = 66.5
 # Logic: if 66.5 <= latitude <= 90.0 → TRUE
-# Result: "arctic" zone (inclusive lower bound)
+# Result: "extreme_cold" zone (inclusive lower bound)
 
-# Subarctic/Cold boundary (60.5°N)
+# very_cold/cold boundary (60.5°N)
 latitude = 60.5
-# Subarctic: if 60.5 <= latitude <= 66.5 → TRUE (matches first)
-# Result: "subarctic" zone
+# very_cold: if 60.5 <= latitude <= 66.5 → TRUE (matches first)
+# Result: "very_cold" zone
 
-# Temperate/Mild boundary (49.0°N)
-latitude = 49.0
-# Temperate: if 49.0 <= latitude <= 55.0 → TRUE (matches first)
-# Result: "temperate" zone
+# cold/moderate_cold boundary (56.0°N)
+latitude = 56.0
+# cold: if 56.0 <= latitude <= 60.5 → TRUE (matches first)
+# Result: "cold" zone
+
+# moderate_cold/standard boundary (54.5°N)
+latitude = 54.5
+# moderate_cold: if 54.5 <= latitude <= 56.0 → TRUE (matches first)
+# Result: "moderate_cold" zone
 ```
 
 #### 5. Invalid Latitudes (> 90° or very unusual)
@@ -603,54 +612,62 @@ latitude = 49.0
 # Example: Invalid input > 90° (should never happen)
 latitude = 95.0
 # Falls through all zone checks
-# Result: Defaults to "temperate" with warning
+# Result: Defaults to "standard" with warning
 # Rationale: Safe fallback, prevents crashes
 ```
 
 #### 6. Zero Latitude (Equator)
 ```python
 latitude = 0.0
-# Outside all zones (< 35°)
-# Result: Defaults to "temperate" with warning
+# Falls in standard zone (0.0°-54.5°)
+# Result: "standard" zone
 ```
 
 #### 7. Between Zones (No Gaps)
 ```python
-# Zones are contiguous - all latitudes from 35° to 90° covered:
-# Arctic:     66.5 - 90.0  (23.5° range)
-# Subarctic:  60.5 - 66.5  (6.0° range)
-# Cold:       55.0 - 60.5  (5.5° range)
-# Temperate:  49.0 - 55.0  (6.0° range)
-# Mild:       35.0 - 48.999 (13.999° range)
-# Total:      35.0 - 90.0  (55° range, no gaps)
+# Zones are contiguous - all latitudes from 0° to 90° covered:
+# extreme_cold:  66.5 - 90.0  (23.5° range)
+# very_cold:     60.5 - 66.5  (6.0° range)
+# cold:          56.0 - 60.5  (4.5° range)
+# moderate_cold: 54.5 - 56.0  (1.5° range)
+# standard:      0.0 - 54.5   (54.5° range)
+# Total:         0.0 - 90.0   (90° range, no gaps)
 
-# Example: 57.5° (middle of Cold zone)
+# Example: 57.5° (middle of cold zone)
 latitude = 57.5
-# Cold: if 55.0 <= 57.5 <= 60.5 → TRUE
+# cold: if 56.0 <= 57.5 <= 60.5 → TRUE
 # Result: "cold" zone (clean match, no ambiguity)
 ```
 
-### Zone Range Overlaps (NONE - Fixed)
+### Zone Range Overlaps (NONE - Clean Boundaries)
 
-**Previous issue:** Mild zone (35.0-49.0) and Temperate zone (49.0-55.0) both included 49.0°.
+**All zone boundaries are inclusive on lower bound, exclusive on upper (except the topmost).**
 
-**Current fix:**
 ```python
-"temperate": {
-    "latitude_range": (49.0, 55.0),  # Inclusive: 49.0 is temperate
+"extreme_cold": {
+    "latitude_range": (66.5, 90.0),  # Includes 66.5°
 },
-"mild": {
-    "latitude_range": (35.0, 48.999),  # Exclusive upper: 49.0 NOT in mild
+"very_cold": {
+    "latitude_range": (60.5, 66.5),  # 60.5° to 66.4999...°
+},
+"cold": {
+    "latitude_range": (56.0, 60.5),  # 56.0° to 60.4999...°
+},
+"moderate_cold": {
+    "latitude_range": (54.5, 56.0),  # 54.5° to 55.9999...°
+},
+"standard": {
+    "latitude_range": (0.0, 54.5),   # 0° to 54.4999...°
 },
 ```
 
-**Result:** 49.0° → "temperate" (first match wins, no ambiguity)
+**Result:** 54.5° → "moderate_cold", 56.0° → "cold" (first match wins in ZONE_ORDER)
 
 ### Why Absolute Latitude?
 ```python
 self.latitude = abs(latitude)  # Handle southern hemisphere
 ```
-Melbourne (-37.81°S) → abs(-37.81) = 37.81° → Mild zone (same as southern France)
+Melbourne (-37.81°S) → abs(-37.81) = 37.81° → standard zone (same as southern France)
 
 This works because climate zones are symmetric around equator for heat pump purposes. A location at 40°S has similar heating needs to 40°N.
 

@@ -241,7 +241,7 @@ def prediction_layer_decision():
     if preheat_decision.should_preheat:
         return LayerDecision(
             offset=preheat_decision.recommended_offset,
-            weight=0.65,  # Higher than price (0.6), lower than weather (0.7)
+            weight=0.65,  # Prediction layer base weight
             reason=preheat_decision.reason
         )
     
@@ -287,8 +287,8 @@ learning_store = Store(hass, version=1, key="effektguard_learned_data")
 ### Integration with Decision Engine
 
 The **Prediction Layer** (weight 0.65) fits between:
-- **Weather Layer** (0.7): Higher priority for immediate weather threats
-- **Price Layer** (0.6): Lower priority than learned building behavior
+- **Weather Layer** (0.85): Higher priority for immediate weather threats
+- **Price Layer** (0.8): Cost optimization balanced with predictions
 
 This ensures **learned pre-heating** takes precedence over simple price optimization while still yielding to immediate weather-based needs.
 

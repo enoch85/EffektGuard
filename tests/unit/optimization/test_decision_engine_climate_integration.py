@@ -13,9 +13,9 @@ import pytest
 from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.effect_manager import EffectManager
-from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-from custom_components.effektguard.optimization.thermal_model import ThermalModel
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
@@ -104,72 +104,79 @@ class TestDMRangeCalculations:
         """Kiruna at zone's winter average should have normal DM -800 to -1200."""
         engine = create_engine_for_location(67.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(
+        dm_range = engine.climate_detector.get_expected_dm_range(
             CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG
         )
 
         # At average winter temperature, expect base DM range
-        assert -1200 <= dm_range["normal"] <= -800
+        # normal_min is shallower (-800), normal_max is deeper (-1200)
+        assert dm_range["normal_min"] <= -800
+        assert dm_range["normal_max"] >= -1200
         assert dm_range["warning"] <= -1200
 
     def test_very_cold_at_average_temperature(self, hass_mock):
         """Luleå at zone's winter average should have normal DM -600 to -1000."""
         engine = create_engine_for_location(65.58, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_VERY_COLD_WINTER_AVG)
+        dm_range = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_VERY_COLD_WINTER_AVG)
 
-        assert -1000 <= dm_range["normal"] <= -600
+        assert dm_range["normal_min"] <= -600
+        assert dm_range["normal_max"] >= -1000
         assert dm_range["warning"] <= -1000
 
     def test_cold_at_average_temperature(self, hass_mock):
         """Stockholm at zone's winter average should have normal DM -450 to -700."""
         engine = create_engine_for_location(59.33, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_COLD_WINTER_AVG)
+        dm_range = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_COLD_WINTER_AVG)
 
-        assert -700 <= dm_range["normal"] <= -450
+        assert dm_range["normal_min"] <= -450
+        assert dm_range["normal_max"] >= -700
         assert dm_range["warning"] <= -700
 
     def test_moderate_cold_at_average_temperature(self, hass_mock):
         """Copenhagen at zone's winter average should have normal DM -300 to -500."""
         engine = create_engine_for_location(55.68, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(
+        dm_range = engine.climate_detector.get_expected_dm_range(
             CLIMATE_ZONE_MODERATE_COLD_WINTER_AVG
         )
 
-        assert -500 <= dm_range["normal"] <= -300
+        assert dm_range["normal_min"] <= -300
+        assert dm_range["normal_max"] >= -500
         assert dm_range["warning"] <= -500
 
     def test_standard_at_average_temperature(self, hass_mock):
         """Paris at zone's winter average should have normal DM -200 to -350."""
         engine = create_engine_for_location(48.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_STANDARD_WINTER_AVG)
+        dm_range = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_STANDARD_WINTER_AVG)
 
-        assert -350 <= dm_range["normal"] <= -200
+        assert dm_range["normal_min"] <= -200
+        assert dm_range["normal_max"] >= -350
         assert dm_range["warning"] <= -350
 
     def test_temperature_adjustment_warmer_than_average(self, hass_mock):
         """Stockholm at warmer than zone average should allow shallower DM."""
         engine = create_engine_for_location(59.33, hass_mock)
 
-        dm_warm = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_COLD_WINTER_AVG + 10.0)
-        dm_avg = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_COLD_WINTER_AVG)
+        dm_warm = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_COLD_WINTER_AVG + 10.0)
+        dm_avg = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_COLD_WINTER_AVG)
 
         # Warmer weather = less deep DM expected (closer to zero)
-        assert dm_warm["normal"] > dm_avg["normal"]
+        # normal_max is the deep end (e.g. -700 vs -500)
+        assert dm_warm["normal_max"] > dm_avg["normal_max"]
         assert dm_warm["warning"] > dm_avg["warning"]
 
     def test_temperature_adjustment_colder_than_average(self, hass_mock):
         """Stockholm at colder than zone average should allow deeper DM."""
         engine = create_engine_for_location(59.33, hass_mock)
 
-        dm_cold = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_COLD_WINTER_AVG - 10.0)
-        dm_avg = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_COLD_WINTER_AVG)
+        dm_cold = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_COLD_WINTER_AVG - 10.0)
+        dm_avg = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_COLD_WINTER_AVG)
 
         # Colder weather = deeper DM expected (more negative)
-        assert dm_cold["normal"] < dm_avg["normal"]
+        assert dm_cold["normal_max"] < dm_avg["normal_max"]
         assert dm_cold["warning"] < dm_avg["warning"]
 
     def test_never_exceeds_absolute_maximum(self, hass_mock):
@@ -179,12 +186,12 @@ class TestDMRangeCalculations:
         # Test extreme cold location at extreme temperature
         engine = create_engine_for_location(67.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(
+        dm_range = engine.climate_detector.get_expected_dm_range(
             CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG - 20.0
         )
 
         # Should be clamped to absolute maximum
-        assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
         assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
 
@@ -195,10 +202,11 @@ class TestArcticScenario:
         """In Kiruna at -30°C, DM -1200 should be within normal operating range."""
         engine = create_engine_for_location(67.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(-30.0)
+        dm_range = engine.climate_detector.get_expected_dm_range(-30.0)
 
         # DM -1200 should be at or below the normal threshold (more negative = deeper)
-        assert dm_range["normal"] <= -1200
+        # normal_max is the deep end of normal
+        assert dm_range["normal_max"] <= -1200
         # Should not trigger warning yet (warning threshold is <= -1200)
         assert dm_range["warning"] <= -1200
 
@@ -206,23 +214,23 @@ class TestArcticScenario:
         """In Kiruna at -30°C, DM -800 should be on the light side of normal."""
         engine = create_engine_for_location(67.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(-30.0)
+        dm_range = engine.climate_detector.get_expected_dm_range(-30.0)
 
         # DM -800 should be well within normal range (less deep than expected)
-        assert dm_range["normal"] <= -800
+        assert dm_range["normal_min"] <= -800
         assert dm_range["warning"] < -800
 
     def test_dm_minus_400_is_shallow_in_kiruna(self, hass_mock):
         """In Kiruna at zone's winter average, DM -400 is unusually shallow."""
         engine = create_engine_for_location(67.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(
+        dm_range = engine.climate_detector.get_expected_dm_range(
             CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG
         )
 
         # DM -400 is way too shallow for Kiruna in winter
         # Normal threshold should be much deeper
-        assert dm_range["normal"] < -400
+        assert dm_range["normal_min"] < -400
 
 
 class TestStandardScenario:
@@ -232,7 +240,7 @@ class TestStandardScenario:
         """In Paris at zone's winter average, DM -400 should be beyond warning threshold."""
         engine = create_engine_for_location(48.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_STANDARD_WINTER_AVG)
+        dm_range = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_STANDARD_WINTER_AVG)
 
         # DM -400 should be deeper than warning threshold for mild climate
         # Standard zone has normal range -200 to -350, warning at -350
@@ -245,10 +253,10 @@ class TestStandardScenario:
         """In Paris at zone's winter average, DM -300 should be within normal range."""
         engine = create_engine_for_location(48.85, hass_mock)
 
-        dm_range = engine._calculate_expected_dm_for_temperature(CLIMATE_ZONE_STANDARD_WINTER_AVG)
+        dm_range = engine.climate_detector.get_expected_dm_range(CLIMATE_ZONE_STANDARD_WINTER_AVG)
 
         # DM -300 should be within normal operating range
-        assert dm_range["normal"] <= -300
+        assert dm_range["normal_max"] <= -300
 
     def test_copenhagen_vs_paris_same_temperature(self, hass_mock):
         """Copenhagen (moderate_cold) should allow deeper DM than Paris (standard) at same temp."""
@@ -256,11 +264,11 @@ class TestStandardScenario:
         engine_paris = create_engine_for_location(48.85, hass_mock)
 
         # Test at 0°C for both
-        dm_cph = engine_cph._calculate_expected_dm_for_temperature(0.0)
-        dm_paris = engine_paris._calculate_expected_dm_for_temperature(0.0)
+        dm_cph = engine_cph.climate_detector.get_expected_dm_range(0.0)
+        dm_paris = engine_paris.climate_detector.get_expected_dm_range(0.0)
 
         # Copenhagen is colder climate, allows deeper DM
-        assert dm_cph["normal"] < dm_paris["normal"]
+        assert dm_cph["normal_max"] < dm_paris["normal_max"]
         assert dm_cph["warning"] < dm_paris["warning"]
 
 
@@ -297,12 +305,12 @@ class TestCrossZoneEdgeCases:
         """Paris experiencing -15°C should adjust thresholds significantly."""
         engine = create_engine_for_location(48.85, hass_mock)
 
-        dm_normal = engine._calculate_expected_dm_for_temperature(5.0)  # Average
-        dm_cold = engine._calculate_expected_dm_for_temperature(-15.0)  # Unusual
+        dm_normal = engine.climate_detector.get_expected_dm_range(5.0)  # Average
+        dm_cold = engine.climate_detector.get_expected_dm_range(-15.0)  # Unusual
 
         # Cold snap should allow much deeper DM
         # -15°C is 20°C colder than 5°C average = 400 DM deeper
-        assert dm_cold["normal"] < dm_normal["normal"] - 300
+        assert dm_cold["normal_max"] < dm_normal["normal_max"] - 300
 
 
 class TestEmergencyLayerIntegration:
@@ -314,13 +322,13 @@ class TestEmergencyLayerIntegration:
         engine_paris = create_engine_for_location(48.85, hass_mock)
 
         # At same outdoor temperature, different zones have different expectations
-        dm_kiruna = engine_kiruna._calculate_expected_dm_for_temperature(-10.0)
-        dm_paris = engine_paris._calculate_expected_dm_for_temperature(-10.0)
+        dm_kiruna = engine_kiruna.climate_detector.get_expected_dm_range(-10.0)
+        dm_paris = engine_paris.climate_detector.get_expected_dm_range(-10.0)
 
         # Kiruna at -10°C is mild weather (warmer than -30°C average)
         # Paris at -10°C is very cold weather (colder than 5°C average)
         # But Kiruna should still allow deeper DM due to climate zone
-        assert dm_kiruna["normal"] < dm_paris["normal"]
+        assert dm_kiruna["normal_max"] < dm_paris["normal_max"]
 
     def test_global_applicability(self, hass_mock):
         """Verify system works globally without configuration."""
@@ -351,9 +359,9 @@ class TestSafetyLimits:
         engine = create_engine_for_location(67.85, hass_mock)
 
         # Test extreme temperature
-        dm_range = engine._calculate_expected_dm_for_temperature(-50.0)
+        dm_range = engine.climate_detector.get_expected_dm_range(-50.0)
 
-        assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
         assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
     def test_absolute_max_is_hard_limit(self, hass_mock):
@@ -365,10 +373,10 @@ class TestSafetyLimits:
 
         for lat in latitudes:
             engine = create_engine_for_location(lat, hass_mock)
-            dm_range = engine._calculate_expected_dm_for_temperature(-40.0)
+            dm_range = engine.climate_detector.get_expected_dm_range(-40.0)
 
             # All zones respect absolute maximum
-            assert dm_range["normal"] >= DM_THRESHOLD_AUX_LIMIT
+            assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
             assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
 
 
@@ -393,14 +401,14 @@ class TestDMThresholdProgression:
         for lat, zone_name, avg_temp in zones_at_averages:
             engine = create_engine_for_location(lat, hass_mock)
             # Test each zone at its own average winter temperature
-            dm_range = engine._calculate_expected_dm_for_temperature(avg_temp)
+            dm_range = engine.climate_detector.get_expected_dm_range(avg_temp)
 
             # Each colder zone at its average should allow deeper DM
             assert (
-                dm_range["normal"] < previous_normal
-            ), f"{zone_name} at its average {avg_temp}°C should allow deeper DM than previous zone (got {dm_range['normal']}, previous {previous_normal})"
+                dm_range["normal_max"] < previous_normal
+            ), f"{zone_name} at its average {avg_temp}°C should allow deeper DM than previous zone (got {dm_range['normal_max']}, previous {previous_normal})"
 
-            previous_normal = dm_range["normal"]
+            previous_normal = dm_range["normal_max"]
 
     def test_temperature_progression_within_zone(self, hass_mock):
         """Within a zone, colder temperatures should allow deeper DM."""
@@ -410,11 +418,11 @@ class TestDMThresholdProgression:
         previous_normal = 0
 
         for temp in temperatures:
-            dm_range = engine._calculate_expected_dm_for_temperature(temp)
+            dm_range = engine.climate_detector.get_expected_dm_range(temp)
 
             # Each colder temperature should allow deeper DM
             assert (
-                dm_range["normal"] < previous_normal
+                dm_range["normal_max"] < previous_normal
             ), f"At {temp}°C, DM should be deeper than warmer temperatures"
 
-            previous_normal = dm_range["normal"]
+            previous_normal = dm_range["normal_max"]

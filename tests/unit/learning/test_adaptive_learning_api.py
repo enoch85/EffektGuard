@@ -171,7 +171,7 @@ class TestAPICompatibility:
 
     def test_same_api_as_thermal_model(self):
         """Test AdaptiveThermalModel has same API as ThermalModel."""
-        from custom_components.effektguard.optimization.thermal_model import ThermalModel
+        from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
         adaptive_model = AdaptiveThermalModel(initial_thermal_mass=1.2)
         thermal_model = ThermalModel(thermal_mass=1.2, insulation_quality=1.5)

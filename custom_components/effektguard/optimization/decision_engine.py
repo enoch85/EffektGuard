@@ -16,13 +16,15 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from datetime import datetime, timedelta
+from typing import Any, Optional, TypedDict
 
 from homeassistant.util import dt as dt_util
 
 from ..const import (
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
+    DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DM_CRITICAL_T1_MARGIN,
@@ -42,20 +44,8 @@ from ..const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_THERMAL_MASS_BUFFER_TIMBER,
-    EFFECT_MARGIN_PREDICTIVE,
-    EFFECT_MARGIN_WARNING,
-    EFFECT_OFFSET_CRITICAL,
-    EFFECT_OFFSET_PREDICTIVE,
-    EFFECT_OFFSET_WARNING_RISING,
-    EFFECT_OFFSET_WARNING_STABLE,
-    EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE,
-    EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE,
-    EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD,
-    EFFECT_PREDICTIVE_WARMING_DECREASE,
-    EFFECT_WEIGHT_CRITICAL,
-    EFFECT_WEIGHT_PREDICTIVE,
-    EFFECT_WEIGHT_WARNING_RISING,
-    EFFECT_WEIGHT_WARNING_STABLE,
+    THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
+    THERMAL_MASS_TIMBER_UFH_THRESHOLD,
     LAYER_WEIGHT_COMFORT_MAX,
     LAYER_WEIGHT_COMFORT_MIN,
     LAYER_WEIGHT_COMFORT_HIGH,
@@ -73,8 +63,6 @@ from ..const import (
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
     OVERSHOOT_PROTECTION_START,
-    PEAK_AWARE_EFFECT_THRESHOLD,
-    PEAK_AWARE_EFFECT_WEIGHT_MIN,
     PROACTIVE_ZONE1_OFFSET,
     PROACTIVE_ZONE1_THRESHOLD_PERCENT,
     PROACTIVE_ZONE2_OFFSET,
@@ -133,14 +121,6 @@ from ..const import (
     WARNING_OFFSET_MIN_SEVERE,
     WEATHER_BASE_INTENSITY_MULTIPLIER,
     WEATHER_BASE_OFFSET_MAX,
-    WEATHER_COMP_DEFER_DM_CRITICAL,
-    WEATHER_COMP_DEFER_DM_LIGHT,
-    WEATHER_COMP_DEFER_DM_MODERATE,
-    WEATHER_COMP_DEFER_DM_SIGNIFICANT,
-    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
-    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
-    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
-    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
@@ -167,7 +147,6 @@ from ..const import (
     MULTIPLIER_REDUCTION_20_PERCENT,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
-    DEFAULT_CURVE_SENSITIVITY,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
@@ -179,9 +158,37 @@ from ..const import (
     PRICE_VOLATILE_WEIGHT_REDUCTION,
 )
 from .climate_zones import ClimateZoneDetector
-from .weather_compensation import AdaptiveClimateSystem, WeatherCompensationCalculator
+from .comfort_layer import ComfortLayer
+from .thermal_layer import (
+    EmergencyLayer,
+    ProactiveLayer,
+    is_cooling_rapidly,
+    is_warming_rapidly,
+)
+from .weather_layer import (
+    AdaptiveClimateSystem,
+    WeatherCompensationCalculator,
+    WeatherCompensationLayer,
+    WeatherPredictionLayer,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class OutdoorTrendDict(TypedDict):
+    """Outdoor temperature trend from BT1 sensor."""
+
+    trend: str  # "warming", "cooling", "stable", "unknown"
+    rate_per_hour: float
+    confidence: float
+
+
+class PowerValidationDict(TypedDict, total=False):
+    """Power consumption validation result."""
+
+    valid: bool
+    warning: str | None
+    severity: str
 
 
 @dataclass
@@ -207,6 +214,31 @@ class OptimizationDecision:
     offset: float  # Final heating curve offset (°C)
     layers: list[LayerDecision] = field(default_factory=list)
     reasoning: str = ""
+
+
+def get_safe_default_decision() -> OptimizationDecision:
+    """Get safe default decision when optimization fails.
+
+    Returns zero offset to maintain current operation without changes.
+    Used as fallback when optimization engine encounters errors.
+
+    Moved from coordinator._get_safe_default_decision for shared reuse.
+
+    Returns:
+        OptimizationDecision with 0.0 offset and safe mode reasoning
+    """
+    return OptimizationDecision(
+        offset=0.0,
+        layers=[
+            LayerDecision(
+                name="Safe Mode",
+                offset=0.0,
+                weight=1.0,
+                reason="Safe mode: optimization unavailable",
+            )
+        ],
+        reasoning="Safe mode active - maintaining current operation",
+    )
 
 
 class DecisionEngine:
@@ -289,7 +321,25 @@ class DecisionEngine:
         # Heat loss coefficient from learned values or config, fallback to default
         heat_loss_coeff = config.get("heat_loss_coefficient", DEFAULT_HEAT_LOSS_COEFFICIENT)
         radiator_output = config.get("radiator_rated_output", None)
-        heating_type = config.get("heating_type", "radiator")  # radiator, concrete_ufh, timber
+        # Infer heating_type from thermal_mass if not explicitly set
+        # Uses THERMAL_MASS_*_THRESHOLD constants from const.py
+        thermal_mass_value = DEFAULT_THERMAL_MASS  # Fallback to default (1.0)
+        if thermal_model is not None:
+            try:
+                tm_attr = getattr(thermal_model, "thermal_mass", None)
+                if isinstance(tm_attr, (int, float)):
+                    thermal_mass_value = float(tm_attr)
+            except (TypeError, AttributeError):
+                pass  # Use default if thermal_model is mocked or has no thermal_mass
+
+        if "heating_type" in config:
+            heating_type = config["heating_type"]
+        elif thermal_mass_value >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+            heating_type = "concrete_ufh"
+        elif thermal_mass_value >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+            heating_type = "timber"
+        else:
+            heating_type = "radiator"
 
         self.weather_comp = WeatherCompensationCalculator(
             heat_loss_coefficient=heat_loss_coeff,
@@ -304,9 +354,46 @@ class DecisionEngine:
             heating_type,
         )
 
+        # Weather prediction layer for proactive pre-heating
+        self.weather_prediction = WeatherPredictionLayer(
+            thermal_mass=thermal_model.thermal_mass if thermal_model else 1.0
+        )
+
+        # Weather compensation layer for mathematical flow temp optimization
+        self.weather_comp_layer = WeatherCompensationLayer(
+            weather_comp=self.weather_comp,
+            climate_system=self.climate_system,
+            weather_learner=self.weather_learner,
+            weather_comp_weight=self.weather_comp_weight,
+        )
+
+        # Emergency layer for thermal debt response
+        self.emergency_layer = EmergencyLayer(
+            climate_detector=self.climate_detector,
+            price_analyzer=self.price,
+            heating_type=config.get("heating_type", "radiator"),
+            get_thermal_trend=self._get_thermal_trend,
+            get_outdoor_trend=self._get_outdoor_trend,
+        )
+
+        # Proactive layer for thermal debt prevention
+        self.proactive_layer = ProactiveLayer(
+            climate_detector=self.climate_detector,
+            get_thermal_trend=self._get_thermal_trend,
+        )
+
+        # Comfort layer for reactive temperature adjustments
+        self.comfort_layer = ComfortLayer(
+            get_thermal_trend=self._get_thermal_trend,
+            thermal_model=self.thermal,
+            mode_config=self.mode_config,
+            tolerance_range=self.tolerance_range,
+            target_temp=self.target_temp,
+        )
+
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
-        self._manual_override_until: Any = None  # datetime or None
+        self._manual_override_until: Optional[datetime] = None
 
     def _update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
@@ -333,8 +420,6 @@ class DecisionEngine:
             offset: Manual offset value (-10 to +10°C)
             duration_minutes: Duration in minutes (0 = until next cycle)
         """
-        from datetime import timedelta
-
         self._manual_override_offset = offset
 
         if duration_minutes > 0:
@@ -387,294 +472,20 @@ class DecisionEngine:
             "samples": 0,
         }
 
-    def _get_outdoor_trend(self) -> dict[str, Any]:
+    def _get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend (BT1 real-time).
 
         Returns:
             Outdoor trend data or empty if not available
         """
         if hasattr(self, "predictor") and self.predictor:
-            return self.predictor.get_outdoor_trend()
+            outdoor_trend = self.predictor.get_outdoor_trend()
+            return {
+                "trend": outdoor_trend.get("trend", "unknown"),
+                "rate_per_hour": outdoor_trend.get("rate_per_hour", 0.0),
+                "confidence": outdoor_trend.get("confidence", 0.0),
+            }
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
-
-    def _apply_thermal_recovery_damping(
-        self,
-        base_offset: float,
-        tier_name: str,
-        min_damped_offset: float,
-        weather_data=None,
-        current_outdoor_temp: float | None = None,
-        indoor_temp: float | None = None,
-        target_temp: float | None = None,
-    ) -> tuple[float, str]:
-        """Apply thermal recovery damping when house warming naturally or overshooting.
-
-        Prevents concrete slab thermal overshoot during recovery periods.
-        When T1/T2/T3 active AND (house warming from solar OR already overshooting),
-        reduce offset to prevent excessive heat storage in thermal mass.
-
-        Args:
-            base_offset: Original recovery offset (e.g., 2.5°C for T2)
-            tier_name: Recovery tier name for logging (e.g., "STRONG RECOVERY")
-            min_damped_offset: Minimum allowed offset after damping (safety floor)
-            weather_data: Weather forecast data (optional, for cold weather check)
-            current_outdoor_temp: Current outdoor temperature (°C)
-            indoor_temp: Current indoor temperature (°C) for overshoot detection
-            target_temp: Target indoor temperature (°C) for overshoot detection
-
-        Returns:
-            Tuple of (damped_offset, damping_reason_string)
-            If no damping applied: (base_offset, "")
-
-        Damping Conditions:
-            Warming-based (original logic):
-                1. Indoor warming >= 0.3°C/h (significant solar gain)
-                2. Outdoor not dropping < -0.5°C/h (not fighting cold spell)
-                3. Sufficient trend confidence >= 0.4 (~1 hour data)
-                4. Weather forecast NOT showing significant cold within 6 hours
-
-            Overshoot-based (NEW - Oct 23, 2025):
-                If indoor_temp > target_temp:
-                    Severe ≥1.5°C: 80% strength (0.8 multiplier)
-                    Moderate ≥1.0°C: 90% strength (0.9 multiplier)
-                    Mild ≥0.5°C: 95% strength (0.95 multiplier)
-                Overshoot damping multiplies with warming damping for compound effect
-
-        Example:
-            T2 base offset 2.5°C + warming 0.4°C/h + stable forecast → damped to 1.5°C (60%)
-            OR: T2 base 2.5°C + 2.0°C overshoot → damped to 2.0°C (80% strength)
-            OR: Both warming + overshoot → compound: 2.5°C × 0.6 × 0.8 = 1.2°C
-        """
-        thermal_trend = self._get_thermal_trend()
-        outdoor_trend = self._get_outdoor_trend()
-
-        # Calculate overshoot damping factor (independent of warming)
-        overshoot_factor = 1.0  # Default: no overshoot penalty
-        overshoot_reason = ""
-
-        if indoor_temp is not None and target_temp is not None:
-            overshoot = indoor_temp - target_temp
-            if overshoot >= THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD:  # ≥1.5°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING  # 0.8
-                overshoot_reason = f"severe overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:  # ≥1.0°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING  # 0.9
-                overshoot_reason = f"moderate overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD:  # ≥0.5°C
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING  # 0.95
-                overshoot_reason = f"mild overshoot +{overshoot:.1f}°C"
-
-        # Check if we have sufficient trend confidence
-        if thermal_trend.get("confidence", 0.0) < THERMAL_RECOVERY_MIN_CONFIDENCE:
-            # Even without trend data, apply overshoot damping if present
-            if overshoot_factor < 1.0:
-                damped_offset = base_offset * overshoot_factor
-                damped_offset = max(damped_offset, min_damped_offset)
-
-                _LOGGER.info(
-                    "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
-                    tier_name,
-                    overshoot_reason,
-                    base_offset,
-                    damped_offset,
-                    overshoot_factor,
-                    min_damped_offset,
-                )
-
-                return damped_offset, overshoot_reason
-
-            return base_offset, ""
-
-        warming_rate = thermal_trend.get("rate_per_hour", 0.0)
-        outdoor_rate = outdoor_trend.get("rate_per_hour", 0.0)
-
-        # Check weather forecast for incoming cold
-        # If significant cold is coming within 6 hours, don't damp - we need the heat!
-        if weather_data and weather_data.forecast_hours and current_outdoor_temp is not None:
-            # Check next 6 hours for significant temperature drop
-            forecast_horizon = int(THERMAL_RECOVERY_FORECAST_HORIZON)
-            forecast_temps = [h.temperature for h in weather_data.forecast_hours[:forecast_horizon]]
-
-            if forecast_temps:
-                min_forecast_temp = min(forecast_temps)
-                forecast_drop = min_forecast_temp - current_outdoor_temp
-
-                if forecast_drop < THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD:
-                    # Significant cold coming - don't damp, we need to prepare!
-                    _LOGGER.info(
-                        "%s: Cold weather forecast (%.1f°C drop to %.1f°C within %dh), "
-                        "maintaining full offset %.2f°C",
-                        tier_name,
-                        abs(forecast_drop),
-                        min_forecast_temp,
-                        forecast_horizon,
-                        base_offset,
-                    )
-                    return base_offset, ""
-
-        # Apply damping if:
-        # 1. Indoor warming significantly (>0.3°C/h = solar gain detected)
-        # 2. Outdoor not rapidly dropping (not fighting cold spell)
-        # 3. Forecast stable (no significant cold incoming)
-        if (
-            warming_rate >= THERMAL_RECOVERY_WARMING_THRESHOLD
-            and outdoor_rate >= THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD
-        ):
-            # Choose damping factor based on warming intensity
-            if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD:  # Rapid warming >0.5°C/h
-                warming_factor = THERMAL_RECOVERY_RAPID_FACTOR  # 0.4 = reduce to 40%
-                warming_reason = f"rapid warming {warming_rate:.2f}°C/h"
-            else:  # Moderate warming 0.3-0.5°C/h
-                warming_factor = THERMAL_RECOVERY_DAMPING_FACTOR  # 0.6 = reduce to 60%
-                warming_reason = f"warming {warming_rate:.2f}°C/h"
-
-            # Combine warming and overshoot damping (multiply factors)
-            combined_factor = warming_factor * overshoot_factor
-
-            # Build comprehensive damping reason
-            if overshoot_reason:
-                damping_reason = f"{warming_reason} + {overshoot_reason}"
-            else:
-                damping_reason = warming_reason
-
-            # Apply combined damping but maintain safety minimum
-            damped_offset = base_offset * combined_factor
-            damped_offset = max(damped_offset, min_damped_offset)
-
-            _LOGGER.info(
-                "%s thermal recovery damping: %s, "
-                "offset %.2f°C → %.2f°C (warming %.2f × overshoot %.2f = %.2f, min %.1f°C)",
-                tier_name,
-                damping_reason,
-                base_offset,
-                damped_offset,
-                warming_factor,
-                overshoot_factor,
-                combined_factor,
-                min_damped_offset,
-            )
-
-            return damped_offset, damping_reason
-
-        # No warming-based damping, but apply overshoot damping if present
-        if overshoot_factor < 1.0:
-            damped_offset = base_offset * overshoot_factor
-            damped_offset = max(damped_offset, min_damped_offset)
-
-            _LOGGER.info(
-                "%s overshoot damping: %s, " "offset %.2f°C → %.2f°C (factor %.2f, min %.1f°C)",
-                tier_name,
-                overshoot_reason,
-                base_offset,
-                damped_offset,
-                overshoot_factor,
-                min_damped_offset,
-            )
-
-            return damped_offset, overshoot_reason
-
-        return base_offset, ""
-
-    def _is_cooling_rapidly(
-        self, thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD
-    ) -> bool:
-        """Check if house is cooling rapidly.
-
-        Args:
-            thermal_trend: Trend data from _get_thermal_trend()
-            threshold: Cooling rate threshold (°C/h, negative)
-
-        Returns:
-            True if cooling faster than threshold
-        """
-        return thermal_trend.get("rate_per_hour", 0.0) < threshold
-
-    def _is_warming_rapidly(
-        self, thermal_trend: dict, threshold: float = THERMAL_CHANGE_MODERATE
-    ) -> bool:
-        """Check if house is warming rapidly.
-
-        Args:
-            thermal_trend: Trend data from _get_thermal_trend()
-            threshold: Warming rate threshold (°C/h, positive)
-
-        Returns:
-            True if warming faster than threshold
-        """
-        return thermal_trend.get("rate_per_hour", 0.0) > threshold
-
-    def _get_preheat_lead_time(self) -> float:
-        """Get required pre-heating lead time based on heating system type.
-
-        Lead time is the hours needed to warm house before cold arrives.
-        Based on thermal lag of heating system.
-
-        Returns:
-            Lead time in hours
-        """
-        # Get prediction horizon (based on UFH type from thermal model)
-        horizon = self.thermal.get_prediction_horizon()
-
-        # Lead time = 50% of prediction horizon
-        # Concrete UFH: 12h horizon → 6h lead time
-        # Timber UFH: 6h horizon → 3h lead time
-        # Radiator: 2h horizon → 1h lead time
-        lead_time = horizon * WEATHER_PREDICTION_LEAD_TIME_FACTOR
-
-        return lead_time
-
-    def _calculate_preheat_intensity(
-        self,
-        temp_drop: float,
-        thermal_trend: dict,
-        indoor_deficit: float,
-    ) -> tuple[float, str]:
-        """Calculate adaptive pre-heating intensity (Phase 3.3).
-
-        Modulates pre-heating strength based on indoor state and trend to prevent
-        over-heating when house already warm, or boost when house struggling.
-
-        Args:
-            temp_drop: Forecasted outdoor temperature drop (°C)
-            thermal_trend: Indoor temperature trend data
-            indoor_deficit: Current indoor temp below target (°C)
-
-        Returns:
-            Tuple of (offset, reasoning)
-
-        References:
-            MASTER_IMPLEMENTATION_PLAN.md: Phase 3.3 - Adaptive Pre-Heat Intensity
-        """
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-
-        # Base intensity from forecast
-        base_intensity = abs(temp_drop) / WEATHER_TEMP_DROP_DIVISOR
-        base_offset = min(
-            base_intensity * WEATHER_BASE_INTENSITY_MULTIPLIER, WEATHER_BASE_OFFSET_MAX
-        )
-
-        # Modulate based on indoor state and trend
-        if (
-            indoor_deficit > WEATHER_INTENSITY_AGGRESSIVE_DEFICIT
-            and trend_rate < THERMAL_CHANGE_MODERATE_COOLING
-        ):
-            intensity_factor = WEATHER_INTENSITY_AGGRESSIVE_FACTOR
-            reason = "aggressive: already cooling below target"
-        elif indoor_deficit < RAPID_COOLING_THRESHOLD and trend_rate > COMFORT_DEAD_ZONE:
-            intensity_factor = WEATHER_INTENSITY_GENTLE_FACTOR
-            reason = "gentle: already warm and rising"
-        elif (
-            abs(indoor_deficit) < COMFORT_DEAD_ZONE
-            and abs(trend_rate) < WEATHER_INTENSITY_STABLE_RATE
-        ):
-            intensity_factor = WEATHER_INTENSITY_NORMAL_FACTOR
-            reason = "normal: stable at target"
-        else:
-            intensity_factor = WEATHER_INTENSITY_MODERATE_FACTOR
-            reason = "moderate: mixed conditions"
-
-        final_offset = base_offset * intensity_factor
-        return final_offset, reason
 
     def calculate_decision(
         self,
@@ -739,25 +550,135 @@ class DecisionEngine:
                     validation["warning"],
                 )
 
+        # Update comfort layer with current state before evaluation
+        self.comfort_layer.mode_config = self.mode_config
+        self.comfort_layer.tolerance_range = self.tolerance_range
+        self.comfort_layer.target_temp = self.target_temp
+
         # Calculate all layer decisions (ordered by priority)
+        # Note: We call evaluate_layer() directly on layer objects instead of using wrappers
+
+        # 1. Safety Layer (Inline)
+        safety_decision = self._safety_layer(nibe_state)
+
+        # 2. Emergency Layer
+        emergency_decision = self.emergency_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            price_data=price_data,
+            target_temp=self.target_temp,
+            tolerance_range=self.tolerance_range,
+        )
+
+        # 3. Proactive Layer
+        proactive_decision = self.proactive_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            target_temp=self.target_temp,
+        )
+
+        # 4. Effect Layer
+        effect_result = self.effect.evaluate_layer(
+            current_peak=current_peak,
+            current_power=current_power,
+            thermal_trend=self._get_thermal_trend(),
+            enable_peak_protection=self.config.get("enable_peak_protection", True),
+        )
+        effect_decision = LayerDecision(
+            name=effect_result.name,
+            offset=effect_result.offset,
+            weight=effect_result.weight,
+            reason=effect_result.reason,
+        )
+
+        # 5. Prediction Layer
+        if self.predictor:
+            pred_result = self.predictor.evaluate_layer(
+                nibe_state=nibe_state,
+                weather_data=weather_data,
+                target_temp=self.target_temp,
+                thermal_model=self.thermal,
+            )
+            prediction_decision = LayerDecision(
+                name=pred_result.name,
+                offset=pred_result.offset,
+                weight=pred_result.weight,
+                reason=pred_result.reason,
+            )
+        else:
+            prediction_decision = LayerDecision(
+                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
+            )
+
+        # 6. Weather Compensation Layer
+        comp_result = self.weather_comp_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            target_temp=self.target_temp,
+            enable_weather_compensation=self.enable_weather_compensation,
+        )
+        comp_decision = LayerDecision(
+            name=comp_result.name,
+            offset=comp_result.offset,
+            weight=comp_result.weight,
+            reason=comp_result.reason,
+        )
+
+        # 7. Weather Prediction Layer
+        weather_result = self.weather_prediction.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            thermal_trend=self._get_thermal_trend(),
+            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
+        )
+        weather_decision = LayerDecision(
+            name=weather_result.name,
+            offset=weather_result.offset,
+            weight=weather_result.weight,
+            reason=weather_result.reason,
+        )
+
+        # 8. Price Layer
+        price_result = self.price.evaluate_layer(
+            nibe_state=nibe_state,
+            price_data=price_data,
+            thermal_mass=self.thermal.thermal_mass if self.thermal else 1.0,
+            target_temp=self.target_temp,
+            tolerance=self.tolerance,
+            mode_config=self.mode_config,
+            gespot_entity=self.config.get("gespot_entity", "unknown"),
+            enable_price_optimization=self.config.get("enable_price_optimization", True),
+        )
+        price_decision = LayerDecision(
+            name=price_result.name,
+            offset=price_result.offset,
+            weight=price_result.weight,
+            reason=price_result.reason,
+        )
+
+        # 9. Comfort Layer
+        comfort_result = self.comfort_layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            price_data=price_data,
+        )
+        comfort_decision = LayerDecision(
+            name=comfort_result.name,
+            offset=comfort_result.offset,
+            weight=comfort_result.weight,
+            reason=comfort_result.reason,
+        )
+
         layers = [
-            self._safety_layer(nibe_state),
-            self._emergency_layer(
-                nibe_state, weather_data, price_data
-            ),  # Pass price for smart recovery
-            self._proactive_debt_prevention_layer(
-                nibe_state, weather_data
-            ),  # Phase 3.2: Pass weather_data for forecast validation
-            self._effect_layer(
-                nibe_state, current_peak, current_power
-            ),  # Pass actual whole-house power
-            self._prediction_layer(nibe_state, weather_data),  # Phase 6 - Learned pre-heating
-            self._weather_compensation_layer(
-                nibe_state, weather_data
-            ),  # Mathematical WC with Swedish adaptations
-            self._weather_layer(nibe_state, weather_data),  # Simple pre-heating logic
-            self._price_layer(nibe_state, price_data),
-            self._comfort_layer(nibe_state, weather_data, price_data),
+            safety_decision,
+            emergency_decision,
+            proactive_decision,
+            effect_decision,
+            prediction_decision,
+            comp_decision,
+            weather_decision,
+            price_decision,
+            comfort_decision,
         ]
 
         # Aggregate layers with priority weighting
@@ -767,7 +688,7 @@ class DecisionEngine:
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
-        if self._is_warming_rapidly(thermal_trend):
+        if is_warming_rapidly(thermal_trend):
             # House warming rapidly
             if raw_offset > 0:
                 # Heating + Warming -> Damp to prevent overshoot
@@ -779,7 +700,7 @@ class DecisionEngine:
                 damping_factor = TREND_DAMPING_NEUTRAL
                 reason_suffix = ""
 
-        elif self._is_cooling_rapidly(thermal_trend):
+        elif is_cooling_rapidly(thermal_trend):
             # House cooling rapidly
             if raw_offset > 0:
                 # Heating + Cooling -> Boost to prevent undershoot
@@ -849,1834 +770,6 @@ class DecisionEngine:
                 offset=0.0,
                 weight=0.0,
                 reason="OK",
-            )
-
-    def _emergency_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
-        """Emergency layer: Smart context-aware thermal debt response.
-
-        DESIGN PHILOSOPHY:
-        Instead of fixed thresholds, this layer understands what's "normal" for
-        current outdoor temperature. At -30°C in Kiruna, DM -1000 might be normal.
-        At 0°C in Malmö, DM -1000 indicates a problem.
-
-        The algorithm calculates expected DM range based on:
-        - Outdoor temperature (colder = deeper normal DM)
-        - Heat demand intensity
-        - Distance from absolute safety limit (-1500)
-
-        This automatically adapts to ANY climate without configuration:
-        - Malmö (0°C): Tight tolerances, early warnings
-        - Stockholm (-5°C): Moderate tolerances
-        - Luleå/Kiruna (-30°C): Wide tolerances, expect deep DM
-
-        Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
-        This is the hard safety limit validated by Swedish NIBE forums.
-
-        CRITICAL RULE (Nov 27, 2025):
-        Never heat when indoor temperature exceeds target + tolerance.
-        Thermal debt while overheating means "flow temp was correctly reduced".
-        Let natural cooling bring temp down first, THEN recover DM during cheap periods.
-        This prevents wasteful heating during expensive hours when house is already warm.
-
-        Args:
-            nibe_state: Current NIBE state
-
-        Returns:
-            LayerDecision with context-aware emergency response
-        """
-        degree_minutes = nibe_state.degree_minutes
-        outdoor_temp = nibe_state.outdoor_temp
-        indoor_temp = nibe_state.indoor_temp
-        target_temp = self.target_temp
-
-        # FIRST CHECK: Smart Debt Recovery (User Request Nov 29, 2025)
-        # 1. If above tolerance: Definitely stop (existing logic)
-        # 2. If at target (>= target) AND Price is NOT CHEAP: Ignore debt
-        #    "Ignore DM if the indoor temp is already at target and price is normal or expensive"
-        #    Exception: Absolute safety limit (-1500) always triggers
-
-        temp_deviation = indoor_temp - target_temp
-        tolerance = self.tolerance_range
-
-        # Case 1: Too warm (above tolerance)
-        if temp_deviation > tolerance:
-            # Too warm - emergency heating would be counterproductive
-            # DM will naturally improve as house cools and we maintain target temp later
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=0.0,
-                weight=0.0,
-                reason=f"DM {degree_minutes:.0f} but {temp_deviation:.1f}°C over target - let cool naturally",
-            )
-
-        # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
-        if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
-            # Check if price is cheap
-            is_cheap = False
-            if price_data and price_data.today:
-                now = dt_util.now()
-                current_quarter = (now.hour * 4) + (now.minute // 15)
-                # Safety check for index
-                if current_quarter < len(price_data.today):
-                    classification = self.price.get_current_classification(current_quarter)
-                    if classification == QuarterClassification.CHEAP:
-                        is_cheap = True
-
-            if not is_cheap:
-                return LayerDecision(
-                    name="Thermal Debt",
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"At target & price not cheap - ignoring DM {degree_minutes:.0f}",
-                )
-
-        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
-            # At absolute safety limit - maximum emergency response
-            # This applies regardless of outdoor temperature or conditions
-            offset = SAFETY_EMERGENCY_OFFSET
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=offset,
-                weight=1.0,
-                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit -1500",
-            )
-
-        # Calculate context-aware thresholds based on outdoor temperature
-        # Colder weather = expect deeper normal DM, so thresholds adapt
-        base_expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
-
-        # Apply thermal mass adjustment (Oct 23, 2025)
-        # High thermal mass systems need tighter thresholds to prevent v0.1.0 solar gain problem
-        # Concrete slab: 30% tighter, Timber: 15% tighter, Radiator: standard
-        heating_type = self.config.get("heating_type", "radiator")
-        expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
-        adjusted_dm_range = self._get_thermal_mass_adjusted_thresholds(
-            expected_dm_range, heating_type
-        )
-        expected_dm = {
-            "normal": adjusted_dm_range["normal_max"],  # Use deep end of normal range
-            "warning": adjusted_dm_range["warning"],  # Thermal mass adjusted warning threshold
-        }
-
-        # Distance from absolute maximum (how much safety margin remains)
-        margin_to_limit = degree_minutes - DM_THRESHOLD_AUX_LIMIT  # Positive value
-
-        # MULTI-TIER CLIMATE-AWARE CRITICAL INTERVENTION (Oct 19, 2025 redesign)
-        # THERMAL MASS ENHANCEMENT (Oct 23, 2025): Adjusted thresholds based on thermal lag
-        # Previous fixed thresholds (-800, -1000, -1200) caused false positives in Arctic climates
-        # and inadequate intervention in mild climates. New design calculates tiers dynamically
-        # based on climate-aware WARNING threshold + margin + thermal mass buffer.
-        #
-        # Examples (without thermal mass adjustment):
-        # - Paris (WARNING -350):     T1=-350,  T2=-550,  T3=-750
-        # - Stockholm (WARNING -700): T1=-700,  T2=-900,  T3=-1100
-        # - Kiruna (WARNING -1200):   T1=-1200, T2=-1400, T3=-1450 (capped)
-        #
-        # Examples (with thermal mass adjustment - concrete slab 1.3×):
-        # - Paris concrete:     T1=-455,  T2=-655,  T3=-855   (30% tighter)
-        # - Stockholm concrete: T1=-910,  T2=-1110, T3=-1310  (30% tighter)
-        # - Kiruna concrete:    T1=-1450, T2=-1450, T3=-1450  (capped at T3 max)
-        #
-        # Philosophy: Use climate zone + thermal mass knowledge to define what's "critical"
-
-        # Calculate climate-aware + thermal mass aware tier thresholds
-        warning_threshold = expected_dm["warning"]
-        t1_threshold = warning_threshold - DM_CRITICAL_T1_MARGIN  # At WARNING threshold
-        t2_threshold = warning_threshold - DM_CRITICAL_T2_MARGIN  # WARNING + 200 DM
-        t3_threshold = max(
-            warning_threshold - DM_CRITICAL_T3_MARGIN,  # WARNING + 400 DM
-            DM_CRITICAL_T3_MAX,  # Capped at -1450 (50 DM from absolute max)
-        )
-
-        # CRITICAL TIER 3: Most severe intervention (within 50-300 DM of absolute maximum)
-        # Applies thermal recovery damping even at T3 to prevent overshoot
-        # T3 minimum (2.0°C) ensures aggressive recovery even when damped
-        if degree_minutes <= t3_threshold:
-            base_offset = DM_CRITICAL_T3_OFFSET
-
-            # Apply thermal recovery damping (even at emergency T3 level)
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T3",
-                min_damped_offset=THERMAL_RECOVERY_T3_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} near absolute max "
-                f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T3",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T3_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # STRONG RECOVERY TIER 2: Severe thermal debt - strong recovery before reaching T3
-        # Thermal Recovery Damping (Oct 20, 2025): Prevent concrete slab overshoot
-        # Uses general _apply_thermal_recovery_damping() helper
-        if degree_minutes <= t2_threshold:
-            base_offset = DM_CRITICAL_T2_OFFSET
-
-            # Apply thermal recovery damping if house warming naturally
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T2",
-                min_damped_offset=THERMAL_RECOVERY_T2_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} approaching T3 "
-                f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T2",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T2_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # MODERATE RECOVERY TIER 1: Serious thermal debt - prevent escalation to T2
-        # Triggers at climate-aware WARNING threshold (where thermal debt becomes abnormal)
-        # Applies thermal recovery damping to prevent overshoot
-        if degree_minutes <= t1_threshold:
-            base_offset = DM_CRITICAL_T1_OFFSET
-
-            # Apply thermal recovery damping
-            damped_offset, damping_reason = self._apply_thermal_recovery_damping(
-                base_offset=base_offset,
-                tier_name="T1",
-                min_damped_offset=THERMAL_RECOVERY_T1_MIN_OFFSET,
-                weather_data=weather_data,
-                current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
-            )
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
-                f"(threshold: {t1_threshold:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-
-            return LayerDecision(
-                name="Thermal Recovery T1",
-                offset=damped_offset,
-                weight=DM_CRITICAL_T1_WEIGHT,
-                reason=" ".join(reason_parts),
-            )
-
-        # WARNING: DM is significantly beyond expected range for this temperature
-        # Check if we're deeper than expected + safety margin
-        # No thermal recovery damping - WARNING already moderate (0.8-1.8°C)
-        if degree_minutes < expected_dm["warning"]:
-            # Beyond expected range - recovery needed
-            # Severity scales with how far beyond expected we are
-            deviation = expected_dm["warning"] - degree_minutes
-
-            # Strengthened offset calculation (Oct 19, 2025 fix)
-            # Previous formula was too weak: +0.5-2.0°C allowed DM to worsen
-            # New formula provides stronger intervention earlier
-            if deviation > WARNING_DEVIATION_THRESHOLD:  # Severe deviation beyond expected
-                offset = min(
-                    WARNING_OFFSET_MAX_SEVERE,
-                    WARNING_OFFSET_MIN_SEVERE + (deviation / WARNING_DEVIATION_DIVISOR_SEVERE),
-                )
-            else:  # Moderate deviation
-                offset = min(
-                    WARNING_OFFSET_MAX_MODERATE,
-                    WARNING_OFFSET_MIN_MODERATE + (deviation / WARNING_DEVIATION_DIVISOR_MODERATE),
-                )
-
-            # WARNING: Beyond expected range - moderate to strong recovery
-            # Philosophy: "If we don't need to heat, we shouldn't"
-            # Let weather compensation and price optimization have their say
-            # DHW blocking will fix root cause of thermal debt from DHW interference
-            percent_beyond = (
-                abs(deviation / expected_dm["warning"]) if expected_dm["warning"] else 0
-            )
-
-            reason = (
-                f"DM {degree_minutes:.0f} beyond expected for "
-                f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
-                f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f})"
-            )
-
-            return LayerDecision(
-                name="Thermal Debt Warning",
-                offset=offset,
-                weight=LAYER_WEIGHT_EMERGENCY,  # Strong suggestion, but not absolute override
-                reason=reason,
-            )
-
-        # CAUTION: DM is approaching expected limits
-        elif degree_minutes < expected_dm["normal"]:
-            # Slightly beyond normal - gentle correction
-            offset = WARNING_CAUTION_OFFSET
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=offset,
-                weight=WARNING_CAUTION_WEIGHT,
-                reason=f"DM {degree_minutes:.0f} approaching limits - monitoring",
-            )
-
-        else:
-            # DM within normal expected range for this temperature
-            return LayerDecision(
-                name="Thermal Debt",
-                offset=0.0,
-                weight=0.0,
-                reason=f"OK (DM: {degree_minutes:.0f})",
-            )
-
-    def _calculate_expected_dm_for_temperature(self, outdoor_temp: float) -> dict[str, float]:
-        """Calculate expected DM range for given outdoor temperature.
-
-        CLIMATE-AWARE ADAPTATION:
-        Uses ClimateZoneDetector to get context-aware DM thresholds based on:
-        1. Climate zone (Extreme Cold → Standard) provides base expectations
-        2. Current outdoor temperature adjusts thresholds dynamically
-        3. Automatically adapts from Arctic (-30°C) to mild climates (5°C)
-
-        Examples:
-        - Kiruna (Extreme Cold, -30°C): DM -800 to -1200 is normal
-        - Stockholm (Cold, -10°C): DM -450 to -700 is normal
-        - Copenhagen (Moderate Cold, 0°C): DM -300 to -500 is normal
-
-        This replaces hardcoded temperature bands with universal climate-aware logic.
-
-        Args:
-            outdoor_temp: Current outdoor temperature (°C)
-
-        Returns:
-            Dictionary with:
-            - normal: Expected normal operating DM
-            - warning: Start warning/recovery at this DM
-
-        References:
-            - climate_zones.py: ClimateZoneDetector implementation
-            - IMPLEMENTATION_PLAN/FUTURE/CLIMATE_ZONE_DM_INTEGRATION.md
-        """
-        # Use climate zone detector to get context-aware DM range
-        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
-
-        _LOGGER.debug(
-            "Expected DM for %s zone at %.1f°C: normal %.0f to %.0f, warning %.0f",
-            self.climate_detector.zone_info.name,
-            outdoor_temp,
-            dm_range["normal_min"],
-            dm_range["normal_max"],
-            dm_range["warning"],
-        )
-
-        return {
-            "normal": dm_range["normal_max"],  # Use deep end of normal range
-            "warning": dm_range["warning"],  # Warning threshold
-        }
-
-    def _get_thermal_mass_adjusted_thresholds(
-        self,
-        base_thresholds: dict,
-        heating_type: str,
-    ) -> dict:
-        """Adjust DM thresholds based on thermal mass (prevents overshoot with lag).
-
-        High thermal mass systems need tighter thresholds because:
-        - Long thermal lag (6+ hours for concrete slab)
-        - Current DM doesn't immediately affect indoor temperature
-        - Solar gain can mask underlying thermal debt accumulation
-        - Need larger buffer to handle sunset/weather changes
-
-        Args:
-            base_thresholds: Climate-aware thresholds from ClimateZoneDetector
-                {"normal_min": -60, "normal_max": -276, "warning": -276, "critical": -1500}
-            heating_type: Heating system type ("concrete_ufh", "timber", "radiator", etc.)
-
-        Returns:
-            Adjusted thresholds with thermal mass buffer applied
-
-        Example:
-            Stockholm at 10°C → base warning -276
-            Concrete slab:      -276 × 1.3 = -359 (tighter)
-            Timber:             -276 × 1.15 = -317 (moderate)
-            Radiator:           -276 × 1.0 = -276 (standard)
-
-        Notes:
-            - Critical threshold (-1500) never adjusted (absolute maximum)
-            - Prevents v0.1.0 failure mode (DM -700 during solar gain)
-            - Maintains thermal buffer for forecast uncertainty
-
-        Research:
-            - v0.1.0 case: DM -700 allowed → 1.5°C drop at sunset
-            - Concrete lag: 6-12 hours observed in production systems
-
-        References:
-            IMPLEMENTATION_PLAN/THERMAL_MASS_AND_CONTEXT_FIXES_OCT23.md
-        """
-        # Get multiplier based on heating type
-        if heating_type in ("concrete_ufh", "concrete_slab"):
-            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE  # 1.3
-        elif heating_type in ("timber", "timber_ufh"):
-            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER  # 1.15
-        else:  # radiator or unknown (conservative default)
-            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR  # 1.0
-
-        # Apply multiplier to thresholds (more negative = tighter)
-        adjusted = {
-            "normal_min": base_thresholds["normal_min"] * multiplier,
-            "normal_max": base_thresholds["normal_max"] * multiplier,
-            "warning": base_thresholds["warning"] * multiplier,
-            "critical": base_thresholds["critical"],  # Never adjust absolute maximum
-        }
-
-        _LOGGER.debug(
-            "Thermal mass adjusted thresholds: heating type '%s' (multiplier %.2f) "
-            "→ warning %.0f (base: %.0f), critical %.0f",
-            heating_type,
-            multiplier,
-            adjusted["warning"],
-            base_thresholds["warning"],
-            adjusted["critical"],
-        )
-
-        return adjusted
-
-    def _proactive_debt_prevention_layer(self, nibe_state, weather_data=None) -> LayerDecision:
-        """Proactive thermal debt prevention with climate-aware thresholds and trend prediction.
-
-        PHILOSOPHY:
-        - Continuous modulation beats forced cycling
-        - Thermal debt from forced stops worse than running low power
-        - Prevent peaks by maintaining gentle background heating
-
-        NEW - PREDICTIVE TREND ANALYSIS:
-        Uses indoor temperature trend to detect problems 30-60 minutes before they occur.
-        Rapid cooling (-0.3°C/h or faster) combined with outdoor cold and temperature deficit
-        indicates thermal debt will develop soon - intervene proactively.
-
-        PHASE 3.2 - FORECAST VALIDATION:
-        Validates rapid cooling trend against weather forecast to reduce false positives.
-        When both signals agree (indoor cooling + outdoor cooling forecast), boost response.
-        When they disagree (indoor cooling + stable forecast), reduce response (likely temporary).
-
-        CLIMATE-AWARE DESIGN:
-        Unlike hardcoded DM thresholds, this layer adapts to climate and outdoor temperature:
-        - Arctic winter (-30°C): Zone 1 at DM -120, Zone 2 at DM -320, Zone 3 at DM -640
-        - Cold winter (-10°C): Zone 1 at DM -68, Zone 2 at DM -180, Zone 3 at DM -360
-        - Mild climate (0°C): Zone 1 at DM -45, Zone 2 at DM -120, Zone 3 at DM -240
-
-        Thresholds calculated as percentages of climate-aware expected DM (normal_max):
-        - Zone 1 (15% of normal_max): Early warning, gentle nudge before compressor starts
-        - Zone 2 (40% of normal_max): Moderate action when compressor running
-        - Zone 3 (80% of normal_max): Strong action when approaching warning threshold
-
-        NOTE: Degree Minutes (DM) are negative values! Percentages make them LESS negative:
-        - expected_dm["normal"] = -800 (Arctic example)
-        - zone1_threshold = -800 * 0.15 = -120 (less negative = earlier intervention)
-        - zone2_threshold = -800 * 0.40 = -320 (moderate)
-        - zone3_threshold = -800 * 0.80 = -640 (more negative = closer to limit)        THERMAL LAG CONSIDERATION:
-        UFH systems have significant thermal lag - changes take hours to manifest:
-        - Concrete slab UFH: 6+ hours lag (UFH_CONCRETE_PREDICTION_HORIZON = 12h)
-        - Timber UFH: 2-3 hours lag (UFH_TIMBER_PREDICTION_HORIZON = 6h)
-        - Radiators: <1 hour lag (UFH_RADIATOR_PREDICTION_HORIZON = 2h)
-
-        This layer provides GENTLE nudges that work with thermal inertia rather than
-        fighting it. Small offsets (+0.5-1.5°C) accumulate effect over hours, preventing
-        deep debt without causing overshoots.
-
-        Think of it as "steering a ship" - small rudder adjustments early prevent
-        large course corrections later.
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data (optional, for forecast validation)
-
-        Returns:
-            LayerDecision with climate-aware proactive gentle heating
-
-        References:
-            MASTER_IMPLEMENTATION_PLAN.md: Phase 3.2 - Forecast Validation of Trend
-        """
-        degree_minutes = nibe_state.degree_minutes
-        outdoor_temp = nibe_state.outdoor_temp
-        indoor_temp = nibe_state.indoor_temp
-
-        # NEW: Get temperature trend for predictive intervention
-        thermal_trend = self._get_thermal_trend()
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-
-        # Calculate current deficit
-        deficit = self.target_temp - indoor_temp
-
-        # Predict deficit in 1 hour if trend continues
-        predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
-
-        # ========================================
-        # RAPID COOLING DETECTION (Predictive)
-        # ========================================
-        # Detect rapid cooling BEFORE thermal debt accumulates in degree minutes
-        # This gives 30-60 minutes advance warning vs reactive DM-based approach
-        if self._is_cooling_rapidly(thermal_trend):
-            # House cooling faster than threshold (from RAPID_COOLING_THRESHOLD)
-            # This often precedes thermal debt if outdoor temp is cold
-
-            if outdoor_temp < RAPID_COOLING_OUTDOOR_THRESHOLD and deficit > THERMAL_CHANGE_MODERATE:
-                # Cold outside + already below target + rapid cooling = trouble ahead
-                boost = min(
-                    abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER,
-                    RAPID_COOLING_BOOST_MAX,
-                )
-
-                # PHASE 3.2: Validate against weather forecast to reduce false positives
-                forecast_reason = ""
-                if weather_data and weather_data.forecast_hours:
-                    next_3h_temps = [h.temperature for h in weather_data.forecast_hours[:3]]
-                    if next_3h_temps:
-                        min_forecast_temp = min(next_3h_temps)
-                        temp_will_drop = min_forecast_temp < outdoor_temp - 1.0
-
-                        if temp_will_drop:
-                            boost *= MULTIPLIER_BOOST_30_PERCENT
-                            forecast_reason = " (forecast confirms cooling)"
-                        else:
-                            boost *= MULTIPLIER_REDUCTION_20_PERCENT
-                            forecast_reason = " (forecast stable, likely temporary)"
-
-                return LayerDecision(
-                    name="Proactive",
-                    offset=boost,
-                    weight=RAPID_COOLING_WEIGHT,
-                    reason=(
-                        f"Rapid cooling ({trend_rate:.2f}°C/h), "
-                        f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
-                        f"{forecast_reason}"
-                    ),
-                )
-
-        # Get climate-aware expected DM range for current conditions
-        expected_dm = self._calculate_expected_dm_for_temperature(outdoor_temp)
-
-        # Climate-aware thresholds (adapt to outdoor temp and climate zone)
-        # All zones use percentage of normal_max - proactive zones are PREVENTION before warning
-        # In Arctic winter (-30°C), these thresholds will be much deeper than mild climate (5°C)
-        zone1_threshold = expected_dm["normal"] * PROACTIVE_ZONE1_THRESHOLD_PERCENT
-        zone2_threshold = expected_dm["normal"] * PROACTIVE_ZONE2_THRESHOLD_PERCENT
-        zone3_threshold = expected_dm["normal"] * PROACTIVE_ZONE3_THRESHOLD_PERCENT
-        zone4_threshold = expected_dm["normal"] * PROACTIVE_ZONE4_THRESHOLD_PERCENT
-        zone5_threshold = expected_dm["normal"] * PROACTIVE_ZONE5_THRESHOLD_PERCENT
-
-        # PROACTIVE ZONE 1: Early warning (gentle nudge at any meaningful thermal debt)
-        # 10% threshold adapts: Arctic -30°C → DM -120, Mild 10°C → DM -28 (climate-aware)
-        if zone2_threshold < degree_minutes <= zone1_threshold:
-            # Gentle nudge to prevent deeper deficit
-            offset = PROACTIVE_ZONE1_OFFSET
-
-            # Boost more if also cooling rapidly
-            if trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
-                offset *= MULTIPLIER_BOOST_30_PERCENT
-                reason_suffix = f" (trend: {trend_rate:.2f}°C/h)"
-            else:
-                reason_suffix = ""
-
-            return LayerDecision(
-                name="Proactive Z1",
-                offset=offset,
-                weight=LAYER_WEIGHT_PROACTIVE_MIN,
-                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}",
-            )
-
-        # PROACTIVE ZONE 2: Compressor running, monitor trend
-        # 30% threshold: Arctic -30°C → -360, Cold -10°C → -170, Mild 0°C → -84
-        elif zone3_threshold < degree_minutes <= zone2_threshold:
-            offset = PROACTIVE_ZONE2_OFFSET
-            return LayerDecision(
-                name="Proactive Z2",
-                offset=offset,
-                weight=PROACTIVE_ZONE2_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, boost recovery speed",
-            )
-
-        # PROACTIVE ZONE 3: Significant deficit (50% of normal_max)
-        elif zone4_threshold < degree_minutes <= zone3_threshold:
-            # Scale offset based on how far into zone
-            deficit_severity = (zone3_threshold - degree_minutes) / (
-                zone3_threshold - zone4_threshold
-            )  # 0-1 scale
-            offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
-
-            return LayerDecision(
-                name="Proactive Z3",
-                offset=offset,
-                weight=PROACTIVE_ZONE3_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, prevent deeper debt",
-            )
-
-        # PROACTIVE ZONE 4: Strong prevention (75% of normal_max)
-        elif zone5_threshold < degree_minutes <= zone4_threshold:
-            offset = PROACTIVE_ZONE4_OFFSET
-            return LayerDecision(
-                name="Proactive Z4",
-                offset=offset,
-                weight=PROACTIVE_ZONE4_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, strong prevention",
-            )
-
-        # PROACTIVE ZONE 5: Very strong prevention (100% of normal_max - at warning boundary)
-        # This is the last proactive layer before WARNING/T-levels take over
-        elif expected_dm["warning"] < degree_minutes <= zone5_threshold:
-            offset = PROACTIVE_ZONE5_OFFSET
-            return LayerDecision(
-                name="Proactive Z5",
-                offset=offset,
-                weight=PROACTIVE_ZONE5_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, approaching warning",
-            )
-
-        # Outside proactive zones - let emergency/critical layers handle it
-        return LayerDecision(
-            name="Proactive",
-            offset=0.0,
-            weight=0.0,
-            reason="Not needed",
-        )
-
-    def _effect_layer(self, nibe_state, current_peak: float, current_power: float) -> LayerDecision:
-        """Effect tariff protection with PREDICTIVE peak avoidance (Phase 4).
-
-        Uses indoor temperature trend to predict heating demand in next 15 minutes.
-        Acts BEFORE power spikes instead of reacting to them.
-
-        PHILOSOPHY:
-        Traditional reactive approach waits until power is high, then reduces.
-        Predictive approach sees house cooling rapidly → knows compressor will ramp up soon
-        → reduces offset NOW before spike occurs → smoother power profile.
-
-        Args:
-            nibe_state: Current NIBE state
-            current_peak: Current monthly peak (kW) - from peak_this_month sensor
-            current_power: Current whole-house power consumption (kW) - from peak_today sensor
-
-        Returns:
-            LayerDecision with predictive peak protection
-
-        References:
-            MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
-        """
-        # Check if peak protection is enabled
-        if not self.config.get("enable_peak_protection", True):
-            return LayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
-
-        # current_power is always provided from coordinator's peak tracking (actual measurements)
-
-        # Get current quarter
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
-
-        # Check if approaching monthly 15-minute peak
-        limit_decision = self.effect.should_limit_power(current_power, current_quarter)
-
-        # PHASE 4: Get thermal trend for predictive analysis
-        thermal_trend = self._get_thermal_trend()
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-
-        # Predict power change in next 15 minutes based on indoor temperature trend
-        # When house cooling fast → heat pump will increase power soon
-        # When house warming → heat pump may reduce power
-        if trend_rate < EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD:
-            # Rapid cooling → Compressor will ramp up significantly
-            predicted_power_increase = EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE
-            prediction_reason = "cooling rapidly"
-        elif trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
-            # Moderate cooling → Slight power increase expected
-            predicted_power_increase = EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE
-            prediction_reason = "gentle cooling"
-        elif trend_rate > THERMAL_CHANGE_MODERATE:
-            # Rapid warming → Compressor may reduce
-            predicted_power_increase = EFFECT_PREDICTIVE_WARMING_DECREASE
-            prediction_reason = "warming"
-        else:
-            # Stable → No significant change expected
-            predicted_power_increase = 0.0
-            prediction_reason = "stable"
-
-        predicted_power = current_power + predicted_power_increase
-        predicted_margin = current_peak - predicted_power
-
-        # Peak protection logic with predictive enhancement
-        # Oct 19, 2025: All values now constants for test script reuse
-        # Peak costs (effect tariff) are monthly charges that accumulate - worth protecting
-        if limit_decision.severity == "CRITICAL":
-            # Already at peak - immediate action
-            return LayerDecision(
-                name="Peak",
-                offset=EFFECT_OFFSET_CRITICAL,
-                weight=EFFECT_WEIGHT_CRITICAL,
-                reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
-            )
-        elif predicted_margin < EFFECT_MARGIN_PREDICTIVE and predicted_power_increase > 0:
-            # PREDICTIVE: Will approach peak in next 15 min - act NOW
-            # This is the key innovation: prevent spike before it happens
-            return LayerDecision(
-                name="Peak",
-                offset=EFFECT_OFFSET_PREDICTIVE,
-                weight=EFFECT_WEIGHT_PREDICTIVE,
-                reason=f"Predictive avoidance ({prediction_reason})",
-            )
-        elif limit_decision.severity == "WARNING":
-            # Close to peak - check if trend shows increasing demand
-            if predicted_power_increase > 0:
-                # Warning + rising demand = moderate reduction
-                return LayerDecision(
-                    name="Peak",
-                    offset=EFFECT_OFFSET_WARNING_RISING,
-                    weight=EFFECT_WEIGHT_WARNING_RISING,
-                    reason=f"WARNING + demand rising ({prediction_reason})",
-                )
-            else:
-                # Warning but demand stable/falling = gentle reduction
-                return LayerDecision(
-                    name="Peak",
-                    offset=EFFECT_OFFSET_WARNING_STABLE,
-                    weight=EFFECT_WEIGHT_WARNING_STABLE,
-                    reason=f"WARNING + demand {prediction_reason}",
-                )
-        else:
-            # Safe margin - no action needed
-            return LayerDecision(
-                name="Peak",
-                offset=0.0,
-                weight=0.0,
-                reason=f"Safe margin ({current_power:.1f}/{current_peak:.1f} kW)",
-            )
-
-    def _prediction_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Prediction layer: Learned pre-heating using thermal state predictor.
-
-        Uses learned building thermal characteristics to make intelligent
-        pre-heating decisions based on predicted temperature evolution.
-
-        This layer uses actual learned thermal response rather than generic
-        thermal mass assumptions, providing more accurate pre-heating.
-
-        Phase 6 - Self-learning capability
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with learned pre-heating recommendation
-        """
-        # Skip if predictor not available or not enough data
-        if not self.predictor:
-            return LayerDecision(
-                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
-            )
-
-        if len(self.predictor.state_history) < 96:  # Less than 24 hours of data
-            return LayerDecision(
-                name="Learned Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason=f"Learning: {len(self.predictor.state_history)}/96 observations",
-            )
-
-        # Skip if no weather forecast available
-        if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(
-                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="No weather forecast"
-            )
-
-        try:
-            # Use UFH-type-specific forecast horizon for learned predictions
-            # Concrete slab: 24h, Timber: 12h, Radiators: 6h
-            prediction_horizon = int(self.thermal.get_prediction_horizon())
-            forecast_temps = [
-                hour.temperature for hour in weather_data.forecast_hours[:prediction_horizon]
-            ]
-
-            if not forecast_temps:
-                return LayerDecision(
-                    name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Empty weather forecast"
-                )
-
-            # Check if pre-heating is recommended
-            # Use half of prediction horizon as lookahead (balance between early and late)
-            hours_ahead = prediction_horizon // 2
-            preheat_decision = self.predictor.should_pre_heat(
-                target_temp=self.target_temp,
-                hours_ahead=hours_ahead,
-                future_outdoor_temps=forecast_temps,
-                current_outdoor_temp=nibe_state.outdoor_temp,
-                current_indoor_temp=nibe_state.indoor_temp,
-                thermal_mass=self.thermal.thermal_mass,
-                insulation_quality=self.thermal.insulation_quality,
-            )
-
-            if preheat_decision.should_preheat:
-                # Thermal predictor now accounts for current overshoot as stored thermal energy
-                # The recommended_offset is already adjusted for overshoot in should_pre_heat()
-                # Weight 0.65 - slightly higher than base price layer (0.6)
-                # but lower than effect/weather layers (0.7-0.8)
-                return LayerDecision(
-                    name="Learned Pre-heat",
-                    offset=preheat_decision.recommended_offset,
-                    weight=LAYER_WEIGHT_PREDICTION,
-                    reason=preheat_decision.reason,
-                )
-            else:
-                return LayerDecision(
-                    name="Learned Pre-heat",
-                    offset=0.0,
-                    weight=0.0,
-                    reason="No pre-heat needed",
-                )
-
-        except AttributeError as err:
-            _LOGGER.error(
-                "Thermal model API compatibility error: %s. "
-                "This indicates the thermal model is missing required attributes. "
-                "Check that AdaptiveThermalModel has insulation_quality property. "
-                "Falling back to basic optimization without pre-heating.",
-                err,
-                exc_info=True,
-            )
-            return LayerDecision(
-                name="Learned Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason="Thermal model API error",
-            )
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as err:
-            _LOGGER.warning("Prediction calculation failed: %s", err)
-            return LayerDecision(
-                name="Learned Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason=f"Calculation error: {err}",
-            )
-
-    def _weather_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Simplified weather prediction layer - Pure forecast-based gentle pre-heating.
-
-        Philosophy (Oct 20, 2025):
-        "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
-
-        Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive
-        too late, resulting in thermal debt spirals (DM -1000 @ 04:00) followed by
-        massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
-
-        Solution: Simple proactive pre-heating:
-        1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
-        2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
-        3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
-
-        Weight scaling by thermal mass:
-        - Concrete slab (1.5): 0.85 × 1.5 = 1.275 (very high priority, 6h lag)
-        - Timber UFH (1.0): 0.85 × 1.0 = 0.85 (high priority, 2-3h lag)
-        - Radiators (0.5): 0.85 × 0.5 = 0.425 (moderate priority, <1h lag)
-
-        Real-world validation:
-        - Prevents 20:00→04:00 emergency thermal debt cycles
-        - Prevents 16:00 overshoot from overnight heating
-        - No complex calculations - just gentle constant pre-heat
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with gentle pre-heating recommendation
-        """
-        # Check if weather prediction is enabled
-        if not self.config.get("enable_weather_prediction", True):
-            return LayerDecision(
-                name="Weather Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
-
-        if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(
-                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No weather data"
-            )
-
-        # Check forecast for significant temperature drop
-        current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
-
-        if not forecast_hours:
-            return LayerDecision(
-                name="Weather Pre-heat", offset=0.0, weight=0.0, reason="No forecast data"
-            )
-
-        # Find minimum temperature in forecast period
-        min_temp = min(f.temperature for f in forecast_hours)
-        temp_drop = min_temp - current_outdoor
-
-        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
-        forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
-
-        # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
-        thermal_trend = self._get_thermal_trend()
-        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
-        trend_confidence = thermal_trend.get("confidence", 0.0)
-
-        indoor_cooling = (
-            trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
-            and trend_confidence > 0.4  # Sufficient data confidence
-        )
-
-        if forecast_triggered or indoor_cooling:
-            # Calculate thermal mass-adjusted weight
-            # Concrete slab: 0.85 × 1.5 = 1.275 (beats most layers except SAFETY/EFFECT_CRITICAL)
-            # Timber: 0.85 × 1.0 = 0.85 (beats price, comfort, proactive)
-            # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
-            weather_weight = min(
-                LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal.thermal_mass,
-                WEATHER_WEIGHT_CAP,  # Cap below Safety (1.0)
-            )
-
-            # Determine trigger reason
-            if forecast_triggered and indoor_cooling:
-                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
-            elif forecast_triggered:
-                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
-            else:
-                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
-
-            return LayerDecision(
-                name="Weather Pre-heat",
-                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
-                weight=weather_weight,
-                reason=trigger,
-            )
-
-        return LayerDecision(
-            name="Weather Pre-heat",
-            offset=0.0,
-            weight=0.0,
-            reason="Forecast stable, indoor stable",
-        )
-
-    def _weather_compensation_layer(self, nibe_state, weather_data) -> LayerDecision:
-        """Mathematical weather compensation layer with adaptive climate system.
-
-        Calculates optimal flow temperature using:
-        - Universal flow temperature formula (validated across manufacturers)
-        - Heat transfer method (if radiator specs available)
-        - UFH-specific adjustments (concrete/timber)
-        - Adaptive climate zones (latitude-based, globally applicable)
-        - Weather learning (unusual pattern detection)
-
-        Automatically adapts to global climates:
-        - Kiruna, Sweden (-30°C) → Arctic zone → 2.5°C base margin
-        - Stockholm, Sweden (-10°C) → Cold zone → 1.0°C base margin
-        - London, UK (0°C) → Temperate zone → 0.5°C base margin
-        - Paris, France (5°C) → Mild zone → 0.0°C base margin
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast data
-
-        Returns:
-            LayerDecision with mathematically calculated offset
-        """
-        # Check if feature is enabled
-        if not self.enable_weather_compensation:
-            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="Disabled")
-
-        if not weather_data or not weather_data.forecast_hours:
-            return LayerDecision(name="Math WC", offset=0.0, weight=0.0, reason="No weather data")
-
-        current_outdoor = nibe_state.outdoor_temp
-        current_flow = nibe_state.flow_temp
-
-        # Calculate optimal flow temperature using physics-based formulas
-        flow_calc = self.weather_comp.calculate_optimal_flow_temp(
-            indoor_setpoint=self.target_temp,
-            outdoor_temp=current_outdoor,
-            prefer_method="auto",  # Combines universal formula + heat transfer if available
-        )
-
-        # Adaptive climate system safety adjustments
-        # Replaces hardcoded Swedish thresholds with universal climate zones + learning
-        unusual_weather = False
-        unusual_severity = 0.0
-
-        # Check for unusual weather patterns if weather learner available
-        if self.weather_learner and weather_data.forecast_hours:
-            try:
-                # Extract forecast for unusual weather detection
-                forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
-                unusual = self.weather_learner.detect_unusual_weather(
-                    current_date=dt_util.now(),
-                    forecast=forecast_temps,
-                )
-
-                if unusual.is_unusual:
-                    unusual_weather = True
-                    # Map severity string to 0.0-1.0 scale
-                    unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
-
-                    _LOGGER.info(
-                        "Unusual weather detected: %s (deviation: %.1f°C)",
-                        unusual.recommendation,
-                        unusual.deviation_from_typical,
-                    )
-            except (AttributeError, KeyError, ValueError, TypeError) as e:
-                _LOGGER.warning("Weather learning check failed: %s", e)
-
-        # Get adaptive safety margin from climate system
-        safety_margin = self.climate_system.get_safety_margin(
-            outdoor_temp=current_outdoor,
-            unusual_weather_detected=unusual_weather,
-            unusual_severity=unusual_severity,
-        )
-
-        # Apply safety margin to calculated flow temp
-        adjusted_flow_temp = flow_calc.flow_temp + safety_margin
-
-        # Calculate required offset from current flow temperature
-        # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
-        curve_sensitivity = DEFAULT_CURVE_SENSITIVITY
-        required_offset = self.weather_comp.calculate_required_offset(
-            optimal_flow_temp=adjusted_flow_temp,
-            current_flow_temp=current_flow,
-            curve_sensitivity=curve_sensitivity,
-        )
-
-        # Get dynamic weight from climate system
-        dynamic_weight = self.climate_system.get_dynamic_weight(
-            outdoor_temp=current_outdoor,
-            unusual_weather_detected=unusual_weather,
-        )
-
-        # Apply user-configured weight adjustment
-        final_weight = dynamic_weight * self.weather_comp_weight
-
-        # Defer weather compensation when thermal debt exists (Conservative strategy)
-        # Allow thermal reality (DM + comfort + proactive) to override outdoor temp optimization
-        degree_minutes = nibe_state.degree_minutes
-        if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
-            # Critical debt: 39% reduction (0.49 → 0.30)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
-            # Significant debt: 29% reduction (0.49 → 0.35)
-            defer_factor = (
-                WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            )
-            defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
-            # Moderate debt: 18% reduction (0.49 → 0.40)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
-        elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
-            # Light debt: 8% reduction (0.49 → 0.45)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            defer_reason = f"Light debt (DM {degree_minutes:.0f})"
-        else:
-            # No debt: full weather comp weight
-            defer_factor = 1.0
-            defer_reason = None
-
-        final_weight = final_weight * defer_factor
-
-        # Build comprehensive reasoning
-        zone_info = self.climate_system.get_climate_info()
-        reasoning_parts = [
-            f"Math WC: {flow_calc.method}",
-            f"Zone: {zone_info['name']}",
-            f"Optimal: {flow_calc.flow_temp:.1f}°C",
-        ]
-
-        if safety_margin > 0:
-            reasoning_parts.append(f"Safety: +{safety_margin:.1f}°C")
-            reasoning_parts.append(f"Adjusted: {adjusted_flow_temp:.1f}°C")
-
-        if unusual_weather:
-            reasoning_parts.append(f"Unusual weather (severity={unusual_severity:.1f})")
-
-        reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
-        reasoning_parts.append(f"Weight: {final_weight:.2f}")
-
-        if defer_reason:
-            reasoning_parts.append(f"Deferred: {defer_reason}")
-
-        reasoning = "; ".join(reasoning_parts)
-
-        _LOGGER.debug("Weather compensation layer: %s", reasoning)
-
-        return LayerDecision(
-            name="Math WC",
-            offset=required_offset,
-            weight=final_weight,
-            reason=reasoning,
-        )
-
-    def _price_layer(self, nibe_state, price_data) -> LayerDecision:
-        """Spot price layer: Forward-looking optimization from native 15-minute spot price data.
-
-        Enhanced Nov 27, 2025: Added forward-looking price analysis
-        - Looks ahead 4 hours for significant price changes
-        - Reduces heating when much cheaper period coming soon
-        - Pre-heats when much more expensive period approaching
-
-        Args:
-            nibe_state: Current NIBE state (for strategic overshoot context)
-            price_data: Spot price data with native 15-min intervals
-
-        Returns:
-            LayerDecision with price-based offset
-        """
-        # Check if price optimization is enabled
-        if not self.config.get("enable_price_optimization", True):
-            return LayerDecision(
-                name="Spot Price",
-                offset=0.0,
-                weight=0.0,
-                reason="Disabled by user",
-            )
-
-        if not price_data or not price_data.today:
-            return LayerDecision(name="Spot Price", offset=0.0, weight=0.0, reason="No price data")
-
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
-
-        # Bound check quarter index (safety)
-        if current_quarter >= len(price_data.today):
-            _LOGGER.warning(
-                "Current quarter %d exceeds available periods (%d)",
-                current_quarter,
-                len(price_data.today),
-            )
-            current_quarter = min(current_quarter, len(price_data.today) - 1)
-
-        # Get current period classification and price
-        classification = self.price.get_current_classification(current_quarter)
-        current_period = price_data.today[current_quarter]
-        current_price = current_period.price
-
-        # Initialize variables (moved outside if-block to avoid UnboundLocalError)
-        remaining_cheap_quarters = 0
-        is_volatile = False
-        volatile_reason = ""
-        in_peak_cluster = False  # True when EXPENSIVE is sandwiched between PEAKs
-
-        # Forward-looking price analysis - horizon scales with thermal mass
-        # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
-        # Calculate horizon based on thermal mass (higher mass = longer lookahead)
-        thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
-        forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
-
-        forecast_quarters = int(forecast_hours * 4)  # Convert hours to 15-min quarters
-
-        lookahead_end = min(current_quarter + forecast_quarters, 96)
-        upcoming_periods = price_data.today[current_quarter + 1 : lookahead_end]
-
-        # Also check tomorrow's first periods if we're near end of day
-        if price_data.has_tomorrow and lookahead_end >= 96:
-            remaining_quarters = forecast_quarters - (96 - current_quarter - 1)
-            upcoming_periods.extend(price_data.tomorrow[:remaining_quarters])
-
-        forecast_adjustment = 0.0
-        forecast_reason = ""
-
-        if upcoming_periods and current_price > 0:
-            # Find index and count duration of min/max prices
-            min_idx = next(
-                i
-                for i, p in enumerate(upcoming_periods)
-                if p.price == min(p.price for p in upcoming_periods)
-            )
-            max_idx = next(
-                i
-                for i, p in enumerate(upcoming_periods)
-                if p.price == max(p.price for p in upcoming_periods)
-            )
-
-            # Count consecutive quarters around min price meeting CHEAP threshold
-            cheap_duration = 1
-            for i in range(min_idx + 1, len(upcoming_periods)):
-                if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
-                    cheap_duration += 1
-                else:
-                    break
-            for i in range(min_idx - 1, -1, -1):
-                if upcoming_periods[i].price / current_price < PRICE_FORECAST_CHEAP_THRESHOLD:
-                    cheap_duration += 1
-                else:
-                    break
-
-            # Count consecutive quarters around max price meeting EXPENSIVE threshold
-            expensive_duration = 1
-            for i in range(max_idx + 1, len(upcoming_periods)):
-                if upcoming_periods[i].price / current_price > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                    expensive_duration += 1
-                else:
-                    break
-            for i in range(max_idx - 1, -1, -1):
-                if upcoming_periods[i].price / current_price > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                    expensive_duration += 1
-                else:
-                    break
-
-            # Calculate price ratios
-            min_price_ratio = min(p.price for p in upcoming_periods) / current_price
-            max_price_ratio = max(p.price for p in upcoming_periods) / current_price
-
-            # Check if current CHEAP period is too brief for meaningful heating (Nov 29, 2025)
-            # Compressor needs ~45min to efficiently use cheap electricity
-            if classification == QuarterClassification.CHEAP:
-                # Count remaining consecutive CHEAP quarters (including current)
-                remaining_cheap_quarters = 1
-                for q in range(current_quarter + 1, 96):
-                    if self.price.get_current_classification(q) == QuarterClassification.CHEAP:
-                        remaining_cheap_quarters += 1
-                    else:
-                        break
-
-                # Check tomorrow if cheap continues to end of today
-                if (
-                    remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
-                    and current_quarter + remaining_cheap_quarters >= 96
-                    and self.price.has_tomorrow_prices()
-                ):
-                    for q in range(96):
-                        if self.price.get_tomorrow_classification(q) == QuarterClassification.CHEAP:
-                            remaining_cheap_quarters += 1
-                        else:
-                            break
-
-            # Volatile detection: brief runs get reduced weight (see const.py for details)
-            # Calculate current quarter's run length by scanning backwards and forwards
-            current_run_length = 1  # Count current quarter
-
-            # Scan backwards to find start of current run
-            for offset in range(1, 96):  # Max scan to start of day
-                check_quarter = current_quarter - offset
-                if check_quarter < 0:
-                    break
-                check_class = self.price.get_current_classification(check_quarter)
-                if check_class == classification:
-                    current_run_length += 1
-                else:
-                    break
-
-            # Scan forwards to find end of current run
-            for offset in range(1, 96):  # Max scan to end of day
-                check_quarter = current_quarter + offset
-                if check_quarter < 96:
-                    check_class = self.price.get_current_classification(check_quarter)
-                elif price_data.has_tomorrow:
-                    # Look into tomorrow if available
-                    tomorrow_quarter = check_quarter - 96
-                    if tomorrow_quarter < 96:
-                        check_class = self.price.get_tomorrow_classification(tomorrow_quarter)
-                    else:
-                        break
-                else:
-                    break
-
-                if check_class == classification:
-                    current_run_length += 1
-                else:
-                    break
-
-            # A period is volatile if the current run is brief (< 3 quarters = < 45 min)
-            # PEAK is never volatile - it's always predictable grid stress, we always reduce
-            is_brief_run = current_run_length < PRICE_FORECAST_MIN_DURATION
-            is_ending_soon = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
-
-            # Single volatility flag - either the whole run is short OR we're near the end
-            # PEAK is never volatile - it's always predictable grid stress, we always reduce
-            is_volatile = (is_brief_run and classification != QuarterClassification.PEAK) or (
-                classification == QuarterClassification.CHEAP and is_ending_soon
-            )
-
-            # PEAK cluster detection: When EXPENSIVE or NORMAL quarters are sandwiched between PEAKs,
-            # treat them as PEAK to prevent offset jumps during peak pricing periods.
-            # Example: PEAK(17:00) → NORMAL(17:15) → PEAK(17:30) should all use PEAK offset.
-            # CHEAP quarters are NOT included - they should break the cluster.
-            # This prevents the heat pump from ramping up during brief dips in peak periods.
-            in_peak_cluster = False
-            if (
-                classification in [QuarterClassification.EXPENSIVE, QuarterClassification.NORMAL]
-                and is_volatile
-            ):
-                # Check if we're sandwiched between PEAK quarters
-                # Scan backwards to find if there's a PEAK within the cluster window
-                has_peak_before = False
-                for back_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
-                    check_quarter = current_quarter - back_offset
-                    if check_quarter < 0:
-                        break
-                    check_class = self.price.get_current_classification(check_quarter)
-                    if check_class == QuarterClassification.PEAK:
-                        has_peak_before = True
-                        break
-                    # Stop if we hit CHEAP - that breaks the cluster
-                    if check_class == QuarterClassification.CHEAP:
-                        break
-
-                # Scan forwards to find if there's a PEAK within the cluster window
-                has_peak_after = False
-                if has_peak_before:  # Only check forward if we found PEAK before
-                    for fwd_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
-                        check_quarter = current_quarter + fwd_offset
-                        if check_quarter >= 96:
-                            # Check tomorrow if available
-                            if price_data.has_tomorrow:
-                                tomorrow_quarter = check_quarter - 96
-                                check_class = self.price.get_tomorrow_classification(
-                                    tomorrow_quarter
-                                )
-                            else:
-                                break
-                        else:
-                            check_class = self.price.get_current_classification(check_quarter)
-
-                        if check_class is None:
-                            break
-                        if check_class == QuarterClassification.PEAK:
-                            has_peak_after = True
-                            break
-                        # Stop if we hit CHEAP - that breaks the cluster
-                        if check_class == QuarterClassification.CHEAP:
-                            break
-
-                # If sandwiched between PEAKs, inherit PEAK behavior
-                if has_peak_before and has_peak_after:
-                    in_peak_cluster = True
-                    is_volatile = False  # No longer volatile when part of PEAK cluster
-
-            if is_volatile:
-                quarters_left = (
-                    min(remaining_cheap_quarters, current_run_length)
-                    if classification == QuarterClassification.CHEAP
-                    else current_run_length
-                )
-                volatile_reason = f" | Price volatile: {classification.name} {quarters_left * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
-
-            # Apply normal forecast logic regardless of volatility
-            # Volatility will reduce weight, not block smart decisions
-            if classification == QuarterClassification.CHEAP:
-                # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
-                # Only act if expensive period is at least 45min in future (same as duration filter)
-                if (
-                    max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                    and expensive_duration >= PRICE_FORECAST_MIN_DURATION
-                    and max_idx >= PRICE_FORECAST_MIN_DURATION
-                ):
-                    increase_percent = int((max_price_ratio - 1) * 100)
-                    forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
-                elif max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                    # Expensive period exists but doesn't meet criteria - explain why
-                    if expensive_duration < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = f" | Forecast: Expensive period too brief ({expensive_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
-                    elif max_idx < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = f" | Forecast: Expensive period too soon ({max_idx * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
-
-            elif classification in [
-                QuarterClassification.EXPENSIVE,
-                QuarterClassification.PEAK,
-            ]:
-                # Wait for upcoming cheap periods (if sustained AND far enough away)
-                # Only reduce if cheap period is at least 45min in future (same as duration filter)
-                if (
-                    min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                    and cheap_duration >= PRICE_FORECAST_MIN_DURATION
-                    and min_idx >= PRICE_FORECAST_MIN_DURATION
-                ):
-                    savings_percent = int((1 - min_price_ratio) * 100)
-                    forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
-                    )
-                elif min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
-                    # Cheap period exists but doesn't meet criteria - explain why
-                    if cheap_duration < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = f" | Forecast: Cheap period too brief ({cheap_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
-                    elif min_idx < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = f" | Forecast: Cheap period too soon ({min_idx * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
-
-            else:  # NORMAL - check both directions, take most significant sustained change
-                # Apply same lookahead requirement: price change must be ≥45min away to act on
-                expensive_valid = (
-                    max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                    and expensive_duration >= PRICE_FORECAST_MIN_DURATION
-                    and max_idx >= PRICE_FORECAST_MIN_DURATION
-                )
-                cheap_valid = (
-                    min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                    and cheap_duration >= PRICE_FORECAST_MIN_DURATION
-                    and min_idx >= PRICE_FORECAST_MIN_DURATION
-                )
-
-                if expensive_valid and cheap_valid:
-                    # Both valid - choose larger magnitude
-                    if (max_price_ratio - 1.0) > (1.0 - min_price_ratio):
-                        increase_percent = int((max_price_ratio - 1) * 100)
-                        forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                        forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
-                    else:
-                        savings_percent = int((1 - min_price_ratio) * 100)
-                        forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                        forecast_reason = f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
-                elif expensive_valid:
-                    increase_percent = int((max_price_ratio - 1) * 100)
-                    forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = f" | Forecast: {increase_percent}% more expensive in {max_idx//4}h - pre-heat now"
-                elif cheap_valid:
-                    savings_percent = int((1 - min_price_ratio) * 100)
-                    forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {savings_percent}% cheaper in {min_idx//4}h - reduce heating"
-                    )
-                else:
-                    # Check if either direction had potential but didn't meet criteria
-                    if max_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                        if expensive_duration < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = f" | Forecast: Expensive period too brief ({expensive_duration * 15}min)"
-                        elif max_idx < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = (
-                                f" | Forecast: Expensive period too soon ({max_idx * 15}min)"
-                            )
-                    elif min_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
-                        if cheap_duration < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = (
-                                f" | Forecast: Cheap period too brief ({cheap_duration * 15}min)"
-                            )
-                        elif min_idx < PRICE_FORECAST_MIN_DURATION:
-                            forecast_reason = (
-                                f" | Forecast: Cheap period too soon ({min_idx * 15}min)"
-                            )
-
-        # Get base offset for current classification
-        base_offset = self.price.get_base_offset(
-            current_quarter,
-            classification,
-            current_period.is_daytime,
-        )
-
-        # PEAK cluster: EXPENSIVE quarters between PEAKs use PEAK offset
-        peak_cluster_reason = ""
-        if in_peak_cluster:
-            base_offset = PRICE_OFFSET_PEAK
-            peak_cluster_reason = " | PEAK cluster: EXPENSIVE sandwiched between PEAKs"
-
-        # Pre-PEAK detection (Dec 2, 2025)
-        # Start reducing 1 quarter BEFORE peak to allow pump slowdown time
-        # Pump needs time to reduce output - acting at PEAK start is too late
-        pre_peak_reason = ""
-        next_quarter = current_quarter + 1
-        if next_quarter < 96:
-            next_classification = self.price.get_current_classification(next_quarter)
-            if (
-                next_classification == QuarterClassification.PEAK
-                and classification != QuarterClassification.PEAK
-            ):
-                # Next quarter is PEAK but current is not - pre-act now
-                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
-                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
-        elif price_data.has_tomorrow:
-            # Check tomorrow Q0 if we're at Q95
-            next_classification = self.price.get_tomorrow_classification(0)
-            if (
-                next_classification == QuarterClassification.PEAK
-                and classification != QuarterClassification.PEAK
-            ):
-                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
-                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
-
-        # Skip heating boost for volatile CHEAP periods (Nov 29, 2025)
-        # Compressor needs ~45min to be efficient - don't boost for short dips
-        if is_volatile and classification == QuarterClassification.CHEAP and base_offset > 0:
-            base_offset = 0.0  # Treat as NORMAL instead of CHEAP
-
-        # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)
-        # Linear interpolation: 0.5 → 0.2 (conservative), 3.0 → 1.0 (full offset)
-        tolerance_range = PRICE_TOLERANCE_MAX - PRICE_TOLERANCE_MIN  # 2.5
-        factor_range = PRICE_TOLERANCE_FACTOR_MAX - PRICE_TOLERANCE_FACTOR_MIN  # 0.8
-        tolerance_factor = (
-            PRICE_TOLERANCE_FACTOR_MIN
-            + ((self.tolerance - PRICE_TOLERANCE_MIN) / tolerance_range) * factor_range
-        )
-
-        # Apply mode multiplier (comfort=0.7, balanced=1.0, savings=1.3)
-        tolerance_factor *= self.mode_config.price_tolerance_multiplier
-
-        # Savings mode: PEAK bypasses tolerance (always full reduction)
-        if classification == QuarterClassification.PEAK and self.mode_config.peak_bypass_tolerance:
-            adjusted_offset = base_offset  # Skip tolerance scaling for PEAK in savings mode
-        else:
-            adjusted_offset = base_offset * tolerance_factor
-
-        # Apply forecast adjustment (additive to base classification)
-        # BUT: During PEAK, we want maximum reduction regardless of forecast
-        if classification == QuarterClassification.PEAK:
-            # PEAK periods get maximum reduction, no forecast adjustment
-            # The goal is -10 offset to coast through the expensive period
-            final_offset = adjusted_offset  # Already -10 from base_offset
-        else:
-            final_offset = adjusted_offset + forecast_adjustment
-
-        # Check for strategic overshoot context when pre-heating
-        strategic_context = ""
-        max_overshoot = self.mode_config.preheat_overshoot_allowed
-        if forecast_adjustment > 0 and nibe_state.indoor_temp > self.target_temp:
-            overshoot = nibe_state.indoor_temp - self.target_temp
-            if overshoot <= max_overshoot:
-                # Calculate cost savings multiplier from price forecast
-                if upcoming_periods and current_price > 0:
-                    max_upcoming = max(p.price for p in upcoming_periods)
-                    cost_multiplier = max_upcoming / current_price
-                    strategic_context = f" | Strategic storage: +{overshoot:.1f}°C overshoot OK (≤{max_overshoot:.1f}°C)"
-            else:
-                # Overshoot exceeds mode limit - reduce pre-heating
-                final_offset = max(final_offset - (overshoot - max_overshoot), 0)
-                strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
-
-        # Apply moderate volatility weight reduction (Dec 1, 2025)
-        # After int accumulation fix, safe to allow stronger price influence during volatility
-        # Math: 0.8 × 0.3 = 0.24 (price layer reduced to 30% of normal strength)
-        # Was 0.1 (10%) before fix when decimal changes caused API oscillation
-        # Effect: Thermal/comfort/weather layers still dominate, but price has meaningful input
-        #
-        # Dec 3, 2025: PEAK classification gets weight 1.0 (critical priority)
-        # This ensures peak avoidance overrides all other layers except safety
-        # PEAK cluster: EXPENSIVE quarters between PEAKs also get PEAK treatment
-        #
-        # Dec 5, 2025: Only reduce weight for volatile CHEAP periods, not EXPENSIVE
-        # Volatility logic was designed to prevent oscillation during short CHEAP dips
-        # But we WANT strong price influence during EXPENSIVE periods to reduce heating
-        if classification == QuarterClassification.PEAK or in_peak_cluster:
-            price_weight = 1.0  # Critical priority - override all other layers
-        elif is_volatile and classification == QuarterClassification.CHEAP:
-            # Only reduce weight for volatile CHEAP periods (prevent ramp-up for brief dips)
-            # EXPENSIVE periods keep full weight even if volatile - we want to reduce heating!
-            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION  # 0.8 → 0.24
-        else:
-            price_weight = LAYER_WEIGHT_PRICE
-
-        # DEBUG: Log price analysis with thermal mass horizon calculation
-        _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh (%.1f base × %.1f thermal_mass) | Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s%s",
-            current_quarter,
-            now.hour,
-            now.minute,
-            current_price,
-            classification.name,
-            forecast_hours,
-            PRICE_FORECAST_BASE_HORIZON,
-            thermal_mass,
-            adjusted_offset,
-            forecast_adjustment,
-            final_offset,
-            price_weight,
-            volatile_reason,
-            strategic_context,
-            pre_peak_reason,
-            peak_cluster_reason,
-        )
-
-        # Get adapter entity for display
-        adapter_entity = self.config.get("gespot_entity", "unknown")
-        # Extract short name from entity_id (e.g., "sensor.gespot_current_price_se2" -> "gespot_current_price_se2")
-        adapter_name = adapter_entity.split(".")[-1] if adapter_entity else "unknown"
-
-        return LayerDecision(
-            name="Spot Price",
-            offset=final_offset,
-            weight=price_weight,
-            reason=f"Q{current_quarter}: {classification.name} ({'day' if current_period.is_daytime else 'night'}) | Adapter: {adapter_name} | Horizon: {forecast_hours:.1f}h ({PRICE_FORECAST_BASE_HORIZON:.1f} × {thermal_mass:.1f}){forecast_reason}{volatile_reason}{strategic_context}{pre_peak_reason}{peak_cluster_reason}",
-        )
-
-    def _comfort_layer(self, nibe_state, weather_data=None, price_data=None) -> LayerDecision:
-        """Comfort layer: Reactive adjustment to maintain comfort.
-
-        Provides gentle steering toward target even within tolerance zone.
-        This ensures temperature doesn't drift unnecessarily during cheap periods.
-
-        Mode affects behavior:
-        - Comfort mode: Tighter dead zone (0.1°C), stronger weight multiplier (1.3x)
-        - Balanced mode: Standard dead zone (0.2°C), normal weights
-        - Savings mode: Wider dead zone (0.3°C), weaker weight multiplier (0.7x)
-
-        Thermal-aware overshoot protection (Dec 4, 2025):
-        - Calculates REAL thermal buffer duration based on:
-          1. Current indoor temp trend (observed cooling rate)
-          2. Weather forecast (upcoming cold = higher heat loss)
-          3. Building thermal characteristics (insulation, thermal mass)
-        - Compares buffer hours to upcoming expensive period duration
-        - If buffer is INSUFFICIENT, reduces weight to allow price layer pre-heating
-        - If buffer is SUFFICIENT, allows gentle coasting with surplus-adjusted weight
-
-        Example calculation:
-        - Overshoot: 0.8°C above target
-        - Heat loss rate: 0.4°C/hour (from trend + forecast cold snap)
-        - Buffer duration: 0.8 / 0.4 = 2.0 hours
-        - Expensive period: starts in 1h, lasts 8h → need 9h buffer
-        - DEFICIT: 7 hours! → Must pre-heat now, not coast!
-
-        Args:
-            nibe_state: Current NIBE state
-            weather_data: Weather forecast (for cold snap → higher heat loss)
-            price_data: Spot price data (for expensive period timing)
-
-        Returns:
-            LayerDecision with comfort correction
-        """
-        temp_deviation = nibe_state.indoor_temp - self.target_temp
-
-        # Temperature tolerance based on user setting
-        tolerance = self.tolerance_range  # ±0.4-4.0°C
-
-        # Dead zone from mode config (comfort=0.1, balanced=0.2, savings=0.3)
-        dead_zone = self.mode_config.dead_zone
-
-        # Weight multiplier from mode (comfort=1.3, balanced=1.0, savings=0.7)
-        weight_mult = self.mode_config.comfort_weight_multiplier
-
-        if abs(temp_deviation) < dead_zone:
-            # Very close to target - we're right on target
-            return LayerDecision(name="Comfort", offset=0.0, weight=0.0, reason="At target")
-        elif abs(temp_deviation) < tolerance:
-            # Within comfort zone but drifting from target
-            # Gentle correction to maintain target during favorable conditions
-            correction = -temp_deviation * COMFORT_CORRECTION_MULT  # Gentle correction
-            base_weight = LAYER_WEIGHT_COMFORT_MIN
-
-            if temp_deviation > 0:
-                reason = f"Slightly warm (+{temp_deviation:.1f}°C), gentle reduce"
-            else:
-                reason = f"Slightly cool ({temp_deviation:.1f}°C), gentle boost"
-
-            return LayerDecision(
-                name="Comfort",
-                offset=correction,
-                weight=base_weight * weight_mult,  # Mode-adjusted weight
-                reason=reason,
-            )
-        elif temp_deviation > tolerance:
-            # ========================================
-            # OVERSHOOT PROTECTION (Dec 2, 2025 - moved from proactive layer)
-            # ========================================
-            # When above target, we need to STOP heating to let DM recover naturally.
-            # Key insight: DM recovers when we stop asking for heat, not by boosting.
-            # Use strong offsets (-7 to -10°C) to effectively stop heating.
-            #
-            # Graduated response based on how far above target:
-            # - 0.6°C above: -7°C offset, weight 0.7 (start coasting)
-            # - 1.5°C above: -10°C offset, weight 1.0 (full coast, overrides all)
-            #
-            # NOTE: Removed old DM < -200 check - it was backwards!
-            # High DM debt during overshoot means flow temp was too high.
-            # The fix is to REDUCE heating, not block the reduction.
-
-            overshoot = temp_deviation  # How far above target (positive value)
-
-            if overshoot >= OVERSHOOT_PROTECTION_START:
-                # ========================================
-                # THERMAL-AWARE OVERSHOOT PROTECTION (Dec 4, 2025)
-                # ========================================
-                # Problem: Small overshoot (0.8°C) triggers aggressive coasting (-7.7°C offset)
-                # which fights the price layer's smart pre-heating for upcoming expensive period.
-                #
-                # Solution: Calculate REAL thermal buffer duration:
-                # 1. Current heat loss rate (from thermal trend + weather forecast)
-                # 2. How many hours will our buffer last?
-                # 3. When does expensive period start/end?
-                # 4. Is buffer sufficient to coast through expensive hours?
-                #
-                # If buffer is INSUFFICIENT, we need to pre-heat NOW during cheap hours!
-
-                # Get current thermal trend (observed indoor temp change rate)
-                thermal_trend = self._get_thermal_trend()
-                indoor_rate = thermal_trend.get("rate_per_hour", 0.0)  # Negative = cooling
-
-                # Get thermal model parameters
-                thermal_mass = self.thermal.thermal_mass if self.thermal else 1.0
-                insulation = self.thermal.insulation_quality if self.thermal else 1.0
-
-                # Calculate heat loss rate based on physics
-                # heat_loss_rate = (indoor - outdoor) / (insulation × 10)
-                outdoor_temp = nibe_state.outdoor_temp
-                indoor_temp = nibe_state.indoor_temp
-                temp_diff = indoor_temp - outdoor_temp
-                base_heat_loss = temp_diff / (insulation * 10)  # °C per hour at current outdoor
-
-                # Check weather forecast for upcoming cold
-                forecast_heat_loss = base_heat_loss
-                forecast_min_outdoor = outdoor_temp
-                if weather_data and weather_data.forecast_hours:
-                    # Use thermal model's prediction horizon
-                    horizon = int(self.thermal.get_prediction_horizon()) if self.thermal else 12
-                    forecast_temps = [h.temperature for h in weather_data.forecast_hours[:horizon]]
-                    if forecast_temps:
-                        forecast_min_outdoor = min(forecast_temps)
-                        # Heat loss will be WORSE when colder outside
-                        future_temp_diff = indoor_temp - forecast_min_outdoor
-                        forecast_heat_loss = future_temp_diff / (insulation * 10)
-
-                # Use the WORSE of current trend or forecast-based loss
-                # If indoor is already cooling at -0.5°C/h, use that
-                # If forecast predicts higher loss due to cold snap, use that
-                effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)
-
-                # Safety: if we can't determine loss rate, assume moderate loss
-                if effective_heat_loss <= 0.01:
-                    effective_heat_loss = 0.3  # Default: 0.3°C/hour loss
-
-                # Calculate buffer duration: how long until we hit target temp?
-                buffer_hours = overshoot / effective_heat_loss
-
-                # Now check prices: when does expensive period start and how long?
-                expensive_start_hours = None
-                expensive_duration_hours = 0
-                price_increase_pct = 0.0
-
-                if price_data and price_data.today:
-                    now = dt_util.now()
-                    current_quarter = (now.hour * 4) + (now.minute // 15)
-
-                    if current_quarter < len(price_data.today):
-                        current_price = price_data.today[current_quarter].price
-
-                        # Scan forward to find expensive periods
-                        forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
-                        forecast_quarters = int(forecast_hours * 4)
-                        lookahead_end = min(current_quarter + 1 + forecast_quarters, 96)
-
-                        upcoming = list(price_data.today[current_quarter + 1 : lookahead_end])
-                        if price_data.has_tomorrow and lookahead_end >= 96:
-                            remaining = forecast_quarters - (96 - current_quarter - 1)
-                            upcoming.extend(price_data.tomorrow[:remaining])
-
-                        # Find first expensive quarter and count duration
-                        if upcoming and current_price > 0:
-                            for i, period in enumerate(upcoming):
-                                ratio = period.price / current_price
-                                if ratio >= PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                                    if expensive_start_hours is None:
-                                        expensive_start_hours = (i + 1) * 0.25  # hours from now
-                                        price_increase_pct = (ratio - 1.0) * 100
-                                    expensive_duration_hours += 0.25
-                                elif expensive_start_hours is not None:
-                                    # Expensive period ended
-                                    break
-
-                # Decision logic based on thermal buffer vs expensive period
-                if expensive_start_hours is not None:
-                    # Calculate: will buffer last through the expensive period?
-                    hours_needed = expensive_start_hours + expensive_duration_hours
-                    buffer_sufficient = buffer_hours >= hours_needed
-                    buffer_deficit = hours_needed - buffer_hours
-
-                    if not buffer_sufficient:
-                        # CRITICAL: Buffer is NOT enough! We need to pre-heat NOW!
-                        # Apply minimal weight so price layer can do its job
-                        correction = -temp_deviation * COMFORT_CORRECTION_MILD
-
-                        return LayerDecision(
-                            name="Comfort",
-                            offset=correction,
-                            weight=LAYER_WEIGHT_COMFORT_MIN,
-                            reason=(
-                                f"Buffer {overshoot:.1f}°C = {buffer_hours:.1f}h @ {effective_heat_loss:.2f}°C/h loss | "
-                                f"Need {hours_needed:.1f}h for {price_increase_pct:.0f}% spike in {expensive_start_hours:.1f}h | "
-                                f"DEFICIT {buffer_deficit:.1f}h - pre-heat required!"
-                            ),
-                        )
-                    else:
-                        # Buffer IS sufficient - but still be gentle, don't fight price layer
-                        # Weighted by how much buffer surplus we have
-                        surplus_ratio = buffer_hours / hours_needed  # >1.0 = surplus
-                        # More surplus = higher weight (can afford to coast)
-                        # 1.0x surplus = 0.3 weight, 2.0x surplus = 0.6 weight
-                        adjusted_weight = min(
-                            LAYER_WEIGHT_COMFORT_MIN * surplus_ratio, LAYER_WEIGHT_COMFORT_HIGH
-                        )
-
-                        coast_offset = -temp_deviation * COMFORT_CORRECTION_MILD * 2  # Gentle coast
-
-                        return LayerDecision(
-                            name="Comfort",
-                            offset=coast_offset,
-                            weight=adjusted_weight,
-                            reason=(
-                                f"Buffer {overshoot:.1f}°C = {buffer_hours:.1f}h @ {effective_heat_loss:.2f}°C/h | "
-                                f"Spike in {expensive_start_hours:.1f}h for {expensive_duration_hours:.1f}h | "
-                                f"OK: {surplus_ratio:.1f}x surplus - gentle coast"
-                            ),
-                        )
-
-                # Standard overshoot protection - no cold snap or sufficient buffer
-                overshoot_range = OVERSHOOT_PROTECTION_FULL - OVERSHOOT_PROTECTION_START
-                fraction = min((overshoot - OVERSHOOT_PROTECTION_START) / overshoot_range, 1.0)
-
-                # Scale offset from -7°C at 0.6°C overshoot to -10°C at 1.5°C overshoot
-                coast_offset = OVERSHOOT_PROTECTION_OFFSET_MIN + fraction * (
-                    OVERSHOOT_PROTECTION_OFFSET_MAX - OVERSHOOT_PROTECTION_OFFSET_MIN
-                )
-
-                # Scale weight from 0.7 at 0.6°C to 1.0 at 1.5°C (always high priority)
-                coast_weight = LAYER_WEIGHT_COMFORT_HIGH + fraction * (
-                    LAYER_WEIGHT_COMFORT_CRITICAL - LAYER_WEIGHT_COMFORT_HIGH
-                )
-
-                return LayerDecision(
-                    name="Comfort",
-                    offset=coast_offset,
-                    weight=coast_weight,
-                    reason=(
-                        f"Overshoot: COAST {coast_offset:.1f}°C @ weight {coast_weight:.2f} "
-                        f"(indoor {nibe_state.indoor_temp:.1f}°C is {overshoot:.1f}°C above target)"
-                    ),
-                )
-            else:
-                # Mild overshoot (below 0.6°C threshold) - gentle correction
-                # Use proportional correction, not the aggressive coast offsets
-                correction = -temp_deviation * COMFORT_CORRECTION_MILD
-                return LayerDecision(
-                    name="Comfort",
-                    offset=correction,
-                    weight=LAYER_WEIGHT_COMFORT_HIGH,
-                    reason=f"Warm: {temp_deviation:.1f}°C above target, gentle reduce",
-                )
-        else:
-            # Too cold, increase heating strongly
-            correction = -(temp_deviation + tolerance) * 0.5
-            return LayerDecision(
-                name="Comfort",
-                offset=correction,
-                weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too cold: {-temp_deviation:.1f}°C under",
             )
 
     def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
@@ -2824,7 +917,7 @@ class DecisionEngine:
         self,
         current_power_kw: float,
         outdoor_temp: float,
-    ) -> dict[str, Any]:
+    ) -> PowerValidationDict:
         """Validate current power against model expectations.
 
         Args:

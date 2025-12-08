@@ -1,20 +1,26 @@
-"""Tests for Phase 2 fixes - DHW abort condition monitoring."""
+"""Tests for DHW abort conditions and manual override behavior.
+
+Validates:
+- DHW abort condition parsing and evaluation
+- Thermal debt and indoor temp threshold triggering
+- Manual override immediate application
+- Manual override expiration
+"""
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime
 
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
 
 def test_check_dhw_abort_conditions_no_conditions():
     """Test that empty abort conditions return False."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=[],
         thermal_debt=-200.0,
         indoor_temp=22.0,
@@ -27,12 +33,10 @@ def test_check_dhw_abort_conditions_no_conditions():
 
 def test_check_dhw_abort_conditions_thermal_debt_triggered():
     """Test abort when thermal debt below threshold."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=["thermal_debt < -500"],
         thermal_debt=-600.0,  # Below -500 threshold
         indoor_temp=22.0,
@@ -46,12 +50,10 @@ def test_check_dhw_abort_conditions_thermal_debt_triggered():
 
 def test_check_dhw_abort_conditions_thermal_debt_not_triggered():
     """Test no abort when thermal debt above threshold."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=["thermal_debt < -500"],
         thermal_debt=-400.0,  # Above -500 threshold (less negative)
         indoor_temp=22.0,
@@ -64,12 +66,10 @@ def test_check_dhw_abort_conditions_thermal_debt_not_triggered():
 
 def test_check_dhw_abort_conditions_indoor_temp_triggered():
     """Test abort when indoor temp below threshold."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=["indoor_temp < 21.5"],
         thermal_debt=-200.0,
         indoor_temp=21.0,  # Below 21.5 threshold
@@ -83,12 +83,10 @@ def test_check_dhw_abort_conditions_indoor_temp_triggered():
 
 def test_check_dhw_abort_conditions_indoor_temp_not_triggered():
     """Test no abort when indoor temp above threshold."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=["indoor_temp < 21.5"],
         thermal_debt=-200.0,
         indoor_temp=22.0,  # Above 21.5 threshold
@@ -101,13 +99,11 @@ def test_check_dhw_abort_conditions_indoor_temp_not_triggered():
 
 def test_check_dhw_abort_conditions_multiple_conditions():
     """Test that first triggered condition causes abort."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
     # Thermal debt triggers (first condition)
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=[
             "thermal_debt < -500",
             "indoor_temp < 21.0",
@@ -123,13 +119,11 @@ def test_check_dhw_abort_conditions_multiple_conditions():
 
 def test_check_dhw_abort_conditions_invalid_format():
     """Test that invalid condition format is handled gracefully."""
-    coordinator = MagicMock(spec=EffektGuardCoordinator)
-    coordinator._check_dhw_abort_conditions = (
-        EffektGuardCoordinator._check_dhw_abort_conditions.__get__(coordinator)
-    )
+    # Use dhw_optimizer directly for testing abort conditions
+    scheduler = IntelligentDHWScheduler()
 
     # Invalid condition format should be skipped
-    should_abort, reason = coordinator._check_dhw_abort_conditions(
+    should_abort, reason = scheduler.check_abort_conditions(
         abort_conditions=[
             "invalid_condition",  # No < operator
             "thermal_debt < -500",  # Valid condition
@@ -151,9 +145,9 @@ def test_manual_override_applies_immediately():
     Current implementation is already correct - this test verifies it stays that way.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     # Create dependencies
     hass_mock = MagicMock()
@@ -206,9 +200,9 @@ def test_manual_override_no_accumulation_between_cycles():
     Verifies no gradual accumulation - each cycle returns the exact override value.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     hass_mock = MagicMock()
     price_analyzer = PriceAnalyzer()
@@ -251,9 +245,9 @@ def test_manual_override_expires():
     We verify that duration parameter is accepted and override is initially active.
     """
     from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-    from custom_components.effektguard.optimization.price_analyzer import PriceAnalyzer
-    from custom_components.effektguard.optimization.effect_manager import EffectManager
-    from custom_components.effektguard.optimization.thermal_model import ThermalModel
+    from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+    from custom_components.effektguard.optimization.effect_layer import EffectManager
+    from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
     hass_mock = MagicMock()
     price_analyzer = PriceAnalyzer()

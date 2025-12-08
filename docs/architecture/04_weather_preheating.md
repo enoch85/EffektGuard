@@ -23,7 +23,7 @@ flowchart TD
         J{Drop < Threshold?}
         K{Rate < -0.5°C/h?}
         L[Calculate Pre-heat Target]
-        M[Weather Pre-heat<br/>Offset: calculated<br/>Weight: 0.7]
+        M[Weather Pre-heat<br/>Offset: calculated<br/>Weight: 0.85]
         N[No Pre-heat Needed<br/>Offset: 0.0°C<br/>Weight: 0.0]
     end
 
@@ -153,11 +153,11 @@ This reflects their ability to store and retain heat effectively.
 
 ### Integration with Other Layers
 
-The weather layer (weight 0.7) works in coordination with:
+The weather layer (weight 0.85) works in coordination with:
 
-- **Price Layer (0.6)**: Pre-heat preferentially during cheap periods
-- **Effect Layer (1.0)**: Avoid pre-heating if it would create peaks
-- **Emergency Layer (1.0)**: Skip pre-heating if thermal debt is critical
+- **Price Layer (0.8)**: Pre-heat preferentially during cheap periods
+- **Effect Layer (0.65-1.0)**: Avoid pre-heating if it would create peaks
+- **Emergency Layer (0.8)**: Skip pre-heating if thermal debt is critical
 
 ### Forecast Window Optimization
 
@@ -185,4 +185,4 @@ This window works well with typical Swedish weather patterns and building therma
 6. Target: 21°C + 2°C + 1°C = 24°C
 7. Final offset: +3.0°C (capped)
 
-**Result**: Weather layer votes for +3.0°C pre-heating with weight 0.7
+**Result**: Weather layer votes for +3.0°C pre-heating with weight 0.85

@@ -373,11 +373,18 @@ class TestF750RealisticScenarios:
 
         for location, outdoor, dm in test_cases:
             state = MockNibeState(dm, outdoor)
-            expected = engine._calculate_expected_dm_for_temperature(outdoor)
-            decision = engine._emergency_layer(state)
+            expected_range = engine.climate_detector.get_expected_dm_range(outdoor)
+            expected_dm = expected_range['normal_min']
+            decision = engine.emergency_layer.evaluate_layer(
+                nibe_state=state,
+                weather_data=None,
+                price_data=None,
+                target_temp=engine.target_temp,
+                tolerance_range=engine.tolerance_range
+            )
 
             print(
-                f"{location:20} | {outdoor:>4}°C | {dm:>6} | {expected['normal']:>12.0f} | "
+                f"{location:20} | {outdoor:>4}°C | {dm:>6} | {expected_dm:>12.0f} | "
                 f"{decision.offset:>6.1f}°C | {decision.reason[:30]}"
             )
 

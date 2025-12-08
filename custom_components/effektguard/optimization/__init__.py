@@ -6,18 +6,29 @@ maintaining comfort and heat pump health.
 """
 
 from .decision_engine import DecisionEngine, LayerDecision, OptimizationDecision
-from .effect_manager import EffectManager, PeakEvent
-from .price_analyzer import PriceAnalyzer, PriceData, QuarterPeriod
-from .thermal_model import ThermalModel
+from .effect_layer import EffectLayerDecision, EffectManager, PeakEvent
+from .price_layer import (
+    CheapestWindowResult,
+    PriceAnalyzer,
+    PriceData,
+    PriceForecast,
+    QuarterPeriod,
+)
+from .thermal_layer import ThermalModel, estimate_dm_recovery_time, get_thermal_debt_status
 
 __all__ = [
+    "CheapestWindowResult",
     "DecisionEngine",
+    "EffectLayerDecision",
     "EffectManager",
     "LayerDecision",
     "OptimizationDecision",
     "PeakEvent",
     "PriceAnalyzer",
     "PriceData",
+    "PriceForecast",
     "QuarterPeriod",
     "ThermalModel",
+    "estimate_dm_recovery_time",
+    "get_thermal_debt_status",
 ]

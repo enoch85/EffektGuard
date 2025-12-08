@@ -12,6 +12,14 @@ recorder on startup. This way we always know about recent high-temp cycles.
 from datetime import datetime, timedelta
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 from custom_components.effektguard.const import DHW_LEGIONELLA_DETECT
+from tests.conftest import create_mock_price_analyzer
+
+
+def create_dhw_scheduler(**kwargs):
+    """Create DHW scheduler with mock price_analyzer."""
+    if "price_analyzer" not in kwargs:
+        kwargs["price_analyzer"] = create_mock_price_analyzer()
+    return IntelligentDHWScheduler(**kwargs)
 
 
 def test_history_initialization_concept():
@@ -28,7 +36,7 @@ def test_history_initialization_concept():
     Result: No spurious trigger at midnight because we KNOW about yesterday's cycle.
     """
 
-    scheduler = IntelligentDHWScheduler()
+    scheduler = create_dhw_scheduler()
     current_time = datetime.now()
 
     # Simulate loading historical data that shows a Legionella cycle yesterday
@@ -96,7 +104,7 @@ def test_history_initialization_concept():
 def test_hygiene_boost_still_triggers_when_actually_overdue():
     """Verify hygiene boost still works when it's genuinely overdue."""
 
-    scheduler = IntelligentDHWScheduler()
+    scheduler = create_dhw_scheduler()
 
     # Simulate history showing last boost was 15 days ago
     scheduler.last_legionella_boost = datetime.now() - timedelta(days=15)

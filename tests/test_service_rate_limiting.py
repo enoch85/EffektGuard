@@ -12,7 +12,7 @@ from freezegun import freeze_time
 # Import the module to access private functions for testing
 import custom_components.effektguard as effektguard_module
 from custom_components.effektguard.const import (
-    BOOST_COOLDOWN_MINUTES,
+    HEATING_BOOST_COOLDOWN_MINUTES,
     DOMAIN,
     SERVICE_RATE_LIMIT_MINUTES,
 )
@@ -130,7 +130,7 @@ class TestBoostHeatingCooldown:
 
             # Check remaining time immediately
             is_allowed, remaining = effektguard_module._check_service_cooldown(
-                "boost_heating", BOOST_COOLDOWN_MINUTES
+                "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
             )
 
             assert is_allowed is False
@@ -148,7 +148,7 @@ class TestBoostHeatingCooldown:
             frozen_time.move_to(base_time + timedelta(minutes=10))
 
             is_allowed, remaining = effektguard_module._check_service_cooldown(
-                "boost_heating", BOOST_COOLDOWN_MINUTES
+                "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
             )
 
             # Should have ~35 minutes remaining
@@ -209,7 +209,7 @@ class TestServiceIndependence:
 
         # Both should be in cooldown
         boost_allowed, _ = effektguard_module._check_service_cooldown(
-            "boost_heating", BOOST_COOLDOWN_MINUTES
+            "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
         )
         force_allowed, _ = effektguard_module._check_service_cooldown(
             "force_offset", SERVICE_RATE_LIMIT_MINUTES
@@ -231,7 +231,7 @@ class TestServiceIndependence:
 
             # boost_heating should still be blocked
             boost_allowed, _ = effektguard_module._check_service_cooldown(
-                "boost_heating", BOOST_COOLDOWN_MINUTES
+                "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
             )
 
             # force_offset should be allowed (never called)
@@ -305,7 +305,7 @@ class TestEdgeCases:
 @pytest.mark.parametrize(
     "service_name,cooldown_minutes,expected_cooldown",
     [
-        ("boost_heating", BOOST_COOLDOWN_MINUTES, 45),
+        ("boost_heating", HEATING_BOOST_COOLDOWN_MINUTES, 45),
         ("force_offset", SERVICE_RATE_LIMIT_MINUTES, 5),
     ],
 )

@@ -16,22 +16,96 @@ References:
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Protocol
 
 from ..const import (
+    DEFAULT_CURVE_SENSITIVITY,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
+    DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     KUEHNE_COEFFICIENT,
     KUEHNE_POWER,
+    LAYER_WEIGHT_WEATHER_PREDICTION,
     RADIATOR_POWER_COEFFICIENT,
     RADIATOR_RATED_DT,
     UFH_FLOW_REDUCTION_CONCRETE,
     UFH_FLOW_REDUCTION_TIMBER,
     UFH_MIN_FLOW_TEMP_CONCRETE,
     UFH_MIN_FLOW_TEMP_TIMBER,
+    WEATHER_COMP_DEFER_DM_CRITICAL,
+    WEATHER_COMP_DEFER_DM_LIGHT,
+    WEATHER_COMP_DEFER_DM_MODERATE,
+    WEATHER_COMP_DEFER_DM_SIGNIFICANT,
+    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
+    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
+    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
+    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
+    WEATHER_FORECAST_DROP_THRESHOLD,
+    WEATHER_FORECAST_HORIZON,
+    WEATHER_GENTLE_OFFSET,
+    WEATHER_INDOOR_COOLING_CONFIRMATION,
+    WEATHER_WEIGHT_CAP,
 )
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class WeatherLearnerProtocol(Protocol):
+    """Protocol for weather learning interface."""
+
+    def detect_unusual_weather(
+        self, current_date: datetime, forecast: list[float]
+    ) -> "UnusualWeatherResult":
+        """Detect unusual weather patterns from forecast."""
+        ...
+
+
+class UnusualWeatherResult(Protocol):
+    """Protocol for unusual weather detection result."""
+
+    is_unusual: bool
+    severity: str
+    deviation_from_typical: float
+    recommendation: str
+
+
+@dataclass
+class WeatherLayerDecision:
+    """Decision from the weather prediction layer.
+
+    Encapsulates the pre-heating recommendation based on weather forecast
+    and thermal trend analysis.
+    """
+
+    name: str
+    offset: float
+    weight: float
+    reason: str
+
+
+@dataclass
+class WeatherCompensationLayerDecision:
+    """Decision from the mathematical weather compensation layer.
+
+    Encapsulates the flow temperature optimization based on:
+    - Universal flow temperature formula (André Kühne)
+    - Heat transfer method (Timbones, if radiator specs available)
+    - UFH-specific adjustments
+    - Adaptive climate zones
+    - Weather learning (unusual pattern detection)
+    """
+
+    name: str
+    offset: float
+    weight: float
+    reason: str
+    # Additional diagnostic fields
+    optimal_flow_temp: float = 0.0
+    adjusted_flow_temp: float = 0.0
+    safety_margin: float = 0.0
+    unusual_weather: bool = False
+    defer_factor: float = 1.0
 
 
 @dataclass
@@ -539,3 +613,340 @@ class AdaptiveClimateSystem:
             "examples": self.detector.zone_info.examples,
             "user_latitude": self.latitude,
         }
+
+
+class WeatherPredictionLayer:
+    """Weather prediction layer for proactive pre-heating.
+
+    Philosophy (Oct 20, 2025):
+    "The heating we add NOW shows up in 6 hours - pre-heat BEFORE cold arrives"
+
+    Problem: Concrete slab 6-hour thermal lag causes reactive heating to arrive
+    too late, resulting in thermal debt spirals (DM -1000 @ 04:00) followed by
+    massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
+
+    Solution: Simple proactive pre-heating:
+    1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
+    2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
+    3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
+    """
+
+    def __init__(self, thermal_mass: float = 1.0):
+        """Initialize weather prediction layer.
+
+        Args:
+            thermal_mass: Building thermal mass (0.5=light, 1.0=medium, 1.5=heavy)
+        """
+        self.thermal_mass = thermal_mass
+
+    def evaluate_layer(
+        self,
+        nibe_state,
+        weather_data,
+        thermal_trend: dict,
+        enable_weather_prediction: bool = True,
+    ) -> WeatherLayerDecision:
+        """Weather prediction layer: Proactive pre-heating based on forecast.
+
+        Weight scaling by thermal mass:
+        - Concrete slab (1.5): 0.85 × 1.5 = 1.275 (very high priority, 6h lag)
+        - Timber UFH (1.0): 0.85 × 1.0 = 0.85 (high priority, 2-3h lag)
+        - Radiators (0.5): 0.85 × 0.5 = 0.425 (moderate priority, <1h lag)
+
+        Real-world validation:
+        - Prevents 20:00→04:00 emergency thermal debt cycles
+        - Prevents 16:00 overshoot from overnight heating
+        - No complex calculations - just gentle constant pre-heat
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            thermal_trend: Trend data from predictor (rate_per_hour, confidence)
+            enable_weather_prediction: Whether layer is enabled by user
+
+        Returns:
+            WeatherLayerDecision with gentle pre-heating recommendation
+        """
+        # Check if weather prediction is enabled
+        if not enable_weather_prediction:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="Disabled by user",
+            )
+
+        if not weather_data or not weather_data.forecast_hours:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="No weather data",
+            )
+
+        # Check forecast for significant temperature drop
+        current_outdoor = nibe_state.outdoor_temp
+        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
+
+        if not forecast_hours:
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason="No forecast data",
+            )
+
+        # Find minimum temperature in forecast period
+        min_temp = min(f.temperature for f in forecast_hours)
+        temp_drop = min_temp - current_outdoor
+
+        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
+        forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
+
+        # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
+        trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+        trend_confidence = thermal_trend.get("confidence", 0.0)
+
+        indoor_cooling = (
+            trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
+            and trend_confidence > 0.4  # Sufficient data confidence
+        )
+
+        if forecast_triggered or indoor_cooling:
+            # Calculate thermal mass-adjusted weight
+            # Concrete slab: 0.85 × 1.5 = 1.275 (beats most layers except SAFETY/EFFECT_CRITICAL)
+            # Timber: 0.85 × 1.0 = 0.85 (beats price, comfort, proactive)
+            # Radiators: 0.85 × 0.5 = 0.425 (lower priority, fast response)
+            weather_weight = min(
+                LAYER_WEIGHT_WEATHER_PREDICTION * self.thermal_mass,
+                WEATHER_WEIGHT_CAP,  # Cap below Safety (1.0)
+            )
+
+            # Determine trigger reason
+            if forecast_triggered and indoor_cooling:
+                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
+            elif forecast_triggered:
+                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
+            else:
+                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
+
+            return WeatherLayerDecision(
+                name="Weather Pre-heat",
+                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
+                weight=weather_weight,
+                reason=trigger,
+            )
+
+        return WeatherLayerDecision(
+            name="Weather Pre-heat",
+            offset=0.0,
+            weight=0.0,
+            reason="Forecast stable, indoor stable",
+        )
+
+
+class WeatherCompensationLayer:
+    """Mathematical weather compensation layer with adaptive climate system.
+
+    Calculates optimal flow temperature using:
+    - Universal flow temperature formula (validated across manufacturers)
+    - Heat transfer method (if radiator specs available)
+    - UFH-specific adjustments (concrete/timber)
+    - Adaptive climate zones (latitude-based, globally applicable)
+    - Weather learning (unusual pattern detection)
+
+    Automatically adapts to global climates:
+    - Kiruna, Sweden (-30°C) → Arctic zone → 2.5°C base margin
+    - Stockholm, Sweden (-10°C) → Cold zone → 1.0°C base margin
+    - London, UK (0°C) → Temperate zone → 0.5°C base margin
+    - Paris, France (5°C) → Mild zone → 0.0°C base margin
+    """
+
+    def __init__(
+        self,
+        weather_comp: WeatherCompensationCalculator,
+        climate_system: AdaptiveClimateSystem,
+        weather_learner: Optional[WeatherLearnerProtocol] = None,
+        weather_comp_weight: float = 1.0,
+    ):
+        """Initialize weather compensation layer.
+
+        Args:
+            weather_comp: WeatherCompensationCalculator instance for flow temp calculation
+            climate_system: AdaptiveClimateSystem for zone-based adjustments
+            weather_learner: Optional weather pattern learner for unusual detection
+            weather_comp_weight: User-configured weight adjustment (default 1.0)
+        """
+        self.weather_comp = weather_comp
+        self.climate_system = climate_system
+        self.weather_learner = weather_learner
+        self.weather_comp_weight = weather_comp_weight
+
+    def evaluate_layer(
+        self,
+        nibe_state,
+        weather_data,
+        target_temp: float,
+        enable_weather_compensation: bool = True,
+        get_current_datetime: Optional[callable] = None,
+    ) -> WeatherCompensationLayerDecision:
+        """Evaluate the weather compensation layer.
+
+        Args:
+            nibe_state: Current NIBE state
+            weather_data: Weather forecast data
+            target_temp: Target indoor temperature (°C)
+            enable_weather_compensation: Whether feature is enabled
+            get_current_datetime: Callable returning current datetime (for testing)
+
+        Returns:
+            WeatherCompensationLayerDecision with mathematically calculated offset
+        """
+        # Check if feature is enabled
+        if not enable_weather_compensation:
+            return WeatherCompensationLayerDecision(
+                name="Math WC", offset=0.0, weight=0.0, reason="Disabled"
+            )
+
+        if not weather_data or not weather_data.forecast_hours:
+            return WeatherCompensationLayerDecision(
+                name="Math WC", offset=0.0, weight=0.0, reason="No weather data"
+            )
+
+        current_outdoor = nibe_state.outdoor_temp
+        current_flow = nibe_state.flow_temp
+
+        # Calculate optimal flow temperature using physics-based formulas
+        flow_calc = self.weather_comp.calculate_optimal_flow_temp(
+            indoor_setpoint=target_temp,
+            outdoor_temp=current_outdoor,
+            prefer_method="auto",  # Combines universal formula + heat transfer if available
+        )
+
+        # Adaptive climate system safety adjustments
+        # Replaces hardcoded Swedish thresholds with universal climate zones + learning
+        unusual_weather = False
+        unusual_severity = 0.0
+
+        # Check for unusual weather patterns if weather learner available
+        if self.weather_learner and weather_data.forecast_hours:
+            try:
+                # Get current datetime (allow injection for testing)
+                if get_current_datetime is not None:
+                    current_date = get_current_datetime()
+                else:
+                    # Import here to avoid circular imports and allow mocking
+                    from homeassistant.util import dt as dt_util
+
+                    current_date = dt_util.now()
+
+                # Extract forecast for unusual weather detection
+                forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
+                unusual = self.weather_learner.detect_unusual_weather(
+                    current_date=current_date,
+                    forecast=forecast_temps,
+                )
+
+                if unusual.is_unusual:
+                    unusual_weather = True
+                    # Map severity string to 0.0-1.0 scale
+                    unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
+
+                    _LOGGER.info(
+                        "Unusual weather detected: %s (deviation: %.1f°C)",
+                        unusual.recommendation,
+                        unusual.deviation_from_typical,
+                    )
+            except (AttributeError, KeyError, ValueError, TypeError) as e:
+                _LOGGER.warning("Weather learning check failed: %s", e)
+
+        # Get adaptive safety margin from climate system
+        safety_margin = self.climate_system.get_safety_margin(
+            outdoor_temp=current_outdoor,
+            unusual_weather_detected=unusual_weather,
+            unusual_severity=unusual_severity,
+        )
+
+        # Apply safety margin to calculated flow temp
+        adjusted_flow_temp = flow_calc.flow_temp + safety_margin
+
+        # Calculate required offset from current flow temperature
+        # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
+        required_offset = self.weather_comp.calculate_required_offset(
+            optimal_flow_temp=adjusted_flow_temp,
+            current_flow_temp=current_flow,
+            curve_sensitivity=DEFAULT_CURVE_SENSITIVITY,
+        )
+
+        # Get dynamic weight from climate system
+        dynamic_weight = self.climate_system.get_dynamic_weight(
+            outdoor_temp=current_outdoor,
+            unusual_weather_detected=unusual_weather,
+        )
+
+        # Apply user-configured weight adjustment
+        final_weight = dynamic_weight * self.weather_comp_weight
+
+        # Defer weather compensation when thermal debt exists (Conservative strategy)
+        # Allow thermal reality (DM + comfort + proactive) to override outdoor temp optimization
+        degree_minutes = nibe_state.degree_minutes
+        defer_factor = 1.0
+        defer_reason = None
+
+        if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
+            # Critical debt: 39% reduction (0.49 → 0.30)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
+            # Significant debt: 29% reduction (0.49 → 0.35)
+            defer_factor = (
+                WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            )
+            defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
+            # Moderate debt: 18% reduction (0.49 → 0.40)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
+        elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
+            # Light debt: 8% reduction (0.49 → 0.45)
+            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_reason = f"Light debt (DM {degree_minutes:.0f})"
+
+        final_weight = final_weight * defer_factor
+
+        # Build comprehensive reasoning
+        zone_info = self.climate_system.get_climate_info()
+        reasoning_parts = [
+            f"Math WC: {flow_calc.method}",
+            f"Zone: {zone_info['name']}",
+            f"Optimal: {flow_calc.flow_temp:.1f}°C",
+        ]
+
+        if safety_margin > 0:
+            reasoning_parts.append(f"Safety: +{safety_margin:.1f}°C")
+            reasoning_parts.append(f"Adjusted: {adjusted_flow_temp:.1f}°C")
+
+        if unusual_weather:
+            reasoning_parts.append(f"Unusual weather (severity={unusual_severity:.1f})")
+
+        reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
+        reasoning_parts.append(f"Weight: {final_weight:.2f}")
+
+        if defer_reason:
+            reasoning_parts.append(f"Deferred: {defer_reason}")
+
+        reasoning = "; ".join(reasoning_parts)
+
+        _LOGGER.debug("Weather compensation layer: %s", reasoning)
+
+        return WeatherCompensationLayerDecision(
+            name="Math WC",
+            offset=required_offset,
+            weight=final_weight,
+            reason=reasoning,
+            optimal_flow_temp=flow_calc.flow_temp,
+            adjusted_flow_temp=adjusted_flow_temp,
+            safety_margin=safety_margin,
+            unusual_weather=unusual_weather,
+            defer_factor=defer_factor,
+        )

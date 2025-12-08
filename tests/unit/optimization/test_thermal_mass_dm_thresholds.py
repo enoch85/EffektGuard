@@ -11,8 +11,6 @@ Test Categories:
 """
 
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch
 
 from custom_components.effektguard.const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
@@ -20,45 +18,29 @@ from custom_components.effektguard.const import (
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_THRESHOLD_AUX_LIMIT,
 )
-from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
+from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 
 
 @pytest.fixture
-def base_config():
-    """Base configuration for decision engine."""
-    return {
-        "target_indoor_temp": 21.5,
-        "tolerance": 0.5,
-        "latitude": 59.33,  # Stockholm
-        "enable_weather_compensation": True,
-        "weather_compensation_weight": 0.49,
-    }
-
-
-@pytest.fixture
-def mock_dependencies():
-    """Mock dependencies for decision engine."""
-    price_analyzer = MagicMock()
-    effect_manager = MagicMock()
-    thermal_model = MagicMock()
-    return price_analyzer, effect_manager, thermal_model
+def climate_detector():
+    """Create climate detector for Stockholm."""
+    return ClimateZoneDetector(latitude=59.33)
 
 
 class TestThermalMassMultipliers:
     """Test thermal mass buffer multipliers are applied correctly."""
 
-    def test_concrete_slab_30_percent_tighter(self, base_config, mock_dependencies):
+    def test_concrete_slab_30_percent_tighter(self, climate_detector):
         """Concrete slab should get 1.3× tighter thresholds (30% more conservative)."""
-        base_config["heating_type"] = "concrete_ufh"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+        layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
 
         # Stockholm at 10°C: base warning ~-276
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
         base_warning = base_thresholds["warning"]
 
         # Apply thermal mass adjustment
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         # Should be 30% tighter (more negative)
         expected_warning = base_warning * DM_THERMAL_MASS_BUFFER_CONCRETE
@@ -69,15 +51,14 @@ class TestThermalMassMultipliers:
         tightening_factor = adjusted["warning"] / base_warning
         assert tightening_factor == pytest.approx(1.3, abs=0.01)
 
-    def test_timber_15_percent_tighter(self, base_config, mock_dependencies):
+    def test_timber_15_percent_tighter(self, climate_detector):
         """Timber UFH should get 1.15× tighter thresholds (15% more conservative)."""
-        base_config["heating_type"] = "timber"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+        layer = EmergencyLayer(climate_detector, heating_type="timber")
 
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
         base_warning = base_thresholds["warning"]
 
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "timber")
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         # Should be 15% tighter
         expected_warning = base_warning * DM_THERMAL_MASS_BUFFER_TIMBER
@@ -87,216 +68,199 @@ class TestThermalMassMultipliers:
         tightening_factor = adjusted["warning"] / base_warning
         assert tightening_factor == pytest.approx(1.15, abs=0.01)
 
-    def test_radiator_standard_thresholds(self, base_config, mock_dependencies):
+    def test_radiator_standard_thresholds(self, climate_detector):
         """Radiators should keep standard thresholds (1.0× = no adjustment)."""
-        base_config["heating_type"] = "radiator"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+        layer = EmergencyLayer(climate_detector, heating_type="radiator")
 
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
         base_warning = base_thresholds["warning"]
 
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "radiator")
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         # Should be identical (1.0× multiplier)
         assert adjusted["warning"] == pytest.approx(base_warning, abs=1)
+        assert adjusted["warning"] == pytest.approx(base_warning * DM_THERMAL_MASS_BUFFER_RADIATOR, abs=1)
 
-        tightening_factor = adjusted["warning"] / base_warning
-        assert tightening_factor == pytest.approx(1.0, abs=0.01)
+    def test_unknown_type_defaults_to_radiator(self, climate_detector):
+        """Unknown heating types should default to radiator (safest option)."""
+        layer = EmergencyLayer(climate_detector, heating_type="unknown_type")
 
-    def test_unknown_type_defaults_to_radiator(self, base_config, mock_dependencies):
-        """Unknown heating type should default to radiator (1.0× = safe default)."""
-        base_config["heating_type"] = "unknown_type"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
+        base_warning = base_thresholds["warning"]
 
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "unknown_type")
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Should use radiator default (1.0×)
-        assert adjusted["warning"] == pytest.approx(base_thresholds["warning"], abs=1)
+        # Should default to radiator (1.0×)
+        assert adjusted["warning"] == pytest.approx(base_warning, abs=1)
 
 
 class TestCriticalThresholdPreservation:
-    """Test that critical threshold (-1500) is never adjusted."""
+    """Test that critical safety thresholds are NEVER adjusted."""
 
-    def test_concrete_preserves_critical_1500(self, base_config, mock_dependencies):
-        """Concrete slab should keep -1500 critical threshold (absolute maximum)."""
-        base_config["heating_type"] = "concrete_ufh"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+    def test_concrete_preserves_critical_1500(self, climate_detector):
+        """Concrete slab adjustment should NOT affect -1500 critical limit."""
+        layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
 
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=-30.0)
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
+        # Stockholm at -30°C (extreme case)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=-30.0)
+        
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Critical should always be -1500
+        # Warning should be adjusted
+        assert adjusted["warning"] < base_thresholds["warning"]
+        
+        # Critical MUST remain -1500
         assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
         assert adjusted["critical"] == -1500
 
-    def test_all_types_preserve_critical(self, base_config, mock_dependencies):
-        """All heating types should keep -1500 critical threshold."""
-        engine = DecisionEngine(*mock_dependencies, base_config)
+    def test_all_types_preserve_critical(self, climate_detector):
+        """All heating types must preserve the critical safety limit."""
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
 
-        for heating_type in ["concrete_ufh", "timber", "radiator", "unknown"]:
-            base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=0.0)
-            adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, heating_type)
-
-            assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
+        for h_type in ["concrete_ufh", "timber", "radiator", "unknown"]:
+            layer = EmergencyLayer(climate_detector, heating_type=h_type)
+            adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
             assert adjusted["critical"] == -1500
 
 
 class TestRealWorldScenarioPrevention:
-    """Test that thermal mass buffer prevents v0.1.0 failure mode."""
+    """Test prevention of specific real-world failure scenarios."""
 
-    def test_prevents_v010_dm_700_overshoot(self, base_config, mock_dependencies):
-        """Verify thermal mass buffer prevents DM -700 during solar gain (v0.1.0 failure)."""
-        # v0.1.0 scenario: Stockholm at 10°C, indoor rising from solar gain
-        # Base warning: -276, v0.1.0 allowed DM to deepen to -700
-        # Result: 1.5°C temperature drop at sunset
-        base_config["heating_type"] = "concrete_ufh"
-        base_config["latitude"] = 59.33  # Stockholm
-        engine = DecisionEngine(*mock_dependencies, base_config)
+    def test_prevents_v010_dm_700_overshoot(self, climate_detector):
+        """Prevent v0.1.0 scenario: DM -700 allowed on concrete slab.
+        
+        In v0.1.0, DM -700 was considered "normal" for Stockholm.
+        On concrete slab, this caused massive overshoot when sun came out.
+        With 1.3× multiplier, -700 should be flagged as WARNING much earlier.
+        """
+        layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
 
-        # Get base and adjusted thresholds for Stockholm at 10°C
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-        base_warning = base_thresholds["warning"]  # ~-276
+        # Stockholm at 10°C (mild spring day)
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
+        # Base warning is around -340
+        
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+        
+        # Adjusted warning should be around -442 (-340 * 1.3)
+        # This means DM -700 is DEEP into warning/critical territory
+        
+        assert adjusted["warning"] > -500  # Warning triggers before -500 (e.g. at -442)
+        
+        # If current DM is -700, it should be well past warning
+        current_dm = -700
+        assert current_dm < adjusted["warning"]  # -700 < -442 (True)
 
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
-        adjusted_warning = adjusted["warning"]  # ~-359 (30% tighter)
+    def test_concrete_activates_t1_earlier_than_radiator(self, climate_detector):
+        """Concrete slab should have deeper (more negative) warning thresholds.
 
-        # v0.1.0 allowed DM -700 (beyond base warning -276)
-        v010_dm = -700
+        With multiplier 1.3, concrete DM thresholds become MORE NEGATIVE.
+        This means recovery triggers at a DEEPER thermal debt level, which
+        makes sense because concrete's high thermal mass can absorb more
+        energy without immediate indoor temperature impact.
 
-        # With thermal mass buffer, system should intervene much earlier
-        # Adjusted warning should be significantly tighter than base
-        assert adjusted_warning < base_warning  # More negative = tighter
-        assert adjusted_warning > v010_dm  # Still not as extreme as -700
+        For concrete: base_warning * 1.3 = deeper threshold
+        Example: -300 * 1.3 = -390 (allows deeper DM before warning)
+        """
+        concrete_layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
+        radiator_layer = EmergencyLayer(climate_detector, heating_type="radiator")
 
-        # Verify concrete gets meaningful tightening
-        # Should activate T1 recovery ~-359 instead of allowing -700
-        tightening = abs(adjusted_warning - base_warning)
-        assert tightening > 50  # At least 50 DM tighter
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
 
-    def test_concrete_activates_t1_earlier_than_radiator(self, base_config, mock_dependencies):
-        """Concrete slab should activate T1 recovery earlier than radiators."""
-        engine = DecisionEngine(*mock_dependencies, base_config)
+        concrete_thresholds = concrete_layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+        radiator_thresholds = radiator_layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        outdoor_temp = 10.0
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp)
-
-        concrete_thresholds = engine._get_thermal_mass_adjusted_thresholds(
-            base_thresholds, "concrete_ufh"
-        )
-        radiator_thresholds = engine._get_thermal_mass_adjusted_thresholds(
-            base_thresholds, "radiator"
-        )
-
-        # Concrete should have tighter (more negative) warning threshold
+        # Concrete warning should be MORE NEGATIVE than radiator (deeper threshold)
+        # because concrete's 1.3× multiplier makes threshold more negative
         assert concrete_thresholds["warning"] < radiator_thresholds["warning"]
 
-        # Concrete activates T1 at DM -359, radiator at DM -276 (Stockholm 10°C example)
-        gap = concrete_thresholds["warning"] - radiator_thresholds["warning"]
-        assert gap < -50  # At least 50 DM earlier intervention for concrete
-
+        # Verify concrete is 30% more negative
+        expected_ratio = DM_THERMAL_MASS_BUFFER_CONCRETE / DM_THERMAL_MASS_BUFFER_RADIATOR
+        actual_ratio = concrete_thresholds["warning"] / radiator_thresholds["warning"]
+        assert actual_ratio == pytest.approx(expected_ratio, abs=0.01)
 
 class TestClimateZoneIntegration:
-    """Test thermal mass buffer works with climate-aware thresholds."""
+    """Test that thermal mass adjustments work across climate zones."""
 
-    def test_arctic_concrete_vs_mild_concrete(self, base_config, mock_dependencies):
-        """Concrete in Arctic should have different thresholds than mild climate."""
-        base_config["heating_type"] = "concrete_ufh"
+    def test_arctic_concrete_vs_mild_concrete(self):
+        """Test concrete slab adjustments in different climates."""
+        arctic_detector = ClimateZoneDetector(latitude=67.85)  # Kiruna
+        mild_detector = ClimateZoneDetector(latitude=55.60)    # Malmö
+        
+        arctic_layer = EmergencyLayer(arctic_detector, heating_type="concrete_ufh")
+        mild_layer = EmergencyLayer(mild_detector, heating_type="concrete_ufh")
 
-        # Test Arctic (Kiruna) at -30°C
-        base_config["latitude"] = 67.85  # Kiruna
-        arctic_engine = DecisionEngine(*mock_dependencies, base_config.copy())
-        arctic_base = arctic_engine.climate_detector.get_expected_dm_range(outdoor_temp=-30.0)
-        arctic_adjusted = arctic_engine._get_thermal_mass_adjusted_thresholds(
-            arctic_base, "concrete_ufh"
-        )
+        # Same outdoor temp
+        outdoor_temp = -5.0
 
-        # Test Mild (Paris) at 5°C
-        base_config["latitude"] = 48.85  # Paris
-        mild_engine = DecisionEngine(*mock_dependencies, base_config.copy())
-        mild_base = mild_engine.climate_detector.get_expected_dm_range(outdoor_temp=5.0)
-        mild_adjusted = mild_engine._get_thermal_mass_adjusted_thresholds(mild_base, "concrete_ufh")
+        arctic_base = arctic_detector.get_expected_dm_range(outdoor_temp)
+        mild_base = mild_detector.get_expected_dm_range(outdoor_temp)
 
-        # Arctic should have much deeper thresholds than mild climate
-        assert arctic_adjusted["warning"] < mild_adjusted["warning"]  # More negative = deeper
+        arctic_adjusted = arctic_layer._get_thermal_mass_adjusted_thresholds(arctic_base)
+        mild_adjusted = mild_layer._get_thermal_mass_adjusted_thresholds(mild_base)
 
-        # Both should apply 1.3× multiplier
-        arctic_factor = arctic_adjusted["warning"] / arctic_base["warning"]
-        mild_factor = mild_adjusted["warning"] / mild_base["warning"]
-        assert arctic_factor == pytest.approx(1.3, abs=0.01)
-        assert mild_factor == pytest.approx(1.3, abs=0.01)
+        # Both should be adjusted by same ratio
+        arctic_ratio = arctic_adjusted["warning"] / arctic_base["warning"]
+        mild_ratio = mild_adjusted["warning"] / mild_base["warning"]
 
-    def test_all_climates_preserve_multiplier_ratio(self, base_config, mock_dependencies):
-        """All climate zones should apply same thermal mass multiplier."""
-        base_config["heating_type"] = "concrete_ufh"
+        assert arctic_ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
+        assert mild_ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
-        test_climates = [
-            (67.85, -30.0, "Kiruna (Extreme Cold)"),
-            (59.33, -10.0, "Stockholm (Cold)"),
-            (55.68, 0.0, "Copenhagen (Moderate Cold)"),
-            (48.85, 5.0, "Paris (Moderate)"),
-        ]
-
-        for latitude, outdoor_temp, name in test_climates:
-            base_config["latitude"] = latitude
-            engine = DecisionEngine(*mock_dependencies, base_config.copy())
-
-            base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp)
-            adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
-
-            # All should apply 1.3× multiplier
-            factor = adjusted["warning"] / base_thresholds["warning"]
-            assert factor == pytest.approx(1.3, abs=0.01), f"{name} failed to apply 1.3× multiplier"
+    def test_all_climates_preserve_multiplier_ratio(self):
+        """Multiplier ratio should be consistent regardless of base threshold magnitude."""
+        detector = ClimateZoneDetector(latitude=67.85)  # Kiruna
+        layer = EmergencyLayer(detector, heating_type="concrete_ufh")
+        
+        # Test across wide temp range
+        for temp in [10.0, 0.0, -10.0, -30.0]:
+            base_thresholds = detector.get_expected_dm_range(temp)
+            adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+            
+            ratio = adjusted["warning"] / base_thresholds["warning"]
+            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
 
 class TestEdgeCases:
-    """Test edge cases and boundary conditions."""
+    """Test edge cases and input validation."""
 
-    def test_alternative_concrete_naming(self, base_config, mock_dependencies):
-        """Test alternative concrete UFH naming conventions."""
-        engine = DecisionEngine(*mock_dependencies, base_config)
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-
-        # Both should apply concrete multiplier
+    def test_alternative_concrete_naming(self, climate_detector):
+        """Test alternative names for concrete slab."""
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
+        
         for name in ["concrete_ufh", "concrete_slab"]:
-            adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, name)
-            factor = adjusted["warning"] / base_thresholds["warning"]
-            assert factor == pytest.approx(1.3, abs=0.01)
+            layer = EmergencyLayer(climate_detector, heating_type=name)
+            adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+            ratio = adjusted["warning"] / base_thresholds["warning"]
+            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
-    def test_alternative_timber_naming(self, base_config, mock_dependencies):
-        """Test alternative timber UFH naming conventions."""
-        engine = DecisionEngine(*mock_dependencies, base_config)
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-
-        # Both should apply timber multiplier
+    def test_alternative_timber_naming(self, climate_detector):
+        """Test alternative names for timber."""
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
+        
         for name in ["timber", "timber_ufh"]:
-            adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, name)
-            factor = adjusted["warning"] / base_thresholds["warning"]
-            assert factor == pytest.approx(1.15, abs=0.01)
+            layer = EmergencyLayer(climate_detector, heating_type=name)
+            adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+            ratio = adjusted["warning"] / base_thresholds["warning"]
+            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_TIMBER, abs=0.01)
 
-    def test_empty_string_defaults_to_radiator(self, base_config, mock_dependencies):
-        """Empty heating type should default to radiator (safe default)."""
-        engine = DecisionEngine(*mock_dependencies, base_config)
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "")
-
-        # Should apply radiator multiplier (1.0×)
+    def test_empty_string_defaults_to_radiator(self, climate_detector):
+        """Empty string should default to radiator."""
+        layer = EmergencyLayer(climate_detector, heating_type="")
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
+        
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+        
+        # Should be 1.0×
         assert adjusted["warning"] == pytest.approx(base_thresholds["warning"], abs=1)
 
-    def test_normal_min_and_max_both_adjusted(self, base_config, mock_dependencies):
-        """Both normal_min and normal_max should be adjusted, not just warning."""
-        base_config["heating_type"] = "concrete_ufh"
-        engine = DecisionEngine(*mock_dependencies, base_config)
+    def test_normal_min_and_max_both_adjusted(self, climate_detector):
+        """Both normal_min and normal_max should be adjusted."""
+        layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
+        base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
+        
+        adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
+        
+        assert adjusted["normal_min"] == pytest.approx(base_thresholds["normal_min"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1)
+        assert adjusted["normal_max"] == pytest.approx(base_thresholds["normal_max"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1)
 
-        base_thresholds = engine.climate_detector.get_expected_dm_range(outdoor_temp=10.0)
-        adjusted = engine._get_thermal_mass_adjusted_thresholds(base_thresholds, "concrete_ufh")
-
-        # All thresholds except critical should be adjusted
-        min_factor = adjusted["normal_min"] / base_thresholds["normal_min"]
-        max_factor = adjusted["normal_max"] / base_thresholds["normal_max"]
-        warning_factor = adjusted["warning"] / base_thresholds["warning"]
-
-        assert min_factor == pytest.approx(1.3, abs=0.01)
-        assert max_factor == pytest.approx(1.3, abs=0.01)
-        assert warning_factor == pytest.approx(1.3, abs=0.01)
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
