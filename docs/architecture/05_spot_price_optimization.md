@@ -25,11 +25,11 @@ flowchart TD
     end
 
     subgraph "Price Layer Decision"
-        L[Base Offsets:<br/>CHEAP: +2.0°C<br/>NORMAL: 0.0°C<br/>EXPENSIVE: -1.0°C<br/>PEAK: -2.0°C]
+        L[Base Offsets:<br/>VERY_CHEAP: +4.0°C<br/>CHEAP: +1.5°C<br/>NORMAL: 0.0°C<br/>EXPENSIVE: -1.0°C<br/>PEAK: -10.0°C]
         M[Daytime Multiplier<br/>Expensive/Peak × 1.5]
         N[User Tolerance Factor<br/>Scale 1-10 → 0.2-2.0]
         O[Final: -1.0 × 1.5 × tolerance<br/>Result: -1.5°C tolerance=1.0]
-        P[Price Layer<br/>Offset: -1.5°C<br/>Weight: 0.6]
+        P[Price Layer<br/>Offset: -1.5°C<br/>Weight: 0.8]
     end
 
     subgraph "Extended Optimization"
@@ -109,13 +109,14 @@ This approach automatically adapts to:
 
 ### Base Offset Strategy
 
-Each classification has a **base offset value**:
+Each classification has a **base offset value** (from `const.py`):
 
 ```
-CHEAP: +2.0°C    # Pre-heat opportunity
-NORMAL: 0.0°C    # Neutral operation
-EXPENSIVE: -1.0°C # Reduce consumption  
-PEAK: -2.0°C     # Minimize consumption
+VERY_CHEAP: +4.0°C   # Exceptional prices, aggressive pre-heating
+CHEAP: +1.5°C        # Good prices, moderate pre-heating
+NORMAL: 0.0°C        # Neutral operation
+EXPENSIVE: -1.0°C    # Reduce consumption  
+PEAK: -10.0°C        # Maximum reduction (MIN_OFFSET limit)
 ```
 
 ### Day/Night Multiplier
@@ -169,10 +170,10 @@ When **tomorrow's prices are available**, the system can:
 
 ### Integration with Other Layers
 
-The price layer (weight 0.6) coordinates with:
+The price layer (weight 0.8) coordinates with:
 
-- **Effect Layer (1.0)**: Don't pre-heat during cheap periods if it creates peaks
-- **Weather Layer (0.7)**: Prioritize cheap periods for weather-based pre-heating  
-- **Comfort Layer (0.2-0.5)**: Balance cost savings with temperature maintenance
+- **Effect Layer (0.65-1.0)**: Don't pre-heat during cheap periods if it creates peaks
+- **Weather Layer (0.85)**: Prioritize cheap periods for weather-based pre-heating  
+- **Comfort Layer (0.2-1.0)**: Balance cost savings with temperature maintenance
 
 This ensures cost optimization never compromises safety or creates unacceptable comfort deviations.
