@@ -54,38 +54,40 @@ The optimization system uses a **shared layer architecture** where reusable laye
 
 ```mermaid
 flowchart TB
-    subgraph Layers["LAYERS (shared, reusable)"]
-        direction TB
-        TL["<b>thermal_layer.py</b><br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time()<br/>+ get_thermal_debt_status()"]
-        CL["<b>comfort_layer.py</b><br/>→ ComfortLayer"]
-        PrL["<b>price_layer.py</b><br/>→ PriceAnalyzer<br/>+ find_cheapest_window()"]
-        EfL["<b>effect_layer.py</b><br/>→ EffectManager"]
-        WL["<b>weather_layer.py</b><br/>→ WeatherLayer"]
-        PredL["<b>prediction_layer.py</b><br/>→ ThermalStatePredictor"]
+    subgraph Layers["LAYERS - shared, reusable"]
+        direction LR
+        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
+        CL["comfort_layer.py<br/>→ ComfortLayer"]
+        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ find_cheapest_window#40;#41;"]
+        EfL["effect_layer.py<br/>→ EffectManager"]
+        WL["weather_layer.py<br/>→ WeatherLayer"]
+        PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
+        AL["adaptive_learning.py<br/>→ AdaptiveLearning"]
+        CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
     end
 
     Layers --> DE
 
-    subgraph DE["DECISION ENGINE (space heating)"]
+    subgraph DE["DECISION ENGINE - space heating"]
         DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
-        DE2["Uses: PriceAnalyzer, EffectManager"]
+        DE2["Uses: PriceAnalyzer, EffectManager, WeatherLayer"]
         DE3["Exposes: emergency_layer, price for sharing"]
     end
 
     DE --> DHW
 
-    subgraph DHW["DHW OPTIMIZER (DHW scheduling)"]
-        DHW1["Receives: emergency_layer (shared from DecisionEngine)"]
-        DHW2["Receives: price_analyzer (shared from DecisionEngine)"]
-        DHW3["Uses: estimate_dm_recovery_time(), find_cheapest_window()"]
+    subgraph DHW["DHW OPTIMIZER - DHW scheduling"]
+        DHW1["Receives: emergency_layer #40;shared from DecisionEngine#41;"]
+        DHW2["Receives: price_analyzer #40;shared from DecisionEngine#41;"]
+        DHW3["Uses: estimate_dm_recovery_time#40;#41;, find_cheapest_window#40;#41;"]
     end
 
     DHW --> COORD
 
     subgraph COORD["COORDINATOR"]
-        COORD1["Creates DecisionEngine (with all layers)"]
-        COORD2["Creates DHWOptimizer (with shared layers)"]
-        COORD3["Uses get_thermal_debt_status() for display"]
+        COORD1["Creates DecisionEngine #40;with all layers#41;"]
+        COORD2["Creates DHWOptimizer #40;with shared layers#41;"]
+        COORD3["Uses get_thermal_debt_status#40;#41; for display"]
         COORD4["Uses ThermalStatePredictor for predictions"]
     end
 ```
