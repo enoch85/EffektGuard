@@ -56,13 +56,13 @@ The optimization system uses a **shared layer architecture** where reusable laye
 flowchart TB
     subgraph Layers["LAYERS - shared, reusable"]
         direction LR
-        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
+        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer, ThermalModel<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
         CL["comfort_layer.py<br/>→ ComfortLayer"]
-        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ find_cheapest_window#40;#41;"]
+        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ get_fallback_prices#40;#41;"]
         EfL["effect_layer.py<br/>→ EffectManager"]
-        WL["weather_layer.py<br/>→ WeatherLayer"]
+        WL["weather_layer.py<br/>→ WeatherPredictionLayer<br/>→ WeatherCompensationLayer<br/>→ AdaptiveClimateSystem"]
         PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
-        AL["adaptive_learning.py<br/>→ AdaptiveLearning"]
+        AL["adaptive_learning.py<br/>→ AdaptiveThermalModel"]
         CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
         
         TL ~~~ CL ~~~ PrL ~~~ EfL ~~~ WL ~~~ PredL ~~~ AL ~~~ CZ
@@ -72,30 +72,33 @@ flowchart TB
 
     subgraph DE["DECISION ENGINE - Space heating"]
         DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
-        DE2["Uses: PriceAnalyzer, EffectManager, WeatherLayer"]
-        DE3["Exposes: emergency_layer, price for sharing"]
+        DE2["Creates: WeatherPredictionLayer, WeatherCompensationLayer"]
+        DE3["Uses: PriceAnalyzer, EffectManager #40;injected#41;"]
+        DE4["Exposes: emergency_layer, price for sharing"]
     end
 
     subgraph DHW["DHW OPTIMIZER - Water heating"]
-        DHW1["Receives: emergency_layer #40;shared from DecisionEngine#41;"]
-        DHW2["Receives: price_analyzer #40;shared from DecisionEngine#41;"]
-        DHW3["Uses: estimate_dm_recovery_time#40;#41;, find_cheapest_window#40;#41;"]
+        DHW1["Receives: emergency_layer #40;shared#41;"]
+        DHW2["Receives: price_analyzer #40;shared#41;"]
+        DHW3["Uses: estimate_dm_recovery_time#40;#41;"]
     end
 
     subgraph COORD["COORDINATOR"]
-        COORD1["Creates DecisionEngine #40;with all layers#41;"]
-        COORD2["Creates DHWOptimizer #40;with shared layers#41;"]
-        COORD3["Uses get_thermal_debt_status#40;#41; for display"]
-        COORD4["Uses ThermalStatePredictor for predictions"]
+        COORD1["Creates: DecisionEngine, DHWOptimizer"]
+        COORD2["Creates: ThermalStatePredictor, AdaptiveThermalModel"]
+        COORD3["Creates: WeatherPatternLearner"]
+        COORD4["Passes shared layers to DHWOptimizer"]
+        COORD5["Uses: get_thermal_debt_status#40;#41;, get_fallback_prices#40;#41;"]
     end
 ```
 
 ### Layer Sharing Flow
 
-1. **Coordinator** creates `DecisionEngine` which instantiates all layers
-2. **DecisionEngine** exposes `emergency_layer` and `price` (PriceAnalyzer) as properties
-3. **Coordinator** passes these shared instances to `DHWOptimizer`
-4. **DHWOptimizer** uses shared layers to gate DHW during thermal debt and find cheap windows
+1. **Coordinator** creates `DecisionEngine` which instantiates space heating layers
+2. **Coordinator** creates `ThermalStatePredictor`, `AdaptiveThermalModel`, `WeatherPatternLearner` separately
+3. **DecisionEngine** exposes `emergency_layer` and `price` (PriceAnalyzer) as properties
+4. **Coordinator** passes these shared instances to `DHWOptimizer`
+5. **DHWOptimizer** uses shared layers to gate DHW during thermal debt
 
 ## Production Quality Features
 
