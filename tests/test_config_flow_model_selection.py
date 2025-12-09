@@ -24,7 +24,6 @@ from custom_components.effektguard.const import (
     CONF_ENABLE_PRICE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
     DEFAULT_HEAT_PUMP_MODEL,
-    DOMAIN,
 )
 
 
@@ -610,7 +609,6 @@ class TestModelStepIntegration:
 
     def test_default_model_is_f750(self):
         """Test that default model is F750."""
-        from custom_components.effektguard.const import DEFAULT_HEAT_PUMP_MODEL
 
         assert DEFAULT_HEAT_PUMP_MODEL == "nibe_f750"
 

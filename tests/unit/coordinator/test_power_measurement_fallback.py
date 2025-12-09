@@ -10,7 +10,7 @@ Power estimation methods are in effect_layer.py and tested in test_shared_layer_
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeState

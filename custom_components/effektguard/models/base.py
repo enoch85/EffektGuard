@@ -7,7 +7,6 @@ performance and validation.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable
 
 
 @dataclass

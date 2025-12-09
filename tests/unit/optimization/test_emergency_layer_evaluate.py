@@ -5,7 +5,6 @@ Phase 6 of layer refactoring: Emergency thermal debt layer extraction.
 
 from dataclasses import dataclass
 from datetime import datetime
-from unittest.mock import MagicMock
 
 from custom_components.effektguard.const import (
     DM_CRITICAL_T2_MARGIN,

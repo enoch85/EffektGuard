@@ -19,7 +19,6 @@ from custom_components.effektguard.const import (
     ATTR_OFFSET,
     DOMAIN,
     MAX_OFFSET,
-    MIN_OFFSET,
     SERVICE_BOOST_HEATING,
     SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
     SERVICE_FORCE_OFFSET,
@@ -154,7 +153,6 @@ async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
 async def test_force_offset_validates_range(mock_hass, mock_coordinator):
     """Test force_offset validates offset is within valid range."""
     from custom_components.effektguard import _async_register_services
-    from homeassistant.exceptions import ServiceValidationError
 
     # Patch cooldown tracker to allow the call
     with patch("custom_components.effektguard._service_last_called", {}):
@@ -545,7 +543,6 @@ def test_effect_manager_reset_monthly_peaks():
 async def test_service_handles_no_coordinator_gracefully(mock_hass):
     """Test services handle missing coordinator gracefully."""
     from custom_components.effektguard import _async_register_services
-    from homeassistant.exceptions import ServiceValidationError
 
     # Empty domain data
     mock_hass.data[DOMAIN] = {}

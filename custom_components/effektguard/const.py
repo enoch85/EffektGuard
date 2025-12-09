@@ -289,17 +289,6 @@ THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD: Final = (
     -2.0  # Temperature drop (°C) that blocks damping (significant cold incoming)
 )
 
-# Thermal Recovery Tier Names (user-friendly, severity-appropriate)
-# Oct 23, 2025: Renamed from "CRITICAL T1/T2/T3" to avoid false alarm fatigue
-# T1: Beyond expected DM range → moderate recovery (gentle correction)
-# T2: Significantly beyond range → strong recovery (stronger intervention)
-# T3: Approaching absolute maximum → emergency recovery (maximum safe action)
-THERMAL_RECOVERY_T1_NAME: Final = "MODERATE RECOVERY"  # T1: Beyond expected, gentle correction
-THERMAL_RECOVERY_T2_NAME: Final = "STRONG RECOVERY"  # T2: Significantly beyond, stronger action
-THERMAL_RECOVERY_T3_NAME: Final = (
-    "EMERGENCY RECOVERY"  # T3: Approaching critical, maximum safe intervention
-)
-
 # Overshoot-Aware Damping (Oct 23, 2025)
 # ============================================================================
 # Context: v0.1.0 showed DM recovery caused indoor 23.6°C vs target 21.5°C
@@ -329,6 +318,79 @@ THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING: Final = 0.95  # Multiplier for mild ove
 THERMAL_RECOVERY_T1_MIN_OFFSET: Final = 1.0  # T1 damped minimum (moderate recovery)
 THERMAL_RECOVERY_T2_MIN_OFFSET: Final = 1.5  # T2 damped minimum (strong recovery)
 THERMAL_RECOVERY_T3_MIN_OFFSET: Final = 2.0  # T3 damped minimum (critical - needs more boost)
+
+# ============================================================================
+# Anti-Windup Protection (Dec 9, 2025)
+# ============================================================================
+# Description:
+#   Prevents DM oscillation caused by "chasing" thermal debt in UFH systems.
+#   When offset is positive (adding heat), DM goes MORE negative initially
+#   because S1 target rises but BT25 (actual) takes hours to catch up.
+#
+# Problem (Classic Integral Windup):
+#   1. DM at -300 → System applies +2°C offset
+#   2. S1 target jumps up immediately
+#   3. BT25 takes 3-6 hours to catch up (concrete slab thermal lag)
+#   4. DM drops to -500 (gap is now bigger!) → "Not working, add more!"
+#   5. Offset raised to +3°C → DM drops to -700 (even worse!)
+#   6. Eventually heat reaches slab, BT25 overshoots S1
+#   7. DM swings to +100 (positive overshoot)
+#   8. System backs off → cycle repeats
+#
+# Solution (Anti-Windup Logic):
+#   If DM is dropping WHILE current_offset is already positive:
+#   → Heat is "in transit" through the thermal mass
+#   → DON'T escalate offset further - wait for heat to arrive
+#   → Cap offset at current level until DM stabilizes or improves
+#
+# Key Insight:
+#   Raising offset doesn't fix DM immediately - it makes DM WORSE temporarily!
+#   Correct behavior: Set reasonable offset and WAIT for thermal lag.
+#
+# All parameters below are DERIVED from existing constants, not static values.
+# This ensures consistency across the codebase and adapts to configuration.
+#
+# Reference:
+#   - Wikipedia: Integral Windup
+#   - Thermal mass buffers: DM_THERMAL_MASS_BUFFER_* (1.0 to 1.3)
+#   - Update interval: UPDATE_INTERVAL_MINUTES (5 min default)
+# ============================================================================
+
+# DM drop rate threshold to detect "dropping while heating"
+#
+# Math derivation:
+#   DM = ∫(BT25 - S1) dt, accumulated in °C·minutes
+#   When offset is raised by X°C, S1 target rises immediately
+#   But BT25 (actual flow) takes hours to catch up (thermal lag)
+#   During lag: gap ≈ X°C → DM drops at X × 60 = X·60 DM/hour
+#
+#   Example: +2°C offset raise → gap ~2°C → DM drops ~120 DM/hour
+#   Example: +1°C offset raise → gap ~1°C → DM drops ~60 DM/hour
+#
+# Threshold: -60 DM/hour = 1°C sustained gap = clear "heat in transit" signal
+# This avoids false positives from normal ±0.3°C fluctuations (~18 DM/h)
+#
+# Reference: NIBE DM formula from F750 Service Manual Menu 4.9.3
+ANTI_WINDUP_DM_DROPPING_RATE: Final = -60.0  # DM/hour (≈1°C gap between S1 and BT25)
+
+# Base history size for anti-windup DM tracking (30 minutes = 6 samples at 5-min intervals)
+# This is scaled by DM_THERMAL_MASS_BUFFER_* in EmergencyLayer.__init__
+# Concrete (×1.3): 6 × 1.3 ≈ 8 samples = 40 min history
+# Timber (×1.15): 6 × 1.15 ≈ 7 samples = 35 min history
+# Radiator (×1.0): 6 samples = 30 min history
+ANTI_WINDUP_DM_HISTORY_BASE_SIZE: Final = 6  # Base samples, scaled by thermal mass buffer
+
+# Minimum samples needed to calculate reliable DM trend
+# At least 15 minutes of data (3 samples at 5-min intervals)
+ANTI_WINDUP_MIN_SAMPLES: Final = 3
+
+# Minimum positive offset to trigger anti-windup check
+# Below this, we're not actively pushing recovery hard enough to cause windup
+ANTI_WINDUP_MIN_POSITIVE_OFFSET: Final = 0.5  # Offset must be at least +0.5°C
+
+# When anti-windup is active, cap offset at this fraction of current offset
+# This allows some recovery but prevents escalation
+ANTI_WINDUP_OFFSET_CAP_MULTIPLIER: Final = 0.7  # Cap at 70% of normal recovery offset
 
 # ============================================================================
 # Thermal Mass Buffer Multipliers (DM Threshold Adjustment)
@@ -489,22 +551,6 @@ THERMAL_CHANGE_MODERATE_COOLING: Final = -0.2  # °C/h - moderate cooling rate t
 # Standard multipliers used across multiple contexts for consistency
 MULTIPLIER_REDUCTION_20_PERCENT: Final = 0.8  # 20% reduction (80% of original)
 MULTIPLIER_BOOST_30_PERCENT: Final = 1.3  # 30% increase (130% of original)
-
-# Weather prediction layer constants (Oct 19, 2025)
-# Pre-heating calculation for forecast temperature drops
-WEATHER_PREDICTION_LEAD_TIME_FACTOR: Final = 0.5  # Lead time = horizon * 0.5
-WEATHER_TEMP_DROP_DIVISOR: Final = 10.0  # Base intensity = temp_drop / 10.0
-WEATHER_BASE_INTENSITY_MULTIPLIER: Final = 2.0  # Base offset = intensity * 2.0
-WEATHER_BASE_OFFSET_MAX: Final = 2.5  # Maximum base offset before intensity modulation
-
-# Weather prediction intensity modulation thresholds (Oct 19, 2025)
-# Adaptive pre-heating based on indoor state and trend
-WEATHER_INTENSITY_AGGRESSIVE_DEFICIT: Final = 0.5  # Indoor deficit threshold for aggressive
-WEATHER_INTENSITY_AGGRESSIVE_FACTOR: Final = 1.4  # 40% boost when already cooling below target
-WEATHER_INTENSITY_GENTLE_FACTOR: Final = 0.6  # 40% reduction when warm and rising
-WEATHER_INTENSITY_STABLE_RATE: Final = 0.1  # Stable rate threshold
-WEATHER_INTENSITY_NORMAL_FACTOR: Final = 1.0  # Normal intensity (no modulation)
-WEATHER_INTENSITY_MODERATE_FACTOR: Final = 0.9  # Moderate intensity (mixed conditions)
 
 # Trend-aware damping (Oct 19, 2025)
 # Prevents overshoot/undershoot by damping offset based on indoor temperature trend
@@ -809,13 +855,12 @@ DHW_READY_THRESHOLD: Final = (
 # NOTE: DHW immersion heater (elpatron) is separate from space heating auxiliary heater.
 # They are different electrical heating systems with different purposes.
 DHW_LEGIONELLA_DETECT: Final = (
-    56.0  # °C - BT7 temp indicating Legionella boost complete (real-world max observed)
+    55.0  # °C - BT7 temp indicating Legionella boost complete (observed 55.3°C in production)
 )
 DHW_LEGIONELLA_PREVENT_TEMP: Final = (
     56.0  # °C - Target temp for hygiene boost (kills bacteria, requires immersion heater)
 )
 DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
-DHW_TARGET_HIGH_DEMAND: Final = 55.0  # °C - Extra comfort target for high demand periods
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
@@ -932,7 +977,6 @@ NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 5  # Minimum minutes to run enha
 
 DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
-NIBE_DHW_START_THRESHOLD: Final = 45.0  # °C - Typical NIBE DHW heating trigger setpoint
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
 # NIBE Adapter Constants

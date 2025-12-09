@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -24,23 +24,14 @@ from .const import (
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     DEFAULT_HEAT_PUMP_MODEL,
-    DEFAULT_HEAT_PUMP_POWER_KW,
     DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
-    DHW_COOLING_RATE,
     DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
-    DM_DHW_ABORT_FALLBACK,
-    DM_DHW_BLOCK_FALLBACK,
-    DM_THRESHOLD_AUX_LIMIT,
     DM_THRESHOLD_START,
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
-    NIBE_DHW_START_THRESHOLD,
     QUARTER_INTERVAL_MINUTES,
-    SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
-    SPACE_HEATING_DEMAND_LOW_THRESHOLD,
-    SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -858,9 +849,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self._learned_data_changed = True  # Trigger save on shutdown
                 else:
                     _LOGGER.debug(
-                        "Offset %.2f°C unchanged (NIBE already at %d°C)",
+                        "Offset %.2f°C unchanged (NIBE offset not changed)",
                         decision.offset,
-                        int(decision.offset),
                     )
             except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
@@ -1207,13 +1197,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
-        # Get price classification
+        # Get price classification and volatility
         current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
         price_classification = (
             self.engine.price.get_current_classification(current_quarter)
             if price_data
             else "normal"
         )
+
+        # Get volatility from price forecast (matches space heating behavior)
+        is_volatile = False
+        if price_data and self.engine.price:
+            price_forecast = self.engine.price.get_price_forecast(
+                current_quarter=current_quarter,
+                price_data=price_data,
+                lookahead_hours=4.0,  # Standard lookahead for DHW
+            )
+            is_volatile = price_forecast.is_volatile
+            if is_volatile:
+                _LOGGER.debug("DHW price volatility detected: %s", price_forecast.volatile_reason)
 
         # Get price periods
         price_periods = []
@@ -1262,6 +1264,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             thermal_trend_rate=trend_rate,
             climate_zone_name=climate_zone_name,
             weather_current_temp=weather_current_temp,
+            is_volatile=is_volatile,
         )
 
         return result

@@ -27,9 +27,7 @@ from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
-    DM_CRITICAL_T1_OFFSET,
     DM_CRITICAL_T2_OFFSET,
-    DM_CRITICAL_T3_OFFSET,
     THERMAL_RECOVERY_DAMPING_FACTOR,
     THERMAL_RECOVERY_RAPID_FACTOR,
     THERMAL_RECOVERY_T1_MIN_OFFSET,

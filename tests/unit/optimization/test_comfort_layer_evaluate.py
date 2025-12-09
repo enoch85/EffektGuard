@@ -19,7 +19,6 @@ from custom_components.effektguard.const import (
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
     OVERSHOOT_PROTECTION_OFFSET_MIN,
-    OVERSHOOT_PROTECTION_START,
 )
 from custom_components.effektguard.optimization.comfort_layer import (
     ComfortLayer,

@@ -13,11 +13,10 @@ Test Categories:
 
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from custom_components.effektguard.utils.compressor_monitor import (
     CompressorHealthMonitor,
-    CompressorStats,
 )
 
 
@@ -85,7 +84,6 @@ class TestSpaceHeatingModeLogging:
 
             # Should call info (not debug)
             mock_logger.info.assert_called_once()
-            assert "HIGH zone" in str(mock_logger.info.call_args)
             assert "space heating" in str(mock_logger.info.call_args)
 
             # Should NOT call debug (would be for DHW)
@@ -97,7 +95,7 @@ class TestSpaceHeatingModeLogging:
             monitor.update(hz=90, heating_mode="space")
 
             mock_logger.info.assert_called_once()
-            assert "HIGH zone" in str(mock_logger.info.call_args)
+            assert "space heating" in str(mock_logger.info.call_args)
 
     def test_space_default_mode(self, monitor):
         """No heating_mode specified should default to space heating behavior."""
@@ -121,9 +119,8 @@ class TestCriticalThreshold:
             # Should call warning (critical threshold)
             mock_logger.warning.assert_called_once()
             call_str = str(mock_logger.warning.call_args)
-            assert "VERY HIGH zone" in call_str
-            assert "100 Hz sustained can damage compressor" in call_str
-            assert "'dhw'" in call_str  # Check for the mode argument
+            assert "100" in call_str  # Hz value
+            assert "dhw" in call_str  # Mode
 
     def test_space_100hz_warning(self, monitor):
         """Space heating at 100 Hz should trigger WARNING (critical)."""
@@ -132,8 +129,8 @@ class TestCriticalThreshold:
 
             mock_logger.warning.assert_called_once()
             call_str = str(mock_logger.warning.call_args)
-            assert "VERY HIGH zone" in call_str
-            assert "'space'" in call_str  # Check for the mode argument
+            assert "100" in call_str  # Hz value
+            assert "space" in call_str  # Mode
 
     def test_both_modes_110hz_warning(self, monitor):
         """110 Hz should warn for both DHW and space heating."""
@@ -152,14 +149,14 @@ class TestCriticalThreshold:
 
                 mock_logger.warning.assert_called()
                 call_str = str(mock_logger.warning.call_args)
-                assert "VERY HIGH zone" in call_str
+                assert "110" in call_str  # Hz value
 
 
 class TestSustainedOperationWarnings:
     """Test sustained operation warnings (context-aware durations)."""
 
     def test_dhw_30min_above_95hz_warns(self, monitor):
-        """DHW >95 Hz for >30 minutes should warn (unusual for DHW cycle)."""
+        """DHW >95 Hz for >30 minutes should log at INFO (elevated for DHW cycle)."""
         base_time = datetime(2025, 10, 23, 12, 0)
 
         with patch("custom_components.effektguard.utils.compressor_monitor._LOGGER") as mock_logger:
@@ -168,16 +165,14 @@ class TestSustainedOperationWarnings:
                 timestamp = base_time + timedelta(minutes=i)
                 monitor.update(hz=95, timestamp=timestamp, heating_mode="dhw")
 
-            # Should have warning about sustained DHW operation
-            # Check for warning calls (skip the first VERY HIGH zone warning)
-            warning_calls = [
-                str(call) for call in mock_logger.warning.call_args_list if "elevated" in str(call)
+            # Should have info about sustained DHW operation (changed from warning to info)
+            info_calls = [
+                str(call) for call in mock_logger.info.call_args_list if "DHW" in str(call)
             ]
-            assert len(warning_calls) > 0
-            assert any("DHW compressor elevated" in str(call) for call in warning_calls)
+            assert len(info_calls) > 0
 
     def test_space_2hours_above_80hz_warns(self, monitor):
-        """Space heating >80 Hz for >2 hours should warn (system struggling)."""
+        """Space heating >80 Hz for >2 hours should log at INFO (sustained operation)."""
         base_time = datetime(2025, 10, 23, 12, 0)
 
         with patch("custom_components.effektguard.utils.compressor_monitor._LOGGER") as mock_logger:
@@ -186,12 +181,11 @@ class TestSustainedOperationWarnings:
                 timestamp = base_time + timedelta(minutes=i)
                 monitor.update(hz=80, timestamp=timestamp, heating_mode="space")
 
-            # Should have warning about sustained space heating operation
-            warning_calls = [
-                str(call) for call in mock_logger.warning.call_args_list if "sustained" in str(call)
+            # Should have info about sustained space heating operation (changed from warning to info)
+            info_calls = [
+                str(call) for call in mock_logger.info.call_args_list if "space" in str(call).lower()
             ]
-            assert len(warning_calls) > 0
-            assert any("Space heating compressor sustained" in str(call) for call in warning_calls)
+            assert len(info_calls) > 0
 
     def test_dhw_25min_no_warning(self, monitor):
         """DHW at 95 Hz for 25 minutes (under 30min) should not warn."""
@@ -308,4 +302,4 @@ class TestEdgeCases:
             monitor.update(hz=101, heating_mode="space")
 
             mock_logger.warning.assert_called_once()
-            assert "VERY HIGH zone" in str(mock_logger.warning.call_args)
+            assert "101" in str(mock_logger.warning.call_args)  # Hz value

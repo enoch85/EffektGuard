@@ -4,7 +4,6 @@ Tests the new dedicated climate_zones.py module that provides climate-aware
 DM (Degree Minutes) thresholds for heat pump optimization.
 """
 
-import pytest
 from custom_components.effektguard.const import (
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,

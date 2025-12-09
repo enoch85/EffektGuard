@@ -18,13 +18,8 @@ from custom_components.effektguard.optimization.weather_learning import (
     WeatherPatternLearner,
 )
 
-import pytest
 import tempfile
-from unittest.mock import AsyncMock, Mock
-from custom_components.effektguard.coordinator import EffektGuardCoordinator
-from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
-from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
-from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
+from unittest.mock import AsyncMock
 
 
 def create_mock_hass(latitude: float = 59.3):

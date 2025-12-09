@@ -7,11 +7,8 @@ Validates:
 - Manual override expiration
 """
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime
+from unittest.mock import MagicMock
 
-from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
 

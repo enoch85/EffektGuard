@@ -17,7 +17,6 @@ from custom_components.effektguard.const import (
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
     CLIMATE_ZONE_COLD_WINTER_AVG,
-    CLIMATE_ZONE_MODERATE_COLD_WINTER_AVG,
     CLIMATE_ZONE_STANDARD_WINTER_AVG,
 )
 from custom_components.effektguard.optimization.weather_layer import (

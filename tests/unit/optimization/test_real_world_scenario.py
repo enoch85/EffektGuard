@@ -25,7 +25,6 @@ from custom_components.effektguard.optimization.thermal_layer import ThermalMode
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_PRICE,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
-    QuarterClassification,
 )
 
 

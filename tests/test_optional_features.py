@@ -1,15 +1,13 @@
 """Tests for optional features and auto-detection."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, patch
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResult
 
 from custom_components.effektguard.config_flow import EffektGuardConfigFlow
 from custom_components.effektguard.const import (
     CONF_DEGREE_MINUTES_ENTITY,
     CONF_POWER_SENSOR_ENTITY,
-    DOMAIN,
 )
 
 

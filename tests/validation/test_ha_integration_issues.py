@@ -8,10 +8,8 @@ This test catches issues that would only manifest when running in Home Assistant
 """
 
 import ast
-import os
 from pathlib import Path
 
-import pytest
 
 
 class ImportAnalyzer(ast.NodeVisitor):

@@ -8,17 +8,10 @@ Tests:
 """
 
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-import voluptuous as vol
 
-from homeassistant.core import HomeAssistant
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 
-from custom_components.effektguard.config_flow import EffektGuardConfigFlow
 from custom_components.effektguard.const import (
-    DOMAIN,
     CONF_NIBE_ENTITY,
     CONF_GESPOT_ENTITY,
     CONF_WEATHER_ENTITY,
@@ -27,7 +20,6 @@ from custom_components.effektguard.const import (
     CONF_THERMAL_MASS,
     CONF_INSULATION_QUALITY,
 )
-from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
 
 class TestSensorAvailability:

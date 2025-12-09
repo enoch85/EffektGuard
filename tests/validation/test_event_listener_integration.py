@@ -9,7 +9,7 @@ Validates:
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def create_mock_coordinator_dependencies(mock_hass, entry):

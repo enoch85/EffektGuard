@@ -13,28 +13,23 @@ This replaces multiple separate DHW test files with one comprehensive suite.
 
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.effektguard.const import (
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_URGENT_RUNTIME_MINUTES,
     DHW_NORMAL_RUNTIME_MINUTES,
-    DHW_EXTENDED_RUNTIME_MINUTES,
     DHW_SAFETY_MIN,
     DHW_SAFETY_CRITICAL,
-    DHW_MAX_WAIT_HOURS,
     MIN_DHW_TARGET_TEMP,
     DEFAULT_DHW_TARGET_TEMP,
-    DHW_PREHEAT_TARGET_OFFSET,
     DM_DHW_BLOCK_FALLBACK,
     DEFAULT_INDOOR_TEMP,
     DHW_LEGIONELLA_PREVENT_TEMP,
-    DHW_LEGIONELLA_MAX_DAYS,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
     DHWDemandPeriod,
-    DHWScheduleDecision,
 )
 from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
 

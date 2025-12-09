@@ -20,20 +20,11 @@ Test Coverage:
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock
-from datetime import datetime
+from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.const import (
-    THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD,  # 1.5°C
-    THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD,  # 1.0°C
-    THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD,  # 0.5°C
-    THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING,  # 0.8
-    THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING,  # 0.9
-    THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING,  # 0.95
-    THERMAL_RECOVERY_DAMPING_FACTOR,  # 0.6 (standard warming)
-    THERMAL_RECOVERY_RAPID_FACTOR,  # 0.4 (rapid warming)
     THERMAL_RECOVERY_T1_MIN_OFFSET,  # 1.0°C
     THERMAL_RECOVERY_T2_MIN_OFFSET,  # 1.5°C
 )

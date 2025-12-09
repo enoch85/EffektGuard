@@ -15,7 +15,6 @@ Validates:
 """
 
 import pytest
-from dataclasses import dataclass
 
 from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 from custom_components.effektguard.models.base import HeatPumpProfile, ValidationResult
@@ -420,7 +419,6 @@ class TestValidationResults:
 
     def test_validation_result_structure(self):
         """Test ValidationResult has correct structure."""
-        from custom_components.effektguard.models.base import ValidationResult
 
         result = ValidationResult(
             valid=True,
@@ -436,7 +434,6 @@ class TestValidationResults:
 
     def test_validation_severity_levels(self):
         """Test different validation severity levels."""
-        from custom_components.effektguard.models.base import ValidationResult
 
         # Info level
         info = ValidationResult(valid=True, severity="info", message="OK", suggestions=[])

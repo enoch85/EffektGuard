@@ -12,14 +12,11 @@ Root causes fixed:
 This test ensures the October 28 scenario would now work correctly.
 """
 
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.effektguard.const import (
     MIN_DHW_TARGET_TEMP,
-    DHW_PREHEAT_TARGET_OFFSET,
-    DHW_NORMAL_RUNTIME_MINUTES,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,

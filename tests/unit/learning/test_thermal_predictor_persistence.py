@@ -1,7 +1,7 @@
 """Tests for thermal predictor persistence across reboots."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.effektguard.coordinator import EffektGuardCoordinator

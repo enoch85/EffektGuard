@@ -1,6 +1,5 @@
 """Pytest configuration for EffektGuard tests."""
 
-import asyncio
 import sys
 import tempfile
 import warnings

@@ -777,7 +777,6 @@ class TestVolatileWeightReduction:
         from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
         from datetime import timezone
         from custom_components.effektguard.const import (
-            PRICE_OFFSET_PEAK,
             QuarterClassification,
         )
 

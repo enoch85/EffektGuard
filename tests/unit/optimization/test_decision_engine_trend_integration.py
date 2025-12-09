@@ -8,7 +8,7 @@ Tests Phase 1 trend integration requirements from INDOOR_TEMP_TREND_IMPLEMENTATI
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager

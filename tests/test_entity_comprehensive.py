@@ -13,13 +13,12 @@ This ensures complete entity coverage for production use.
 """
 
 import pytest
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import Mock
 
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
 from homeassistant.components.climate.const import PRESET_COMFORT, PRESET_ECO, PRESET_NONE
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
-from homeassistant.const import UnitOfPower, UnitOfTemperature, ATTR_TEMPERATURE
+from homeassistant.const import UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -111,7 +110,6 @@ def mock_coordinator_with_data(mock_hass, mock_config_entry):
     # Mock price data
     # Note: PriceData has .today (list of QuarterPeriod), not .today_prices
     from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
-    from datetime import datetime
     from homeassistant.util import dt as dt_util
 
     price_data = Mock()

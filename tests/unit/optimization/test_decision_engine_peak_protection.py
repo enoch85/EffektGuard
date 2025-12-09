@@ -14,14 +14,11 @@ from unittest.mock import MagicMock
 
 from custom_components.effektguard.optimization.decision_engine import (
     DecisionEngine,
-    LayerDecision,
-    OptimizationDecision,
 )
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
-    QuarterClassification,
     DM_CRITICAL_T3_WEIGHT,
 )
 

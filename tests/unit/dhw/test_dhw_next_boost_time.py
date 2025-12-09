@@ -13,19 +13,14 @@ from zoneinfo import ZoneInfo
 from custom_components.effektguard.const import (
     COMPRESSOR_MIN_CYCLE_MINUTES,
     DHW_COOLING_RATE,
-    DHW_SAFETY_CRITICAL,
-    DHW_SAFETY_MIN,
     DHW_SCHEDULING_WINDOW_MAX,
     DHW_SCHEDULING_WINDOW_MIN,
-    DM_DHW_BLOCK_FALLBACK,
     DM_RECOVERY_MAX_HOURS,
     INDOOR_TEMP_RECOVERY_MAX_HOURS,
-    MIN_DHW_TARGET_TEMP,
     SPACE_HEATING_DEMAND_DROP_HOURS,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
-    DHWDemandPeriod,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from tests.conftest import create_mock_price_analyzer

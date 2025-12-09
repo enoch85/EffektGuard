@@ -253,11 +253,10 @@ class CompressorHealthMonitor:
         # Normalize mode to lowercase for consistent comparison
         mode = heating_mode.lower() if heating_mode else "space"
 
-        # Always log >100 Hz (critical regardless of mode)
+        # Always log >100 Hz (elevated regardless of mode)
         if stats.current_hz >= 100 and stats.time_above_100hz == timedelta(0):
             _LOGGER.warning(
-                "Compressor entered VERY HIGH zone: %d Hz "
-                "(>100 Hz sustained can damage compressor, mode: %s)",
+                "Compressor operating at %d Hz (mode: %s)",
                 stats.current_hz,
                 mode,
             )
@@ -273,18 +272,17 @@ class CompressorHealthMonitor:
             # Space heating: 80+ Hz is elevated, log at INFO level
             if stats.current_hz >= 80 and stats.time_above_80hz == timedelta(0):
                 _LOGGER.info(
-                    "Compressor entered HIGH zone: %d Hz for space heating "
-                    "(monitor for sustained operation)",
+                    "Compressor at %d Hz for space heating",
                     stats.current_hz,
                 )
 
         # Sustained warnings - context-aware durations
         if stats.time_above_100hz >= timedelta(minutes=15):
-            # Always critical (any mode)
+            # Always notable (any mode)
             minutes = stats.time_above_100hz.total_seconds() / 60
-            _LOGGER.error(
-                "COMPRESSOR STRESS CRITICAL: >100 Hz for %.0f minutes "
-                "(current: %d Hz, mode: %s, 1h avg: %.0f Hz) - REDUCE DEMAND IMMEDIATELY",
+            _LOGGER.warning(
+                "Compressor at >100 Hz for %.0f minutes "
+                "(current: %d Hz, mode: %s, 1h avg: %.0f Hz)",
                 minutes,
                 stats.current_hz,
                 mode,
@@ -294,68 +292,63 @@ class CompressorHealthMonitor:
             # DHW: Warn if >95 Hz for >30 minutes (unusual for DHW cycle)
             if stats.time_above_80hz >= timedelta(minutes=30) and stats.current_hz >= 95:
                 minutes = stats.time_above_80hz.total_seconds() / 60
-                _LOGGER.warning(
-                    "DHW compressor elevated for %.0f minutes: %d Hz "
-                    "(normal cycle <15min, check DHW tank size or sensor)",
-                    minutes,
+                _LOGGER.info(
+                    "DHW compressor at %d Hz for %.0f minutes",
                     stats.current_hz,
+                    minutes,
                 )
         else:  # space heating
-            # Space: Warn if >80 Hz for >2 hours (system struggling)
+            # Space: Warn if >80 Hz for >2 hours (system running hard)
             if stats.time_above_80hz >= timedelta(hours=2):
                 hours = stats.time_above_80hz.total_seconds() / 3600
-                _LOGGER.warning(
-                    "Space heating compressor sustained high operation: "
-                    ">80 Hz for %.1f hours (current: %d Hz, 6h avg: %.0f Hz) "
-                    "- consider increasing insulation or heat pump capacity",
+                _LOGGER.info(
+                    "Space heating compressor at >80 Hz for %.1f hours "
+                    "(current: %d Hz, 6h avg: %.0f Hz)",
                     hours,
                     stats.current_hz,
                     stats.avg_6h,
                 )
 
     def assess_risk(self, stats: CompressorStats) -> tuple[str, str]:
-        """Assess compressor health risk level.
+        """Assess compressor operating status.
 
-        Risk levels based on NIBE forum research and OEM recommendations:
-        - CRITICAL: Immediate action required (hardware damage risk)
-        - SEVERE: Sustained stress (reduce demand)
-        - WARNING: Monitor closely (elevated operation)
-        - WATCH: Note for diagnostics
+        Status levels based on NIBE forum research and OEM recommendations:
+        - HIGH: Extended high-frequency operation
+        - ELEVATED: Sustained elevated operation
+        - NOTABLE: Above-average operation
+        - WATCH: Temporary high demand
         - OK: Normal operation
 
         Args:
             stats: Current compressor statistics
 
         Returns:
-            (risk_level, reason) tuple
+            (status_level, reason) tuple
         """
-        # CRITICAL: Above 100 Hz for more than 15 minutes
-        # This indicates compressor at absolute maximum for extended period
-        # Risk: Bearing damage, oil breakdown, motor overheating
+        # HIGH: Above 100 Hz for more than 15 minutes
+        # This indicates compressor at maximum capacity for extended period
         if stats.time_above_100hz > timedelta(minutes=15):
             minutes = stats.time_above_100hz.total_seconds() / 60
             return (
-                "CRITICAL",
-                f"Compressor at {stats.current_hz} Hz for {minutes:.0f} min - REDUCE DEMAND IMMEDIATELY",
+                "HIGH",
+                f"Compressor at {stats.current_hz} Hz for {minutes:.0f} min",
             )
 
-        # SEVERE: Above 80 Hz for more than 2 hours
-        # Continuous high-Hz operation causes accelerated wear
-        # Indicates system struggling to meet demand
+        # ELEVATED: Above 80 Hz for more than 2 hours
+        # Continuous high-Hz operation
         if stats.time_above_80hz > timedelta(hours=2):
             hours = stats.time_above_80hz.total_seconds() / 3600
             return (
-                "SEVERE",
-                f"Sustained high Hz ({stats.avg_1h:.0f} avg) for {hours:.1f}h - THERMAL STRESS",
+                "ELEVATED",
+                f"Sustained operation ({stats.avg_1h:.0f} Hz avg) for {hours:.1f}h",
             )
 
-        # WARNING: 6-hour average above 70 Hz
+        # NOTABLE: 6-hour average above 70 Hz
         # System consistently operating at high capacity
-        # May indicate undersized system or excessive heat loss
         if stats.avg_6h > 70:
             return (
-                "WARNING",
-                f"Sustained high operation (6h avg: {stats.avg_6h:.0f} Hz) - monitor closely",
+                "NOTABLE",
+                f"6-hour average: {stats.avg_6h:.0f} Hz",
             )
 
         # WATCH: 1-hour average above 75 Hz

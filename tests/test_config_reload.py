@@ -20,11 +20,10 @@ Analysis: FINAL_ANALYSIS_CONFIG_RELOAD.md
 
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
+from unittest.mock import AsyncMock, Mock
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.effektguard import async_reload_entry
 from custom_components.effektguard.const import (
@@ -33,8 +32,6 @@ from custom_components.effektguard.const import (
     CONF_TARGET_INDOOR_TEMP,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
-    DEFAULT_TARGET_TEMP,
-    DEFAULT_TOLERANCE,
     DOMAIN,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_SAVINGS,
@@ -45,7 +42,6 @@ from custom_components.effektguard.coordinator import EffektGuardCoordinator
 @pytest.fixture
 def mock_hass():
     """Create mock Home Assistant instance."""
-    from homeassistant.const import __version__ as HA_VERSION
 
     hass = Mock(spec=HomeAssistant)
     hass.data = {DOMAIN: {}, "integrations": {}}  # Add integrations key for HA internals
@@ -630,7 +626,7 @@ class TestThermalPredictorPersistence:
             ThermalStatePredictor,
             ThermalSnapshot,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         predictor = ThermalStatePredictor(lookback_hours=24)
 
@@ -668,7 +664,7 @@ class TestThermalPredictorPersistence:
         from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Create serialized data
         base_time = datetime(2025, 10, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -706,7 +702,7 @@ class TestThermalPredictorPersistence:
             ThermalStatePredictor,
             ThermalSnapshot,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Create a real thermal predictor (not mocked)
         thermal_predictor = ThermalStatePredictor(lookback_hours=24)
@@ -745,7 +741,7 @@ class TestThermalPredictorPersistence:
         from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Simulate loaded data with thermal predictor state
         base_time = datetime(2025, 10, 18, 10, 0, 0, tzinfo=timezone.utc)
@@ -787,7 +783,7 @@ class TestThermalPredictorPersistence:
             ThermalStatePredictor,
             ThermalSnapshot,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Step 1: Create thermal predictor with historical data
         predictor = ThermalStatePredictor(lookback_hours=24)
@@ -843,7 +839,7 @@ class TestOffsetPersistence:
         from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Create a minimal thermal predictor for serialization
         thermal_predictor = ThermalStatePredictor(lookback_hours=24)
@@ -867,7 +863,7 @@ class TestOffsetPersistence:
     @pytest.mark.asyncio
     async def test_offset_restored_on_startup(self):
         """Verify offset is restored from learning data on startup."""
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Simulate loaded data with last offset
         learned_data = {
@@ -915,7 +911,7 @@ class TestOffsetPersistence:
         from custom_components.effektguard.optimization.prediction_layer import (
             ThermalStatePredictor,
         )
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         # Step 1: Create data to save
         thermal_predictor = ThermalStatePredictor(lookback_hours=24)

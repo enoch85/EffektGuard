@@ -7,10 +7,17 @@ Includes proactive debt prevention layer (Phase 7 refactor).
 """
 
 import logging
+from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Optional, Protocol
 
 from ..const import (
+    ANTI_WINDUP_DM_DROPPING_RATE,
+    ANTI_WINDUP_DM_HISTORY_BASE_SIZE,
+    ANTI_WINDUP_MIN_POSITIVE_OFFSET,
+    ANTI_WINDUP_MIN_SAMPLES,
+    ANTI_WINDUP_OFFSET_CAP_MULTIPLIER,
     DM_CRITICAL_T1_MARGIN,
     DM_CRITICAL_T1_OFFSET,
     DM_CRITICAL_T1_WEIGHT,
@@ -221,6 +228,8 @@ class EmergencyLayerDecision:
     degree_minutes: float = 0.0
     threshold_used: float = 0.0
     damping_applied: bool = False
+    anti_windup_active: bool = False  # True if offset was capped due to anti-windup
+    dm_rate: float = 0.0  # DM rate of change (DM/hour, negative = dropping)
 
 
 @dataclass
@@ -329,6 +338,142 @@ class EmergencyLayer:
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
 
+        # Anti-windup: Track DM history to detect "heat in transit" situations
+        # When offset is positive but DM is still dropping, heat hasn't reached
+        # the thermal mass yet - don't escalate offset further
+        # History size varies by heating type to match thermal lag
+        history_size = self._get_dm_history_size_for_heating_type(heating_type)
+        self._dm_history: deque[tuple[datetime, float]] = deque(maxlen=history_size)
+
+    def _get_dm_history_size_for_heating_type(self, heating_type: str) -> int:
+        """Get DM history size based on heating system thermal lag.
+
+        Derives from ANTI_WINDUP_DM_HISTORY_BASE_SIZE scaled by thermal mass buffer.
+        Longer thermal lag systems need more history to detect sustained trends.
+
+        Args:
+            heating_type: Heating system type
+
+        Returns:
+            Number of samples to track (at 5-min intervals)
+        """
+        # Use existing thermal mass buffer multipliers to scale history size
+        # Higher thermal mass = longer history needed to detect trends
+        if heating_type in ("concrete_ufh", "concrete_slab", "concrete"):
+            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE  # 1.3
+        elif heating_type in ("timber", "timber_ufh"):
+            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER  # 1.15
+        else:
+            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR  # 1.0
+
+        # Scale base history size by thermal mass buffer
+        # Base 6 samples × 1.3 = ~8 samples for concrete (40 min)
+        # Base 6 samples × 1.15 = ~7 samples for timber (35 min)
+        # Base 6 samples × 1.0 = 6 samples for radiator (30 min)
+        return round(ANTI_WINDUP_DM_HISTORY_BASE_SIZE * multiplier)
+
+    def _update_dm_history(self, dm: float, timestamp: datetime) -> None:
+        """Update DM history for anti-windup tracking.
+
+        Args:
+            dm: Current degree minutes value
+            timestamp: Current timestamp
+        """
+        self._dm_history.append((timestamp, dm))
+
+    def _calculate_dm_rate(self) -> tuple[float, bool]:
+        """Calculate DM rate of change from history.
+
+        Returns:
+            (dm_rate_per_hour, has_valid_data)
+            dm_rate is negative when DM is dropping (going more negative)
+        """
+        if len(self._dm_history) < ANTI_WINDUP_MIN_SAMPLES:
+            return 0.0, False
+
+        oldest_time, oldest_dm = self._dm_history[0]
+        newest_time, newest_dm = self._dm_history[-1]
+
+        time_diff = (newest_time - oldest_time).total_seconds() / 3600  # hours
+        if time_diff < 0.05:  # Less than 3 minutes of data
+            return 0.0, False
+
+        dm_change = newest_dm - oldest_dm  # Negative means DM dropped
+        dm_rate = dm_change / time_diff  # DM/hour
+
+        return dm_rate, True
+
+    def _check_anti_windup(
+        self, current_offset: float, dm_rate: float, has_valid_rate: bool
+    ) -> tuple[bool, str]:
+        """Check if anti-windup protection should be activated.
+
+        Anti-windup prevents escalating offset when heat is "in transit" through
+        thermal mass. This occurs when:
+        1. Current offset is already positive (we're adding heat)
+        2. DM is still dropping (heat hasn't arrived yet)
+
+        Args:
+            current_offset: Current NIBE offset value
+            dm_rate: DM rate of change (negative = dropping)
+            has_valid_rate: Whether we have enough data to trust the rate
+
+        Returns:
+            (anti_windup_active, reason_string)
+        """
+        if not has_valid_rate:
+            return False, ""
+
+        # Check if we're already adding heat (positive offset)
+        if current_offset < ANTI_WINDUP_MIN_POSITIVE_OFFSET:
+            return False, ""
+
+        # Check if DM is dropping despite positive offset
+        if dm_rate > ANTI_WINDUP_DM_DROPPING_RATE:
+            return False, ""
+
+        # Anti-windup triggered: heat is in transit, don't escalate
+        return True, f"anti-windup: DM dropping {dm_rate:.0f}/h while offset +{current_offset:.0f}"
+
+    def _apply_anti_windup_cap(
+        self,
+        calculated_offset: float,
+        current_offset: float,
+        anti_windup_active: bool,
+        tier_name: str,
+    ) -> tuple[float, str]:
+        """Apply anti-windup offset capping if active.
+
+        When anti-windup is triggered (heat in transit), cap the new offset to
+        prevent escalation. Allow maintaining or slightly reducing offset.
+
+        Args:
+            calculated_offset: Offset calculated by tier logic
+            current_offset: Current NIBE offset value
+            anti_windup_active: Whether anti-windup is triggered
+            tier_name: Tier name for logging
+
+        Returns:
+            (final_offset, cap_reason) - reason is empty if no cap applied
+        """
+        if not anti_windup_active:
+            return calculated_offset, ""
+
+        # Calculate capped offset: don't exceed current offset * cap multiplier
+        # This prevents escalation while allowing gradual reduction
+        max_offset = max(current_offset, current_offset * ANTI_WINDUP_OFFSET_CAP_MULTIPLIER)
+
+        if calculated_offset > max_offset:
+            _LOGGER.info(
+                "%s anti-windup: capping offset %.2f°C → %.2f°C (heat in transit)",
+                tier_name,
+                calculated_offset,
+                max_offset,
+            )
+            return max_offset, f"capped from {calculated_offset:.1f}°C"
+
+        return calculated_offset, ""
+
     def evaluate_layer(
         self,
         nibe_state,
@@ -359,6 +504,17 @@ class EmergencyLayer:
         degree_minutes = nibe_state.degree_minutes
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
+        current_offset = getattr(nibe_state, "current_offset", 0.0)
+        timestamp = getattr(nibe_state, "timestamp", datetime.now())
+
+        # Update DM history for anti-windup tracking
+        self._update_dm_history(degree_minutes, timestamp)
+
+        # Calculate DM rate and check anti-windup
+        dm_rate, has_valid_rate = self._calculate_dm_rate()
+        anti_windup_active, anti_windup_reason = self._check_anti_windup(
+            current_offset, dm_rate, has_valid_rate
+        )
 
         temp_deviation = indoor_temp - target_temp
 
@@ -432,22 +588,31 @@ class EmergencyLayer:
                 target_temp=target_temp,
             )
 
+            # Apply anti-windup cap (T3 is critical, so we still apply but note it)
+            final_offset, cap_reason = self._apply_anti_windup_cap(
+                damped_offset, current_offset, anti_windup_active, "T3"
+            )
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} near absolute max "
                 f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
+            if anti_windup_active:
+                reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
                 name="Thermal Recovery T3",
-                offset=damped_offset,
+                offset=final_offset,
                 weight=DM_CRITICAL_T3_WEIGHT,
                 reason=" ".join(reason_parts),
                 tier="T3",
                 degree_minutes=degree_minutes,
                 threshold_used=t3_threshold,
                 damping_applied=bool(damping_reason),
+                anti_windup_active=anti_windup_active,
+                dm_rate=dm_rate,
             )
 
         # TIER 2
@@ -463,22 +628,31 @@ class EmergencyLayer:
                 target_temp=target_temp,
             )
 
+            # Apply anti-windup cap to prevent escalation
+            final_offset, cap_reason = self._apply_anti_windup_cap(
+                damped_offset, current_offset, anti_windup_active, "T2"
+            )
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} approaching T3 "
                 f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
+            if anti_windup_active:
+                reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
                 name="Thermal Recovery T2",
-                offset=damped_offset,
+                offset=final_offset,
                 weight=DM_CRITICAL_T2_WEIGHT,
                 reason=" ".join(reason_parts),
                 tier="T2",
                 degree_minutes=degree_minutes,
                 threshold_used=t2_threshold,
                 damping_applied=bool(damping_reason),
+                anti_windup_active=anti_windup_active,
+                dm_rate=dm_rate,
             )
 
         # TIER 1
@@ -494,22 +668,31 @@ class EmergencyLayer:
                 target_temp=target_temp,
             )
 
+            # Apply anti-windup cap to prevent escalation
+            final_offset, cap_reason = self._apply_anti_windup_cap(
+                damped_offset, current_offset, anti_windup_active, "T1"
+            )
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
                 f"(threshold: {t1_threshold:.0f})"
             ]
             if damping_reason:
                 reason_parts.append(f"[{damping_reason}]")
+            if anti_windup_active:
+                reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
                 name="Thermal Recovery T1",
-                offset=damped_offset,
+                offset=final_offset,
                 weight=DM_CRITICAL_T1_WEIGHT,
                 reason=" ".join(reason_parts),
                 tier="T1",
                 degree_minutes=degree_minutes,
                 threshold_used=t1_threshold,
                 damping_applied=bool(damping_reason),
+                anti_windup_active=anti_windup_active,
+                dm_rate=dm_rate,
             )
 
         # WARNING: Beyond expected range
@@ -527,20 +710,29 @@ class EmergencyLayer:
                     WARNING_OFFSET_MIN_MODERATE + (deviation / WARNING_DEVIATION_DIVISOR_MODERATE),
                 )
 
+            # Apply anti-windup cap to WARNING tier too
+            final_offset, cap_reason = self._apply_anti_windup_cap(
+                offset, current_offset, anti_windup_active, "WARNING"
+            )
+
             reason = (
                 f"DM {degree_minutes:.0f} beyond expected for "
                 f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
                 f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f})"
             )
+            if anti_windup_active:
+                reason += f" [{anti_windup_reason}]"
 
             return EmergencyLayerDecision(
                 name="Thermal Debt Warning",
-                offset=offset,
+                offset=final_offset,
                 weight=LAYER_WEIGHT_EMERGENCY,
                 reason=reason,
                 tier="WARNING",
                 degree_minutes=degree_minutes,
                 threshold_used=expected_dm["warning"],
+                anti_windup_active=anti_windup_active,
+                dm_rate=dm_rate,
             )
 
         # CAUTION: Approaching limits
@@ -553,6 +745,7 @@ class EmergencyLayer:
                 tier="CAUTION",
                 degree_minutes=degree_minutes,
                 threshold_used=expected_dm["normal"],
+                dm_rate=dm_rate,
             )
 
         # OK: Within normal range
@@ -563,6 +756,7 @@ class EmergencyLayer:
             reason=f"OK (DM: {degree_minutes:.0f})",
             tier="OK",
             degree_minutes=degree_minutes,
+            dm_rate=dm_rate,
         )
 
     def _is_price_cheap(self, price_data, get_current_datetime: Optional[Callable] = None) -> bool:

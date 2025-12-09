@@ -16,7 +16,7 @@ Based on: User request to lower DHW minimum temps for better price optimization
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from custom_components.effektguard.const import (
     DEFAULT_DHW_TARGET_TEMP,
@@ -26,7 +26,6 @@ from custom_components.effektguard.const import (
     DM_DHW_BLOCK_FALLBACK,
 )
 from custom_components.effektguard.optimization.dhw_optimizer import (
-    DHWScheduleDecision,
     IntelligentDHWScheduler,
 )
 from tests.conftest import create_mock_price_analyzer

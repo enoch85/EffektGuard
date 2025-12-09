@@ -17,7 +17,6 @@ Reference table (from documentation):
 | < -15      | Don't enhance   | Negative      |
 """
 
-import pytest
 from datetime import datetime
 
 from custom_components.effektguard.const import (
@@ -25,7 +24,6 @@ from custom_components.effektguard.const import (
     AIRFLOW_DEFAULT_STANDARD,
     AIRFLOW_OUTDOOR_TEMP_MIN,
     AIRFLOW_INDOOR_DEFICIT_MIN,
-    AIRFLOW_TREND_WARMING_THRESHOLD,
     AIRFLOW_COMPRESSOR_BASE_THRESHOLD,
 )
 from custom_components.effektguard.optimization.airflow_optimizer import (

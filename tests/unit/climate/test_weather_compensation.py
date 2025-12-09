@@ -4,13 +4,8 @@ Validates universal flow temperature formula, heat transfer method, and UFH adju
 against real-world production data.
 """
 
-import pytest
 
 from custom_components.effektguard.const import (
-    DEFAULT_HEAT_LOSS_COEFFICIENT,
-    KUEHNE_COEFFICIENT,
-    KUEHNE_POWER,
-    RADIATOR_POWER_COEFFICIENT,
     UFH_FLOW_REDUCTION_CONCRETE,
     UFH_FLOW_REDUCTION_TIMBER,
 )

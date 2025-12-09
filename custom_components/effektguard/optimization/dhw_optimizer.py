@@ -25,11 +25,9 @@ from datetime import datetime, timedelta
 from typing import TypedDict
 
 from ..const import (
-    COMPRESSOR_MIN_CYCLE_MINUTES,
     DEFAULT_DHW_TARGET_TEMP,
     DHW_COOLING_RATE,
     DHW_EXTENDED_RUNTIME_MINUTES,
-    DHW_HEATING_TIME_HOURS,
     DHW_LEGIONELLA_DETECT,
     DHW_LEGIONELLA_MAX_DAYS,
     DHW_LEGIONELLA_PREVENT_TEMP,
@@ -44,7 +42,6 @@ from ..const import (
     DHW_SCHEDULING_WINDOW_MIN,
     DHW_SPACE_HEATING_DEFICIT_THRESHOLD,
     DHW_SPACE_HEATING_OUTDOOR_THRESHOLD,
-    DHW_TARGET_HIGH_DEMAND,
     DHW_TREND_DEFICIT_THRESHOLD,
     DHW_TREND_RATE_THRESHOLD,
     DHW_URGENT_DEMAND_HOURS,
@@ -423,14 +420,16 @@ class IntelligentDHWScheduler:
         indoor_temp: float,
         target_indoor_temp: float,
         outdoor_temp: float,
-        price_classification: str,  # "cheap", "normal", "expensive", "peak"
+        price_classification: str,  # "very_cheap", "cheap", "normal", "expensive", "peak"
         current_time: datetime,
         price_periods: list | None = None,  # QuarterPeriod list for window scheduling
         hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
+        is_volatile: bool = False,  # True if current price run is too brief (<45 min)
     ) -> DHWScheduleDecision:
         """Decide if DHW heating should start based on priority rules.
 
         Uses climate-aware DM thresholds that adapt to local conditions and current temperature.
+        Respects price volatility: won't trigger on brief cheap periods (< 45 min).
 
         Args:
             current_dhw_temp: Current DHW temperature (°C)
@@ -443,10 +442,16 @@ class IntelligentDHWScheduler:
             current_time: Current datetime
             price_periods: Optional list of QuarterPeriod for window-based scheduling
             hours_since_last_dhw: Optional hours since last DHW heating (for max wait check)
+            is_volatile: True if current price classification run is too brief (<45 min).
+                When volatile=True and price is cheap, DHW waits for stable cheap window
+                instead of triggering immediately. Matches space heating behavior.
 
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
+        # Helper: Check if price is beneficial (cheap or very_cheap) AND stable
+        is_cheap_price = price_classification in ["cheap", "very_cheap"]
+        is_stable_cheap = is_cheap_price and not is_volatile
         indoor_deficit = target_indoor_temp - indoor_temp
 
         # Determine DM blocking using shared EmergencyLayer or fallback to local logic
@@ -706,46 +711,54 @@ class IntelligentDHWScheduler:
                 )
                 days_since_legionella = (current_naive - last_boost_naive).total_seconds() / 86400.0
 
-        if (
-            days_since_legionella is None  # Never had high-temp cycle
-            or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS  # 14+ days
-        ) and price_classification == "cheap":  # Only during cheap periods
-            _LOGGER.warning(
-                "DHW hygiene boost needed: %s days since last high-temp cycle (limit %.0f days). "
-                "Heating to %.0f°C for Legionella prevention (requires DHW immersion heater - "
-                "compressor max ~50-55°C, real-world max observed %.0f°C with immersion heater).",
-                "Never" if days_since_legionella is None else f"{days_since_legionella:.1f}",
-                DHW_LEGIONELLA_MAX_DAYS,
-                DHW_LEGIONELLA_PREVENT_TEMP,
-                DHW_LEGIONELLA_DETECT,
-            )
-            _LOGGER.info(
-                "Hygiene boost scheduled during cheap electricity period to minimize "
-                "immersion heater cost. NIBE will use compressor to ~50-55°C, "
-                "then DHW tank immersion heater to reach %.0f°C target.",
-                DHW_LEGIONELLA_PREVENT_TEMP,
-            )
-            return DHWScheduleDecision(
-                should_heat=True,
-                priority_reason="DHW_HYGIENE_BOOST",
-                target_temp=DHW_LEGIONELLA_PREVENT_TEMP,  # 60°C kills bacteria
-                max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,  # May take longer
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
-                recommended_start_time=current_time,
-            )
+        legionella_needed = (
+            days_since_legionella is None or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS
+        )
+
+        if legionella_needed:
+            if is_stable_cheap:
+                # Stable cheap period - execute Legionella boost now
+                _LOGGER.info(
+                    "DHW hygiene boost: %.1f days since last cycle (limit %.0f), stable cheap period - heating to %.0f°C",
+                    days_since_legionella if days_since_legionella else 0,
+                    DHW_LEGIONELLA_MAX_DAYS,
+                    DHW_LEGIONELLA_PREVENT_TEMP,
+                )
+                return DHWScheduleDecision(
+                    should_heat=True,
+                    priority_reason="DHW_HYGIENE_BOOST",
+                    target_temp=DHW_LEGIONELLA_PREVENT_TEMP,
+                    max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
+                    abort_conditions=[
+                        f"thermal_debt < {dm_abort_threshold:.0f}",
+                        f"indoor_temp < {target_indoor_temp - 0.5}",
+                    ],
+                    recommended_start_time=current_time,
+                )
+            elif is_cheap_price and is_volatile:
+                # Cheap but volatile - wait for stable window
+                _LOGGER.debug(
+                    "DHW hygiene boost pending: %.1f days, cheap but volatile - waiting for stable cheap period",
+                    days_since_legionella if days_since_legionella else 0,
+                )
+            else:
+                # Not cheap - log at DEBUG level (avoid log spam), will run when stable cheap
+                _LOGGER.debug(
+                    "DHW hygiene boost pending: %.1f days since last cycle, waiting for stable cheap period (current: %s, volatile: %s)",
+                    days_since_legionella if days_since_legionella else 0,
+                    price_classification,
+                    is_volatile,
+                )
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
         # After emergency heating reached DHW_SAFETY_MIN (30°C), complete to comfort level
-        # during cheap prices. This is the second phase of two-tier emergency heating.
+        # during stable cheap prices. This is the second phase of two-tier emergency heating.
         if (
             DHW_SAFETY_MIN <= current_dhw_temp < MIN_DHW_TARGET_TEMP  # In 30-45°C range
-            and price_classification == "cheap"  # Wait for cheap prices
+            and is_stable_cheap  # Wait for stable cheap prices (not volatile)
         ):
             _LOGGER.info(
-                "DHW completing emergency heating: %.1f°C → %.1f°C during cheap period",
+                "DHW completing emergency heating: %.1f°C → %.1f°C during stable cheap period",
                 current_dhw_temp,
                 self.user_target_temp,
             )
@@ -878,11 +891,8 @@ class IntelligentDHWScheduler:
                 )
 
                 if optimal_window is None:
-                    # No price data - only heat during cheap periods if needed
-                    if (
-                        price_classification == "cheap"
-                        and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP
-                    ):
+                    # No price data - only heat during stable cheap periods if needed
+                    if is_stable_cheap and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP:
                         return DHWScheduleDecision(
                             should_heat=True,
                             priority_reason="CHEAP_NO_WINDOW_DATA",
@@ -941,11 +951,11 @@ class IntelligentDHWScheduler:
                     )
 
             # Fallback: No price data AND no optimal window ahead
-            # Heat now if DHW getting low and price is cheap
+            # Heat now if DHW getting low and price is stable cheap
             # Only use this fallback when we don't have a better window to wait for
             if (
                 not price_periods  # No price data available
-                and price_classification == "cheap"
+                and is_stable_cheap  # Stable cheap (not volatile)
                 and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP
             ):
                 return DHWScheduleDecision(
@@ -961,8 +971,8 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
-        # Heat below minimum user target during cheap prices (no window check - urgent enough)
-        if current_dhw_temp < MIN_DHW_TARGET_TEMP and price_classification == "cheap":
+        # Heat below minimum user target during stable cheap prices (no window check - urgent enough)
+        if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_stable_cheap:
             return DHWScheduleDecision(
                 should_heat=True,
                 priority_reason="DHW_COMFORT_LOW_CHEAP",
@@ -1242,6 +1252,7 @@ class IntelligentDHWScheduler:
         thermal_trend_rate: float = 0.0,
         climate_zone_name: str | None = None,
         weather_current_temp: float | None = None,
+        is_volatile: bool = False,  # True if current price run is too brief (<45 min)
     ) -> DHWRecommendation:
         """Calculate complete DHW heating recommendation.
 
@@ -1260,13 +1271,14 @@ class IntelligentDHWScheduler:
             outdoor_temp: Current outdoor temperature (°C)
             indoor_temp: Current indoor temperature (°C)
             target_indoor: Target indoor temperature (°C)
-            price_classification: Price classification (cheap/normal/expensive/peak)
+            price_classification: Price classification (very_cheap/cheap/normal/expensive/peak)
             current_time: Current datetime
             price_periods: Price period list for window scheduling
             hours_since_last_dhw: Hours since last DHW heating
             thermal_trend_rate: Indoor temp change rate (°C/hour)
             climate_zone_name: Climate zone name for display
             weather_current_temp: Current weather temp for opportunity detection
+            is_volatile: True if current price classification run is too brief (<45 min)
 
         Returns:
             DHWRecommendation with recommendation, summary, details, and decision
@@ -1332,6 +1344,7 @@ class IntelligentDHWScheduler:
             current_time=current_time,
             price_periods=price_periods,
             hours_since_last_dhw=hours_since_last_dhw,
+            is_volatile=is_volatile,
         )
 
         # Build detailed planning attributes

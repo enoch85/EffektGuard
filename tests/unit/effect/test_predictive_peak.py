@@ -14,11 +14,9 @@ References:
 
 import pytest
 from unittest.mock import MagicMock
-from datetime import datetime
 
 from custom_components.effektguard.optimization.decision_engine import (
     DecisionEngine,
-    LayerDecision,
 )
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.optimization.effect_layer import EffectManager

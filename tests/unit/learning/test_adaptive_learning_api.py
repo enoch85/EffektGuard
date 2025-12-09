@@ -4,15 +4,9 @@ Tests the insulation_quality property that bridges the old ThermalModel API
 with the new adaptive learning approach.
 """
 
-import pytest
-from datetime import datetime, timedelta
-import numpy as np
 
 from custom_components.effektguard.optimization.adaptive_learning import (
     AdaptiveThermalModel,
-)
-from custom_components.effektguard.optimization.learning_types import (
-    LearnedThermalParameters,
 )
 
 

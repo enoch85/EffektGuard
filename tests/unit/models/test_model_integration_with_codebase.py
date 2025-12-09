@@ -10,7 +10,6 @@ These tests validate BEHAVIOR, not exact specifications.
 They work regardless of whether model specs are 100% accurate.
 """
 
-import pytest
 from dataclasses import dataclass
 
 # Ensure model modules are imported so they register with the registry

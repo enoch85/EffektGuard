@@ -194,6 +194,54 @@ def find_unused_constants(
     return sorted(unused, key=lambda x: x[1])  # Sort by line number
 
 
+def find_unused_imports(project_root: Path) -> list[tuple[Path, str, int]]:
+    """Find unused imports across all Python files using ruff.
+    
+    Returns list of (file_path, message, line_number) tuples.
+    """
+    import subprocess
+    
+    unused_imports = []
+    
+    # Check production code and tests
+    dirs_to_check = [
+        project_root / "custom_components" / "effektguard",
+        project_root / "tests",
+        project_root / "scripts",
+    ]
+    
+    for check_dir in dirs_to_check:
+        if not check_dir.exists():
+            continue
+            
+        try:
+            result = subprocess.run(
+                ["ruff", "check", str(check_dir), "--select", "F401", "--output-format", "text"],
+                capture_output=True,
+                text=True,
+                cwd=project_root,
+            )
+            
+            # Parse ruff output: file:line:col: F401 message
+            for line in result.stdout.strip().split("\n"):
+                if not line or "F401" not in line:
+                    continue
+                # Example: tests/unit/test.py:34:5: F401 `module.name` imported but unused
+                parts = line.split(":", 3)
+                if len(parts) >= 4:
+                    file_path = project_root / parts[0]
+                    line_num = int(parts[1]) if parts[1].isdigit() else 0
+                    message = parts[3].strip() if len(parts) > 3 else line
+                    unused_imports.append((file_path, message, line_num))
+        except FileNotFoundError:
+            # ruff not installed
+            pass
+        except Exception:
+            pass
+    
+    return unused_imports
+
+
 def find_semantic_duplicates(constants: dict[str, tuple[any, int]]) -> list[tuple[str, str, str]]:
     """Find constants that might be semantically equivalent.
     
@@ -326,6 +374,20 @@ def main():
     else:
         print("  All constants are used!")
     
+    # 5. Find unused imports across all files
+    print("\n" + "-" * 70)
+    print("5. UNUSED IMPORTS (imported but never used in file)")
+    print("-" * 70)
+    unused_imports = find_unused_imports(project_root)
+    if unused_imports:
+        print(f"  Found {len(unused_imports)} unused imports:")
+        for file_path, message, line_num in unused_imports:
+            rel_path = file_path.relative_to(project_root)
+            print(f"    {rel_path}:{line_num}: {message}")
+        print("\n  Fix with: ruff check --select F401 --fix .")
+    else:
+        print("  All imports are used!")
+    
     # Summary
     print("\n" + "=" * 70)
     print("SUMMARY")
@@ -335,9 +397,14 @@ def main():
     print(f"  Similar name pairs: {len(similar)}")
     print(f"  Semantic duplicates: {len(semantic)}")
     print(f"  Unused constants: {len(unused)}")
+    print(f"  Unused imports: {len(unused_imports)}")
     
-    if unused:
-        print(f"\n  ⚠️  {len(unused)} constants can be safely removed!")
+    has_issues = unused or unused_imports
+    if has_issues:
+        if unused:
+            print(f"\n  ⚠️  {len(unused)} constants can be safely removed!")
+        if unused_imports:
+            print(f"  ⚠️  {len(unused_imports)} unused imports found!")
         return 1
     
     return 0

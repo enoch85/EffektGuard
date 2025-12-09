@@ -17,16 +17,6 @@ from custom_components.effektguard.optimization.decision_engine import DecisionE
 from custom_components.effektguard.optimization.effect_layer import EffectLayerDecision
 from custom_components.effektguard.optimization.price_layer import PriceLayerDecision
 from custom_components.effektguard.optimization.weather_layer import WeatherLayerDecision
-from custom_components.effektguard.const import (
-    CONF_ENABLE_OPTIMIZATION,
-    CONF_ENABLE_PEAK_PROTECTION,
-    CONF_ENABLE_PRICE_OPTIMIZATION,
-    CONF_ENABLE_WEATHER_PREDICTION,
-    CONF_ENABLE_HOT_WATER_OPTIMIZATION,
-    MODE_CONFIGS,
-    OPTIMIZATION_MODE_BALANCED,
-    QuarterClassification,
-)
 
 
 def create_engine(config_overrides=None):

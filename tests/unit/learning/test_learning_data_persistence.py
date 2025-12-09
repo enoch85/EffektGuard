@@ -4,7 +4,6 @@ Verifies that learned data can be saved to disk and restored correctly,
 ensuring learning progress persists across Home Assistant restarts.
 """
 
-import pytest
 from datetime import datetime, timedelta
 from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
