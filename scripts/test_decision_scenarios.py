@@ -566,7 +566,7 @@ class ScenarioTester:
                     "Proactive",
                     offset=coast_offset,
                     weight=coast_weight,
-                    reason=f"Overshoot protection: COAST at {coast_offset:.1f}°C (overshoot {overshoot:.1f}°C)",
+                    reason=f"Overshoot: {overshoot:.1f}°C above target, reducing heat ({coast_offset:.1f}°C @ {coast_weight:.2f})",
                 )
 
         # Get climate-aware expected DM ranges (same as emergency layer)

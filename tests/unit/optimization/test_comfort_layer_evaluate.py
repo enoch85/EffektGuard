@@ -189,10 +189,10 @@ class TestComfortLayerOvershoot:
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
         assert result.offset < 0.0
-        # Should be in range of coast offsets (-7 to -10)
+        # Should be in range of overshoot protection offsets (-7 to -10)
         assert result.offset <= OVERSHOOT_PROTECTION_OFFSET_MIN
         assert result.weight >= LAYER_WEIGHT_COMFORT_HIGH
-        assert "COAST" in result.reason or "Overshoot" in result.reason
+        assert "Overshoot" in result.reason
 
 
 class TestComfortLayerTooCold:
@@ -309,7 +309,7 @@ class TestComfortLayerThermalAwareOvershoot:
 
         # Standard overshoot protection (not thermal-aware since no price data)
         assert result.offset < 0.0  # Should reduce heating
-        assert "COAST" in result.reason or "Overshoot" in result.reason
+        assert "Overshoot" in result.reason
         assert result.weight >= LAYER_WEIGHT_COMFORT_HIGH
 
     def test_overshoot_with_sufficient_buffer(self):

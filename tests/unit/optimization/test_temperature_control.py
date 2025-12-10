@@ -109,7 +109,7 @@ def test_comfort_layer_at_overshoot_start_threshold():
     assert (
         decision.offset <= OVERSHOOT_PROTECTION_OFFSET_MIN
     ), f"Expected offset <= {OVERSHOOT_PROTECTION_OFFSET_MIN} in coast mode, got {decision.offset}"
-    assert "COAST" in decision.reason or "Overshoot" in decision.reason
+    assert "Overshoot" in decision.reason
 
 
 def test_comfort_layer_at_overshoot_full_threshold():
@@ -136,7 +136,7 @@ def test_comfort_layer_at_overshoot_full_threshold():
     assert (
         decision.offset == OVERSHOOT_PROTECTION_OFFSET_MAX
     ), f"Expected offset {OVERSHOOT_PROTECTION_OFFSET_MAX} at FULL, got {decision.offset}"
-    assert "COAST" in decision.reason
+    assert "Overshoot" in decision.reason
 
 
 def test_comfort_layer_above_full_threshold():
@@ -159,7 +159,7 @@ def test_comfort_layer_above_full_threshold():
     # Should use maximum response
     assert decision.weight == LAYER_WEIGHT_COMFORT_CRITICAL
     assert decision.offset == OVERSHOOT_PROTECTION_OFFSET_MAX  # -10°C
-    assert "COAST" in decision.reason
+    assert "Overshoot" in decision.reason
 
 
 def test_comfort_layer_mild_overshoot_before_coast():
@@ -179,10 +179,10 @@ def test_comfort_layer_mild_overshoot_before_coast():
 
     decision = layer.evaluate_layer(nibe_state)
 
-    # Should use gentle correction, NOT coast
+    # Should use gentle correction, NOT overshoot protection
     assert decision.weight == LAYER_WEIGHT_COMFORT_HIGH
-    assert "COAST" not in decision.reason
-    # Offset should be milder than coast offsets
+    assert "reducing heat" not in decision.reason  # Not the overshoot protection message
+    # Offset should be milder than overshoot protection offsets
     assert decision.offset > OVERSHOOT_PROTECTION_OFFSET_MIN
 
 
@@ -204,7 +204,7 @@ def test_graduated_offsets_scale_with_overshoot():
     # Should be roughly halfway between MIN (-7) and MAX (-10)
     # Expected: -8.5°C
     assert -9.0 <= decision.offset <= -8.0
-    assert "COAST" in decision.reason
+    assert "Overshoot" in decision.reason
 
 
 def test_graduated_weights_increase_with_overshoot():

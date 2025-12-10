@@ -286,7 +286,7 @@ class ComfortLayer:
                 )
 
             else:
-                # Buffer IS sufficient - gentle coast
+                # Buffer IS sufficient - gentle reduce
                 surplus_ratio = buffer_hours / hours_needed
                 adjusted_weight = min(
                     LAYER_WEIGHT_COMFORT_MIN * surplus_ratio, LAYER_WEIGHT_COMFORT_HIGH
@@ -300,7 +300,7 @@ class ComfortLayer:
                     reason=(
                         f"Buffer {overshoot:.1f}°C = {buffer_hours:.1f}h @ {effective_heat_loss:.2f}°C/h | "
                         f"Spike in {expensive_start_hours:.1f}h for {expensive_duration_hours:.1f}h | "
-                        f"OK: {surplus_ratio:.1f}x surplus - gentle coast"
+                        f"OK: {surplus_ratio:.1f}x surplus - reducing heat"
                     ),
                     temp_deviation=temp_deviation,
                     buffer_hours=buffer_hours,
@@ -397,8 +397,8 @@ class ComfortLayer:
             offset=coast_offset,
             weight=coast_weight,
             reason=(
-                f"Overshoot: COAST {coast_offset:.1f}°C @ weight {coast_weight:.2f} "
-                f"(indoor {nibe_state.indoor_temp:.1f}°C is {overshoot:.1f}°C above target)"
+                f"Overshoot: {overshoot:.1f}°C above target, reducing heat "
+                f"({coast_offset:.1f}°C @ {coast_weight:.2f})"
             ),
             temp_deviation=temp_deviation,
         )

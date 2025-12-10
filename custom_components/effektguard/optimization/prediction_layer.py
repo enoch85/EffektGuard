@@ -319,28 +319,26 @@ class ThermalStatePredictor:
                     effective_deficit * PREDICTION_PREHEAT_MULT_EXTREME_COLD,
                     PREDICTION_PREHEAT_MAX_EXTREME_COLD,
                 )
-                reason = f"Extreme cold pre-heating: predicted drop {temp_deficit:.1f}°C"
+                reason = f"Extreme cold: building {temp_deficit:.1f}°C margin"
             elif current_outdoor_temp < PREDICTION_OUTDOOR_COLD:
                 # Cold: Moderate pre-heating
                 recommended_offset = min(
                     effective_deficit * PREDICTION_PREHEAT_MULT_COLD,
                     PREDICTION_PREHEAT_MAX_COLD,
                 )
-                reason = f"Cold spell pre-heating: predicted drop {temp_deficit:.1f}°C"
+                reason = f"Cold spell: building {temp_deficit:.1f}°C margin"
             else:
                 # Mild: Normal pre-heating
                 recommended_offset = min(
                     effective_deficit * PREDICTION_PREHEAT_MULT_MILD,
                     PREDICTION_PREHEAT_MAX_MILD,
                 )
-                reason = f"Pre-heating: predicted drop {temp_deficit:.1f}°C"
+                reason = f"Pre-heating: building {temp_deficit:.1f}°C margin"
 
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
             if current_overshoot > PREDICTION_OVERSHOOT_LOG_THRESHOLD:
-                reason += (
-                    f" (thermal storage: +{current_overshoot:.1f}°C overshoot → coast through cold)"
-                )
+                reason += f" (buffer: +{current_overshoot:.1f}°C stored for cold ahead)"
 
             # Calculate hours until temperature drops below threshold
             hours_until_cold = 0

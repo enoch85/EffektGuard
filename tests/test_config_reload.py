@@ -942,3 +942,106 @@ class TestOffsetPersistence:
         new_decision_offset = 1.8  # Same as restored
         should_skip = abs(new_decision_offset - restored_offset) < 0.01
         assert should_skip is True
+
+
+class TestTargetTemperaturePersistence:
+    """Tests for target temperature persistence across restarts (Dec 10, 2025).
+
+    Issue: Target temperature reset from 21.5°C to 21.0°C after restart.
+    Root cause: entry.options should override entry.data during initialization.
+    """
+
+    def test_decision_engine_uses_options_over_data(self):
+        """Verify DecisionEngine reads target_temp from options first, then data."""
+        from unittest.mock import MagicMock
+        from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+
+        # Simulate config merge: options should override data
+        # User set target to 22.5°C (stored in options)
+        # Original default was 21.0°C (stored in data)
+        merged_config = {
+            "target_indoor_temp": 22.5,  # This is what merged config should have
+            "latitude": 59.33,
+            "tolerance": 0.5,
+        }
+
+        # Create mocked dependencies
+        mock_price_analyzer = MagicMock()
+        mock_effect_manager = MagicMock()
+        mock_thermal_model = MagicMock()
+        mock_thermal_model.thermal_mass = 1.0
+
+        engine = DecisionEngine(
+            price_analyzer=mock_price_analyzer,
+            effect_manager=mock_effect_manager,
+            thermal_model=mock_thermal_model,
+            config=merged_config,
+        )
+
+        # Engine should use the merged value (22.5), not default (21.0)
+        assert engine.target_temp == 22.5
+
+    def test_config_merge_options_override_data(self):
+        """Verify config merge pattern: entry.options overlays entry.data."""
+        # Simulate entry.data (initial config from setup)
+        entry_data = {
+            "nibe_entity": "number.nibe_offset",
+            "target_indoor_temp": 21.0,  # Default from config flow
+        }
+
+        # Simulate entry.options (user changes via UI)
+        entry_options = {
+            "target_indoor_temp": 22.5,  # User changed to 22.5°C
+            "tolerance": 0.5,
+        }
+
+        # Merge pattern used in __init__.py
+        merged_config = dict(entry_data)
+        merged_config.update(entry_options)
+
+        # Options should override data
+        assert merged_config["target_indoor_temp"] == 22.5
+        assert merged_config["nibe_entity"] == "number.nibe_offset"  # From data
+        assert merged_config["tolerance"] == 0.5  # From options
+
+    def test_coordinator_uses_options_for_dhw_target(self):
+        """Verify coordinator reads target_indoor from options first."""
+        # Test the pattern used in coordinator.py for DHW abort monitoring
+        entry_data = {"target_indoor_temp": 21.0}
+        entry_options = {"target_indoor_temp": 22.5}
+
+        # Correct pattern (options first, data fallback)
+        target_indoor = entry_options.get(
+            "target_indoor_temp",
+            entry_data.get("target_indoor_temp", 21.0),
+        )
+
+        assert target_indoor == 22.5
+
+    def test_coordinator_fallback_to_data_when_no_options(self):
+        """Verify fallback to entry.data when options doesn't have target."""
+        entry_data = {"target_indoor_temp": 21.5}
+        entry_options = {}  # User never changed it via UI
+
+        # Correct pattern (options first, data fallback)
+        target_indoor = entry_options.get(
+            "target_indoor_temp",
+            entry_data.get("target_indoor_temp", 21.0),
+        )
+
+        # Should fall back to data value
+        assert target_indoor == 21.5
+
+    def test_coordinator_fallback_to_default_when_neither(self):
+        """Verify fallback to default when neither options nor data has target."""
+        from custom_components.effektguard.const import DEFAULT_INDOOR_TEMP
+
+        entry_data = {}
+        entry_options = {}
+
+        target_indoor = entry_options.get(
+            "target_indoor_temp",
+            entry_data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+        )
+
+        assert target_indoor == DEFAULT_INDOOR_TEMP

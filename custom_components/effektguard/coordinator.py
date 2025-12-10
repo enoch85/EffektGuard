@@ -1485,7 +1485,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self.last_update_success and hasattr(self, "data") and self.data is not None
             else DEFAULT_INDOOR_TEMP
         )
-        target_indoor = self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP)
+        target_indoor = self.entry.options.get(
+            "target_indoor_temp",
+            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+        )
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
