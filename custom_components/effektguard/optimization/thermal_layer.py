@@ -51,6 +51,8 @@ from ..const import (
     PROACTIVE_ZONE5_OFFSET,
     PROACTIVE_ZONE5_THRESHOLD_PERCENT,
     PROACTIVE_ZONE5_WEIGHT,
+    PROACTIVE_WARM_HOUSE_THRESHOLD,
+    PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION,
     QuarterClassification,
     RAPID_COOLING_BOOST_MAX,
     RAPID_COOLING_BOOST_MULTIPLIER,
@@ -1011,6 +1013,52 @@ class ProactiveLayer:
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
 
+    def _is_house_warm(self, indoor_temp: float, target_temp: float) -> bool:
+        """Check if house is warm enough to reduce proactive heating.
+
+        When house is above target + threshold, DM recovery is less urgent
+        because COAST (overshoot protection) should handle temperature.
+        Reduces proactive layer weight to prevent fighting with COAST.
+
+        Args:
+            indoor_temp: Current indoor temperature (°C)
+            target_temp: Target indoor temperature (°C)
+
+        Returns:
+            True if house is warm (above target + threshold)
+        """
+        return indoor_temp > target_temp + PROACTIVE_WARM_HOUSE_THRESHOLD
+
+    def _apply_warm_house_reduction(
+        self, weight: float, indoor_temp: float, target_temp: float, zone: str
+    ) -> tuple[float, str]:
+        """Apply weight reduction when house is warm.
+
+        Z5 is exempt because at warning boundary, DM recovery takes priority.
+
+        Args:
+            weight: Original weight
+            indoor_temp: Current indoor temperature (°C)
+            target_temp: Target indoor temperature (°C)
+            zone: Zone identifier (Z1-Z5, RAPID_COOLING)
+
+        Returns:
+            Tuple of (adjusted_weight, reason_suffix)
+        """
+        # Z5 exempt: at warning boundary, prioritize DM recovery
+        if zone == "Z5":
+            return weight, ""
+
+        if self._is_house_warm(indoor_temp, target_temp):
+            overshoot = indoor_temp - target_temp
+            reduced_weight = weight * PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION
+            return (
+                reduced_weight,
+                f" [warm house: +{overshoot:.1f}°C, weight {weight:.2f}→{reduced_weight:.2f}]",
+            )
+
+        return weight, ""
+
     def evaluate_layer(
         self,
         nibe_state,
@@ -1068,14 +1116,20 @@ class ProactiveLayer:
                             boost *= MULTIPLIER_REDUCTION_20_PERCENT
                             forecast_reason = " (forecast stable, likely temporary)"
 
+                # Apply warm house weight reduction
+                weight = RAPID_COOLING_WEIGHT
+                weight, warm_suffix = self._apply_warm_house_reduction(
+                    weight, indoor_temp, target_temp, "RAPID_COOLING"
+                )
+
                 return ProactiveLayerDecision(
                     name="Proactive",
                     offset=boost,
-                    weight=RAPID_COOLING_WEIGHT,
+                    weight=weight,
                     reason=(
                         f"Rapid cooling ({trend_rate:.2f}°C/h), "
                         f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
-                        f"{forecast_reason}"
+                        f"{forecast_reason}{warm_suffix}"
                     ),
                     zone="RAPID_COOLING",
                     degree_minutes=degree_minutes,
@@ -1103,11 +1157,17 @@ class ProactiveLayer:
             else:
                 reason_suffix = ""
 
+            # Apply warm house weight reduction
+            weight = LAYER_WEIGHT_PROACTIVE_MIN
+            weight, warm_suffix = self._apply_warm_house_reduction(
+                weight, indoor_temp, target_temp, "Z1"
+            )
+
             return ProactiveLayerDecision(
                 name="Proactive Z1",
                 offset=offset,
-                weight=LAYER_WEIGHT_PROACTIVE_MIN,
-                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}",
+                weight=weight,
+                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{warm_suffix}",
                 zone="Z1",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1115,11 +1175,17 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 2
         if zone3_threshold < degree_minutes <= zone2_threshold:
+            # Apply warm house weight reduction
+            weight = PROACTIVE_ZONE2_WEIGHT
+            weight, warm_suffix = self._apply_warm_house_reduction(
+                weight, indoor_temp, target_temp, "Z2"
+            )
+
             return ProactiveLayerDecision(
                 name="Proactive Z2",
                 offset=PROACTIVE_ZONE2_OFFSET,
-                weight=PROACTIVE_ZONE2_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, boost recovery speed",
+                weight=weight,
+                reason=f"DM {degree_minutes:.0f}, boost recovery speed{warm_suffix}",
                 zone="Z2",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1132,11 +1198,17 @@ class ProactiveLayer:
             )
             offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
 
+            # Apply warm house weight reduction
+            weight = PROACTIVE_ZONE3_WEIGHT
+            weight, warm_suffix = self._apply_warm_house_reduction(
+                weight, indoor_temp, target_temp, "Z3"
+            )
+
             return ProactiveLayerDecision(
                 name="Proactive Z3",
                 offset=offset,
-                weight=PROACTIVE_ZONE3_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, prevent deeper debt",
+                weight=weight,
+                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{warm_suffix}",
                 zone="Z3",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1144,17 +1216,23 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 4
         if zone5_threshold < degree_minutes <= zone4_threshold:
+            # Apply warm house weight reduction
+            weight = PROACTIVE_ZONE4_WEIGHT
+            weight, warm_suffix = self._apply_warm_house_reduction(
+                weight, indoor_temp, target_temp, "Z4"
+            )
+
             return ProactiveLayerDecision(
                 name="Proactive Z4",
                 offset=PROACTIVE_ZONE4_OFFSET,
-                weight=PROACTIVE_ZONE4_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, strong prevention",
+                weight=weight,
+                reason=f"DM {degree_minutes:.0f}, strong prevention{warm_suffix}",
                 zone="Z4",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
             )
 
-        # PROACTIVE ZONE 5
+        # PROACTIVE ZONE 5 (no warm house reduction - at warning boundary)
         if expected_dm["warning"] < degree_minutes <= zone5_threshold:
             return ProactiveLayerDecision(
                 name="Proactive Z5",

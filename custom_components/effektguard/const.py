@@ -517,6 +517,15 @@ PROACTIVE_ZONE4_WEIGHT: Final = 0.55  # Strong weight (below WARNING)
 PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNING)
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
+# Warm house weight reduction (Dec 10, 2025)
+# When house is warm (above target + threshold), reduce proactive layer weight
+# to prevent fighting with COAST (overshoot protection).
+# Root cause: DM can be negative even when house is warm due to flow temp reduction.
+# The correct response is to let COAST reduce heat, not boost DM recovery.
+# Z5 exemption: At warning boundary, prioritize DM recovery over temperature
+PROACTIVE_WARM_HOUSE_THRESHOLD: Final = 0.5  # °C above target to consider "warm"
+PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION: Final = 0.3  # Apply 30% of normal weight when warm
+
 # Overshoot Protection
 # Graduated coasting response when indoor temp is above target with stable weather
 # Based on Dec 1-2, 2025 production analysis: overshoot was ignored, causing DM spiral
