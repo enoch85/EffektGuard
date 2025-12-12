@@ -7,3 +7,7 @@ pytest-cov>=4.1.0
 pytest-homeassistant-custom-component>=0.13.0
 voluptuous>=0.13.0
 freezegun>=1.2.0
+
+# Pin pycares to avoid aiodns incompatibility with pycares 5.0.0
+# See: https://github.com/aio-libs/aiodns/issues/214
+pycares<5.0.0
