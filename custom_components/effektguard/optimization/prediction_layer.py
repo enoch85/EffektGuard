@@ -19,9 +19,12 @@ import numpy as np
 
 from ..const import (
     LAYER_WEIGHT_PREDICTION,
+    LEARNING_CONFIDENCE_THRESHOLD,
     PREDICTION_COMFORT_THRESHOLD_COLD,
     PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD,
     PREDICTION_COMFORT_THRESHOLD_MILD,
+    PREDICTION_FALLBACK_HEAT_LOSS_RATE,
+    PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF,
     PREDICTION_MIN_HEATING_OFFSET,
     PREDICTION_OUTDOOR_COLD,
     PREDICTION_OUTDOOR_EXTREME_COLD,
@@ -39,7 +42,12 @@ from ..const import (
     PREDICTION_TREND_RISING_THRESHOLD,
     SAMPLES_PER_HOUR,
 )
-from .learning_types import PreHeatDecision, TempPrediction, ThermalSnapshot
+from .learning_types import (
+    LearnedThermalParameters,
+    PreHeatDecision,
+    TempPrediction,
+    ThermalSnapshot,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -167,8 +175,12 @@ class ThermalStatePredictor:
         planned_offsets: list[float] | None = None,
         thermal_mass: float = 1.0,
         insulation_quality: float = 1.0,
+        learned_params: LearnedThermalParameters | None = None,
     ) -> TempPrediction:
         """Predict indoor temperature N hours ahead.
+
+        Uses learned thermal parameters when available with sufficient confidence,
+        falling back to calculated responsiveness and simple heat loss formula.
 
         Args:
             hours_ahead: Number of hours to predict forward
@@ -176,9 +188,16 @@ class ThermalStatePredictor:
             planned_offsets: Planned heating offsets (one per hour), or None for current
             thermal_mass: Building thermal mass (learned or configured)
             insulation_quality: Insulation quality (learned or configured)
+            learned_params: Learned thermal parameters from AdaptiveThermalModel
 
         Returns:
             Temperature prediction with confidence
+
+        Notes:
+            When learned_params is provided with confidence >= LEARNING_CONFIDENCE_THRESHOLD:
+            - Uses heating_efficiency instead of calculated responsiveness
+            - Uses heat_loss_coefficient for proper heat loss calculation
+            - Uses thermal_decay_rate for natural cooling prediction
         """
         if len(self.state_history) < 4:  # Need at least 1 hour of history
             # Insufficient data - return simple projection
@@ -196,9 +215,25 @@ class ThermalStatePredictor:
         current_outdoor = current.outdoor_temp
         current_offset = current.heating_offset
 
-        # Calculate thermal responsiveness if not cached
-        if self._thermal_responsiveness is None:
-            self._thermal_responsiveness = self._calculate_thermal_responsiveness()
+        # Determine if we should use learned parameters
+        use_learned = (
+            learned_params is not None
+            and learned_params.confidence >= LEARNING_CONFIDENCE_THRESHOLD
+        )
+
+        # Get heating efficiency (thermal responsiveness)
+        if use_learned:
+            heating_efficiency = learned_params.heating_efficiency
+            _LOGGER.debug(
+                "Using learned heating_efficiency=%.3f (confidence=%.1f%%)",
+                heating_efficiency,
+                learned_params.confidence * 100,
+            )
+        else:
+            # Fall back to calculated responsiveness
+            if self._thermal_responsiveness is None:
+                self._thermal_responsiveness = self._calculate_thermal_responsiveness()
+            heating_efficiency = self._thermal_responsiveness
 
         # Use planned offsets or assume current offset continues
         if planned_offsets is None:
@@ -216,13 +251,44 @@ class ThermalStatePredictor:
 
             # Calculate heat loss rate (natural cooling)
             temp_diff = temp - outdoor_temp
-            heat_loss_rate = temp_diff / (insulation_quality * 10)  # °C per hour
+            if use_learned and temp_diff > 0:
+                # thermal_decay_rate was measured in °C/hour during actual cooling periods
+                # It already incorporates the building's insulation characteristics
+                #
+                # The learned rate is valid for "typical" conditions during learning.
+                # We have the actual historical average temp diff from state_history.
+                # For now, use the decay_rate directly - it's already calibrated to this building.
+                #
+                # Note: This is a simplification. In reality, heat loss scales with temp_diff
+                # (Newton's law of cooling), but the learned rate already captures the
+                # building's behavior at typical Swedish conditions.
+                heat_loss_rate = abs(learned_params.thermal_decay_rate)
+            elif temp_diff > 0:
+                # Fallback: Simple model based on temp difference (Newton's law of cooling)
+                # Scale linearly with temp_diff from reference conditions
+                # Better insulation (higher quality) = less heat loss
+                # insulation_quality 0.5 = poor (2x heat loss), 2.0 = excellent (0.5x heat loss)
+                base_heat_loss = (
+                    temp_diff / PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF
+                ) * PREDICTION_FALLBACK_HEAT_LOSS_RATE
+                heat_loss_rate = base_heat_loss / insulation_quality
+            else:
+                # Indoor colder than outdoor - no heat loss (actually gain, but ignore)
+                heat_loss_rate = 0.0
 
             # Calculate heat input from heating system
-            heat_input_rate = offset * self._thermal_responsiveness
+            # heating_efficiency is °C per offset per hour (already measured including thermal mass effects)
+            heat_input_rate = offset * heating_efficiency
 
-            # Net temperature change (higher thermal mass = slower change)
-            dt_per_hour = (heat_input_rate - heat_loss_rate) / thermal_mass
+            # Net temperature change per hour
+            # When using learned params, heating_efficiency already accounts for building response
+            # When using fallback, thermal_mass scales the rate (higher mass = slower change)
+            if use_learned:
+                # Learned efficiency already captures building's response characteristics
+                dt_per_hour = heat_input_rate - heat_loss_rate
+            else:
+                # Fallback: apply thermal mass scaling (1.0 = normal, 2.0 = slow, 0.5 = fast)
+                dt_per_hour = (heat_input_rate - heat_loss_rate) / thermal_mass
 
             # Update temperature
             temp = temp + dt_per_hour
@@ -259,6 +325,7 @@ class ThermalStatePredictor:
         current_indoor_temp: float,
         thermal_mass: float = 1.0,
         insulation_quality: float = 1.0,
+        learned_params: LearnedThermalParameters | None = None,
     ) -> PreHeatDecision:
         """Determine if pre-heating is needed.
 
@@ -273,6 +340,7 @@ class ThermalStatePredictor:
             current_indoor_temp: Current indoor temperature (°C, from nibe_state)
             thermal_mass: Building thermal mass
             insulation_quality: Insulation quality
+            learned_params: Learned thermal parameters from AdaptiveThermalModel
 
         Returns:
             Pre-heating decision with reasoning
@@ -284,6 +352,7 @@ class ThermalStatePredictor:
             planned_offsets=[0.0] * hours_ahead,
             thermal_mass=thermal_mass,
             insulation_quality=insulation_quality,
+            learned_params=learned_params,
         )
 
         # Check minimum predicted temperature
@@ -348,8 +417,9 @@ class ThermalStatePredictor:
                     break
 
             # Calculate pre-heat target temperature
-            # Add safety margin proportional to thermal mass
-            safety_margin = 1.0 / thermal_mass  # 0.5-2.0°C range
+            # Higher thermal mass = building holds heat longer = LESS safety margin needed
+            # thermal_mass 0.5 (light) → 1.0°C margin, 2.0 (heavy) → 0.25°C margin
+            safety_margin = 0.5 / max(thermal_mass, 0.5)
             preheat_target = target_temp + safety_margin
 
             return PreHeatDecision(
@@ -432,6 +502,12 @@ class ThermalStatePredictor:
             # Check if pre-heating is recommended
             # Use half of prediction horizon as lookahead (balance between early and late)
             hours_ahead = prediction_horizon // 2
+
+            # Get learned parameters from AdaptiveThermalModel if available
+            learned_params = None
+            if hasattr(thermal_model, "get_parameters"):
+                learned_params = thermal_model.get_parameters()
+
             preheat_decision = self.should_pre_heat(
                 target_temp=target_temp,
                 hours_ahead=hours_ahead,
@@ -440,6 +516,7 @@ class ThermalStatePredictor:
                 current_indoor_temp=nibe_state.indoor_temp,
                 thermal_mass=thermal_model.thermal_mass,
                 insulation_quality=thermal_model.insulation_quality,
+                learned_params=learned_params,
             )
 
             if preheat_decision.should_preheat:
@@ -505,9 +582,11 @@ class ThermalStatePredictor:
 
             time_delta = (current.timestamp - prev.timestamp).total_seconds() / 3600
 
-            if time_delta > 0 and current.heating_offset > PREDICTION_MIN_HEATING_OFFSET:
+            # Use the PREVIOUS offset - it's what caused the temperature change
+            # The current offset just started and hasn't affected indoor temp yet
+            if time_delta > 0 and prev.heating_offset > PREDICTION_MIN_HEATING_OFFSET:
                 temp_change = current.indoor_temp - prev.indoor_temp
-                responsiveness = temp_change / (time_delta * current.heating_offset)
+                responsiveness = temp_change / (time_delta * prev.heating_offset)
 
                 # Sanity check
                 if (
