@@ -1476,19 +1476,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # This avoids duplicate optimizer calls and log spam
         # Get thermal_debt and indoor_temp from coordinator data for abort conditions
         thermal_debt = (
-            self.data.get("dhw_planning_details", {}).get("thermal_debt", 0.0)
+            self.data.get("dhw_planning", {}).get("thermal_debt", 0.0)
             if self.last_update_success and hasattr(self, "data") and self.data is not None
             else 0.0
         )
         indoor_temp = (
-            self.data.get("dhw_planning_details", {}).get("indoor_temperature", DEFAULT_INDOOR_TEMP)
+            self.data.get("dhw_planning", {}).get("indoor_temperature", DEFAULT_INDOOR_TEMP)
             if self.last_update_success and hasattr(self, "data") and self.data is not None
             else DEFAULT_INDOOR_TEMP
         )
-        target_indoor = self.entry.options.get(
-            "target_indoor_temp",
-            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
-        )
+        target_indoor = self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP)
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
