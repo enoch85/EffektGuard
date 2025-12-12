@@ -721,7 +721,9 @@ PREDICTION_FALLBACK_HEAT_LOSS_RATE: Final = 0.15  # °C/hour at reference temp d
 PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF: Final = 20.0  # Reference indoor/outdoor temp diff
 # Derived divisor for heat loss formula: divisor = REF_DIFF / RATE
 # Used by both comfort_layer and prediction_layer for consistent heat loss calculations
-HEAT_LOSS_DIVISOR: Final = PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF / PREDICTION_FALLBACK_HEAT_LOSS_RATE
+HEAT_LOSS_DIVISOR: Final = (
+    PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF / PREDICTION_FALLBACK_HEAT_LOSS_RATE
+)
 # Current overshoot threshold for logging thermal storage strategy
 PREDICTION_OVERSHOOT_LOG_THRESHOLD: Final = 0.1  # °C overshoot to log storage strategy
 
