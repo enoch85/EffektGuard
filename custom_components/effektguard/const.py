@@ -678,11 +678,9 @@ COMFORT_DM_COOLING_THRESHOLD: Final = (
 # Well-insulated Swedish house loses ~0.15°C/hour at 20°C indoor/outdoor diff
 # Formula: heat_loss = (temp_diff / REF_DIFF) * RATE / insulation
 #          = temp_diff / (insulation * REF_DIFF / RATE)
-#          = temp_diff / (insulation * 20 / 0.15)
-#          = temp_diff / (insulation * 133)
-# Updated Dec 12, 2025: Was 10.0 which gave 13x too high heat loss rates
-COMFORT_HEAT_LOSS_DIVISOR: Final = 133.0  # Based on 0.15°C/h at 20°C diff
-COMFORT_HEAT_LOSS_FLOOR: Final = 0.02  # Minimum effective heat loss rate (°C/h) - also reduced
+# Updated Dec 12, 2025: Was hardcoded 10.0 which gave 13x too high heat loss rates
+# Now dynamically calculated from reference constants (defined in prediction layer section below)
+COMFORT_HEAT_LOSS_FLOOR: Final = 0.02  # Minimum effective heat loss rate (°C/h)
 COMFORT_TOO_COLD_CORRECTION_MULT: Final = 0.5  # Multiplier for "too cold" correction
 
 # Effect layer peak protection margins and offsets (Dec 8, 2025)
@@ -721,6 +719,9 @@ PREDICTION_PREHEAT_MAX_MILD: Final = 3.0  # Max offset in mild
 # Reference: Well-insulated Swedish house loses ~0.1-0.2°C/hour at 20°C indoor/outdoor diff
 PREDICTION_FALLBACK_HEAT_LOSS_RATE: Final = 0.15  # °C/hour at reference temp diff
 PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF: Final = 20.0  # Reference indoor/outdoor temp diff
+# Derived divisor for heat loss formula: divisor = REF_DIFF / RATE
+# Used by both comfort_layer and prediction_layer for consistent heat loss calculations
+HEAT_LOSS_DIVISOR: Final = PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF / PREDICTION_FALLBACK_HEAT_LOSS_RATE
 # Current overshoot threshold for logging thermal storage strategy
 PREDICTION_OVERSHOOT_LOG_THRESHOLD: Final = 0.1  # °C overshoot to log storage strategy
 
