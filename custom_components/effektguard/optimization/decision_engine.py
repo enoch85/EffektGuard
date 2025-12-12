@@ -787,17 +787,19 @@ class DecisionEngine:
 
         if critical_layers:
             # Critical layers drive the decision - show them prominently
-            critical_reasons = [layer.reason for layer in critical_layers]
+            critical_reasons = [f"[{layer.name}] {layer.reason}" for layer in critical_layers]
             reasons.extend(critical_reasons)
 
             # Show advisory layers as supplementary info (if any)
             if advisory_layers and len(advisory_layers) <= 2:
                 # Only show a few advisory layers to avoid clutter
-                advisory_summary = ", ".join(f"{layer.reason}" for layer in advisory_layers[:2])
+                advisory_summary = ", ".join(
+                    f"[{layer.name}] {layer.reason}" for layer in advisory_layers[:2]
+                )
                 reasons.append(f"[Advisory: {advisory_summary}]")
         else:
             # No critical layers - all are advisory, show normally
-            reasons = [layer.reason for layer in advisory_layers]
+            reasons = [f"[{layer.name}] {layer.reason}" for layer in advisory_layers]
 
         return " | ".join(reasons)
 

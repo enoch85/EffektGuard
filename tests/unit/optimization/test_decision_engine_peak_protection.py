@@ -238,7 +238,7 @@ class TestLayerPriority:
         # because comfort is at risk (not just theoretical DM concern)
         # Check that an emergency-related layer is active
         emergency_layer = decision.layers[1]
-        assert emergency_layer.name in ("Thermal Debt", "Thermal Recovery T1", "Thermal Recovery T2", "Thermal Recovery T3", "Thermal Debt Warning")
+        assert emergency_layer.name in ("Thermal Debt", "T1", "T2", "T3", "Thermal Debt Warning")
         # Either emergency layer is active or comfort layer detects cold
         assert emergency_layer.weight > 0 or decision.offset > 0
 
@@ -371,7 +371,7 @@ class TestOffsetAggregation:
 
         # Check the layer - when at target with normal prices, emergency should not force heating
         emergency_layer = decision.layers[1]
-        assert emergency_layer.name in ("Thermal Debt", "Thermal Recovery T1", "Thermal Recovery T2", "Thermal Recovery T3")
+        assert emergency_layer.name in ("Thermal Debt", "T1", "T2", "T3")
         # When smart recovery is active, weight should be 0 (ignoring DM)
         assert emergency_layer.weight == 0.0
 

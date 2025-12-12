@@ -172,7 +172,7 @@ class TestVolatileWeightReduction:
         ), f"Offset too negative before spike (should be gentle), got {decision.offset}"
 
         # Verify proactive layer is contributing positive offset
-        proactive_layers = [l for l in decision.layers if l.name.startswith("Proactive")]
+        proactive_layers = [l for l in decision.layers if l.name.startswith("Z")]
         assert len(proactive_layers) > 0, "Should have proactive layer active"
         assert proactive_layers[0].offset > 0, "Proactive layer should suggest heating"
 

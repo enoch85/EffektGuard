@@ -586,14 +586,14 @@ class ScenarioTester:
 
         if zone2 < dm <= zone1:
             return LayerVote(
-                "Proactive Z1",
+                "Z1",
                 offset=PROACTIVE_ZONE1_OFFSET,
                 weight=self.proactive_weight_z1,
                 reason=f"DM {dm:.0f} (threshold: {zone1:.0f}), gentle heating prevents debt",
             )
         elif zone3 < dm <= zone2:
             return LayerVote(
-                "Proactive Z2",
+                "Z2",
                 offset=PROACTIVE_ZONE2_OFFSET,
                 weight=self.proactive_weight_z2,
                 reason=f"DM {dm:.0f} (threshold: {zone2:.0f}), boost recovery speed",
@@ -604,7 +604,7 @@ class ScenarioTester:
                 min(deficit_severity, 1.0) * PROACTIVE_ZONE3_OFFSET_RANGE
             )
             return LayerVote(
-                "Proactive Z3",
+                "Z3",
                 offset=offset,
                 weight=self.proactive_weight_z3,
                 reason=f"DM {dm:.0f} (threshold: {zone3:.0f}), prevent deeper debt (severity: {deficit_severity:.2f})",
@@ -612,7 +612,7 @@ class ScenarioTester:
         elif zone4_end < dm <= zone4_start:
             # NEW ZONE 4: Bridge gap to WARNING (Oct 19, 2025)
             return LayerVote(
-                "Proactive Z4",
+                "Z4",
                 offset=PROACTIVE_ZONE4_OFFSET,
                 weight=PROACTIVE_ZONE4_WEIGHT,
                 reason=f"DM {dm:.0f} extended debt prevention (bridge to WARNING)",

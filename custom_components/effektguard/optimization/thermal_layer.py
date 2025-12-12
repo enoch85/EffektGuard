@@ -605,7 +605,7 @@ class EmergencyLayer:
                 reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
-                name="Thermal Recovery T3",
+                name="T3",
                 offset=final_offset,
                 weight=DM_CRITICAL_T3_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -645,7 +645,7 @@ class EmergencyLayer:
                 reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
-                name="Thermal Recovery T2",
+                name="T2",
                 offset=final_offset,
                 weight=DM_CRITICAL_T2_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -685,7 +685,7 @@ class EmergencyLayer:
                 reason_parts.append(f"[{anti_windup_reason}]")
 
             return EmergencyLayerDecision(
-                name="Thermal Recovery T1",
+                name="T1",
                 offset=final_offset,
                 weight=DM_CRITICAL_T1_WEIGHT,
                 reason=" ".join(reason_parts),
@@ -1164,7 +1164,7 @@ class ProactiveLayer:
             )
 
             return ProactiveLayerDecision(
-                name="Proactive Z1",
+                name="Z1",
                 offset=offset,
                 weight=weight,
                 reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{warm_suffix}",
@@ -1182,7 +1182,7 @@ class ProactiveLayer:
             )
 
             return ProactiveLayerDecision(
-                name="Proactive Z2",
+                name="Z2",
                 offset=PROACTIVE_ZONE2_OFFSET,
                 weight=weight,
                 reason=f"DM {degree_minutes:.0f}, boost recovery speed{warm_suffix}",
@@ -1205,7 +1205,7 @@ class ProactiveLayer:
             )
 
             return ProactiveLayerDecision(
-                name="Proactive Z3",
+                name="Z3",
                 offset=offset,
                 weight=weight,
                 reason=f"DM {degree_minutes:.0f}, prevent deeper debt{warm_suffix}",
@@ -1223,7 +1223,7 @@ class ProactiveLayer:
             )
 
             return ProactiveLayerDecision(
-                name="Proactive Z4",
+                name="Z4",
                 offset=PROACTIVE_ZONE4_OFFSET,
                 weight=weight,
                 reason=f"DM {degree_minutes:.0f}, strong prevention{warm_suffix}",
@@ -1235,7 +1235,7 @@ class ProactiveLayer:
         # PROACTIVE ZONE 5 (no warm house reduction - at warning boundary)
         if expected_dm["warning"] < degree_minutes <= zone5_threshold:
             return ProactiveLayerDecision(
-                name="Proactive Z5",
+                name="Z5",
                 offset=PROACTIVE_ZONE5_OFFSET,
                 weight=PROACTIVE_ZONE5_WEIGHT,
                 reason=f"DM {degree_minutes:.0f}, approaching warning",

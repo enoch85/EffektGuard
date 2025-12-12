@@ -474,7 +474,7 @@ class TestProactiveLayerDecisionDataclass:
     def test_dataclass_fields(self):
         """Test dataclass has all expected fields."""
         decision = ProactiveLayerDecision(
-            name="Proactive Z1",
+            name="Z1",
             offset=0.5,
             weight=0.05,
             reason="Test reason",
@@ -484,7 +484,7 @@ class TestProactiveLayerDecisionDataclass:
             forecast_validated=True,
         )
 
-        assert decision.name == "Proactive Z1"
+        assert decision.name == "Z1"
         assert decision.offset == 0.5
         assert decision.weight == 0.05
         assert decision.reason == "Test reason"
