@@ -629,6 +629,12 @@ PRICE_FORECAST_REDUCTION_OFFSET: Final = (
 )  # °C - reduce heating when cheap period coming (Dec 5, 2025: strengthened from -1.0)
 PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
+# Price layer DM debt gate (Dec 13, 2025)
+# When thermal debt exists, price layer should not suppress heating (fighting thermal recovery).
+# Instead, contribute a gentle positive offset to aid recovery while respecting user savings intent.
+# Uses WEATHER_COMP_DEFER_DM_CRITICAL (-400) as threshold for consistent behavior across layers.
+PRICE_FORECAST_DM_DEBT_OFFSET: Final = 0.3  # °C - Gentle recovery offset when in debt
+
 # Volatile price detection - Current run-length approach (Dec 2, 2025)
 # A quarter is volatile if its own run is brief (< 3 quarters / 45 min).
 # Compressor needs ~45 min to ramp up - brief periods cause wear.

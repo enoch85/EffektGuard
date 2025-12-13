@@ -19,6 +19,7 @@ from ..const import (
     PRICE_DAYTIME_MULTIPLIER,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
+    PRICE_FORECAST_DM_DEBT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     PRICE_FORECAST_MIN_DURATION,
     PRICE_FORECAST_PREHEAT_OFFSET,
@@ -39,6 +40,7 @@ from ..const import (
     PRICE_TOLERANCE_MIN,
     PRICE_VOLATILE_WEIGHT_REDUCTION,
     QuarterClassification,
+    WEATHER_COMP_DEFER_DM_CRITICAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -1079,6 +1081,16 @@ class PriceAnalyzer:
                             f" | Forecast: Cheap period too soon "
                             f"({cheap_quarters_away * 15}min)"
                         )
+
+        # DM debt gate: Don't suppress heating when thermal debt exists (Dec 13, 2025)
+        # Price layer was fighting thermal recovery by applying -1.5°C during critical DM debt.
+        # When in debt, switch to gentle positive offset to aid recovery while respecting savings intent.
+        if forecast_adjustment < 0 and nibe_state.degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
+            forecast_reason = (
+                f" | DM debt ({nibe_state.degree_minutes:.0f}): "
+                f"forecast {forecast_adjustment:+.1f}→{PRICE_FORECAST_DM_DEBT_OFFSET:+.1f}°C"
+            )
+            forecast_adjustment = PRICE_FORECAST_DM_DEBT_OFFSET
 
         # Get base offset for current classification
         base_offset = self.get_base_offset(
