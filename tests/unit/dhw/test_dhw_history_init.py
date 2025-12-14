@@ -56,18 +56,19 @@ def test_history_initialization_concept():
     ]
 
     # Simulate what initialize_from_history() does
-    max_temp_seen = 0.0
-    max_temp_time = None
+    # Track the MOST RECENT time temperature reached Legionella threshold
+    last_legionella_time = None
 
     for timestamp, temp in historical_temps:
         scheduler.bt7_history.append((timestamp, temp))
-        if temp > max_temp_seen:
-            max_temp_seen = temp
-            max_temp_time = timestamp
+        # Track most recent time at threshold (not just max temp)
+        if temp >= DHW_LEGIONELLA_DETECT:
+            if last_legionella_time is None or timestamp > last_legionella_time:
+                last_legionella_time = timestamp
 
-    # If we saw ≥56°C in past 24h, record it
-    if max_temp_seen >= DHW_LEGIONELLA_DETECT and max_temp_time:
-        scheduler.last_legionella_boost = max_temp_time
+    # If we saw ≥55°C in past 24h, record it
+    if last_legionella_time:
+        scheduler.last_legionella_boost = last_legionella_time
 
     # Now last_legionella_boost is NOT None - it's set to yesterday!
     assert (

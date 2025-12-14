@@ -367,6 +367,7 @@ class IntelligentDHWScheduler:
             state_list = states[bt7_entity_id]
             max_temp_seen = 0.0
             max_temp_time = None
+            last_legionella_time = None
 
             for state in state_list:
                 try:
@@ -377,10 +378,16 @@ class IntelligentDHWScheduler:
                     # (limited to last 48 entries = 12 hours @ 15min for peak detection)
                     self.bt7_history.append((timestamp, temp))
 
-                    # Track maximum temperature seen
+                    # Track maximum temperature seen (for logging)
                     if temp > max_temp_seen:
                         max_temp_seen = temp
                         max_temp_time = timestamp
+
+                    # Track most recent time at Legionella threshold
+                    # This ensures we get the LATEST boost, not just the highest peak
+                    if temp >= DHW_LEGIONELLA_DETECT:
+                        if last_legionella_time is None or timestamp > last_legionella_time:
+                            last_legionella_time = timestamp
 
                 except (ValueError, TypeError):
                     continue
@@ -393,18 +400,18 @@ class IntelligentDHWScheduler:
                 max_temp_time,
             )
 
-            # If we saw a high-temp cycle (≥56°C) in the past 14 days, record it
-            if max_temp_seen >= DHW_LEGIONELLA_DETECT and max_temp_time:
-                # Check if this is recent enough (within 14 days tracking window)
-                hours_ago = (end_time - max_temp_time).total_seconds() / 3600.0
+            # If we saw a high-temp cycle (≥55°C) in the past 14 days, record it
+            # Use the MOST RECENT time at threshold, not the time of max temperature
+            if last_legionella_time:
+                hours_ago = (end_time - last_legionella_time).total_seconds() / 3600.0
 
                 if hours_ago <= 24.0 * DHW_LEGIONELLA_MAX_DAYS:  # Within tracking window
-                    self.last_legionella_boost = max_temp_time
+                    self.last_legionella_boost = last_legionella_time
                     _LOGGER.info(
-                        "Detected previous Legionella boost from history: %.1f°C at %s (%.1f hours ago)",
-                        max_temp_seen,
-                        max_temp_time,
+                        "Detected previous Legionella boost from history: last at %s (%.1f hours ago, max seen: %.1f°C)",
+                        last_legionella_time,
                         hours_ago,
+                        max_temp_seen,
                     )
 
         except Exception as err:
