@@ -68,7 +68,7 @@ class OutdoorTrendDict(TypedDict):
     rate_per_hour: float
     confidence: float
     samples: int
-    temp_change_2h: float
+    temp_change_last_2h: float
 
 
 class ThermalSnapshotDict(TypedDict):
@@ -684,7 +684,7 @@ class ThermalStatePredictor:
                 "rate_per_hour": 0.0,
                 "confidence": 0.0,
                 "samples": 0,
-                "temp_change_2h": 0.0,
+                "temp_change_last_2h": 0.0,
             }
 
         # Calculate outdoor temperature change over last 2 hours
@@ -720,7 +720,7 @@ class ThermalStatePredictor:
             "rate_per_hour": rate,
             "confidence": self._calculate_prediction_confidence(),
             "samples": len(self.state_history),
-            "temp_change_2h": outdoor_delta,
+            "temp_change_last_2h": outdoor_delta,
         }
 
     def to_dict(self) -> PredictorStateDict:

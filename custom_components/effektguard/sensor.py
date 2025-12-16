@@ -668,8 +668,8 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["confidence"] = trend_data["confidence"]
                     if "samples" in trend_data:
                         attrs["samples"] = trend_data["samples"]
-                    if "temp_change_2h" in trend_data:
-                        attrs["temp_change_2h"] = trend_data["temp_change_2h"]
+                    if "temp_change_last_2h" in trend_data:
+                        attrs["temp_change_last_2h"] = trend_data["temp_change_last_2h"]
 
             # Add current outdoor temp for reference
             if "nibe" in self.coordinator.data and self.coordinator.data["nibe"]:
@@ -816,8 +816,8 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         attrs["confidence"] = trend_data["confidence"]
                     if "samples" in trend_data:
                         attrs["samples"] = trend_data["samples"]
-                    if "temp_change_2h" in trend_data:
-                        attrs["temp_change_2h"] = trend_data["temp_change_2h"]
+                    if "temp_change_last_2h" in trend_data:
+                        attrs["temp_change_last_2h"] = trend_data["temp_change_last_2h"]
 
         elif key == "savings_estimate":
             # Show breakdown of savings

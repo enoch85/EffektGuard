@@ -147,7 +147,7 @@ def mock_coordinator_with_data(mock_hass, mock_config_entry):
         "trend": "falling",
         "confidence": 0.90,
         "samples": 12,
-        "temp_change_2h": -0.20,
+        "temp_change_last_2h": -0.20,
     }
 
     # Mock DHW planning data
@@ -511,7 +511,7 @@ class TestSensorExtraStateAttributes:
         assert attrs["trend_direction"] == "falling"
         assert attrs["confidence"] == 0.90
         assert attrs["samples"] == 12
-        assert attrs["temp_change_2h"] == -0.20
+        assert attrs["temp_change_last_2h"] == -0.20
         assert attrs["current_outdoor_temp"] == 5.0
 
 
