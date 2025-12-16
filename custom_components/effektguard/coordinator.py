@@ -142,7 +142,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             morning_hour = int(entry.options.get("dhw_morning_hour", 7))
             demand_periods.append(
                 DHWDemandPeriod(
-                    start_hour=morning_hour,
+                    availability_hour=morning_hour,
                     target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=2,  # 2-hour window
                 )
@@ -153,7 +153,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             evening_hour = int(entry.options.get("dhw_evening_hour", 18))
             demand_periods.append(
                 DHWDemandPeriod(
-                    start_hour=evening_hour,
+                    availability_hour=evening_hour,
                     target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=3,  # 3-hour window
                 )
@@ -215,20 +215,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 formatted_periods = []
                 for p in demand_periods:
                     try:
-                        hour = int(p.start_hour)
+                        hour = int(p.availability_hour)
                         temp = float(p.target_temp)
                         formatted_periods.append(f"{hour:02d}:00 ({temp:.1f}°C)")
                     except (TypeError, ValueError):
                         # Fallback for mock objects in tests
-                        formatted_periods.append(f"{p.start_hour}:00 ({p.target_temp}°C)")
+                        formatted_periods.append(f"{p.availability_hour}:00 ({p.target_temp}°C)")
 
                 _LOGGER.info("DHW demand periods configured: %s", formatted_periods)
 
                 # Debug logging for type validation
                 _LOGGER.debug(
                     "DHW periods configured: %s (types: %s)",
-                    [f"{p.start_hour}:00" for p in demand_periods],
-                    [f"{type(p.start_hour).__name__}" for p in demand_periods],
+                    [f"{p.availability_hour}:00" for p in demand_periods],
+                    [f"{type(p.availability_hour).__name__}" for p in demand_periods],
                 )
             except (AttributeError, TypeError, ValueError) as err:
                 _LOGGER.debug("Could not format DHW periods: %s", err)
@@ -1901,7 +1901,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 morning_hour = int(options.get("dhw_morning_hour", 7))
                 demand_periods.append(
                     DHWDemandPeriod(
-                        start_hour=morning_hour,
+                        availability_hour=morning_hour,
                         target_temp=dhw_target,
                         duration_hours=2,
                     )
@@ -1911,7 +1911,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 evening_hour = int(options.get("dhw_evening_hour", 18))
                 demand_periods.append(
                     DHWDemandPeriod(
-                        start_hour=evening_hour,
+                        availability_hour=evening_hour,
                         target_temp=dhw_target,
                         duration_hours=3,
                     )

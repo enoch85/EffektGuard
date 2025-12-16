@@ -115,7 +115,7 @@ def test_oct28_failure_scenario_at_03_45():
     """
     # Setup: Moderate Cold zone (Malmö/Southern Sweden)
     climate_detector = ClimateZoneDetector(latitude=55.60)  # Malmö
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
@@ -172,7 +172,7 @@ def test_oct28_at_04_00_exactly():
     (as long as RULE 1 doesn't block, which it won't at -249).
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
@@ -220,7 +220,7 @@ def test_oct28_at_04_00_exactly():
 def test_oct28_at_03_50_also_within_window():
     """At 03:50 (10 min before window), should also heat with new 15-min buffer."""
     climate_detector = ClimateZoneDetector(latitude=55.60)
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
@@ -338,7 +338,7 @@ def test_comparison_operator_fix():
     normal prices will wait for cheap prices, which is the correct behavior.
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,
@@ -378,7 +378,7 @@ def test_october_28_would_not_need_manual_boost():
     bringing DHW from 36.1°C to 50°C+ without manual intervention.
     """
     climate_detector = ClimateZoneDetector(latitude=55.60)
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     scheduler = create_dhw_scheduler(
         demand_periods=[demand_period],
         climate_detector=climate_detector,

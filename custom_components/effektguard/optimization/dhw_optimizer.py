@@ -39,13 +39,10 @@ from ..const import (
     DHW_SAFETY_MIN,
     DHW_SAFETY_RUNTIME_MINUTES,
     DHW_SCHEDULING_WINDOW_MAX,
-    DHW_SCHEDULING_WINDOW_MIN,
     DHW_SPACE_HEATING_DEFICIT_THRESHOLD,
     DHW_SPACE_HEATING_OUTDOOR_THRESHOLD,
     DHW_TREND_DEFICIT_THRESHOLD,
     DHW_TREND_RATE_THRESHOLD,
-    DHW_URGENT_DEMAND_HOURS,
-    DHW_URGENT_RUNTIME_MINUTES,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
     DM_RECOVERY_SAFETY_BUFFER,
@@ -63,10 +60,11 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DemandPeriodInfoDict(TypedDict):
-    """Information about an upcoming demand period."""
+    """Information about an upcoming demand period (KISS version)."""
 
-    hours_until: float
-    target_temp: float
+    min_amount_minutes: float  # Minimum hot water minutes required
+    target_temp: float  # Fallback target temp if amount sensor unavailable
+    availability_time: datetime  # When water should be ready
 
 
 class DHWScheduleWindowDict(TypedDict):
@@ -142,11 +140,20 @@ class DHWRecommendation:
 
 @dataclass
 class DHWDemandPeriod:
-    """User-defined high DHW demand period."""
+    """User-defined high DHW demand period.
 
-    start_hour: int  # 0-23
+    IMPORTANT: availability_hour is when hot water should be READY (available),
+    not when heating should start. The optimizer calculates backwards to determine
+    when to start heating based on current DHW amount and min_amount_minutes.
+
+    Example: If availability_hour=20 and min_amount_minutes=5, the system ensures
+    at least 5 minutes of hot water is available by 20:00.
+    """
+
+    availability_hour: int  # 0-23 - Hour when water should be READY (not heating start)
     target_temp: float  # Target DHW temp by this time
     duration_hours: int  # How long high demand lasts
+    min_amount_minutes: int = 5  # Minimum minutes of hot water required at availability time
 
     def __post_init__(self):
         """Validate types and ranges after initialization.
@@ -154,21 +161,29 @@ class DHWDemandPeriod:
         Catches configuration errors early before they cause runtime failures.
         """
         # Type validation
-        if not isinstance(self.start_hour, int):
+        if not isinstance(self.availability_hour, int):
             raise TypeError(
-                f"start_hour must be int, got {type(self.start_hour).__name__}. "
+                f"availability_hour must be int, got {type(self.availability_hour).__name__}. "
                 f"Check config flow conversion."
             )
 
         if not isinstance(self.duration_hours, int):
             raise TypeError(f"duration_hours must be int, got {type(self.duration_hours).__name__}")
 
+        if not isinstance(self.min_amount_minutes, int):
+            raise TypeError(
+                f"min_amount_minutes must be int, got {type(self.min_amount_minutes).__name__}"
+            )
+
         # Range validation
-        if not 0 <= self.start_hour <= 23:
-            raise ValueError(f"start_hour must be 0-23, got {self.start_hour}")
+        if not 0 <= self.availability_hour <= 23:
+            raise ValueError(f"availability_hour must be 0-23, got {self.availability_hour}")
 
         if not 0 < self.duration_hours <= 24:
             raise ValueError(f"duration_hours must be 1-24, got {self.duration_hours}")
+
+        if not 1 <= self.min_amount_minutes <= 30:
+            raise ValueError(f"min_amount_minutes must be 1-30, got {self.min_amount_minutes}")
 
         if self.target_temp < DHW_SAFETY_MIN or self.target_temp > DHW_MAX_TEMP_VALIDATION:
             raise ValueError(
@@ -432,6 +447,7 @@ class IntelligentDHWScheduler:
         price_periods: list | None = None,  # QuarterPeriod list for window scheduling
         hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
+        dhw_amount_minutes: float | None = None,  # Current hot water amount from sensor
     ) -> DHWScheduleDecision:
         """Decide if DHW heating should start based on priority rules.
 
@@ -452,6 +468,8 @@ class IntelligentDHWScheduler:
             is_volatile: True if current price classification run is too brief (<45 min).
                 When volatile=True and price is cheap, DHW waits for stable cheap window
                 instead of triggering immediately. Matches space heating behavior.
+            dhw_amount_minutes: Current hot water amount from NIBE sensor (minutes).
+                When scheduling is active and amount >= target, stop heating.
 
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
@@ -508,6 +526,45 @@ class IntelligentDHWScheduler:
             dm_block_threshold = DM_DHW_BLOCK_FALLBACK
             dm_abort_threshold = DM_DHW_ABORT_FALLBACK
             should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
+
+        # Check if scheduling is active (user configured demand periods)
+        upcoming_demand = self._check_upcoming_demand_period(current_time)
+        scheduled_min_amount: float | None = None
+        if upcoming_demand:
+            scheduled_min_amount = upcoming_demand["min_amount_minutes"]
+            _LOGGER.debug(
+                "DHW scheduling active: availability at %s, min amount %d min",
+                upcoming_demand["availability_time"].strftime("%H:%M"),
+                scheduled_min_amount,
+            )
+
+            # === RULE 0: TARGET AMOUNT REACHED - STOP HEATING ===
+            # When scheduling active and sensor shows enough hot water, stop immediately
+            # This is checked every 5 min by coordinator - simple and reliable
+            if dhw_amount_minutes is not None and dhw_amount_minutes >= scheduled_min_amount:
+                _LOGGER.info(
+                    "DHW target amount reached: %.0f min ≥ %d min target - stopping",
+                    dhw_amount_minutes,
+                    scheduled_min_amount,
+                )
+                # Find next cheap window (when we'd next consider heating)
+                next_opportunity = self._find_next_dhw_opportunity(
+                    current_time=current_time,
+                    current_dhw_temp=current_dhw_temp,
+                    thermal_debt_dm=thermal_debt_dm,
+                    outdoor_temp=outdoor_temp,
+                    price_periods=price_periods,
+                    blocking_reason="DHW_AMOUNT_TARGET_REACHED",
+                    dm_block_threshold=dm_block_threshold,
+                )
+                return DHWScheduleDecision(
+                    should_heat=False,
+                    priority_reason=f"DHW_AMOUNT_TARGET_REACHED_{dhw_amount_minutes:.0f}MIN",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=0,
+                    abort_conditions=[],
+                    recommended_start_time=next_opportunity,
+                )
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if should_block_for_thermal_debt:
@@ -798,6 +855,7 @@ class IntelligentDHWScheduler:
                     max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
+                        f"indoor_temp < {target_indoor_temp - 0.5}",
                     ],
                     recommended_start_time=current_time,
                 )
@@ -830,30 +888,12 @@ class IntelligentDHWScheduler:
                 recommended_start_time=next_opportunity,
             )
 
-        # === RULE 5: HIGH DEMAND PERIOD - TARGET TEMP BY START TIME ===
-        # Check if we're approaching a user-defined high demand period
-        # URGENT heating overrides price classification (except peak)
-        upcoming_demand = self._check_upcoming_demand_period(current_time)
-        if upcoming_demand:
-            hours_until = upcoming_demand["hours_until"]
-            target = upcoming_demand["target_temp"]
+        # NOTE: Rule 5 (demand period urgent heating) removed - KISS!
+        # Rule 0 checks if target amount reached → stops heating
+        # Existing window logic finds cheapest time → starts heating
+        # No need for complex "behind schedule" detection
 
-            # IMMEDIATE: Within 30 min of demand - heat regardless of price (except peak)
-            if hours_until < DHW_URGENT_DEMAND_HOURS and current_dhw_temp < target:
-                if price_classification != "peak":
-                    return DHWScheduleDecision(
-                        should_heat=True,
-                        priority_reason=f"URGENT_DEMAND_IN_{hours_until * 60:.0f}MIN",
-                        target_temp=target,
-                        max_runtime_minutes=DHW_URGENT_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                        ],
-                        recommended_start_time=current_time,
-                    )
-
-        # === RULE 6: SMART WINDOW-BASED SCHEDULING ===
+        # === RULE 5: SMART WINDOW-BASED SCHEDULING ===
         # If DHW is adequate, only heat during CHEAP periods
         # This mirrors space heating logic: adequate = no urgency = wait for cheap
         # Adequate temp = one shower guaranteed (morning/evening usage pattern)
@@ -1026,7 +1066,12 @@ class IntelligentDHWScheduler:
             Hours to look ahead (1-24h range)
         """
         next_demand = self._check_upcoming_demand_period(current_time)
-        next_demand_hours = next_demand["hours_until"] if next_demand else None
+
+        # Calculate hours until availability if demand period exists
+        next_demand_hours = None
+        if next_demand:
+            hours_until = (next_demand["availability_time"] - current_time).total_seconds() / 3600
+            next_demand_hours = max(0, hours_until)
 
         if self.price_analyzer:
             return self.price_analyzer.calculate_lookahead_hours(
@@ -1205,6 +1250,10 @@ class IntelligentDHWScheduler:
 
         Abort conditions are returned by DHW optimizer to monitor during active heating.
         If triggered, we should stop DHW heating early to prioritize space heating.
+
+        Note: DHW amount target is checked in should_start_dhw() Rule 0, not here.
+        Every 5 min the coordinator calls should_start_dhw() with the sensor value,
+        and if target is reached, it returns should_heat=False - simple and reliable.
 
         Args:
             abort_conditions: List of condition strings from DHW decision
@@ -1436,38 +1485,34 @@ class IntelligentDHWScheduler:
         )
 
     def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
-        """Check if approaching a high demand period (up to 24h ahead).
+        """Check if there's a configured demand period within 24h.
 
-        Extended window: We can preheat up to 24h ahead since DHW tank
-        cools slowly and heating is fast (1-2 hours).
-
-        Smart fallback: Uses whatever forecast data available (min 1h ahead).
+        KISS: Just returns the next scheduled period's target amount and availability time.
+        The existing price window logic handles finding cheap times to heat.
 
         Args:
             current_time: Current datetime
 
         Returns:
-            Dict with hours_until and target_temp, or None if no upcoming period
+            Dict with min_amount_minutes and availability_time, or None
         """
         for period in self.demand_periods:
-            # Calculate hours until period start
-            today_start = current_time.replace(
-                hour=period.start_hour, minute=0, second=0, microsecond=0
+            # Calculate next availability time
+            availability_time = current_time.replace(
+                hour=period.availability_hour, minute=0, second=0, microsecond=0
             )
 
-            if today_start < current_time:
-                # Period is tomorrow
-                today_start += timedelta(days=1)
+            if availability_time < current_time:
+                availability_time += timedelta(days=1)
 
-            hours_until = (today_start - current_time).total_seconds() / 3600
+            hours_until = (availability_time - current_time).total_seconds() / 3600
 
-            # Extended window: 24h ahead (DHW tank doesn't cool much in 24h)
-            # Minimum: 1h ahead (need some time for optimization)
-            if DHW_SCHEDULING_WINDOW_MIN <= hours_until <= DHW_SCHEDULING_WINDOW_MAX:
+            # Return if within 24h window
+            if hours_until <= DHW_SCHEDULING_WINDOW_MAX:
                 return {
-                    "hours_until": hours_until,  # Keep as float for precise decisions
+                    "min_amount_minutes": period.min_amount_minutes,
                     "target_temp": period.target_temp,
-                    "period_start": today_start,
+                    "availability_time": availability_time,
                 }
 
         return None

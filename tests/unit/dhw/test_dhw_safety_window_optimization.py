@@ -82,7 +82,7 @@ def create_mock_price_analyzer():
 @pytest.fixture
 def dhw_optimizer():
     """Create DHW optimizer with realistic demand period and mock price analyzer."""
-    demand_period = DHWDemandPeriod(start_hour=7, target_temp=50.0, duration_hours=2)
+    demand_period = DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)
     mock_analyzer = create_mock_price_analyzer()
     return IntelligentDHWScheduler(demand_periods=[demand_period], price_analyzer=mock_analyzer)
 

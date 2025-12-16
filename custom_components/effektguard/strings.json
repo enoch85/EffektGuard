@@ -70,15 +70,17 @@
             "description": "Hot water scheduling and temperature settings",
             "data": {
               "dhw_target_temp": "DHW Target Temperature",
+              "dhw_min_amount": "Minimum Hot Water Available",
               "dhw_schedules": "Enable/Disable",
               "dhw_morning_hour": "Morning start hour",
               "dhw_evening_hour": "Evening start hour"
             },
             "data_description": {
               "dhw_target_temp": "Target temperature for hot water storage tank (45-60°C).\n\nHigher temperatures = more stored energy but more electricity consumption.",
+              "dhw_min_amount": "Minimum minutes of hot water that must be available at the scheduled time.\n\nHeating will start early enough to ensure this amount is ready.",
               "dhw_schedules": "Select which heating periods to enable. Uncheck to disable heating during that period.",
-              "dhw_morning_hour": "Hour when morning hot water heating should start.",
-              "dhw_evening_hour": "Hour when evening hot water heating should start."
+              "dhw_morning_hour": "Hour when hot water should be AVAILABLE (ready to use).\n\nHeating starts earlier to ensure water is ready by this time.",
+              "dhw_evening_hour": "Hour when hot water should be AVAILABLE (ready to use).\n\nHeating starts earlier to ensure water is ready by this time."
             }
           },
           "airflow_optimization": {
