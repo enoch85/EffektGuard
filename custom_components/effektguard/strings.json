@@ -67,20 +67,20 @@
           },
           "domestic_hot_water": {
             "name": "Domestic Hot Water (DHW)",
-            "description": "Hot water scheduling and temperature settings",
+            "description": "Schedule when hot water should be ready and how much you need",
             "data": {
               "dhw_target_temp": "DHW Target Temperature",
-              "dhw_min_amount": "Minimum Hot Water Available",
+              "dhw_min_amount": "Minimum Hot Water at Scheduled Time",
               "dhw_schedules": "Enable/Disable",
-              "dhw_morning_hour": "Morning start hour",
-              "dhw_evening_hour": "Evening start hour"
+              "dhw_morning_hour": "Morning availability hour",
+              "dhw_evening_hour": "Evening availability hour"
             },
             "data_description": {
               "dhw_target_temp": "Target temperature for hot water storage tank (45-60°C).\n\nHigher temperatures = more stored energy but more electricity consumption.",
-              "dhw_min_amount": "Minimum minutes of hot water that must be available at the scheduled time.\n\nHeating will start early enough to ensure this amount is ready.",
+              "dhw_min_amount": "Minutes of hot water that should be available at the scheduled time.\n\nEffektGuard will heat during the cheapest hours to ensure this amount is ready when you need it.",
               "dhw_schedules": "Select which heating periods to enable. Uncheck to disable heating during that period.",
-              "dhw_morning_hour": "Hour when hot water should be AVAILABLE (ready to use).\n\nHeating starts earlier to ensure water is ready by this time.",
-              "dhw_evening_hour": "Hour when hot water should be AVAILABLE (ready to use).\n\nHeating starts earlier to ensure water is ready by this time."
+              "dhw_morning_hour": "Hour when hot water should be READY (e.g., 7 = ready at 07:00).\n\nHeating starts during cheaper hours to ensure water is ready by this time.",
+              "dhw_evening_hour": "Hour when hot water should be READY (e.g., 18 = ready at 18:00).\n\nHeating starts during cheaper hours to ensure water is ready by this time."
             }
           },
           "airflow_optimization": {
