@@ -414,18 +414,26 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             learned_data = await self._load_learned_data()
 
             if learned_data:
-                # Restore last applied offset to avoid redundant API calls
-                if "last_offset" in learned_data:
-                    offset_data = learned_data["last_offset"]
-                    self.last_applied_offset = offset_data.get("value")
-                    timestamp_str = offset_data.get("timestamp")
-                    if timestamp_str:
-                        self.last_offset_timestamp = datetime.fromisoformat(timestamp_str)
-                    _LOGGER.info(
-                        "Restored last offset: %.1f°C from %s",
-                        self.last_applied_offset,
-                        timestamp_str or "unknown",
-                    )
+                # Restore last_applied_offset - try NIBE entity first (source of truth),
+                # fall back to stored value if entity not available during startup
+                offset_synced = False
+                offset_entity = self.nibe._entity_cache.get("offset")
+                if offset_entity:
+                    state = self.hass.states.get(offset_entity)
+                    if state and state.state not in ["unavailable", "unknown"]:
+                        try:
+                            self.last_applied_offset = float(int(float(state.state)))
+                            _LOGGER.info("Synced with NIBE offset: %d°C", int(self.last_applied_offset))
+                            offset_synced = True
+                        except (ValueError, TypeError):
+                            pass
+
+                # Fall back to stored value if NIBE entity wasn't available
+                if not offset_synced and "last_offset" in learned_data:
+                    stored = learned_data["last_offset"].get("value")
+                    if stored is not None:
+                        self.last_applied_offset = float(int(stored))
+                        _LOGGER.info("Restored offset from storage: %d°C (NIBE entity not yet available)", int(self.last_applied_offset))
 
                 # Restore adaptive thermal model
                 if "thermal_model" in learned_data:
@@ -846,8 +854,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 was_applied = await self.nibe.set_curve_offset(decision.offset)
                 if was_applied:
                     _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
-                    # Track successfully applied offset to avoid redundant API calls on restart
-                    self.last_applied_offset = decision.offset
+                    # Track what NIBE actually has (integer) - synced from entity on restart
+                    self.last_applied_offset = float(int(decision.offset))
                     self.last_offset_timestamp = dt_util.utcnow()
                     self._learned_data_changed = True  # Trigger save on shutdown
                 else:
