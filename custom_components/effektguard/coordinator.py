@@ -31,7 +31,6 @@ from .const import (
     DM_THRESHOLD_START,
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
-    QUARTER_INTERVAL_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -93,7 +92,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
+            # Disable base class automatic scheduling - we use clock-aligned scheduling instead
+            # This prevents drift from startup time and ensures updates at :00:10, :05:10, etc.
+            update_interval=None,
         )
         self.nibe = nibe_adapter
         self.gespot = gespot_adapter
@@ -270,7 +271,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._first_successful_update = False
         self._startup_update_count = 0  # Count updates before ending grace period
         self._startup_grace_updates = 2  # Require 2 updates before applying offsets
-        self._clock_aligned = False  # Wait for quarter alignment (00:10, 15:10, 30:10, 45:10)
+        self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
+        self._unsub_refresh = None  # Clock-aligned refresh subscription (replaces base class)
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -334,25 +336,26 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return CLIMATE_CENTRAL_SWEDEN
 
     def _calculate_next_aligned_time(self) -> datetime:
-        """Calculate next quarter boundary + 10 seconds.
+        """Calculate next 5-minute boundary + 10 seconds.
 
-        Aligns to 15-minute quarter boundaries (00:10, 15:10, 30:10, 45:10)
-        to match spot price quarter intervals for optimal price optimization.
+        Aligns to 5-minute boundaries (:00:10, :05:10, :10:10, etc.)
+        to ensure consistent timing relative to 15-minute spot price quarters.
+        The +10 seconds gives sensors time to update before we read them.
 
         Returns:
             Next aligned datetime
         """
         now = dt_util.now()
-        # Align to 15-minute boundaries for quarter-based spot prices
-        minutes_past = now.minute % QUARTER_INTERVAL_MINUTES
+        # Align to 5-minute boundaries (UPDATE_INTERVAL_MINUTES)
+        minutes_past = now.minute % UPDATE_INTERVAL_MINUTES
         seconds_past = now.second
 
         if minutes_past == 0 and seconds_past < 10:
-            # Within current quarter boundary, before :10
+            # Within current 5-minute boundary, before :10
             seconds_to_next = 10 - seconds_past
         else:
-            # Schedule for next quarter boundary + 10 seconds
-            minutes_to_next = QUARTER_INTERVAL_MINUTES - minutes_past
+            # Schedule for next 5-minute boundary + 10 seconds
+            minutes_to_next = UPDATE_INTERVAL_MINUTES - minutes_past
             seconds_to_next = (minutes_to_next * 60) - seconds_past + 10
 
         return now + timedelta(seconds=seconds_to_next)
@@ -380,7 +383,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if not self._clock_aligned:
             self._clock_aligned = True
             _LOGGER.info(
-                "Clock aligned to %s (updates at :00:10, :15:10, :30:10, :45:10)",
+                "Clock aligned to %s (updates every 5 min at :00:10, :05:10, :10:10, etc.)",
                 next_time.strftime("%H:%M:%S"),
             )
         else:
