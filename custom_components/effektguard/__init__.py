@@ -179,58 +179,31 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry when options change - only if needed.
+    """Handle options update.
 
-    Runtime options (target temp, thermal mass, etc.) can be updated without reload.
-    Entity selections or critical settings require full reload.
+    Called when entry.options changes (from options flow UI).
+    Entity selections are in entry.data and don't trigger this listener.
+
+    Since our options flow only contains runtime settings (target temp, tolerance,
+    thermal mass, DHW schedules, etc.), we can always hot-reload without restart.
+
+    This prevents:
+    - Startup grace period reset (which blocks offset application)
+    - Screen flickering from entity recreation
+    - Lost state (compressor stats, trends, thermal predictor)
     """
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if not coordinator:
-        _LOGGER.warning("No coordinator found for reload")
+        _LOGGER.warning("No coordinator found for options update")
         return
 
-    # Runtime options that DON'T require reload (can be hot-reloaded)
-    runtime_options = {
-        "target_indoor_temp",
-        "tolerance",
-        "optimization_mode",  # FIX: Added to prevent unnecessary reload
-        "control_priority",  # FIX: Added to prevent unnecessary reload
-        "thermal_mass",
-        "insulation_quality",
-        "dhw_morning_hour",
-        "dhw_morning_enabled",
-        "dhw_evening_hour",
-        "dhw_evening_enabled",
-        "dhw_target_temp",  # FIX: Added to prevent unnecessary reload
-        "peak_protection_margin",  # FIX: Added to prevent unnecessary reload
-    }
-
-    # Switch settings that DON'T require reload (can be hot-reloaded)
-    switch_options = {
-        "enable_optimization",
-        "enable_peak_protection",
-        "enable_price_optimization",
-        "enable_weather_prediction",
-        "enable_hot_water_optimization",
-        "enable_airflow_optimization",
-    }
-
-    # Check if only runtime options or switches changed
-    options_keys = set(entry.options.keys())
-    data_keys = set(entry.data.keys())
-
-    # Merge both for checking (entry.data has switches, entry.options has runtime)
+    # Merge data and options - options override data for runtime settings
     merged_config = dict(entry.data)
     merged_config.update(entry.options)
 
-    if options_keys.issubset(runtime_options) or data_keys.issubset(switch_options):
-        _LOGGER.info("Runtime options changed, updating coordinator without reload")
-        await coordinator.async_update_config(merged_config)
-        return
-
-    # Entity selections or critical settings changed - full reload needed
-    _LOGGER.info("Critical settings changed, reloading integration")
-    await hass.config_entries.async_reload(entry.entry_id)
+    # Hot-reload runtime options without restart
+    _LOGGER.info("Options updated, applying changes (no restart)")
+    await coordinator.async_update_config(merged_config)
 
 
 async def _create_coordinator(

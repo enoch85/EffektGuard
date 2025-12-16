@@ -51,7 +51,10 @@ from ..const import (
     AIRFLOW_SPECIFIC_HEAT,
     AIRFLOW_TEMP_COLD_THRESHOLD,
     AIRFLOW_TEMP_COOL_THRESHOLD,
+    AIRFLOW_TREND_COOLING_THRESHOLD,
     AIRFLOW_TREND_WARMING_THRESHOLD,
+    COMPRESSOR_HZ_MAX,
+    COMPRESSOR_HZ_MIN,
 )
 
 
@@ -304,7 +307,18 @@ def evaluate_airflow(
             f"Already warming (+{state.trend_indoor:.2f}°C/h) - let system stabilize",
         )
 
-    # Check compressor threshold
+    # Check for cooling trend - if temperature is dropping, extra airflow isn't helping
+    # This catches the case where compressor is maxed and enhanced ventilation
+    # only brings in more cold air without additional heat production
+    if state.trend_indoor < AIRFLOW_TREND_COOLING_THRESHOLD:
+        return FlowDecision(
+            FlowMode.STANDARD,
+            0,
+            0.0,
+            f"Cooling ({state.trend_indoor:.2f}°C/h) - extra airflow making it worse",
+        )
+
+    # Check compressor threshold - minimum required
     min_compressor = minimum_compressor_threshold(state.temp_outdoor)
     if state.compressor_pct < min_compressor:
         return FlowDecision(
@@ -472,9 +486,13 @@ class AirflowOptimizer:
             FlowDecision with recommended mode and duration
         """
         # Extract compressor percentage from Hz
-        # NIBE F750 typically runs 20-100 Hz, normalize to 0-100%
+        # NIBE inverter compressors run 20-120 Hz
+        # Convert to 0-100% capacity for threshold calculations
         compressor_hz = getattr(nibe_data, "compressor_hz", 0) or 0
-        compressor_pct = min(100.0, max(0.0, compressor_hz))
+        hz_range = COMPRESSOR_HZ_MAX - COMPRESSOR_HZ_MIN  # 120 - 20 = 100 Hz operating range
+        compressor_pct = min(
+            100.0, max(0.0, (compressor_hz - COMPRESSOR_HZ_MIN) / hz_range * 100.0)
+        )
 
         # Get indoor trend rate if available
         trend_indoor = 0.0

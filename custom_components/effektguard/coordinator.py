@@ -1190,7 +1190,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             Dictionary with recommendation text and detailed planning info
         """
         # Gather HA-specific data
-        target_indoor = self.entry.data.get("indoor_temp", DEFAULT_INDOOR_TEMP)
+        # CRITICAL: Check options first (runtime changes), fall back to data then default
+        target_indoor = self.entry.options.get(
+            "target_indoor_temp",
+            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+        )
         hours_since_last = await self._calculate_hours_since_last_dhw()
 
         # Get thermal trend from predictor
@@ -1485,7 +1489,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self.last_update_success and hasattr(self, "data") and self.data is not None
             else DEFAULT_INDOOR_TEMP
         )
-        target_indoor = self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP)
+        # CRITICAL: Check options first (runtime changes), fall back to data then default
+        target_indoor = self.entry.options.get(
+            "target_indoor_temp",
+            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
+        )
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
@@ -1933,6 +1941,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         _LOGGER.info("Disabled enhanced ventilation on airflow optimizer disable")
                 except (AttributeError, ValueError, OSError) as err:
                     _LOGGER.warning("Failed to disable enhanced ventilation: %s", err)
+
+        # Update airflow rates if changed
+        if self.airflow_optimizer:
+            if CONF_AIRFLOW_STANDARD_RATE in options:
+                self.airflow_optimizer.flow_standard = float(options[CONF_AIRFLOW_STANDARD_RATE])
+                _LOGGER.debug(
+                    "Updated airflow standard rate: %.0f m³/h", options[CONF_AIRFLOW_STANDARD_RATE]
+                )
+            if CONF_AIRFLOW_ENHANCED_RATE in options:
+                self.airflow_optimizer.flow_enhanced = float(options[CONF_AIRFLOW_ENHANCED_RATE])
+                _LOGGER.debug(
+                    "Updated airflow enhanced rate: %.0f m³/h", options[CONF_AIRFLOW_ENHANCED_RATE]
+                )
 
         # Configuration is now updated in the engine's internal state
         # Next coordinator update cycle (≤5 min) will use these new values

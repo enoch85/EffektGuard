@@ -153,7 +153,7 @@ class TestEvaluateAirflow:
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold (-0.15)
         )
         decision = evaluate_airflow(state)
 
@@ -169,7 +169,7 @@ class TestEvaluateAirflow:
             temp_indoor=20.0,
             temp_target=21.0,
             compressor_pct=100.0,
-            trend_indoor=-0.5,
+            trend_indoor=0.0,  # Neutral - test focuses on outdoor temp
         )
         decision = evaluate_airflow(state)
 
@@ -204,6 +204,20 @@ class TestEvaluateAirflow:
         assert decision.mode == FlowMode.STANDARD
         assert "warming" in decision.reason.lower() or "stabilize" in decision.reason.lower()
 
+    def test_no_enhance_cooling_trend(self):
+        """Should not enhance when cooling rapidly - extra airflow would make it worse."""
+        state = ThermalState(
+            temp_outdoor=0.0,
+            temp_indoor=20.0,
+            temp_target=21.0,
+            compressor_pct=80.0,  # Good compressor activity
+            trend_indoor=-0.2,  # Below AIRFLOW_TREND_COOLING_THRESHOLD (-0.15)
+        )
+        decision = evaluate_airflow(state)
+
+        assert decision.mode == FlowMode.STANDARD
+        assert "cooling" in decision.reason.lower()
+
     def test_no_enhance_low_compressor(self):
         """Should not enhance when compressor below threshold."""
         state = ThermalState(
@@ -211,7 +225,7 @@ class TestEvaluateAirflow:
             temp_indoor=20.0,
             temp_target=21.0,
             compressor_pct=30.0,  # Below 50% threshold at 0°C
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold - test focuses on compressor
         )
         decision = evaluate_airflow(state)
 
@@ -229,7 +243,7 @@ class TestShouldEnhanceAirflow:
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold
         )
         assert isinstance(result, tuple)
         assert len(result) == 2
@@ -243,7 +257,7 @@ class TestShouldEnhanceAirflow:
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold
         )
         assert should_enhance is True
         assert duration > 0
@@ -284,7 +298,7 @@ class TestAirflowOptimizer:
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold
         )
 
         assert optimizer.current_decision is not None
@@ -315,9 +329,9 @@ class TestAirflowOptimizer:
 
         # Make several evaluations
         for _ in range(5):
-            optimizer.evaluate(0.0, 20.5, 21.0, 80.0, -0.2)  # Should enhance
+            optimizer.evaluate(0.0, 20.5, 21.0, 80.0, -0.1)  # Should enhance (valid trend)
         for _ in range(5):
-            optimizer.evaluate(-20.0, 20.0, 21.0, 80.0, -0.2)  # Should not enhance
+            optimizer.evaluate(-20.0, 20.0, 21.0, 80.0, 0.0)  # Should not enhance (too cold)
 
         stats = optimizer.get_enhancement_stats()
 
@@ -448,7 +462,7 @@ class TestEdgeCases:
             temp_indoor=20.0,
             temp_target=21.0,
             compressor_pct=100.0,  # Full power
-            trend_indoor=-0.2,
+            trend_indoor=-0.1,  # Slightly cooling but above threshold
         )
         decision = evaluate_airflow(state)
         assert decision.mode == FlowMode.ENHANCED

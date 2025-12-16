@@ -992,6 +992,7 @@ AIRFLOW_DURATION_COOL_CAP: Final = 30  # minutes cap when outdoor < -5°C
 
 # Indoor temperature trend threshold for enhancement decision
 AIRFLOW_TREND_WARMING_THRESHOLD: Final = 0.1  # °C/h - already warming, let stabilize
+AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.15  # °C/h - cooling despite enhanced = stop
 
 # Configuration keys
 CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"
@@ -1065,12 +1066,15 @@ POWER_MULTIPLIER_COLD: Final = 1.1  # -10 to 0°C
 POWER_MULTIPLIER_MILD: Final = 1.0  # >0°C
 
 # Compressor frequency-based power estimation
-# Based on typical NIBE F750 performance curves:
-# - 20 Hz (minimum): ~1.5-2.0 kW
+# Based on typical NIBE F750/F2040 inverter compressor specifications:
+# - Frequency range: 20-120 Hz (model-specific, see modulation_range in heat pump profiles)
+# - 20 Hz (idle): ~1.5-2.0 kW
 # - 50 Hz (mid): ~3.5-4.5 kW
-# - 80 Hz (maximum): ~6.0-7.0 kW
-COMPRESSOR_HZ_MIN: Final = 20
-COMPRESSOR_HZ_RANGE: Final = 60  # 80-20
+# - 80 Hz (normal max): ~6.0-7.0 kW
+# - 100-120 Hz (emergency/max): Higher output, reduced efficiency
+COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
+COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)
+COMPRESSOR_HZ_RANGE: Final = 100  # 120-20 = operating range
 COMPRESSOR_POWER_MIN_KW: Final = 1.5
 COMPRESSOR_POWER_RANGE_KW: Final = 5.0  # 6.5-1.5
 COMPRESSOR_POWER_MAX_KW: Final = 6.5

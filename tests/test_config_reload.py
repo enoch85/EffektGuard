@@ -104,6 +104,9 @@ def mock_coordinator(mock_hass, mock_config_entry):
     coordinator.dhw_optimizer = Mock()
     coordinator.dhw_optimizer.demand_periods = []
 
+    # Mock airflow optimizer (may be None for non-F750 models)
+    coordinator.airflow_optimizer = None
+
     return coordinator
 
 
@@ -159,25 +162,33 @@ class TestUpdateListenerSmartReload:
         mock_hass.config_entries.async_reload.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_critical_option_triggers_full_reload(
+    async def test_entity_in_options_still_hot_reloads(
         self, mock_hass, mock_config_entry, mock_coordinator
     ):
-        """Verify entity selection changes trigger full reload."""
+        """Verify options always hot-reload since entity selections are in data, not options.
+
+        Entity selections (nibe_entity, gespot_entity, etc.) are set during initial
+        config flow and stored in entry.data. The options flow only exposes runtime
+        settings. Therefore, the update_listener will never see entity changes -
+        those only happen through reconfigure flow which triggers async_setup_entry.
+
+        Even if someone manually puts entity keys in options (shouldn't happen),
+        we still hot-reload because the options flow is designed for runtime changes.
+        """
         mock_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
 
-        # Add entity selection change (critical option)
+        # Even with entity-like key in options (shouldn't happen in practice),
+        # we hot-reload because options flow is for runtime settings only
         mock_config_entry.options = {
             CONF_TARGET_INDOOR_TEMP: 23.0,
-            "nibe_entity": "number.different_entity",  # Critical change
+            "nibe_entity": "number.different_entity",  # Shouldn't be here in reality
         }
 
         await async_reload_entry(mock_hass, mock_config_entry)
 
-        # Should call async_reload (full reload)
-        mock_hass.config_entries.async_reload.assert_called_once_with(mock_config_entry.entry_id)
-
-        # Should NOT call async_update_config
-        mock_coordinator.async_update_config.assert_not_called()
+        # Should still hot-reload (options are always runtime-safe)
+        mock_coordinator.async_update_config.assert_called_once()
+        mock_hass.config_entries.async_reload.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_graceful_handling_missing_coordinator(self, mock_hass, mock_config_entry):

@@ -50,18 +50,21 @@ class TestCompressorHzPowerEstimation:
         power = effect_manager.estimate_power_from_compressor(
             compressor_hz=50, outdoor_temp=0.0
         )
-        # At 50 Hz with 0°C: ~4-5 kW
-        assert power >= 3.5
-        assert power <= 5.5
+        # At 50 Hz with 0°C (MILD factor 1.0):
+        # base = 1.5 + (50-20) * (5.0/100) = 3.0 kW
+        assert power >= 2.5
+        assert power <= 4.0
 
     def test_maximum_compressor_80hz(self, effect_manager):
         """Test power estimation at maximum frequency (80 Hz)."""
         power = effect_manager.estimate_power_from_compressor(
             compressor_hz=80, outdoor_temp=-10.0
         )
-        # At 80 Hz with -10°C: ~6.5-8.5 kW
-        assert power >= 6.0
-        assert power <= 9.0
+        # At 80 Hz with -10°C (COLD factor 1.2):
+        # base = 1.5 + (80-20) * (5.0/100) = 4.5 kW
+        # result = 4.5 * 1.2 = 5.4 kW
+        assert power >= 5.0
+        assert power <= 7.0
 
     def test_cold_weather_increases_power(self, effect_manager):
         """Test that colder outdoor temp increases power for same Hz."""
@@ -79,10 +82,11 @@ class TestCompressorHzPowerEstimation:
         power = effect_manager.estimate_power_from_compressor(
             compressor_hz=50, outdoor_temp=-20.0
         )
-        # Extreme cold should apply 1.3x factor
-        # Base at 50 Hz: ~3.5 kW, with 1.3x = ~4.55 kW
-        assert power >= 4.0
-        assert power <= 6.0
+        # Extreme cold applies 1.3x factor
+        # Base at 50 Hz: 1.5 + (50-20)*0.05 = 3.0 kW
+        # With 1.3x = 3.9 kW
+        assert power >= 3.5
+        assert power <= 5.0
 
     def test_mild_weather_no_temp_factor(self, effect_manager):
         """Test that mild weather (>0°C) applies no temp factor."""
@@ -183,9 +187,11 @@ class TestPowerMeasurementPriority:
             outdoor_temp=-5.0,
         )
 
-        # At 50 Hz and -5°C (cold), expect ~4-5 kW
-        assert estimated_power >= 4.0
-        assert estimated_power <= 5.5
+        # At 50 Hz and -5°C (COOL factor 1.1):
+        # base = 1.5 + (50-20)*0.05 = 3.0 kW
+        # result = 3.0 * 1.1 = 3.3 kW
+        assert estimated_power >= 3.0
+        assert estimated_power <= 4.5
         print(f"Priority 3 (Hz): Estimation at 50 Hz, -5°C = {estimated_power:.2f} kW")
 
     @pytest.mark.asyncio
