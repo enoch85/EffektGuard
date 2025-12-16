@@ -147,7 +147,7 @@ def scheduler_with_morning_demand():
     from tests.conftest import create_mock_price_analyzer
 
     demand_period = DHWDemandPeriod(
-        start_hour=7,
+        availability_hour=7,
         target_temp=55.0,
         duration_hours=2,
     )
@@ -562,35 +562,14 @@ class TestMaximumWaitEnforcement:
 class TestDemandPeriodTargeting:
     """Test targeting DHW ready by demand period (e.g., morning shower)."""
 
-    def test_urgent_demand_within_30_min(self, scheduler_with_morning_demand):
-        """RULE 5: Urgent demand (<30 min) triggers heating during cheap/normal prices."""
+    def test_amount_target_reached_stops_heating(self, scheduler_with_morning_demand):
+        """KISS: When amount sensor shows target reached, stop heating."""
         from zoneinfo import ZoneInfo
 
-        # 6:45 AM, shower at 7:00 AM (15 minutes away = 0.25 hours)
+        # 6:45 AM, shower at 7:00 AM
         current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
 
-        decision = scheduler_with_morning_demand.should_start_dhw(
-            current_dhw_temp=45.0,  # Below target 55°C
-            space_heating_demand_kw=2.0,
-            thermal_debt_dm=-50,
-            indoor_temp=21.0,
-            target_indoor_temp=21.0,
-            outdoor_temp=5.0,
-            price_classification="normal",
-            current_time=current_time,
-        )
-
-        # Should trigger urgent heating (0.25 hours < 0.5 hours threshold)
-        assert decision.should_heat is True
-        assert "URGENT_DEMAND" in decision.priority_reason
-        assert decision.max_runtime_minutes == DHW_URGENT_RUNTIME_MINUTES
-
-    def test_urgent_demand_blocks_during_peak(self, scheduler_with_morning_demand):
-        """RULE 5: Urgent demand still blocks during peak pricing."""
-        from zoneinfo import ZoneInfo
-
-        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
-
+        # Amount sensor shows 10 min available, target is 5 min → STOP
         decision = scheduler_with_morning_demand.should_start_dhw(
             current_dhw_temp=45.0,
             space_heating_demand_kw=2.0,
@@ -598,12 +577,36 @@ class TestDemandPeriodTargeting:
             indoor_temp=21.0,
             target_indoor_temp=21.0,
             outdoor_temp=5.0,
-            price_classification="peak",  # Peak!
+            price_classification="cheap",  # Even cheap price
             current_time=current_time,
+            dhw_amount_minutes=10.0,  # Above 5 min target
         )
 
-        # Should not heat during peak even with urgent demand
+        # Should NOT heat - target amount already reached
         assert decision.should_heat is False
+        assert "AMOUNT_TARGET_REACHED" in decision.priority_reason
+
+    def test_amount_below_target_heats_during_cheap(self, scheduler_with_morning_demand):
+        """KISS: When amount below target and price is cheap, heat."""
+        from zoneinfo import ZoneInfo
+
+        current_time = datetime(2025, 10, 18, 6, 45, tzinfo=ZoneInfo("Europe/Stockholm"))
+
+        # Amount sensor shows 2 min available, target is 5 min → HEAT if cheap
+        decision = scheduler_with_morning_demand.should_start_dhw(
+            current_dhw_temp=40.0,  # Below comfort level
+            space_heating_demand_kw=2.0,
+            thermal_debt_dm=-50,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            outdoor_temp=5.0,
+            price_classification="cheap",
+            current_time=current_time,
+            dhw_amount_minutes=2.0,  # Below 5 min target
+        )
+
+        # Should heat - amount below target and price is cheap
+        assert decision.should_heat is True
 
 
 # ==============================================================================

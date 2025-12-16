@@ -65,6 +65,7 @@ class NibeState:
     timestamp: datetime
     dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
     dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
+    dhw_amount_minutes: float | None = None  # Hot water amount available (minutes) - optional
     phase1_current: float | None = None  # BE1 - Phase 1 current (43086) - optional
     phase2_current: float | None = None  # BE2 - Phase 2 current (43122) - optional
     phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
@@ -204,11 +205,18 @@ class NibeAdapter:
             self._entity_cache.get("dhw_charging_temp"), default=None
         )
 
+        # Read DHW amount (hot water minutes available) - NIBE calculates this
+        dhw_amount_minutes = await self._read_entity_float(
+            self._entity_cache.get("dhw_amount"), default=None
+        )
+
         # Log DHW sensor status
         if dhw_top_temp is not None:
             _LOGGER.debug("DHW top temperature (BT7): %.1f°C", dhw_top_temp)
         if dhw_charging_temp is not None:
             _LOGGER.debug("DHW charging temperature (BT6): %.1f°C", dhw_charging_temp)
+        if dhw_amount_minutes is not None:
+            _LOGGER.debug("DHW amount available: %.1f minutes", dhw_amount_minutes)
 
         # Read phase current sensors (optional - BE1, BE2, BE3)
         phase1_current = await self._read_entity_float(
@@ -250,6 +258,7 @@ class NibeAdapter:
             timestamp=dt_util.utcnow(),
             dhw_top_temp=dhw_top_temp,
             dhw_charging_temp=dhw_charging_temp,
+            dhw_amount_minutes=dhw_amount_minutes,
             phase1_current=phase1_current,
             phase2_current=phase2_current,
             phase3_current=phase3_current,
@@ -562,6 +571,10 @@ class NibeAdapter:
                 "hw_charging",
                 "40014",
             ],  # BT6 / param 40014
+            "dhw_amount": [
+                "hot_water_amount",
+                "hw_amount",
+            ],  # Hot water amount in minutes
             "phase1_current": [
                 "current_be1",
                 "_be1",

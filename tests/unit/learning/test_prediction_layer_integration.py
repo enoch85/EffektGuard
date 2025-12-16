@@ -110,6 +110,8 @@ class TestPredictionLayerMethod:
         mock_nibe.indoor_temp = 21.0
         mock_nibe.outdoor_temp = -5.0
         mock_nibe.degree_minutes = 0  # Set to 0 to avoid ProactiveLayer interference
+        mock_nibe.is_hot_water = False  # Not in DHW/lux mode
+        mock_nibe.flow_temp = 35.0  # Normal flow temp
 
         # Should not crash, return neutral decision
         decision = engine.calculate_decision(mock_nibe, None, None, 0.0, 0.0)

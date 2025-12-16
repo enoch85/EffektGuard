@@ -14,6 +14,7 @@ from .const import (
     AIRFLOW_DEFAULT_STANDARD,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
+    CONF_DHW_MIN_AMOUNT,
     CONF_HEAT_PUMP_MODEL,
     CONF_INSULATION_QUALITY,
     CONF_OPTIMIZATION_MODE,
@@ -24,6 +25,9 @@ from .const import (
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
+    DHW_MIN_AMOUNT_DEFAULT,
+    DHW_MIN_AMOUNT_MAX,
+    DHW_MIN_AMOUNT_MIN,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
@@ -78,6 +82,18 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 validated["dhw_target_temp"] = dhw_target
             except (TypeError, ValueError) as e:
                 raise vol.Invalid(f"Invalid DHW target temperature: {e}")
+
+        # Validate DHW min amount (minutes of hot water)
+        if CONF_DHW_MIN_AMOUNT in validated:
+            try:
+                dhw_min = int(validated[CONF_DHW_MIN_AMOUNT])
+                if dhw_min < DHW_MIN_AMOUNT_MIN or dhw_min > DHW_MIN_AMOUNT_MAX:
+                    raise vol.Invalid(
+                        f"DHW min amount must be {DHW_MIN_AMOUNT_MIN}-{DHW_MIN_AMOUNT_MAX} minutes"
+                    )
+                validated[CONF_DHW_MIN_AMOUNT] = dhw_min
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid DHW min amount: {e}")
 
         # Convert hour values to int (SelectSelector returns string)
         for hour_field in ["dhw_morning_hour", "dhw_evening_hour"]:
@@ -193,6 +209,20 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                                 step=1.0,
                                 mode=selector.NumberSelectorMode.SLIDER,
                                 unit_of_measurement="°C",
+                            )
+                        ),
+                        vol.Optional(
+                            CONF_DHW_MIN_AMOUNT,
+                            default=self.config_entry.options.get(
+                                CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT
+                            ),
+                        ): selector.NumberSelector(
+                            selector.NumberSelectorConfig(
+                                min=DHW_MIN_AMOUNT_MIN,
+                                max=DHW_MIN_AMOUNT_MAX,
+                                step=1,
+                                mode=selector.NumberSelectorMode.SLIDER,
+                                unit_of_measurement="min",
                             )
                         ),
                         vol.Optional(

@@ -31,6 +31,7 @@ class MockNibeState:
     indoor_temp: float = 21.0
     flow_temp: float = 35.0
     degree_minutes: float = 0.0
+    is_hot_water: bool = False  # DHW/lux heating status
 
 
 @dataclass

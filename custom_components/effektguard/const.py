@@ -894,6 +894,13 @@ DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
+# DHW amount-based scheduling (minutes of hot water available)
+# Schedule time = when water should be AVAILABLE (ready), not when heating starts
+DHW_MIN_AMOUNT_DEFAULT: Final = 5  # Default: min 5 minutes of hot water at scheduled time
+DHW_MIN_AMOUNT_MIN: Final = 1  # Config minimum: 1 minute
+DHW_MIN_AMOUNT_MAX: Final = 30  # Config maximum: 30 minutes
+CONF_DHW_MIN_AMOUNT: Final = "dhw_min_amount"  # Config key for min hot water minutes
+
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
