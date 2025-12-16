@@ -423,7 +423,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if state and state.state not in ["unavailable", "unknown"]:
                         try:
                             self.last_applied_offset = float(int(float(state.state)))
-                            _LOGGER.info("Synced with NIBE offset: %d°C", int(self.last_applied_offset))
+                            _LOGGER.info(
+                                "Synced with NIBE offset: %d°C", int(self.last_applied_offset)
+                            )
                             offset_synced = True
                         except (ValueError, TypeError):
                             pass
@@ -433,7 +435,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     stored = learned_data["last_offset"].get("value")
                     if stored is not None:
                         self.last_applied_offset = float(int(stored))
-                        _LOGGER.info("Restored offset from storage: %d°C (NIBE entity not yet available)", int(self.last_applied_offset))
+                        _LOGGER.info(
+                            "Restored offset from storage: %d°C (NIBE entity not yet available)",
+                            int(self.last_applied_offset),
+                        )
 
                 # Restore adaptive thermal model
                 if "thermal_model" in learned_data:
