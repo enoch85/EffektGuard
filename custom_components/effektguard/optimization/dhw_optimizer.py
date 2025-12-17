@@ -1309,6 +1309,7 @@ class IntelligentDHWScheduler:
         climate_zone_name: str | None = None,
         weather_current_temp: float | None = None,
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
+        dhw_amount_minutes: float | None = None,  # Hot water amount for scheduled check
     ) -> DHWRecommendation:
         """Calculate complete DHW heating recommendation.
 
@@ -1335,6 +1336,7 @@ class IntelligentDHWScheduler:
             climate_zone_name: Climate zone name for display
             weather_current_temp: Current weather temp for opportunity detection
             is_volatile: True if current price classification run is too brief (<45 min)
+            dhw_amount_minutes: Hot water amount (minutes) for scheduled check (RULE 0)
 
         Returns:
             DHWRecommendation with recommendation, summary, details, and decision
@@ -1401,7 +1403,12 @@ class IntelligentDHWScheduler:
             price_periods=price_periods,
             hours_since_last_dhw=hours_since_last_dhw,
             is_volatile=is_volatile,
+            dhw_amount_minutes=dhw_amount_minutes,
         )
+
+        # Get scheduled target for amount tracking
+        upcoming_demand = self._check_upcoming_demand_period(current_time)
+        scheduled_min_amount = upcoming_demand["min_amount_minutes"] if upcoming_demand else None
 
         # Build detailed planning attributes
         from .thermal_layer import get_thermal_debt_status
@@ -1421,6 +1428,10 @@ class IntelligentDHWScheduler:
             "indoor_temperature": indoor_temp,
             "climate_zone": zone_name,
             "recommended_start_time": decision.recommended_start_time,
+            # DHW amount tracking (RULE 0) - for sensor display
+            "dhw_amount_current": dhw_amount_minutes,
+            "dhw_amount_target": scheduled_min_amount,
+            "dhw_amount_scheduling_active": upcoming_demand is not None,
         }
 
         # Check for weather opportunity

@@ -1174,6 +1174,43 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         else str(last_heated)
                     )
 
+            # DHW amount tracking (RULE 0) - for scheduled amount-based control
+            if "dhw_planning" in self.coordinator.data:
+                planning = self.coordinator.data.get("dhw_planning", {})
+
+                # Amount tracking
+                current = planning.get("dhw_amount_current")
+                target = planning.get("dhw_amount_target")
+                scheduling_active = planning.get("dhw_amount_scheduling_active", False)
+
+                attrs["amount_scheduling_active"] = scheduling_active
+                if current is not None:
+                    attrs["amount_current_minutes"] = round(current, 1)
+                if target is not None:
+                    attrs["amount_target_minutes"] = target
+
+                # Calculate and show reasoning for amount-based decisions
+                if scheduling_active and current is not None and target is not None:
+                    if current >= target:
+                        attrs["amount_status"] = "target_reached"
+                        attrs["amount_reasoning"] = (
+                            f"DHW amount ({current:.0f} min) >= target ({target} min). "
+                            f"Heating skipped - will resume when amount drops below target."
+                        )
+                    else:
+                        deficit = target - current
+                        attrs["amount_status"] = "below_target"
+                        attrs["amount_reasoning"] = (
+                            f"DHW amount ({current:.0f} min) < target ({target} min). "
+                            f"Need {deficit:.0f} more minutes before demand period."
+                        )
+                        attrs["amount_deficit_minutes"] = round(deficit, 1)
+                elif scheduling_active and current is None:
+                    attrs["amount_status"] = "sensor_unavailable"
+                    attrs["amount_reasoning"] = (
+                        "DHW amount sensor not available - using temperature-based scheduling."
+                    )
+
         elif key == "airflow_enhancement":
             # Airflow mode decision attributes
             if "airflow_decision" in self.coordinator.data:
