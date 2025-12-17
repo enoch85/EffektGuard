@@ -148,22 +148,39 @@ Integration Layer (HA-specific)
 └── coordinator.py (DataUpdateCoordinator pattern)
     ├── climate.py (main UI entity)
     ├── sensor.py (monitoring entities)
+    ├── switch.py (DHW control switch)
+    ├── config_flow.py (setup wizard)
+    ├── options.py (runtime settings)
     └── services.yaml (manual control)
 
 Optimization Engine (pure Python)
-└── decision_engine.py (8-layer aggregation)
-    ├── thermal_model.py (physics)
-    ├── price_analyzer.py (spot price classification)
-    ├── effect_manager.py (peak tracking)
-    ├── weather_compensation.py (mathematical WC)
+└── decision_engine.py (9-layer aggregation)
+    ├── thermal_layer.py (thermal debt + emergency)
+    ├── effect_layer.py (peak protection)
+    ├── prediction_layer.py (learned pre-heating)
+    ├── price_layer.py (spot price optimization)
+    ├── weather_layer.py (mathematical WC + cold snap)
+    ├── comfort_layer.py (temperature correction)
+    ├── dhw_optimizer.py (18 decision rules)
     ├── adaptive_learning.py (self-tuning)
-    ├── thermal_predictor.py (pre-heating)
+    ├── savings_calculator.py (cost estimation)
+    ├── airflow_optimizer.py (S-series supply air)
     └── climate_zones.py (latitude detection)
 
 Data Adapters (external interfaces)
 ├── nibe_adapter.py (MyUplink read/write)
 ├── gespot_adapter.py (price data)
 └── weather_adapter.py (forecast)
+
+Models (heat pump abstractions)
+└── models/
+    ├── base.py (abstract interface)
+    ├── registry.py (model discovery)
+    └── nibe/ (NIBE-specific implementations)
+
+Utilities
+└── utils/
+    └── compressor_monitor.py (runtime tracking)
 ```
 
 ### Data Flow

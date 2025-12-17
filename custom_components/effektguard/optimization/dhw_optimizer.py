@@ -35,6 +35,7 @@ from ..const import (
     DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_PREHEAT_TARGET_OFFSET,
+    DHW_SCHEDULED_WINDOW_HOURS,
     DHW_SAFETY_CRITICAL,
     DHW_SAFETY_MIN,
     DHW_SAFETY_RUNTIME_MINUTES,
@@ -65,6 +66,10 @@ class DemandPeriodInfoDict(TypedDict):
     min_amount_minutes: float  # Minimum hot water minutes required
     target_temp: float  # Fallback target temp if amount sensor unavailable
     availability_time: datetime  # When water should be ready
+    hours_until: float  # Hours until availability time
+    within_scheduled_window: (
+        bool  # True if within DHW_SCHEDULED_WINDOW_HOURS of target (active scheduling)
+    )
 
 
 class DHWScheduleWindowDict(TypedDict):
@@ -530,41 +535,63 @@ class IntelligentDHWScheduler:
         # Check if scheduling is active (user configured demand periods)
         upcoming_demand = self._check_upcoming_demand_period(current_time)
         scheduled_min_amount: float | None = None
+        within_scheduled_window: bool = False
+        hours_until_target: float | None = None
+
         if upcoming_demand:
             scheduled_min_amount = upcoming_demand["min_amount_minutes"]
+            within_scheduled_window = upcoming_demand["within_scheduled_window"]
+            hours_until_target = upcoming_demand["hours_until"]
+
             _LOGGER.debug(
-                "DHW scheduling active: availability at %s, min amount %d min",
+                "DHW scheduling: availability at %s (%.1fh), min amount %d min, within_scheduled=%s",
                 upcoming_demand["availability_time"].strftime("%H:%M"),
+                hours_until_target,
                 scheduled_min_amount,
+                within_scheduled_window,
             )
 
-            # === RULE 0: TARGET AMOUNT REACHED - STOP HEATING ===
-            # When scheduling active and sensor shows enough hot water, stop immediately
-            # This is checked every 5 min by coordinator - simple and reliable
-            if dhw_amount_minutes is not None and dhw_amount_minutes >= scheduled_min_amount:
-                _LOGGER.info(
-                    "DHW target amount reached: %.0f min ≥ %d min target - stopping",
+            # === RULE 0: AMOUNT-BASED SCHEDULING ===
+            # Two lanes:
+            # 1. Normal: 24h price optimization continues regardless of scheduling
+            # 2. Scheduled window: Additionally check if we have enough hot water for target time
+            #
+            # Within scheduled window: If target amount reached, STOP heating to avoid waste
+            # Outside scheduled window: Normal price optimization continues (no blocking)
+            if within_scheduled_window and dhw_amount_minutes is not None:
+                if dhw_amount_minutes >= scheduled_min_amount:
+                    # Target amount reached within scheduled window - stop heating
+                    _LOGGER.info(
+                        "DHW target amount reached: %.0f min ≥ %d min target - stopping",
+                        dhw_amount_minutes,
+                        scheduled_min_amount,
+                    )
+                    # Find next cheap window (when we'd next consider heating)
+                    next_opportunity = self._find_next_dhw_opportunity(
+                        current_time=current_time,
+                        current_dhw_temp=current_dhw_temp,
+                        thermal_debt_dm=thermal_debt_dm,
+                        outdoor_temp=outdoor_temp,
+                        price_periods=price_periods,
+                        blocking_reason="DHW_AMOUNT_TARGET_REACHED",
+                        dm_block_threshold=dm_block_threshold,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=False,
+                        priority_reason=f"DHW_AMOUNT_TARGET_REACHED_{dhw_amount_minutes:.0f}MIN",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=0,
+                        abort_conditions=[],
+                        recommended_start_time=next_opportunity,
+                    )
+                # Below target within window - continue to price rules, they'll find cheap time
+                _LOGGER.debug(
+                    "DHW below target (%.0f < %d min) within scheduled window - "
+                    "continuing to price optimization",
                     dhw_amount_minutes,
                     scheduled_min_amount,
                 )
-                # Find next cheap window (when we'd next consider heating)
-                next_opportunity = self._find_next_dhw_opportunity(
-                    current_time=current_time,
-                    current_dhw_temp=current_dhw_temp,
-                    thermal_debt_dm=thermal_debt_dm,
-                    outdoor_temp=outdoor_temp,
-                    price_periods=price_periods,
-                    blocking_reason="DHW_AMOUNT_TARGET_REACHED",
-                    dm_block_threshold=dm_block_threshold,
-                )
-                return DHWScheduleDecision(
-                    should_heat=False,
-                    priority_reason=f"DHW_AMOUNT_TARGET_REACHED_{dhw_amount_minutes:.0f}MIN",
-                    target_temp=self.user_target_temp,
-                    max_runtime_minutes=0,
-                    abort_conditions=[],
-                    recommended_start_time=next_opportunity,
-                )
+            # Outside scheduled window: Normal 24h price optimization continues (no special handling)
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if should_block_for_thermal_debt:
@@ -1409,6 +1436,11 @@ class IntelligentDHWScheduler:
         # Get scheduled target for amount tracking
         upcoming_demand = self._check_upcoming_demand_period(current_time)
         scheduled_min_amount = upcoming_demand["min_amount_minutes"] if upcoming_demand else None
+        within_scheduled_window = (
+            upcoming_demand["within_scheduled_window"] if upcoming_demand else False
+        )
+        hours_until_target = upcoming_demand["hours_until"] if upcoming_demand else None
+        availability_time = upcoming_demand["availability_time"] if upcoming_demand else None
 
         # Build detailed planning attributes
         from .thermal_layer import get_thermal_debt_status
@@ -1431,7 +1463,11 @@ class IntelligentDHWScheduler:
             # DHW amount tracking (RULE 0) - for sensor display
             "dhw_amount_current": dhw_amount_minutes,
             "dhw_amount_target": scheduled_min_amount,
-            "dhw_amount_scheduling_active": upcoming_demand is not None,
+            "dhw_has_upcoming_demand": upcoming_demand is not None,
+            "dhw_within_scheduled_window": within_scheduled_window,
+            "dhw_hours_until_target": hours_until_target,
+            "dhw_availability_time": availability_time,
+            "dhw_scheduled_window_hours": DHW_SCHEDULED_WINDOW_HOURS,
         }
 
         # Check for weather opportunity
@@ -1498,14 +1534,15 @@ class IntelligentDHWScheduler:
     def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
         """Check if there's a configured demand period within 24h.
 
-        KISS: Just returns the next scheduled period's target amount and availability time.
-        The existing price window logic handles finding cheap times to heat.
+        Returns scheduling info including whether we're within the scheduled window.
+        The scheduled window (DHW_SCHEDULED_WINDOW_HOURS) determines when we should
+        actively check if target amount is reached vs just monitoring.
 
         Args:
             current_time: Current datetime
 
         Returns:
-            Dict with min_amount_minutes and availability_time, or None
+            Dict with scheduling info including within_scheduled_window flag, or None
         """
         for period in self.demand_periods:
             # Calculate next availability time
@@ -1518,12 +1555,16 @@ class IntelligentDHWScheduler:
 
             hours_until = (availability_time - current_time).total_seconds() / 3600
 
-            # Return if within 24h window
+            # Return if within 24h window (for monitoring/display)
             if hours_until <= DHW_SCHEDULING_WINDOW_MAX:
+                # Scheduling is active when within scheduled window of target time
+                within_scheduled_window = hours_until <= DHW_SCHEDULED_WINDOW_HOURS
                 return {
                     "min_amount_minutes": period.min_amount_minutes,
                     "target_temp": period.target_temp,
                     "availability_time": availability_time,
+                    "hours_until": hours_until,
+                    "within_scheduled_window": within_scheduled_window,
                 }
 
         return None

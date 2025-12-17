@@ -1181,31 +1181,63 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 # Amount tracking
                 current = planning.get("dhw_amount_current")
                 target = planning.get("dhw_amount_target")
-                scheduling_active = planning.get("dhw_amount_scheduling_active", False)
+                has_upcoming_demand = planning.get("dhw_has_upcoming_demand", False)
+                within_scheduled = planning.get("dhw_within_scheduled_window", False)
+                hours_until = planning.get("dhw_hours_until_target")
+                availability_time = planning.get("dhw_availability_time")
+                scheduled_window_hours = planning.get("dhw_scheduled_window_hours", 6)
 
-                attrs["amount_scheduling_active"] = scheduling_active
+                # Show scheduling status
+                attrs["has_upcoming_demand"] = has_upcoming_demand
                 if current is not None:
                     attrs["amount_current_minutes"] = round(current, 1)
                 if target is not None:
                     attrs["amount_target_minutes"] = target
+                if hours_until is not None:
+                    attrs["hours_until_target"] = round(hours_until, 1)
+                if availability_time is not None:
+                    attrs["availability_time"] = availability_time.strftime("%H:%M")
+                attrs["within_scheduled_window"] = within_scheduled
+                attrs["scheduled_window_hours"] = scheduled_window_hours
 
                 # Calculate and show reasoning for amount-based decisions
-                if scheduling_active and current is not None and target is not None:
-                    if current >= target:
-                        attrs["amount_status"] = "target_reached"
-                        attrs["amount_reasoning"] = (
-                            f"DHW amount ({current:.0f} min) >= target ({target} min). "
-                            f"Heating skipped - will resume when amount drops below target."
-                        )
+                if has_upcoming_demand and current is not None and target is not None:
+                    if within_scheduled:
+                        # Within scheduled window - active scheduling
+                        if current >= target:
+                            attrs["amount_status"] = "target_reached"
+                            attrs["amount_reasoning"] = (
+                                f"DHW amount ({current:.0f} min) >= target ({target} min). "
+                                f"Heating stopped until amount drops below target."
+                            )
+                        else:
+                            deficit = target - current
+                            attrs["amount_status"] = "below_target"
+                            attrs["amount_reasoning"] = (
+                                f"DHW amount ({current:.0f} min) < target ({target} min). "
+                                f"Need {deficit:.0f} more minutes before "
+                                f"{availability_time.strftime('%H:%M') if availability_time else 'target time'}. "
+                                f"Looking for cheap heating window."
+                            )
+                            attrs["amount_deficit_minutes"] = round(deficit, 1)
                     else:
-                        deficit = target - current
-                        attrs["amount_status"] = "below_target"
-                        attrs["amount_reasoning"] = (
-                            f"DHW amount ({current:.0f} min) < target ({target} min). "
-                            f"Need {deficit:.0f} more minutes before demand period."
+                        # Outside scheduled window - normal price optimization continues
+                        scheduled_starts_in = (
+                            hours_until - scheduled_window_hours if hours_until else None
                         )
-                        attrs["amount_deficit_minutes"] = round(deficit, 1)
-                elif scheduling_active and current is None:
+                        attrs["amount_status"] = "normal_optimization"
+                        if scheduled_starts_in is not None and scheduled_starts_in > 0:
+                            attrs["amount_reasoning"] = (
+                                f"Target: {target} min by {availability_time.strftime('%H:%M') if availability_time else 'N/A'}. "
+                                f"Currently {current:.0f} min. Normal price optimization active. "
+                                f"Scheduled check starts in {scheduled_starts_in:.1f}h."
+                            )
+                        else:
+                            attrs["amount_reasoning"] = (
+                                f"Normal price optimization active. "
+                                f"Target: {target} min, current: {current:.0f} min."
+                            )
+                elif has_upcoming_demand and current is None:
                     attrs["amount_status"] = "sensor_unavailable"
                     attrs["amount_reasoning"] = (
                         "DHW amount sensor not available - using temperature-based scheduling."
