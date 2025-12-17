@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
@@ -23,6 +24,8 @@ from .const import (
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
+    CONF_NIBE_TEMP_LUX_ENTITY,
+    DEFAULT_DHW_TARGET_TEMP,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
@@ -31,6 +34,7 @@ from .const import (
     DM_THRESHOLD_START,
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
+    NIBE_VENTILATION_MIN_ENHANCED_DURATION,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     UPDATE_INTERVAL_MINUTES,
@@ -126,13 +130,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
         self.compressor_stats = None  # Latest CompressorStats from monitor
 
+        # DHW temporary lux entity (stored once, reused everywhere)
+        self.temp_lux_entity = entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
+
         # DHW optimizer - pass climate detector for climate-aware thresholds
         from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
         from .optimization.savings_calculator import SavingsCalculator
 
         # Get user-configured DHW target temperature (default 50°C)
-        from .const import DEFAULT_DHW_TARGET_TEMP
-
         dhw_target_temp = float(entry.options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
 
         # Configure DHW demand periods from options
@@ -793,6 +798,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 else:
                     current_power_for_decision = self.peak_today
 
+                # Check if DHW temporary lux is active
+                # When NIBE heats DHW, flow temp reads charging temp (45-60°C), not space heating
+                temp_lux_active = False
+                if self.temp_lux_entity:
+                    lux_state = self.hass.states.get(self.temp_lux_entity)
+                    temp_lux_active = lux_state is not None and lux_state.state == STATE_ON
+
                 decision = await self.hass.async_add_executor_job(
                     self.engine.calculate_decision,
                     nibe_data,
@@ -800,6 +812,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     weather_data,
                     self.peak_this_month,  # Monthly peak threshold to protect
                     current_power_for_decision,  # Current whole-house power consumption
+                    temp_lux_active,  # DHW heating active - skip weather comp
                 )
 
                 # Startup grace period: Skip first N updates to allow sensors/trends to stabilize
@@ -1299,17 +1312,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             datetime: Last time DHW heating was activated (UTC)
             None: If no history available
         """
-        from homeassistant.const import STATE_ON
-
-        from .const import CONF_NIBE_TEMP_LUX_ENTITY
-
-        temp_lux_entity = self.entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
-        if not temp_lux_entity:
+        if not self.temp_lux_entity:
             _LOGGER.debug("No temporary lux entity configured")
             return None
 
         # Try to read from current entity state
-        state = self.hass.states.get(temp_lux_entity)
+        state = self.hass.states.get(self.temp_lux_entity)
         if state:
             if state.state == STATE_ON:
                 # Currently ON - last_changed is when it turned ON
@@ -1336,11 +1344,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self.hass,
                     start_time,
                     end_time,
-                    temp_lux_entity,
+                    self.temp_lux_entity,
                 )
 
-                if temp_lux_entity in states:
-                    entity_states = states[temp_lux_entity]
+                if self.temp_lux_entity in states:
+                    entity_states = states[self.temp_lux_entity]
 
                     # Find most recent ON state
                     for state_obj in reversed(entity_states):
@@ -1350,13 +1358,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             )
                             return state_obj.last_changed
 
-                _LOGGER.debug("No ON state in history for %s", temp_lux_entity)
+                _LOGGER.debug("No ON state in history for %s", self.temp_lux_entity)
 
             except (AttributeError, KeyError, ValueError, OSError) as err:
                 _LOGGER.error("Failed to read DHW heating history: %s", err)
 
         else:
-            _LOGGER.warning("Temporary lux entity %s not found", temp_lux_entity)
+            _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
 
         # Fall back to stored value (if any)
         if hasattr(self, "_last_dhw_control_time") and self._last_dhw_control_time:
@@ -1404,8 +1412,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Args:
             decision: FlowDecision from airflow optimizer
         """
-        from .const import NIBE_VENTILATION_MIN_ENHANCED_DURATION
-
         # Check if enhanced ventilation is currently active
         is_enhanced = await self.nibe.is_enhanced_ventilation_active()
 
@@ -1474,20 +1480,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             current_dhw_temp: Current DHW temperature
             now_time: Current datetime
         """
-        from .const import CONF_NIBE_TEMP_LUX_ENTITY
-
-        # Get temporary lux entity from config
-        temp_lux_entity = self.entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
-        if not temp_lux_entity:
+        # Check temporary lux entity
+        if not self.temp_lux_entity:
             _LOGGER.debug(
                 "DHW control disabled: No temporary lux entity configured (switch.temporary_lux_50004)"
             )
             return
 
         # Get current state of temporary lux switch
-        temp_lux_state = self.hass.states.get(temp_lux_entity)
+        temp_lux_state = self.hass.states.get(self.temp_lux_entity)
         if not temp_lux_state:
-            _LOGGER.warning("Temporary lux entity %s not found", temp_lux_entity)
+            _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
             return
 
         is_lux_on = temp_lux_state.state == "on"
@@ -1531,7 +1534,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     await self.hass.services.async_call(
                         "switch",
                         "turn_off",
-                        {"entity_id": temp_lux_entity},
+                        {"entity_id": self.temp_lux_entity},
                         blocking=False,
                     )
                     self._last_dhw_control_time = now_time
@@ -1563,7 +1566,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self.hass.services.async_call(
                     "switch",
                     "turn_on",
-                    {"entity_id": temp_lux_entity},
+                    {"entity_id": self.temp_lux_entity},
                     blocking=False,
                 )
                 self._last_dhw_control_time = now_time
@@ -1582,7 +1585,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self.hass.services.async_call(
                     "switch",
                     "turn_off",
-                    {"entity_id": temp_lux_entity},
+                    {"entity_id": self.temp_lux_entity},
                     blocking=False,
                 )
                 self._last_dhw_control_time = now_time
@@ -1908,7 +1911,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if dhw_config_changed:
             # Rebuild DHW demand periods
             from .optimization.dhw_optimizer import DHWDemandPeriod
-            from .const import DEFAULT_DHW_TARGET_TEMP
 
             dhw_target = float(options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
             demand_periods = []

@@ -382,6 +382,7 @@ class DecisionEngine:
         weather_data,
         current_peak: float,
         current_power: float,
+        temp_lux_active: bool = False,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -504,6 +505,7 @@ class DecisionEngine:
             weather_data=weather_data,
             target_temp=self.target_temp,
             enable_weather_compensation=self.enable_weather_compensation,
+            temp_lux_active=temp_lux_active,
         )
         comp_decision = LayerDecision(
             name=comp_result.name,

@@ -789,6 +789,7 @@ class WeatherCompensationLayer:
         target_temp: float,
         enable_weather_compensation: bool = True,
         get_current_datetime: Optional[callable] = None,
+        temp_lux_active: bool = False,
     ) -> WeatherCompensationLayerDecision:
         """Evaluate the weather compensation layer.
 
@@ -811,7 +812,8 @@ class WeatherCompensationLayer:
         # Skip weather compensation during DHW/lux heating
         # When NIBE heats DHW, flow temp reads DHW charging temp (45-60°C),
         # not space heating flow. This would cause incorrect negative offsets.
-        if nibe_state.is_hot_water:
+        # Check temp_lux_active from coordinator (checks temp_lux switch state)
+        if temp_lux_active:
             _LOGGER.debug(
                 "Weather comp skipped: DHW/lux heating active (flow=%.1f°C)",
                 nibe_state.flow_temp,
