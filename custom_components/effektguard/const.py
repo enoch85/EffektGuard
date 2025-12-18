@@ -915,9 +915,6 @@ DHW_NORMAL_RUNTIME_MINUTES: Final = 45  # Normal DHW heating window
 DHW_EXTENDED_RUNTIME_MINUTES: Final = 60  # High demand period heating
 DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
 
-# DHW demand period thresholds
-DHW_URGENT_DEMAND_HOURS: Final = 0.5  # Start urgent heating 30 min before demand period
-
 # NIBE Power Calculation Constants (Swedish 3-phase standard)
 # All NIBE heat pumps in Sweden are 3-phase systems
 NIBE_VOLTAGE_PER_PHASE: Final = (
@@ -1126,6 +1123,13 @@ class QuarterClassification(StrEnum):
     NORMAL = "normal"
     EXPENSIVE = "expensive"
     PEAK = "peak"
+
+
+# Classifications that benefit from heating boosts (pre-heating opportunities)
+# Used by price_layer and volatile_helpers to determine when to boost heating
+BENEFICIAL_CLASSIFICATIONS: Final = frozenset(
+    [QuarterClassification.VERY_CHEAP, QuarterClassification.CHEAP]
+)
 
 
 class UFHType(StrEnum):

@@ -74,7 +74,9 @@ class TestPriceForecast:
             expensive_price_ratio=1.8,
             is_volatile=True,
             current_run_length=2,
+            remaining_quarters=1,
             volatile_reason="Brief run",
+            is_ending_soon=True,
             in_peak_cluster=False,
         )
 
@@ -86,7 +88,9 @@ class TestPriceForecast:
         assert forecast.expensive_price_ratio == 1.8
         assert forecast.is_volatile is True
         assert forecast.current_run_length == 2
+        assert forecast.remaining_quarters == 1
         assert forecast.volatile_reason == "Brief run"
+        assert forecast.is_ending_soon is True
         assert forecast.in_peak_cluster is False
 
 

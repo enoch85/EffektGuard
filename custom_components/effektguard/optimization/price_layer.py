@@ -14,6 +14,7 @@ import numpy as np
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BENEFICIAL_CLASSIFICATIONS,
     OptimizationModeConfig,
     LAYER_WEIGHT_PRICE,
     PRICE_DAYTIME_MULTIPLIER,
@@ -43,7 +44,7 @@ from ..const import (
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
 from ..utils.time_utils import get_current_quarter
-from ..utils.volatile_helpers import should_skip_volatile_boost
+from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,7 +104,9 @@ class PriceForecast:
     # Volatility detection
     is_volatile: bool  # True if current run is too brief for effective heating
     current_run_length: int  # Duration of current classification run (quarters)
+    remaining_quarters: int  # Quarters remaining forward with same classification
     volatile_reason: str  # Human-readable explanation
+    is_ending_soon: bool  # True if favorable period ending soon (< 3 quarters remain)
 
     # Cluster detection
     in_peak_cluster: bool  # True when EXPENSIVE sandwiched between PEAKs
@@ -351,18 +354,14 @@ class PriceAnalyzer:
         Returns:
             Quarter number of next cheap/very cheap period, or None if none found
         """
-        beneficial_classifications = [
-            QuarterClassification.VERY_CHEAP,
-            QuarterClassification.CHEAP,
-        ]
         # Search today's periods
         for quarter in range(current_quarter + 1, 96):
-            if self._classifications_today.get(quarter) in beneficial_classifications:
+            if self._classifications_today.get(quarter) in BENEFICIAL_CLASSIFICATIONS:
                 return quarter
 
         # Search tomorrow's periods if available
         for quarter in range(96):
-            if self._classifications_tomorrow.get(quarter) in beneficial_classifications:
+            if self._classifications_tomorrow.get(quarter) in BENEFICIAL_CLASSIFICATIONS:
                 return 96 + quarter  # Offset by 96 for tomorrow
 
         return None
@@ -625,7 +624,9 @@ class PriceAnalyzer:
                 expensive_price_ratio=1.0,
                 is_volatile=False,
                 current_run_length=0,
+                remaining_quarters=0,
                 volatile_reason="",
+                is_ending_soon=False,
                 in_peak_cluster=False,
             )
 
@@ -644,7 +645,6 @@ class PriceAnalyzer:
         expensive_quarters_away = None
         expensive_duration = 0
         expensive_ratio = 1.0
-        current_run_length = 1
 
         # Build list of upcoming periods
         forecast_quarters = int(lookahead_hours * 4)
@@ -705,102 +705,14 @@ class PriceAnalyzer:
                     else:
                         break
 
-        # Calculate current run length (volatility detection)
-        # Scan backwards
-        for offset in range(1, 96):
-            check_quarter = current_quarter - offset
-            if check_quarter < 0:
-                break
-            check_class = self.get_current_classification(check_quarter)
-            if check_class == current_classification:
-                current_run_length += 1
-            else:
-                break
-
-        # Scan forwards
-        for offset in range(1, 96):
-            check_quarter = current_quarter + offset
-            if check_quarter < 96:
-                check_class = self.get_current_classification(check_quarter)
-            elif price_data.has_tomorrow:
-                tomorrow_quarter = check_quarter - 96
-                if tomorrow_quarter < 96:
-                    check_class = self.get_tomorrow_classification(tomorrow_quarter)
-                else:
-                    break
-            else:
-                break
-
-            if check_class == current_classification:
-                current_run_length += 1
-            else:
-                break
-
-        # Volatility detection
-        is_volatile = False
-        volatile_reason = ""
-        beneficial_classifications = [
-            QuarterClassification.VERY_CHEAP,
-            QuarterClassification.CHEAP,
-        ]
-
-        is_brief_run = current_run_length < PRICE_FORECAST_MIN_DURATION
-        if is_brief_run and current_classification != QuarterClassification.PEAK:
-            is_volatile = True
-            volatile_reason = (
-                f"Price volatile: {current_classification.name} "
-                f"{current_run_length * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
-            )
-
-        # PEAK cluster detection
-        in_peak_cluster = False
-        cluster_break_classifications = [
-            QuarterClassification.VERY_CHEAP,
-            QuarterClassification.CHEAP,
-        ]
-
-        if (
-            current_classification
-            in [QuarterClassification.EXPENSIVE, QuarterClassification.NORMAL]
-            and is_volatile
-        ):
-            has_peak_before = False
-            for back_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
-                check_quarter = current_quarter - back_offset
-                if check_quarter < 0:
-                    break
-                check_class = self.get_current_classification(check_quarter)
-                if check_class == QuarterClassification.PEAK:
-                    has_peak_before = True
-                    break
-                if check_class in cluster_break_classifications:
-                    break
-
-            has_peak_after = False
-            if has_peak_before:
-                for fwd_offset in range(1, PRICE_FORECAST_MIN_DURATION + 1):
-                    check_quarter = current_quarter + fwd_offset
-                    if check_quarter >= 96:
-                        if price_data.has_tomorrow:
-                            tomorrow_quarter = check_quarter - 96
-                            check_class = self.get_tomorrow_classification(tomorrow_quarter)
-                        else:
-                            break
-                    else:
-                        check_class = self.get_current_classification(check_quarter)
-
-                    if check_class is None:
-                        break
-                    if check_class == QuarterClassification.PEAK:
-                        has_peak_after = True
-                        break
-                    if check_class in cluster_break_classifications:
-                        break
-
-            if has_peak_before and has_peak_after:
-                in_peak_cluster = True
-                is_volatile = False  # No longer volatile when part of PEAK cluster
-                volatile_reason = ""
+        # Get volatility and cluster info from shared helper
+        volatile_info = get_volatile_info(self, price_data, current_quarter)
+        is_volatile = volatile_info.is_volatile
+        volatile_reason = volatile_info.reason
+        current_run_length = volatile_info.run_length
+        remaining_quarters = volatile_info.remaining_quarters
+        in_peak_cluster = volatile_info.in_peak_cluster
+        is_ending_soon = volatile_info.is_ending_soon
 
         return PriceForecast(
             next_cheap_quarters_away=cheap_quarters_away,
@@ -811,7 +723,9 @@ class PriceAnalyzer:
             expensive_price_ratio=expensive_ratio,
             is_volatile=is_volatile,
             current_run_length=current_run_length,
+            remaining_quarters=remaining_quarters,
             volatile_reason=volatile_reason,
+            is_ending_soon=is_ending_soon,
             in_peak_cluster=in_peak_cluster,
         )
 
@@ -880,58 +794,18 @@ class PriceAnalyzer:
         current_period = price_data.today[current_quarter]
         current_price = current_period.price
 
-        # Classifications that benefit from heating (used in multiple places)
-        beneficial_classifications = [
-            QuarterClassification.VERY_CHEAP,
-            QuarterClassification.CHEAP,
-        ]
-
         # Forward-looking price analysis - horizon scales with thermal mass
         # Base 4h × thermal_mass (0.5-2.0) → 2.0-8.0 hour adaptive horizon
         forecast_hours = self.calculate_lookahead_hours("space", thermal_mass=thermal_mass)
 
-        # Use shared forecast method for volatility, cluster detection, and price analysis
+        # Use shared forecast method for cluster detection and price analysis
         forecast = self.get_price_forecast(current_quarter, price_data, forecast_hours)
 
-        # Extract shared forecast data
+        # Get volatility and cluster info from forecast (computed via helper)
         is_volatile = forecast.is_volatile
+        is_ending_soon = forecast.is_ending_soon
         in_peak_cluster = forecast.in_peak_cluster
-        current_run_length = forecast.current_run_length
-        volatile_reason = ""
-        if forecast.volatile_reason:
-            volatile_reason = f" | {forecast.volatile_reason}"
-
-        # Calculate remaining cheap quarters for CHEAP periods (evaluate_layer specific)
-        # This tracks how many consecutive CHEAP quarters remain from current position
-        remaining_cheap_quarters = 0
-        if classification in beneficial_classifications:
-            remaining_cheap_quarters = 1
-            for q in range(current_quarter + 1, 96):
-                if self.get_current_classification(q) in beneficial_classifications:
-                    remaining_cheap_quarters += 1
-                else:
-                    break
-
-            # Check tomorrow if cheap continues to end of today
-            if (
-                remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
-                and current_quarter + remaining_cheap_quarters >= 96
-                and self.has_tomorrow_prices()
-            ):
-                for q in range(96):
-                    if self.get_tomorrow_classification(q) in beneficial_classifications:
-                        remaining_cheap_quarters += 1
-                    else:
-                        break
-
-            # Additional volatility check: CHEAP period ending soon
-            is_ending_soon = remaining_cheap_quarters < PRICE_FORECAST_MIN_DURATION
-            if classification == QuarterClassification.CHEAP and is_ending_soon:
-                is_volatile = True
-                volatile_reason = (
-                    f" | Price volatile: {classification.name} "
-                    f"{remaining_cheap_quarters * 15}min<{PRICE_FORECAST_MIN_DURATION * 15}min"
-                )
+        volatile_reason = f" | {forecast.volatile_reason}" if forecast.volatile_reason else ""
 
         # Calculate forecast adjustment based on upcoming price periods
         forecast_adjustment = 0.0
@@ -945,7 +819,7 @@ class PriceAnalyzer:
         expensive_duration = forecast.expensive_period_duration
         expensive_ratio = forecast.expensive_price_ratio
 
-        if classification in beneficial_classifications:
+        if classification in BENEFICIAL_CLASSIFICATIONS:
             # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
             if (
                 expensive_quarters_away is not None
@@ -1128,8 +1002,8 @@ class PriceAnalyzer:
                 base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
                 pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
 
-        # Skip heating boost for volatile periods (brief price runs)
-        if should_skip_volatile_boost(is_volatile, base_offset):
+        # Skip heating boost for volatile periods or when favorable period ending soon
+        if should_skip_volatile_boost(is_volatile, base_offset, is_ending_soon):
             base_offset = 0.0  # Treat as NORMAL
 
         # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)

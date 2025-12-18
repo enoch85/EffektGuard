@@ -56,7 +56,7 @@ from ..const import (
 )
 from .thermal_layer import estimate_dm_recovery_time
 from .price_layer import PriceAnalyzer
-from ..utils.volatile_helpers import is_volatile_period
+from ..utils.volatile_helpers import get_volatile_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1372,7 +1372,7 @@ class IntelligentDHWScheduler:
         # Calculate volatility using shared helper (consistent with space heating)
         is_volatile = False
         if self.price_analyzer and price_data:
-            is_volatile = is_volatile_period(self.price_analyzer, price_data)
+            is_volatile = get_volatile_info(self.price_analyzer, price_data).is_volatile
             if is_volatile:
                 _LOGGER.debug("DHW price volatility detected")
 
