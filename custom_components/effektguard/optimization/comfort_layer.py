@@ -8,8 +8,6 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
-from homeassistant.util import dt as dt_util
-
 from ..const import (
     COMFORT_CORRECTION_MILD,
     COMFORT_CORRECTION_MULT,
@@ -30,6 +28,7 @@ from ..const import (
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
 )
+from ..utils.time_utils import get_current_quarter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -320,8 +319,7 @@ class ComfortLayer:
         if not price_data or not price_data.today:
             return None
 
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)
+        current_quarter = get_current_quarter()
 
         if current_quarter >= len(price_data.today):
             return None

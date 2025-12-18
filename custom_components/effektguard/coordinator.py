@@ -55,6 +55,7 @@ from .optimization.price_layer import get_fallback_prices
 
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
+from .utils.time_utils import get_current_quarter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -887,7 +888,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Calculate actual spot savings for this cycle using real NIBE power
         now_time = dt_util.now()
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        current_quarter = get_current_quarter(now_time)
         if (
             price_data
             and hasattr(price_data, "today")
@@ -965,7 +966,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get current quarter classification from price analyzer
         # Use Home Assistant timezone-aware helper to avoid naive datetimes
         now_time = dt_util.now()
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        current_quarter = get_current_quarter(now_time)
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
         # Calculate estimated savings
@@ -1231,24 +1232,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
         # Get price classification and volatility
-        current_quarter = (now_time.hour * 4) + (now_time.minute // 15)
+        current_quarter = get_current_quarter(now_time)
         price_classification = (
             self.engine.price.get_current_classification(current_quarter)
             if price_data
             else "normal"
         )
-
-        # Get volatility from price forecast (matches space heating behavior)
-        is_volatile = False
-        if price_data and self.engine.price:
-            price_forecast = self.engine.price.get_price_forecast(
-                current_quarter=current_quarter,
-                price_data=price_data,
-                lookahead_hours=4.0,  # Standard lookahead for DHW
-            )
-            is_volatile = price_forecast.is_volatile
-            if is_volatile:
-                _LOGGER.debug("DHW price volatility detected: %s", price_forecast.volatile_reason)
 
         # Get price periods
         price_periods = []
@@ -1285,7 +1274,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get DHW amount from NIBE state for scheduled amount check (RULE 0)
         dhw_amount_minutes = nibe_data.dhw_amount_minutes if nibe_data else None
 
-        # Call pure logic in dhw_optimizer
+        # Call pure logic in dhw_optimizer (volatility calculated internally)
         result = self.dhw_optimizer.calculate_recommendation(
             current_dhw_temp=current_dhw_temp,
             thermal_debt=thermal_debt,
@@ -1300,7 +1289,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             thermal_trend_rate=trend_rate,
             climate_zone_name=climate_zone_name,
             weather_current_temp=weather_current_temp,
-            is_volatile=is_volatile,
+            price_data=price_data,
             dhw_amount_minutes=dhw_amount_minutes,
         )
 

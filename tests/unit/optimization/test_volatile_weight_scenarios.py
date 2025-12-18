@@ -12,7 +12,7 @@ from freezegun import freeze_time
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
-    PRICE_VOLATILE_WEIGHT_REDUCTION,
+    VOLATILE_WEIGHT_REDUCTION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     PRICE_FORECAST_MIN_DURATION,
@@ -251,13 +251,13 @@ class TestVolatileWeightReduction:
         normal_weight = LAYER_WEIGHT_PRICE
 
         # Volatile period weight (calculated from constants)
-        volatile_weight = normal_weight * PRICE_VOLATILE_WEIGHT_REDUCTION
-        expected_volatile_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+        volatile_weight = normal_weight * VOLATILE_WEIGHT_REDUCTION
+        expected_volatile_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
 
         # Verify reduction matches expected value from constants
         assert volatile_weight == pytest.approx(expected_volatile_weight), (
             f"Volatile weight should be {expected_volatile_weight} "
-            f"({LAYER_WEIGHT_PRICE} × {PRICE_VOLATILE_WEIGHT_REDUCTION}), got {volatile_weight}"
+            f"({LAYER_WEIGHT_PRICE} × {VOLATILE_WEIGHT_REDUCTION}), got {volatile_weight}"
         )
 
         # Calculate influence using actual constants
@@ -268,7 +268,7 @@ class TestVolatileWeightReduction:
         # Moderate reduction allows price layer to still have meaningful influence
         # Dec 1, 2025: After int accumulation fix, can safely allow stronger price influence
         assert extreme_spike_influence > normal_offset_influence, (
-            f"With reduction {PRICE_VOLATILE_WEIGHT_REDUCTION}, extreme spike ({extreme_spike_influence}) "
+            f"With reduction {VOLATILE_WEIGHT_REDUCTION}, extreme spike ({extreme_spike_influence}) "
             f"should still beat normal offset ({normal_offset_influence}) through weighted aggregation"
         )
 
@@ -749,8 +749,8 @@ class TestVolatileWeightReduction:
         # Weight reduction during volatility - moderate to prevent chasing erratic prices
         # Dec 1, 2025: Changed to 0.25-0.35 range (25-35% retention) after int accumulation fix
         assert (
-            0.25 <= PRICE_VOLATILE_WEIGHT_REDUCTION <= 0.35
-        ), f"Weight reduction should be moderate (25-35% retention), got {PRICE_VOLATILE_WEIGHT_REDUCTION}"
+            0.25 <= VOLATILE_WEIGHT_REDUCTION <= 0.35
+        ), f"Weight reduction should be moderate (25-35% retention), got {VOLATILE_WEIGHT_REDUCTION}"
 
         # Expensive threshold for spikes should require significant increase
         assert (

@@ -183,6 +183,8 @@ class TestEmergencyLayerEvaluate:
             target_temp=21.0,
             tolerance_range=0.5,
             get_current_datetime=lambda: mock_datetime,
+            # Note: is_volatile_cheap not passed, defaults to False
+            # The _is_price_cheap method is used internally for "at target" check
         )
 
         # With cheap price and DM -800 (beyond warning for Stockholm at -5°C),

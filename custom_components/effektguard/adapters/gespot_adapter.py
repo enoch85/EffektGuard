@@ -26,6 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import CONF_GESPOT_ENTITY, DAYTIME_END_HOUR, DAYTIME_START_HOUR
+from ..utils.time_utils import get_current_quarter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,8 +85,7 @@ class PriceData:
             return None
 
         # Find current quarter (0-95)
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)
+        current_quarter = get_current_quarter()
 
         # Find matching quarter period
         for period in self.today:

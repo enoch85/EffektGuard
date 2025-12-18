@@ -367,11 +367,13 @@ THERMAL_RECOVERY_T3_MIN_OFFSET: Final = 2.0  # T3 damped minimum (critical - nee
 #   Example: +2°C offset raise → gap ~2°C → DM drops ~120 DM/hour
 #   Example: +1°C offset raise → gap ~1°C → DM drops ~60 DM/hour
 #
-# Threshold: -60 DM/hour = 1°C sustained gap = clear "heat in transit" signal
+# Threshold: -50 DM/hour = ~0.8°C sustained gap = clear "heat in transit" signal
+# Lowered from -60 to -50 (Dec 18, 2025) to catch borderline cases where
+# heat is clearly in transit but rate is just above threshold.
 # This avoids false positives from normal ±0.3°C fluctuations (~18 DM/h)
 #
 # Reference: NIBE DM formula from F750 Service Manual Menu 4.9.3
-ANTI_WINDUP_DM_DROPPING_RATE: Final = -60.0  # DM/hour (≈1°C gap between S1 and BT25)
+ANTI_WINDUP_DM_DROPPING_RATE: Final = -50.0  # DM/hour (≈0.8°C gap between S1 and BT25)
 
 # Base history size for anti-windup DM tracking (30 minutes = 6 samples at 5-min intervals)
 # This is scaled by DM_THERMAL_MASS_BUFFER_* in EmergencyLayer.__init__
@@ -646,7 +648,7 @@ PRICE_FORECAST_DM_DEBT_OFFSET: Final = 0.3  # °C - Gentle recovery offset when 
 #
 # PEAK EXCLUDED: Always gets full response (never suppressed)
 # WEIGHT REDUCTION: 0.8 → 0.24 (70% reduction during volatility)
-PRICE_VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility (0.8 → 0.24)
+VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility
 
 # Price classification percentile thresholds (Dec 8, 2025)
 # Define the boundaries between price classifications

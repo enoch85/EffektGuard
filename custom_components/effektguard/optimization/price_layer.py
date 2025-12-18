@@ -38,10 +38,12 @@ from ..const import (
     PRICE_TOLERANCE_FACTOR_MIN,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
-    PRICE_VOLATILE_WEIGHT_REDUCTION,
     QuarterClassification,
+    VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
+from ..utils.time_utils import get_current_quarter
+from ..utils.volatile_helpers import should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -862,7 +864,7 @@ class PriceAnalyzer:
             )
 
         now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
+        current_quarter = get_current_quarter(now)
 
         # Bound check quarter index (safety)
         if current_quarter >= len(price_data.today):
@@ -1126,9 +1128,9 @@ class PriceAnalyzer:
                 base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
                 pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
 
-        # Skip heating boost for volatile CHEAP/VERY_CHEAP periods
-        if is_volatile and classification in beneficial_classifications and base_offset > 0:
-            base_offset = 0.0  # Treat as NORMAL instead of CHEAP/VERY_CHEAP
+        # Skip heating boost for volatile periods (brief price runs)
+        if should_skip_volatile_boost(is_volatile, base_offset):
+            base_offset = 0.0  # Treat as NORMAL
 
         # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)
         tolerance_range = PRICE_TOLERANCE_MAX - PRICE_TOLERANCE_MIN
@@ -1170,8 +1172,8 @@ class PriceAnalyzer:
         # Apply weight based on classification and volatility
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority
-        elif is_volatile and classification in beneficial_classifications:
-            price_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+        elif is_volatile:
+            price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
         else:
             price_weight = LAYER_WEIGHT_PRICE
 

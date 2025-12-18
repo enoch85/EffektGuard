@@ -65,6 +65,7 @@ from ..const import (
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
 )
+from ..utils.time_utils import get_current_quarter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -546,8 +547,7 @@ class EffectManager:
             )
 
         # Get current quarter
-        now = dt_util.now()
-        current_quarter = (now.hour * 4) + (now.minute // 15)  # 0-95
+        current_quarter = get_current_quarter()
 
         # Check if approaching monthly 15-minute peak
         limit_decision = self.should_limit_power(current_power, current_quarter)

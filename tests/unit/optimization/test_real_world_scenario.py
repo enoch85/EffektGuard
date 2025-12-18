@@ -24,7 +24,7 @@ from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_PRICE,
-    PRICE_VOLATILE_WEIGHT_REDUCTION,
+    VOLATILE_WEIGHT_REDUCTION,
 )
 
 
@@ -257,8 +257,8 @@ class TestRealWorldScenario:
         price_layer = decision.layers[7]
         assert price_layer.offset < 0.0, "Price layer should reduce during EXPENSIVE period"
         # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
-        # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
-        min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+        # Weight may be reduced based on VOLATILE_WEIGHT_REDUCTION constant
+        min_expected_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
         max_expected_weight = LAYER_WEIGHT_PRICE
         assert min_expected_weight <= price_layer.weight <= max_expected_weight, (
             f"Price layer weight should be between {min_expected_weight} (volatile) and "
@@ -392,8 +392,8 @@ class TestRealWorldScenario:
 
             assert price_layer.offset == pytest.approx(-2.5, abs=0.3)
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
-            # Weight may be reduced based on PRICE_VOLATILE_WEIGHT_REDUCTION constant
-            min_expected_weight = LAYER_WEIGHT_PRICE * PRICE_VOLATILE_WEIGHT_REDUCTION
+            # Weight may be reduced based on VOLATILE_WEIGHT_REDUCTION constant
+            min_expected_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
             max_expected_weight = LAYER_WEIGHT_PRICE
             assert min_expected_weight <= price_layer.weight <= max_expected_weight, (
                 f"Price layer weight should be between {min_expected_weight} (volatile) and "

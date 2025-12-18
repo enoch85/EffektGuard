@@ -53,6 +53,7 @@ from .thermal_layer import (
     is_cooling_rapidly,
     is_warming_rapidly,
 )
+from ..utils.volatile_helpers import is_volatile_period
 from .weather_layer import (
     AdaptiveClimateSystem,
     WeatherCompensationCalculator,
@@ -450,6 +451,9 @@ class DecisionEngine:
         # 1. Safety Layer (Inline)
         safety_decision = self._safety_layer(nibe_state)
 
+        # Check volatility once for reuse across all layers
+        is_volatile = is_volatile_period(self.price, price_data)
+
         # 2. Emergency Layer
         emergency_decision = self.emergency_layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -457,6 +461,7 @@ class DecisionEngine:
             price_data=price_data,
             target_temp=self.target_temp,
             tolerance_range=self.tolerance_range,
+            is_volatile=is_volatile,
         )
 
         # 3. Proactive Layer
@@ -464,6 +469,7 @@ class DecisionEngine:
             nibe_state=nibe_state,
             weather_data=weather_data,
             target_temp=self.target_temp,
+            is_volatile=is_volatile,
         )
 
         # 4. Effect Layer

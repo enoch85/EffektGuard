@@ -79,6 +79,7 @@ from ..const import (
     THERMAL_RECOVERY_T2_MIN_OFFSET,
     THERMAL_RECOVERY_T3_MIN_OFFSET,
     THERMAL_RECOVERY_WARMING_THRESHOLD,
+    VOLATILE_WEIGHT_REDUCTION,
     WARNING_CAUTION_OFFSET,
     WARNING_CAUTION_WEIGHT,
     WARNING_DEVIATION_DIVISOR_MODERATE,
@@ -95,6 +96,8 @@ from ..const import (
     DM_RECOVERY_RATE_VERY_COLD,
 )
 from .climate_zones import ClimateZoneDetector
+from ..utils.time_utils import get_current_quarter
+from ..utils.volatile_helpers import should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -484,6 +487,7 @@ class EmergencyLayer:
         target_temp: float,
         tolerance_range: float,
         get_current_datetime: Optional[Callable] = None,
+        is_volatile: bool = False,
     ) -> EmergencyLayerDecision:
         """Emergency layer: Smart context-aware thermal debt response.
 
@@ -499,6 +503,7 @@ class EmergencyLayer:
             target_temp: Target indoor temperature
             tolerance_range: Temperature tolerance range
             get_current_datetime: Callable returning current datetime (for testing)
+            is_volatile: True if in volatile cheap period (brief duration)
 
         Returns:
             EmergencyLayerDecision with context-aware emergency response
@@ -531,11 +536,10 @@ class EmergencyLayer:
                 degree_minutes=degree_minutes,
             )
 
-        # Case 2: At target + Expensive/Normal Price (and not at absolute limit)
+        # Case 2: At target + Not cheap (and not at absolute limit)
+        # Use _is_price_cheap to check current price classification
         if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
-            is_cheap = self._is_price_cheap(price_data, get_current_datetime)
-
-            if not is_cheap:
+            if not self._is_price_cheap(price_data, get_current_datetime):
                 return EmergencyLayerDecision(
                     name="Thermal Debt",
                     offset=0.0,
@@ -595,6 +599,13 @@ class EmergencyLayer:
                 damped_offset, current_offset, anti_windup_active, "T3"
             )
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, final_offset):
+                final_offset = 0.0
+                volatile_suffix = "[volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} near absolute max "
                 f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
@@ -603,11 +614,18 @@ class EmergencyLayer:
                 reason_parts.append(f"[{damping_reason}]")
             if anti_windup_active:
                 reason_parts.append(f"[{anti_windup_reason}]")
+            if volatile_suffix:
+                reason_parts.append(volatile_suffix.strip())
+
+            # Apply weight reduction during volatile cheap periods
+            weight = DM_CRITICAL_T3_WEIGHT
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
 
             return EmergencyLayerDecision(
                 name="T3",
                 offset=final_offset,
-                weight=DM_CRITICAL_T3_WEIGHT,
+                weight=weight,
                 reason=" ".join(reason_parts),
                 tier="T3",
                 degree_minutes=degree_minutes,
@@ -635,6 +653,13 @@ class EmergencyLayer:
                 damped_offset, current_offset, anti_windup_active, "T2"
             )
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, final_offset):
+                final_offset = 0.0
+                volatile_suffix = "[volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} approaching T3 "
                 f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
@@ -643,11 +668,18 @@ class EmergencyLayer:
                 reason_parts.append(f"[{damping_reason}]")
             if anti_windup_active:
                 reason_parts.append(f"[{anti_windup_reason}]")
+            if volatile_suffix:
+                reason_parts.append(volatile_suffix.strip())
+
+            # Apply weight reduction during volatile cheap periods
+            weight = DM_CRITICAL_T2_WEIGHT
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
 
             return EmergencyLayerDecision(
                 name="T2",
                 offset=final_offset,
-                weight=DM_CRITICAL_T2_WEIGHT,
+                weight=weight,
                 reason=" ".join(reason_parts),
                 tier="T2",
                 degree_minutes=degree_minutes,
@@ -675,6 +707,13 @@ class EmergencyLayer:
                 damped_offset, current_offset, anti_windup_active, "T1"
             )
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, final_offset):
+                final_offset = 0.0
+                volatile_suffix = "[volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             reason_parts = [
                 f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
                 f"(threshold: {t1_threshold:.0f})"
@@ -683,11 +722,18 @@ class EmergencyLayer:
                 reason_parts.append(f"[{damping_reason}]")
             if anti_windup_active:
                 reason_parts.append(f"[{anti_windup_reason}]")
+            if volatile_suffix:
+                reason_parts.append(volatile_suffix.strip())
+
+            # Apply weight reduction during volatile cheap periods
+            weight = DM_CRITICAL_T1_WEIGHT
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
 
             return EmergencyLayerDecision(
                 name="T1",
                 offset=final_offset,
-                weight=DM_CRITICAL_T1_WEIGHT,
+                weight=weight,
                 reason=" ".join(reason_parts),
                 tier="T1",
                 degree_minutes=degree_minutes,
@@ -717,6 +763,13 @@ class EmergencyLayer:
                 offset, current_offset, anti_windup_active, "WARNING"
             )
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, final_offset):
+                final_offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             reason = (
                 f"DM {degree_minutes:.0f} beyond expected for "
                 f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
@@ -724,11 +777,18 @@ class EmergencyLayer:
             )
             if anti_windup_active:
                 reason += f" [{anti_windup_reason}]"
+            if volatile_suffix:
+                reason += volatile_suffix
+
+            # Apply weight reduction during volatile cheap periods
+            weight = LAYER_WEIGHT_EMERGENCY
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
 
             return EmergencyLayerDecision(
                 name="Thermal Debt Warning",
                 offset=final_offset,
-                weight=LAYER_WEIGHT_EMERGENCY,
+                weight=weight,
                 reason=reason,
                 tier="WARNING",
                 degree_minutes=degree_minutes,
@@ -762,7 +822,7 @@ class EmergencyLayer:
         )
 
     def _is_price_cheap(self, price_data, get_current_datetime: Optional[Callable] = None) -> bool:
-        """Check if current price is classified as CHEAP."""
+        """Check if current price is classified as CHEAP or VERY_CHEAP."""
         if not price_data or not price_data.today or not self.price_analyzer:
             return False
 
@@ -770,14 +830,15 @@ class EmergencyLayer:
             if get_current_datetime:
                 now = get_current_datetime()
             else:
-                from homeassistant.util import dt as dt_util
+                now = None  # get_current_quarter will use dt_util.now()
 
-                now = dt_util.now()
-
-            current_quarter = (now.hour * 4) + (now.minute // 15)
+            current_quarter = get_current_quarter(now)
             if current_quarter < len(price_data.today):
                 classification = self.price_analyzer.get_current_classification(current_quarter)
-                return classification == QuarterClassification.CHEAP
+                return classification in (
+                    QuarterClassification.CHEAP,
+                    QuarterClassification.VERY_CHEAP,
+                )
         except (AttributeError, IndexError, TypeError):
             pass  # Price data unavailable or malformed - return False (default to not cheap)
 
@@ -1064,6 +1125,7 @@ class ProactiveLayer:
         nibe_state,
         weather_data,
         target_temp: float,
+        is_volatile: bool = False,
     ) -> ProactiveLayerDecision:
         """Proactive debt prevention with climate-aware thresholds and trend prediction.
 
@@ -1071,6 +1133,7 @@ class ProactiveLayer:
             nibe_state: Current NIBE state
             weather_data: Weather forecast data (for forecast validation)
             target_temp: Target indoor temperature
+            is_volatile: True if in volatile cheap period (brief duration)
 
         Returns:
             ProactiveLayerDecision with climate-aware proactive gentle heating
@@ -1116,11 +1179,22 @@ class ProactiveLayer:
                             boost *= MULTIPLIER_REDUCTION_20_PERCENT
                             forecast_reason = " (forecast stable, likely temporary)"
 
+                # Skip boost during volatile cheap period (shared logic)
+                if should_skip_volatile_boost(is_volatile, boost):
+                    boost = 0.0
+                    volatile_suffix = " [volatile: skipped]"
+                else:
+                    volatile_suffix = ""
+
                 # Apply warm house weight reduction
                 weight = RAPID_COOLING_WEIGHT
                 weight, warm_suffix = self._apply_warm_house_reduction(
                     weight, indoor_temp, target_temp, "RAPID_COOLING"
                 )
+
+                # Apply weight reduction during volatile cheap periods
+                if is_volatile:
+                    weight = weight * VOLATILE_WEIGHT_REDUCTION
 
                 return ProactiveLayerDecision(
                     name="Proactive",
@@ -1129,7 +1203,7 @@ class ProactiveLayer:
                     reason=(
                         f"Rapid cooling ({trend_rate:.2f}°C/h), "
                         f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
-                        f"{forecast_reason}{warm_suffix}"
+                        f"{forecast_reason}{warm_suffix}{volatile_suffix}"
                     ),
                     zone="RAPID_COOLING",
                     degree_minutes=degree_minutes,
@@ -1157,17 +1231,28 @@ class ProactiveLayer:
             else:
                 reason_suffix = ""
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, offset):
+                offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             # Apply warm house weight reduction
             weight = LAYER_WEIGHT_PROACTIVE_MIN
             weight, warm_suffix = self._apply_warm_house_reduction(
                 weight, indoor_temp, target_temp, "Z1"
             )
 
+            # Apply weight reduction during volatile cheap periods
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
+
             return ProactiveLayerDecision(
                 name="Z1",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{warm_suffix}",
+                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{warm_suffix}{volatile_suffix}",
                 zone="Z1",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1175,17 +1260,30 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 2
         if zone3_threshold < degree_minutes <= zone2_threshold:
+            offset = PROACTIVE_ZONE2_OFFSET
+
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, offset):
+                offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             # Apply warm house weight reduction
             weight = PROACTIVE_ZONE2_WEIGHT
             weight, warm_suffix = self._apply_warm_house_reduction(
                 weight, indoor_temp, target_temp, "Z2"
             )
 
+            # Apply weight reduction during volatile cheap periods
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
+
             return ProactiveLayerDecision(
                 name="Z2",
-                offset=PROACTIVE_ZONE2_OFFSET,
+                offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, boost recovery speed{warm_suffix}",
+                reason=f"DM {degree_minutes:.0f}, boost recovery speed{warm_suffix}{volatile_suffix}",
                 zone="Z2",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1198,17 +1296,28 @@ class ProactiveLayer:
             )
             offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
 
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, offset):
+                offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             # Apply warm house weight reduction
             weight = PROACTIVE_ZONE3_WEIGHT
             weight, warm_suffix = self._apply_warm_house_reduction(
                 weight, indoor_temp, target_temp, "Z3"
             )
 
+            # Apply weight reduction during volatile cheap periods
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
+
             return ProactiveLayerDecision(
                 name="Z3",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{warm_suffix}",
+                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{warm_suffix}{volatile_suffix}",
                 zone="Z3",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1216,17 +1325,30 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 4
         if zone5_threshold < degree_minutes <= zone4_threshold:
+            offset = PROACTIVE_ZONE4_OFFSET
+
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, offset):
+                offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
             # Apply warm house weight reduction
             weight = PROACTIVE_ZONE4_WEIGHT
             weight, warm_suffix = self._apply_warm_house_reduction(
                 weight, indoor_temp, target_temp, "Z4"
             )
 
+            # Apply weight reduction during volatile cheap periods
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
+
             return ProactiveLayerDecision(
                 name="Z4",
-                offset=PROACTIVE_ZONE4_OFFSET,
+                offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, strong prevention{warm_suffix}",
+                reason=f"DM {degree_minutes:.0f}, strong prevention{warm_suffix}{volatile_suffix}",
                 zone="Z4",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1234,11 +1356,25 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 5 (no warm house reduction - at warning boundary)
         if expected_dm["warning"] < degree_minutes <= zone5_threshold:
+            offset = PROACTIVE_ZONE5_OFFSET
+
+            # Skip boost during volatile cheap period (shared logic)
+            if should_skip_volatile_boost(is_volatile, offset):
+                offset = 0.0
+                volatile_suffix = " [volatile: skipped]"
+            else:
+                volatile_suffix = ""
+
+            # Apply weight reduction during volatile cheap periods
+            weight = PROACTIVE_ZONE5_WEIGHT
+            if is_volatile:
+                weight = weight * VOLATILE_WEIGHT_REDUCTION
+
             return ProactiveLayerDecision(
                 name="Z5",
-                offset=PROACTIVE_ZONE5_OFFSET,
-                weight=PROACTIVE_ZONE5_WEIGHT,
-                reason=f"DM {degree_minutes:.0f}, approaching warning",
+                offset=offset,
+                weight=weight,
+                reason=f"DM {degree_minutes:.0f}, approaching warning{volatile_suffix}",
                 zone="Z5",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,

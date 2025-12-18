@@ -56,6 +56,7 @@ from ..const import (
 )
 from .thermal_layer import estimate_dm_recovery_time
 from .price_layer import PriceAnalyzer
+from ..utils.volatile_helpers import is_volatile_period
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1335,7 +1336,7 @@ class IntelligentDHWScheduler:
         thermal_trend_rate: float = 0.0,
         climate_zone_name: str | None = None,
         weather_current_temp: float | None = None,
-        is_volatile: bool = False,  # True if current price run is too brief (<45 min)
+        price_data=None,  # PriceData for volatility calculation
         dhw_amount_minutes: float | None = None,  # Hot water amount for scheduled check
     ) -> DHWRecommendation:
         """Calculate complete DHW heating recommendation.
@@ -1362,12 +1363,19 @@ class IntelligentDHWScheduler:
             thermal_trend_rate: Indoor temp change rate (°C/hour)
             climate_zone_name: Climate zone name for display
             weather_current_temp: Current weather temp for opportunity detection
-            is_volatile: True if current price classification run is too brief (<45 min)
+            price_data: PriceData for volatility calculation (uses shared helper)
             dhw_amount_minutes: Hot water amount (minutes) for scheduled check (RULE 0)
 
         Returns:
             DHWRecommendation with recommendation, summary, details, and decision
         """
+        # Calculate volatility using shared helper (consistent with space heating)
+        is_volatile = False
+        if self.price_analyzer and price_data:
+            is_volatile = is_volatile_period(self.price_analyzer, price_data)
+            if is_volatile:
+                _LOGGER.debug("DHW price volatility detected")
+
         indoor_deficit = max(0.0, target_indoor - indoor_temp)
 
         # Get DM thresholds from climate detector or use fallback
