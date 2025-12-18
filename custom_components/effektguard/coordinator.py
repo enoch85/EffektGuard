@@ -396,7 +396,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
 
     async def _do_aligned_refresh(self) -> None:
-        """Perform refresh and schedule next aligned update."""
+        """Perform refresh and schedule next aligned update.
+
+        Note: _async_update_data() now handles scheduling at the end of every update,
+        so we don't need to schedule here. This method is called by the timer callback.
+        """
         try:
             self.data = await self._async_update_data()
             self.last_update_success = True
@@ -404,9 +408,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except Exception as err:  # noqa: BLE001
             self.last_update_success = False
             _LOGGER.error("Update failed: %s", err)
-
-        # Schedule next aligned refresh (maintains alignment regardless of update duration)
-        self._schedule_aligned_refresh()
+            # Still need to schedule next update even on failure
+            self._schedule_aligned_refresh()
 
     async def async_initialize_learning(self) -> None:
         """Initialize learning modules by loading persisted data.
@@ -1171,9 +1174,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning("Airflow evaluation failed: %s", err)
                 # Continue without airflow optimization
 
-        # Start aligned scheduling on first update (replaces base class scheduling)
-        if not self._clock_aligned:
-            self._schedule_aligned_refresh()
+        # Ensure aligned scheduling is always active
+        # This handles both first update AND event-triggered refreshes (e.g., power sensor)
+        # that could otherwise break the scheduling chain
+        self._schedule_aligned_refresh()
 
         return {
             "nibe": nibe_data,
