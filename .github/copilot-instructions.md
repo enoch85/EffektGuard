@@ -886,14 +886,16 @@ When creating release notes via `gh release create`, use this exact format:
 ```
 
 **Rules:**
-- Use `## Key Changes` as main header
-- Group changes under `### Bug Fixes`, `### Enhancements`, `### Removed`, `### Renamed` as needed
-- Use bullet points with `•` character
-- Bold feature names with `**Feature**:`
-- Use backticks for constant/function names
-- Keep descriptions concise (one line each)
-- Always include Full Changelog link at bottom
-- Omit empty sections
+- **Source of Truth**: Always perform a full `git diff` between tags (e.g., `git diff v0.4.11..v0.4.12`) to identify actual code changes. NEVER guess or assume changes.
+- **Pushing Changes**: Use `gh release edit` to update existing ones with the generated notes (e.g., `gh release edit v0.4.12 --notes "## Key Changes..."`).
+- **Header**: Use `## Key Changes` as main header.
+- **Grouping**: Group changes under `### Bug Fixes`, `### Enhancements`, `### Removed`, `### Renamed` as needed.
+- **Bullets**: Use bullet points with `•` character.
+- **Features**: Bold feature names with `**Feature**:`
+- **Code Symbols**: Use backticks for constant/function names.
+- **Conciseness**: Keep descriptions concise (one line each).
+- **Changelog**: Always include Full Changelog link at bottom.
+- **Cleanup**: Omit empty sections.
 
 ---
 
