@@ -131,6 +131,27 @@ DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 
+# DHW/Weather layer cooldown (Dec 19, 2025)
+# After DHW heating stops, flow temperature remains elevated for a LONG time:
+# - 20:25 (DHW stop): 55.4°C
+# - 20:30 (+5 min): 48.3°C
+# - 20:55 (+30 min): 46.3°C
+# - 21:30 (+65 min): 44.3°C
+# - 22:30 (+125 min): 41.8°C (still elevated!)
+#
+# The weather layer optimal flow at 8°C outdoor is ~26.6°C. Flow temp never
+# reaches optimal even after 2 hours! When flow is much higher, weather layer
+# sees huge "error" and recommends large negative offset.
+#
+# Skip weather layer for 30 minutes after DHW stops. This prevents the
+# immediate volatility spike we saw at 20:30 (-3.75 → -5.24°C) and gives
+# the system time to stabilize in space heating mode.
+#
+# TODO: Consider temperature-based cooldown instead (skip if flow > optimal + X°C).
+# More adaptive but tricky to tune - with 10°C threshold it skips for 2+ hours.
+# Time-based is simpler and catches the immediate spike which is the main issue.
+DHW_WEATHER_COOLDOWN_MINUTES: Final = 30
+
 # Decision engine layer weights
 # Source: User feedback and optimization tuning (Oct 2025)
 # Philosophy: "Charge heat when cheap, without peaking the peak"

@@ -831,6 +831,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self.peak_this_month,  # Monthly peak threshold to protect
                     current_power_for_decision,  # Current whole-house power consumption
                     temp_lux_active,  # DHW heating active - skip weather comp
+                    self.dhw_heating_end,  # When DHW last stopped - for cooldown
                 )
 
                 # Startup grace period: lockout + observation cycles

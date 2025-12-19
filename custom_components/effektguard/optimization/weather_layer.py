@@ -1,5 +1,9 @@
 """Weather compensation calculations for optimal flow temperature.
 
+TODO: Rename this module to flow_temp_layer.py and classes to FlowTemp* for clarity.
+      "Weather compensation" is confusing - this layer optimizes FLOW TEMPERATURE
+      based on outdoor conditions, not weather forecasting. (Dec 19, 2025)
+
 Implements scientifically-validated mathematical formulas from OpenEnergyMonitor research:
 1. André Kühne's Universal Formula (validated across Vaillant, Daikin, Mitsubishi, NIBE)
 2. Timbones' Heat Transfer Method (radiator output approach)
@@ -19,10 +23,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Protocol
 
+from homeassistant.util import dt as dt_util
+
 from ..const import (
     DEFAULT_CURVE_SENSITIVITY,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
+    DHW_WEATHER_COOLDOWN_MINUTES,
     KUEHNE_COEFFICIENT,
     KUEHNE_POWER,
     LAYER_WEIGHT_WEATHER_PREDICTION,
@@ -790,6 +797,7 @@ class WeatherCompensationLayer:
         enable_weather_compensation: bool = True,
         get_current_datetime: Optional[callable] = None,
         temp_lux_active: bool = False,
+        dhw_heating_end: Optional[datetime] = None,
     ) -> WeatherCompensationLayerDecision:
         """Evaluate the weather compensation layer.
 
@@ -799,6 +807,8 @@ class WeatherCompensationLayer:
             target_temp: Target indoor temperature (°C)
             enable_weather_compensation: Whether feature is enabled
             get_current_datetime: Callable returning current datetime (for testing)
+            temp_lux_active: Whether DHW/lux heating is currently active
+            dhw_heating_end: When DHW heating last stopped (for cooldown check)
 
         Returns:
             WeatherCompensationLayerDecision with mathematically calculated offset
@@ -825,6 +835,26 @@ class WeatherCompensationLayer:
                 reason="DHW/lux active - flow temp not valid for space heating",
             )
 
+        # Skip weather compensation during DHW cooldown period
+        # After DHW stops, flow temperature remains elevated (45-55°C).
+        # Wait for it to normalize before using weather compensation.
+        if dhw_heating_end is not None:
+            now = get_current_datetime() if get_current_datetime else dt_util.now()
+            minutes_since_dhw = (now - dhw_heating_end).total_seconds() / 60
+            if minutes_since_dhw < DHW_WEATHER_COOLDOWN_MINUTES:
+                _LOGGER.debug(
+                    "Weather comp skipped: DHW cooldown (%.1f min < %d min, flow=%.1f°C)",
+                    minutes_since_dhw,
+                    DHW_WEATHER_COOLDOWN_MINUTES,
+                    nibe_state.flow_temp,
+                )
+                return WeatherCompensationLayerDecision(
+                    name="Math WC",
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"DHW cooldown ({minutes_since_dhw:.0f}/{DHW_WEATHER_COOLDOWN_MINUTES}min)",
+                )
+
         if not weather_data or not weather_data.forecast_hours:
             return WeatherCompensationLayerDecision(
                 name="Math WC", offset=0.0, weight=0.0, reason="No weather data"
@@ -848,14 +878,7 @@ class WeatherCompensationLayer:
         # Check for unusual weather patterns if weather learner available
         if self.weather_learner and weather_data.forecast_hours:
             try:
-                # Get current datetime (allow injection for testing)
-                if get_current_datetime is not None:
-                    current_date = get_current_datetime()
-                else:
-                    # Import here to avoid circular imports and allow mocking
-                    from homeassistant.util import dt as dt_util
-
-                    current_date = dt_util.now()
+                current_date = get_current_datetime() if get_current_datetime else dt_util.now()
 
                 # Extract forecast for unusual weather detection
                 forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
