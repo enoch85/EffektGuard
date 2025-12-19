@@ -834,20 +834,26 @@ class PriceAnalyzer:
                     f"{expensive_quarters_away // 4}h - pre-heat now"
                 )
             elif expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                # Expensive period exists but doesn't meet criteria
+                # DEBUG: Log non-actionable expensive periods for troubleshooting
+                # Period meets price threshold but fails duration/lead-time requirements.
+                # Common cause: lookahead window boundary cuts off part of the period
+                # (e.g., we see 15min of a 45min peak because the rest is beyond horizon).
                 if expensive_duration < PRICE_FORECAST_MIN_DURATION:
-                    forecast_reason = (
-                        f" | Forecast: Expensive period too brief "
-                        f"({expensive_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
+                    _LOGGER.debug(
+                        "Forecast: Expensive period too brief "
+                        "(%dmin < %dmin) - may extend beyond lookahead",
+                        expensive_duration * 15,
+                        PRICE_FORECAST_MIN_DURATION * 15,
                     )
                 elif (
                     expensive_quarters_away is not None
                     and expensive_quarters_away < PRICE_FORECAST_MIN_DURATION
                 ):
-                    forecast_reason = (
-                        f" | Forecast: Expensive period too soon "
-                        f"({expensive_quarters_away * 15}min < "
-                        f"{PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
+                    _LOGGER.debug(
+                        "Forecast: Expensive period too soon "
+                        "(%dmin < %dmin lookahead)",
+                        expensive_quarters_away * 15,
+                        PRICE_FORECAST_MIN_DURATION * 15,
                     )
 
         elif classification in [
@@ -868,20 +874,26 @@ class PriceAnalyzer:
                     f"{cheap_quarters_away // 4}h - reduce heating"
                 )
             elif cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
-                # Cheap period exists but doesn't meet criteria
+                # DEBUG: Log non-actionable cheap periods for troubleshooting
+                # Period meets price threshold but fails duration/lead-time requirements.
+                # Common cause: lookahead window boundary cuts off part of the period
+                # (e.g., we see 15min of a 45min cheap period beyond horizon).
                 if cheap_duration < PRICE_FORECAST_MIN_DURATION:
-                    forecast_reason = (
-                        f" | Forecast: Cheap period too brief "
-                        f"({cheap_duration * 15}min < {PRICE_FORECAST_MIN_DURATION * 15}min)"
+                    _LOGGER.debug(
+                        "Forecast: Cheap period too brief "
+                        "(%dmin < %dmin) - may extend beyond lookahead",
+                        cheap_duration * 15,
+                        PRICE_FORECAST_MIN_DURATION * 15,
                     )
                 elif (
                     cheap_quarters_away is not None
                     and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
                 ):
-                    forecast_reason = (
-                        f" | Forecast: Cheap period too soon "
-                        f"({cheap_quarters_away * 15}min < "
-                        f"{PRICE_FORECAST_MIN_DURATION * 15}min lookahead)"
+                    _LOGGER.debug(
+                        "Forecast: Cheap period too soon "
+                        "(%dmin < %dmin lookahead)",
+                        cheap_quarters_away * 15,
+                        PRICE_FORECAST_MIN_DURATION * 15,
                     )
 
         else:  # NORMAL - check both directions, take most significant sustained change
@@ -929,33 +941,45 @@ class PriceAnalyzer:
                     f"{cheap_quarters_away // 4}h - reduce heating"
                 )
             else:
-                # Check if either direction had potential but didn't meet criteria
+                # DEBUG: Log non-actionable forecast periods for troubleshooting
+                # Periods meet price thresholds but fail duration/lead-time requirements.
+                # Common cause: lookahead window boundary cuts off part of the period
+                # (e.g., we see 15min of a 45min peak beyond horizon). Expected behavior.
                 if expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
                     if expensive_duration < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = (
-                            f" | Forecast: Expensive period too brief "
-                            f"({expensive_duration * 15}min)"
+                        _LOGGER.debug(
+                            "Forecast NORMAL: Expensive period too brief "
+                            "(%dmin < %dmin) - may extend beyond lookahead",
+                            expensive_duration * 15,
+                            PRICE_FORECAST_MIN_DURATION * 15,
                         )
                     elif (
                         expensive_quarters_away is not None
                         and expensive_quarters_away < PRICE_FORECAST_MIN_DURATION
                     ):
-                        forecast_reason = (
-                            f" | Forecast: Expensive period too soon "
-                            f"({expensive_quarters_away * 15}min)"
+                        _LOGGER.debug(
+                            "Forecast NORMAL: Expensive period too soon "
+                            "(%dmin < %dmin lookahead)",
+                            expensive_quarters_away * 15,
+                            PRICE_FORECAST_MIN_DURATION * 15,
                         )
-                elif cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
+                if cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
                     if cheap_duration < PRICE_FORECAST_MIN_DURATION:
-                        forecast_reason = (
-                            f" | Forecast: Cheap period too brief ({cheap_duration * 15}min)"
+                        _LOGGER.debug(
+                            "Forecast NORMAL: Cheap period too brief "
+                            "(%dmin < %dmin) - may extend beyond lookahead",
+                            cheap_duration * 15,
+                            PRICE_FORECAST_MIN_DURATION * 15,
                         )
                     elif (
                         cheap_quarters_away is not None
                         and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
                     ):
-                        forecast_reason = (
-                            f" | Forecast: Cheap period too soon "
-                            f"({cheap_quarters_away * 15}min)"
+                        _LOGGER.debug(
+                            "Forecast NORMAL: Cheap period too soon "
+                            "(%dmin < %dmin lookahead)",
+                            cheap_quarters_away * 15,
+                            PRICE_FORECAST_MIN_DURATION * 15,
                         )
 
         # DM debt gate: Don't suppress heating when thermal debt exists (Dec 13, 2025)
