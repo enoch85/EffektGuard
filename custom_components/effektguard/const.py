@@ -650,6 +650,16 @@ PRICE_FORECAST_DM_DEBT_OFFSET: Final = 0.3  # °C - Gentle recovery offset when 
 # WEIGHT REDUCTION: 0.8 → 0.24 (70% reduction during volatility)
 VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility
 
+# Volatility smoothing (Dec 19, 2025)
+# Merge brief "islands" (e.g., a single NORMAL quarter) that are sandwiched
+# between longer runs of the same classification. This reduces false volatility
+# from percentile boundary hopping without changing the underlying price
+# classifications used for offsets.
+#
+# Example (with max=1): CHEAP(2Q), NORMAL(1Q), CHEAP(1Q) → treat the 1Q NORMAL as CHEAP
+# PEAK is never merged.
+VOLATILE_ISLAND_MERGE_MAX_QUARTERS: Final = 1
+
 # Price classification percentile thresholds (Dec 8, 2025)
 # Define the boundaries between price classifications
 PRICE_PERCENTILE_VERY_CHEAP: Final = 10  # Bottom 10% = VERY_CHEAP

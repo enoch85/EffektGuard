@@ -24,8 +24,74 @@ from ..const import (
     BENEFICIAL_CLASSIFICATIONS,
     PRICE_FORECAST_MIN_DURATION,
     QuarterClassification,
+    VOLATILE_ISLAND_MERGE_MAX_QUARTERS,
 )
 from .time_utils import get_current_quarter
+
+
+def _build_classification_sequence(
+    price_analyzer,
+    price_data,
+) -> list[QuarterClassification]:
+    """Build a contiguous classification sequence for today (+tomorrow if available)."""
+
+    today = [price_analyzer.get_current_classification(q) for q in range(96)]
+    if not getattr(price_data, "has_tomorrow", False):
+        return today
+
+    tomorrow = [price_analyzer.get_tomorrow_classification(q) for q in range(96)]
+    return today + tomorrow
+
+
+def _merge_short_islands(
+    classifications: list[QuarterClassification],
+    max_island_quarters: int,
+) -> list[QuarterClassification]:
+    """Merge brief sandwiched runs into surrounding classification.
+
+    This is used only for volatility run-length calculations to reduce false
+    volatility from percentile boundary hopping.
+
+    This intentionally only merges brief NORMAL islands; it does NOT merge
+    brief CHEAP/VERY_CHEAP or EXPENSIVE islands, to avoid masking real price
+    opportunities/spikes.
+
+    PEAK is never merged and no island is merged *into* PEAK.
+    """
+
+    if max_island_quarters <= 0:
+        return classifications
+
+    merged = list(classifications)
+    n = len(merged)
+    if n < 3:
+        return merged
+
+    i = 0
+    while i < n:
+        cls = merged[i]
+        j = i
+        while j + 1 < n and merged[j + 1] == cls:
+            j += 1
+
+        run_len = (j - i) + 1
+        if (
+            run_len <= max_island_quarters
+            and i > 0
+            and j < n - 1
+            and merged[i - 1] == merged[j + 1]
+            and merged[i - 1] != cls
+            and cls == QuarterClassification.NORMAL
+            and cls != QuarterClassification.PEAK
+            and merged[i - 1] != QuarterClassification.PEAK
+        ):
+            fill_cls = merged[i - 1]
+            for k in range(i, j + 1):
+                merged[k] = fill_cls
+
+        i = j + 1
+
+    return merged
 
 
 @dataclass
@@ -87,8 +153,15 @@ def get_volatile_info(
             is_ending_soon=False,
         )
 
-    # Get current classification
-    current_classification = price_analyzer.get_current_classification(current_quarter)
+    # Use a smoothed classification sequence for volatility only.
+    # This reduces false positives from percentile boundary hopping (e.g., single-quarter islands).
+    raw_classifications = _build_classification_sequence(price_analyzer, price_data)
+    classifications = _merge_short_islands(
+        raw_classifications,
+        VOLATILE_ISLAND_MERGE_MAX_QUARTERS,
+    )
+
+    current_classification = classifications[current_quarter]
     classification_name = current_classification.name
 
     # Count total run length (current quarter = 1)
@@ -100,7 +173,7 @@ def get_volatile_info(
         check_quarter = current_quarter - offset
         if check_quarter < 0:
             break
-        if price_analyzer.get_current_classification(check_quarter) == current_classification:
+        if classifications[check_quarter] == current_classification:
             run_length += 1
         else:
             break
@@ -108,16 +181,9 @@ def get_volatile_info(
     # Scan forwards (count both run_length and remaining_quarters)
     for offset in range(1, 96):
         check_quarter = current_quarter + offset
-        if check_quarter < 96:
-            check_class = price_analyzer.get_current_classification(check_quarter)
-        elif price_data.has_tomorrow:
-            tomorrow_quarter = check_quarter - 96
-            if tomorrow_quarter < 96:
-                check_class = price_analyzer.get_tomorrow_classification(tomorrow_quarter)
-            else:
-                break
-        else:
+        if check_quarter >= len(classifications):
             break
+        check_class = classifications[check_quarter]
 
         if check_class == current_classification:
             run_length += 1
