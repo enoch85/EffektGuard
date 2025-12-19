@@ -106,6 +106,8 @@ def get_volatile_info(
             break
 
     # Scan forwards (count both run_length and remaining_quarters)
+    # Also track what classification comes NEXT (after current run ends)
+    next_classification = None
     for offset in range(1, 96):
         check_quarter = current_quarter + offset
         if check_quarter < 96:
@@ -123,17 +125,22 @@ def get_volatile_info(
             run_length += 1
             remaining_quarters += 1
         else:
+            # Found the next different classification
+            next_classification = check_class
             break
 
     # Initial volatility check (short run, not PEAK)
     is_brief_run = run_length < PRICE_FORECAST_MIN_DURATION
     is_volatile = is_brief_run and current_classification != QuarterClassification.PEAK
 
-    # Check if favorable period ending soon (for gradual transition)
-    # This applies to CHEAP/VERY_CHEAP periods: stop boosting before expensive periods
+    # Check if favorable period ending soon AND transitioning to worse prices
+    # Only skip boost when next period is non-beneficial (NORMAL, EXPENSIVE, PEAK)
+    # Don't skip if transitioning to another beneficial period (CHEAP ↔ VERY_CHEAP)
     is_ending_soon = (
         current_classification in BENEFICIAL_CLASSIFICATIONS
         and remaining_quarters < PRICE_FORECAST_MIN_DURATION
+        and next_classification is not None
+        and next_classification not in BENEFICIAL_CLASSIFICATIONS
     )
 
     # PEAK cluster detection - only for volatile EXPENSIVE/NORMAL periods
