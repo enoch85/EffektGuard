@@ -37,6 +37,8 @@ from .const import (
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
+    STARTUP_GRACE_MIN_INTERVAL,
+    STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
 )
 from .models.nibe import (
@@ -276,9 +278,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
         self._startup_update_count = 0  # Count updates before ending grace period
-        self._startup_grace_updates = 2  # Require 2 updates before applying offsets
+        self._startup_grace_updates = (
+            STARTUP_GRACE_UPDATES  # Require N updates before active control
+        )
         self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
         self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
+        # Startup grace: timeout after which observation cycles begin
+        self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -827,25 +833,36 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     temp_lux_active,  # DHW heating active - skip weather comp
                 )
 
-                # Startup grace period: Skip first N updates to allow sensors/trends to stabilize
-                # This prevents applying bad offsets before multi-sensor aggregation and
-                # thermal trend prediction have collected enough data
-                if self._first_successful_update:
-                    self._startup_update_count += 1
+                # Startup grace period: lockout + observation cycles
+                now = dt_util.now()
 
-                if self._startup_update_count <= self._startup_grace_updates:
+                if now < self._startup_grace_timeout:
+                    # Phase 1: Time-based lockout
+                    secs_left = int((self._startup_grace_timeout - now).total_seconds())
                     is_grace_period = True
-                    remaining = self._startup_grace_updates - self._startup_update_count + 1
                     _LOGGER.info(
-                        "Startup grace period (%d update%s remaining): Observing only. "
-                        "Real decision would have been: %.2f°C (%s)",
-                        remaining,
-                        "s" if remaining != 1 else "",
+                        "Startup Lockout (%ds): Observing. Decision: %.1f°C (%s)",
+                        secs_left,
                         decision.offset,
                         decision.reasoning,
                     )
-                    # Don't force offset to 0.0 - let the calculated value stand for reporting
-                    decision.reasoning = f"[Startup Grace Period] {decision.reasoning}"
+                    decision.reasoning = f"[Startup Lockout] {decision.reasoning}"
+                elif self._startup_update_count < self._startup_grace_updates:
+                    # Phase 2: Observation cycles (one per update interval)
+                    self._startup_update_count += 1
+                    is_grace_period = True
+                    cycles_left = self._startup_grace_updates - self._startup_update_count
+                    _LOGGER.info(
+                        "Startup Observation (%d cycle%s): Observing. Decision: %.1f°C (%s)",
+                        cycles_left,
+                        "s" if cycles_left != 1 else "",
+                        decision.offset,
+                        decision.reasoning,
+                    )
+                    decision.reasoning = f"[Startup Observation] {decision.reasoning}"
+                elif not getattr(self, "_grace_period_ended_logged", False):
+                    _LOGGER.info("Startup complete - active control enabled")
+                    self._grace_period_ended_logged = True
 
                 _LOGGER.info(
                     "Decision: offset %.2f°C, reasoning: %s",

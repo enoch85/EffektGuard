@@ -786,6 +786,8 @@ UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
 QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control
+STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before observation cycles
 
 # Thermal predictor history constants (derived from UPDATE_INTERVAL_MINUTES)
 SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 5-min intervals
