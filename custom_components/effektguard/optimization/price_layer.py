@@ -850,8 +850,7 @@ class PriceAnalyzer:
                     and expensive_quarters_away < PRICE_FORECAST_MIN_DURATION
                 ):
                     _LOGGER.debug(
-                        "Forecast: Expensive period too soon "
-                        "(%dmin < %dmin lookahead)",
+                        "Forecast: Expensive period too soon " "(%dmin < %dmin lookahead)",
                         expensive_quarters_away * 15,
                         PRICE_FORECAST_MIN_DURATION * 15,
                     )
@@ -890,8 +889,7 @@ class PriceAnalyzer:
                     and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
                 ):
                     _LOGGER.debug(
-                        "Forecast: Cheap period too soon "
-                        "(%dmin < %dmin lookahead)",
+                        "Forecast: Cheap period too soon " "(%dmin < %dmin lookahead)",
                         cheap_quarters_away * 15,
                         PRICE_FORECAST_MIN_DURATION * 15,
                     )
@@ -976,8 +974,7 @@ class PriceAnalyzer:
                         and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
                     ):
                         _LOGGER.debug(
-                            "Forecast NORMAL: Cheap period too soon "
-                            "(%dmin < %dmin lookahead)",
+                            "Forecast NORMAL: Cheap period too soon " "(%dmin < %dmin lookahead)",
                             cheap_quarters_away * 15,
                             PRICE_FORECAST_MIN_DURATION * 15,
                         )

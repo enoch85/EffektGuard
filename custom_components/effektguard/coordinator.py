@@ -278,7 +278,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._startup_update_count = 0  # Count updates before ending grace period
         self._startup_grace_updates = 2  # Require 2 updates before applying offsets
         self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
-        self._unsub_refresh = None  # Clock-aligned refresh subscription (replaces base class)
+        self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
 
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
@@ -374,9 +374,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         with 15-minute spot price intervals.
         """
         # Cancel any existing schedule
-        if self._unsub_refresh:
-            self._unsub_refresh()
-            self._unsub_refresh = None
+        if self._unsub_aligned_refresh:
+            self._unsub_aligned_refresh()
+            self._unsub_aligned_refresh = None
 
         next_time = self._calculate_next_aligned_time()
 
@@ -384,7 +384,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         def _on_refresh(_now: datetime) -> None:
             self.hass.async_create_task(self._do_aligned_refresh())
 
-        self._unsub_refresh = async_track_point_in_time(self.hass, _on_refresh, next_time)
+        self._unsub_aligned_refresh = async_track_point_in_time(self.hass, _on_refresh, next_time)
 
         if not self._clock_aligned:
             self._clock_aligned = True
@@ -612,6 +612,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Shutting down EffektGuard coordinator")
 
         try:
+            # Unsubscribe aligned refresh timer (if active)
+            if (unsub := getattr(self, "_unsub_aligned_refresh", None)) is not None:
+                unsub()
+                self._unsub_aligned_refresh = None
+
             # Unsubscribe power sensor listener if still active
             if self._power_sensor_listener:
                 self._power_sensor_listener()
@@ -713,6 +718,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     err,
                     UPDATE_INTERVAL_MINUTES,
                 )
+                # Important: even though we return early, we must keep clock-aligned scheduling
+                # running. With update_interval=None, nothing else will trigger retries.
+                self._schedule_aligned_refresh()
                 # Return minimal coordinator data to allow entities to be created
                 # They will show "unavailable" until NIBE data becomes ready
                 return {
@@ -1109,11 +1117,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
             if self.entry.data.get("enable_hot_water_optimization", False) and dhw_result.decision:
-                await self._apply_dhw_control(
-                    dhw_result.decision,  # Reuse decision from recommendation
-                    current_dhw_temp,
-                    now_time,
-                )
+                if is_grace_period:
+                    _LOGGER.info("Skipping DHW control during startup grace period")
+                else:
+                    await self._apply_dhw_control(
+                        dhw_result.decision,  # Reuse decision from recommendation
+                        current_dhw_temp,
+                        now_time,
+                    )
         else:
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
@@ -1166,7 +1177,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Apply control only if airflow optimization is enabled (like DHW)
                 airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
                 if airflow_enabled:
-                    await self._apply_airflow_decision(airflow_decision)
+                    if is_grace_period:
+                        _LOGGER.info("Skipping airflow control during startup grace period")
+                    else:
+                        await self._apply_airflow_decision(airflow_decision)
                 else:
                     _LOGGER.debug("Airflow optimization disabled - not applying control")
 
