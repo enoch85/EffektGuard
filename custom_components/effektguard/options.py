@@ -122,6 +122,15 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
         """Manage runtime options."""
         if user_input is not None:
             validated_input = self._validate_and_convert_dhw_config(user_input)
+
+            # Preserve ALL existing options not in the form
+            # This is critical for values set by other entities (e.g., target_indoor_temp from climate)
+            # and for options from entry.data that should persist
+            for key, value in self.config_entry.options.items():
+                if key not in validated_input:
+                    _LOGGER.debug("Preserving option %s = %s", key, value)
+                    validated_input[key] = value
+
             return self.async_create_entry(title="", data=validated_input)
 
         # Get current values for defaults
