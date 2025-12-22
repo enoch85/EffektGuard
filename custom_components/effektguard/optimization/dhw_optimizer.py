@@ -1557,6 +1557,9 @@ class IntelligentDHWScheduler:
         Returns:
             Dict with scheduling info including within_scheduled_window flag, or None
         """
+        closest_period = None
+        closest_hours = float("inf")
+
         for period in self.demand_periods:
             # Calculate next availability time
             availability_time = current_time.replace(
@@ -1568,11 +1571,12 @@ class IntelligentDHWScheduler:
 
             hours_until = (availability_time - current_time).total_seconds() / 3600
 
-            # Return if within 24h window (for monitoring/display)
-            if hours_until <= DHW_SCHEDULING_WINDOW_MAX:
+            # Check if within 24h window and is closer than previous closest
+            if hours_until <= DHW_SCHEDULING_WINDOW_MAX and hours_until < closest_hours:
+                closest_hours = hours_until
                 # Scheduling is active when within scheduled window of target time
                 within_scheduled_window = hours_until <= DHW_SCHEDULED_WINDOW_HOURS
-                return {
+                closest_period = {
                     "min_amount_minutes": period.min_amount_minutes,
                     "target_temp": period.target_temp,
                     "availability_time": availability_time,
@@ -1580,7 +1584,7 @@ class IntelligentDHWScheduler:
                     "within_scheduled_window": within_scheduled_window,
                 }
 
-        return None
+        return closest_period
 
     def get_recommended_dhw_schedule(
         self,

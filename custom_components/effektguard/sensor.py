@@ -28,10 +28,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
-    CONF_DHW_MIN_AMOUNT,
-    DHW_MIN_AMOUNT_DEFAULT,
-    DEFAULT_DHW_MORNING_HOUR,
-    DEFAULT_DHW_EVENING_HOUR,
 )
 from .coordinator import EffektGuardCoordinator
 
@@ -1137,8 +1133,15 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             if "nibe" in self.coordinator.data:
                 nibe_data = self.coordinator.data["nibe"]
                 if nibe_data and hasattr(nibe_data, "dhw_top_temp"):
-                    attrs["current_temperature"] = nibe_data.dhw_top_temp
+                    attrs["dhw_current_temp"] = nibe_data.dhw_top_temp
                     attrs["temperature_unit"] = "°C"
+
+            # Target temperature (might differ from current target in some scenarios)
+            if hasattr(self.coordinator, "entry") and self.coordinator.entry.options:
+                options = self.coordinator.entry.options
+                target_temp = options.get("dhw_target_temp")
+                if target_temp is not None:
+                    attrs["dhw_target_temp"] = float(target_temp)
 
             # Last Legionella boost (hygiene cycle at 56°C)
             if self.coordinator.dhw_optimizer:
@@ -1196,9 +1199,9 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 # Show scheduling status
                 attrs["has_upcoming_demand"] = has_upcoming_demand
                 if current is not None:
-                    attrs["amount_current_minutes"] = round(current, 1)
+                    attrs["water_amount_current"] = round(current, 1)
                 if target is not None:
-                    attrs["amount_target_minutes"] = target
+                    attrs["water_amount_target"] = target
                 if hours_until is not None:
                     attrs["hours_until_target"] = round(hours_until, 1)
                 if availability_time is not None:
@@ -1211,75 +1214,45 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     if within_scheduled:
                         # Within scheduled window - active scheduling
                         if current >= target:
-                            attrs["amount_status"] = "target_reached"
-                            attrs["amount_reasoning"] = (
+                            attrs["water_amount_status"] = "target_reached"
+                            attrs["water_amount_reasoning"] = (
                                 f"DHW amount ({current:.0f} min) >= target ({target} min). "
                                 f"Heating stopped until amount drops below target."
                             )
                         else:
                             deficit = target - current
-                            attrs["amount_status"] = "below_target"
-                            attrs["amount_reasoning"] = (
+                            attrs["water_amount_status"] = "below_target"
+                            attrs["water_amount_reasoning"] = (
                                 f"DHW amount ({current:.0f} min) < target ({target} min). "
                                 f"Need {deficit:.0f} more minutes before "
                                 f"{availability_time.strftime('%H:%M') if availability_time else 'target time'}. "
                                 f"Looking for cheap heating window."
                             )
-                            attrs["amount_deficit_minutes"] = round(deficit, 1)
+                            attrs["water_amount_deficit_minutes"] = round(deficit, 1)
                     else:
                         # Outside scheduled window - normal price optimization continues
                         scheduled_starts_in = (
                             hours_until - scheduled_window_hours if hours_until else None
                         )
-                        attrs["amount_status"] = "normal_optimization"
+                        attrs["water_amount_status"] = "normal_optimization"
                         if scheduled_starts_in is not None and scheduled_starts_in > 0:
-                            attrs["amount_reasoning"] = (
+                            # Calculate the actual start time
+                            start_time = dt_util.now() + timedelta(hours=scheduled_starts_in)
+                            attrs["water_amount_reasoning"] = (
                                 f"Target: {target} min by {availability_time.strftime('%H:%M') if availability_time else 'N/A'}. "
                                 f"Currently {current:.0f} min. Normal price optimization active. "
-                                f"Scheduled check starts in {scheduled_starts_in:.1f}h."
+                                f"Scheduled check starts in {scheduled_starts_in:.1f}h ({start_time.strftime('%H:%M')})."
                             )
                         else:
-                            attrs["amount_reasoning"] = (
+                            attrs["water_amount_reasoning"] = (
                                 f"Normal price optimization active. "
                                 f"Target: {target} min, current: {current:.0f} min."
                             )
                 elif has_upcoming_demand and current is None:
-                    attrs["amount_status"] = "sensor_unavailable"
-                    attrs["amount_reasoning"] = (
+                    attrs["water_amount_status"] = "sensor_unavailable"
+                    attrs["water_amount_reasoning"] = (
                         "DHW amount sensor not available - using temperature-based scheduling."
                     )
-
-            # Show user configuration from options (always available)
-            if hasattr(self.coordinator, "entry") and self.coordinator.entry.options:
-                options = self.coordinator.entry.options
-
-                # DHW target temperature
-                target_temp = options.get("dhw_target_temp")
-                if target_temp is not None:
-                    attrs["dhw_target_temp"] = float(target_temp)
-
-                # Minimum hot water amount
-                min_amount = options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT)
-                if min_amount is not None:
-                    attrs["dhw_min_amount"] = int(min_amount)
-
-                # Morning schedule
-                attrs["dhw_morning_enabled"] = options.get("dhw_morning_enabled", True)
-                if options.get("dhw_morning_enabled", True):
-                    attrs["dhw_morning_hour"] = int(
-                        options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR)
-                    )
-                    morning_hour = attrs["dhw_morning_hour"]
-                    attrs["dhw_morning_time"] = f"{morning_hour:02d}:00"
-
-                # Evening schedule
-                attrs["dhw_evening_enabled"] = options.get("dhw_evening_enabled", True)
-                if options.get("dhw_evening_enabled", True):
-                    attrs["dhw_evening_hour"] = int(
-                        options.get("dhw_evening_hour", DEFAULT_DHW_EVENING_HOUR)
-                    )
-                    evening_hour = attrs["dhw_evening_hour"]
-                    attrs["dhw_evening_time"] = f"{evening_hour:02d}:00"
 
         elif key == "airflow_enhancement":
             # Airflow mode decision attributes
