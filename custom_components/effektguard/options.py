@@ -20,14 +20,19 @@ from .const import (
     CONF_OPTIMIZATION_MODE,
     CONF_THERMAL_MASS,
     CONF_TOLERANCE,
+    DEFAULT_DHW_EVENING_HOUR,
+    DEFAULT_DHW_MORNING_HOUR,
+    DEFAULT_DHW_TARGET_TEMP,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INSULATION_QUALITY,
     DEFAULT_OPTIMIZATION_MODE,
     DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
+    DHW_MAX_TEMP,
     DHW_MIN_AMOUNT_DEFAULT,
     DHW_MIN_AMOUNT_MAX,
     DHW_MIN_AMOUNT_MIN,
+    MIN_DHW_TARGET_TEMP,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
@@ -77,8 +82,10 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
         if "dhw_target_temp" in validated:
             try:
                 dhw_target = float(validated["dhw_target_temp"])
-                if dhw_target < 45.0 or dhw_target > 60.0:
-                    raise vol.Invalid("DHW target temperature must be between 45-60°C")
+                if dhw_target < MIN_DHW_TARGET_TEMP or dhw_target > DHW_MAX_TEMP:
+                    raise vol.Invalid(
+                        f"DHW target temperature must be between {MIN_DHW_TARGET_TEMP}-{DHW_MAX_TEMP}°C"
+                    )
                 validated["dhw_target_temp"] = dhw_target
             except (TypeError, ValueError) as e:
                 raise vol.Invalid(f"Invalid DHW target temperature: {e}")
@@ -134,8 +141,8 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=validated_input)
 
         # Get current values for defaults
-        morning_hour = self.config_entry.options.get("dhw_morning_hour", 6)
-        evening_hour = self.config_entry.options.get("dhw_evening_hour", 18)
+        morning_hour = self.config_entry.options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR)
+        evening_hour = self.config_entry.options.get("dhw_evening_hour", DEFAULT_DHW_EVENING_HOUR)
         default_schedules = []
         if self.config_entry.options.get("dhw_morning_enabled", True):
             default_schedules.append("morning")
@@ -210,11 +217,13 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                     {
                         vol.Optional(
                             "dhw_target_temp",
-                            default=self.config_entry.options.get("dhw_target_temp", 50.0),
+                            default=self.config_entry.options.get(
+                                "dhw_target_temp", DEFAULT_DHW_TARGET_TEMP
+                            ),
                         ): selector.NumberSelector(
                             selector.NumberSelectorConfig(
-                                min=45.0,
-                                max=60.0,
+                                min=MIN_DHW_TARGET_TEMP,
+                                max=DHW_MAX_TEMP,
                                 step=1.0,
                                 mode=selector.NumberSelectorMode.SLIDER,
                                 unit_of_measurement="°C",

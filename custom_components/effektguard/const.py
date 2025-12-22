@@ -47,6 +47,8 @@ DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.49  # User-configurable weight (matches layer weight)
 DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
 DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
+DEFAULT_DHW_MORNING_HOUR: Final = 7  # Default morning DHW availability hour (07:00)
+DEFAULT_DHW_EVENING_HOUR: Final = 18  # Default evening DHW availability hour (18:00)
 
 # Climate entity temperature limits (displayed in UI)
 MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature

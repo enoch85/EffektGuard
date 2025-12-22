@@ -22,13 +22,17 @@ from .const import (
     CLIMATE_SOUTHERN_SWEDEN,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
+    CONF_DHW_MIN_AMOUNT,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     CONF_NIBE_TEMP_LUX_ENTITY,
+    DEFAULT_DHW_EVENING_HOUR,
+    DEFAULT_DHW_MORNING_HOUR,
     DEFAULT_DHW_TARGET_TEMP,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
+    DHW_MIN_AMOUNT_DEFAULT,
     DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
     DM_THRESHOLD_START,
@@ -143,28 +147,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get user-configured DHW target temperature (default 50°C)
         dhw_target_temp = float(entry.options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
 
+        # Get user-configured minimum hot water amount (default 5 minutes)
+        dhw_min_amount = int(entry.options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT))
+
         # Configure DHW demand periods from options
         demand_periods = []
 
         # Morning demand period (e.g., shower time)
         if entry.options.get("dhw_morning_enabled", True):
-            morning_hour = int(entry.options.get("dhw_morning_hour", 7))
+            morning_hour = int(entry.options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR))
             demand_periods.append(
                 DHWDemandPeriod(
                     availability_hour=morning_hour,
                     target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=2,  # 2-hour window
+                    min_amount_minutes=dhw_min_amount,  # User-configurable min amount
                 )
             )
 
         # Evening demand period (e.g., dishes, evening shower)
         if entry.options.get("dhw_evening_enabled", True):
-            evening_hour = int(entry.options.get("dhw_evening_hour", 18))
+            evening_hour = int(entry.options.get("dhw_evening_hour", DEFAULT_DHW_EVENING_HOUR))
             demand_periods.append(
                 DHWDemandPeriod(
                     availability_hour=evening_hour,
                     target_temp=dhw_target_temp,  # User-configurable target
                     duration_hours=3,  # 3-hour window
+                    min_amount_minutes=dhw_min_amount,  # User-configurable min amount
                 )
             )
 
@@ -1945,7 +1954,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             demand_periods = []
 
             if options.get("dhw_morning_enabled", True):
-                morning_hour = int(options.get("dhw_morning_hour", 7))
+                morning_hour = int(options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR))
                 demand_periods.append(
                     DHWDemandPeriod(
                         availability_hour=morning_hour,
@@ -1955,7 +1964,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
             if options.get("dhw_evening_enabled", True):
-                evening_hour = int(options.get("dhw_evening_hour", 18))
+                evening_hour = int(options.get("dhw_evening_hour", DEFAULT_DHW_EVENING_HOUR))
                 demand_periods.append(
                     DHWDemandPeriod(
                         availability_hour=evening_hour,

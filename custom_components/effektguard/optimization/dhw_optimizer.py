@@ -31,6 +31,7 @@ from ..const import (
     DHW_LEGIONELLA_DETECT,
     DHW_LEGIONELLA_MAX_DAYS,
     DHW_LEGIONELLA_PREVENT_TEMP,
+    DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
     DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
@@ -996,7 +997,9 @@ class IntelligentDHWScheduler:
                     return DHWScheduleDecision(
                         should_heat=True,
                         priority_reason=f"OPTIMAL_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
-                        target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
+                        target_temp=min(
+                            self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
+                        ),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                         abort_conditions=[
                             f"thermal_debt < {dm_abort_threshold:.0f}",
@@ -1036,7 +1039,9 @@ class IntelligentDHWScheduler:
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="CHEAP_ELECTRICITY_OPPORTUNITY",
-                    target_temp=min(self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, 60.0),
+                    target_temp=min(
+                        self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
+                    ),
                     max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
@@ -1417,7 +1422,7 @@ class IntelligentDHWScheduler:
                     "should_heat": False,
                     "priority_reason": "INDOOR_COOLING_RAPIDLY",
                     "current_temperature": current_dhw_temp,
-                    "target_temperature": 50.0,
+                    "target_temperature": DEFAULT_DHW_TARGET_TEMP,
                     "indoor_temp": indoor_temp,
                     "indoor_trend": thermal_trend_rate,
                     "indoor_deficit": indoor_deficit,

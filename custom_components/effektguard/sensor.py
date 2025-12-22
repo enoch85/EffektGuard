@@ -26,7 +26,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    CONF_DHW_MIN_AMOUNT,
+    DHW_MIN_AMOUNT_DEFAULT,
+    DEFAULT_DHW_MORNING_HOUR,
+    DEFAULT_DHW_EVENING_HOUR,
+)
 from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -1242,6 +1248,38 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     attrs["amount_reasoning"] = (
                         "DHW amount sensor not available - using temperature-based scheduling."
                     )
+
+            # Show user configuration from options (always available)
+            if hasattr(self.coordinator, "entry") and self.coordinator.entry.options:
+                options = self.coordinator.entry.options
+
+                # DHW target temperature
+                target_temp = options.get("dhw_target_temp")
+                if target_temp is not None:
+                    attrs["dhw_target_temp"] = float(target_temp)
+
+                # Minimum hot water amount
+                min_amount = options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT)
+                if min_amount is not None:
+                    attrs["dhw_min_amount"] = int(min_amount)
+
+                # Morning schedule
+                attrs["dhw_morning_enabled"] = options.get("dhw_morning_enabled", True)
+                if options.get("dhw_morning_enabled", True):
+                    attrs["dhw_morning_hour"] = int(
+                        options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR)
+                    )
+                    morning_hour = attrs["dhw_morning_hour"]
+                    attrs["dhw_morning_time"] = f"{morning_hour:02d}:00"
+
+                # Evening schedule
+                attrs["dhw_evening_enabled"] = options.get("dhw_evening_enabled", True)
+                if options.get("dhw_evening_enabled", True):
+                    attrs["dhw_evening_hour"] = int(
+                        options.get("dhw_evening_hour", DEFAULT_DHW_EVENING_HOUR)
+                    )
+                    evening_hour = attrs["dhw_evening_hour"]
+                    attrs["dhw_evening_time"] = f"{evening_hour:02d}:00"
 
         elif key == "airflow_enhancement":
             # Airflow mode decision attributes
