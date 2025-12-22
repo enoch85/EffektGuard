@@ -929,6 +929,13 @@ DHW_MIN_AMOUNT_MIN: Final = 1  # Config minimum: 1 minute
 DHW_MIN_AMOUNT_MAX: Final = 30  # Config maximum: 30 minutes
 CONF_DHW_MIN_AMOUNT: Final = "dhw_min_amount"  # Config key for min hot water minutes
 
+# DHW temperature-based heating rate (measured from real F750 data 2025-12-22)
+# 19:00 → 20:00: 23.8°C → 37.8°C = 14°C in 60 min = 14°C/hour
+# Used as fallback when insufficient history for dynamic calculation
+# The dhw_optimizer uses calculate_heating_rate() for dynamic estimation from BT7 history
+DHW_DEFAULT_HEATING_RATE: Final = 14.0  # °C/hour (measured from debug log)
+DHW_AMOUNT_HEATING_BUFFER: Final = 0.5  # Hours buffer for scheduling (arrive early, not late)
+
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM

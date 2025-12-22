@@ -584,7 +584,8 @@ class TestDemandPeriodTargeting:
 
         # Should NOT heat - target amount already reached
         assert decision.should_heat is False
-        assert "AMOUNT_TARGET_REACHED" in decision.priority_reason
+        # New format: DHW_SCHEDULED_TARGET_REACHED_{amount}MIN
+        assert "TARGET_REACHED" in decision.priority_reason
 
     def test_amount_below_target_heats_during_cheap(self, scheduler_with_morning_demand):
         """KISS: When amount below target and price is cheap, heat."""
@@ -887,6 +888,102 @@ class TestIntegrationScenarios:
             "SPACE_HEATING" in decision.priority_reason
             or "THERMAL_DEBT" in decision.priority_reason
         )
+
+
+# ==============================================================================
+# HEATING RATE LEARNING
+# ==============================================================================
+
+
+class TestHeatingRateLearning:
+    """Test DHW heating rate learning and persistence."""
+
+    def test_default_rate_without_history(self):
+        """Uses default rate when no history available."""
+        from custom_components.effektguard.const import DHW_DEFAULT_HEATING_RATE
+
+        scheduler = create_dhw_scheduler()
+
+        rate = scheduler.calculate_heating_rate()
+        assert rate == DHW_DEFAULT_HEATING_RATE
+
+    def test_calculates_rate_from_history(self):
+        """Calculates heating rate from BT7 temperature history."""
+        scheduler = create_dhw_scheduler()
+        now = datetime.now()
+
+        # Simulate stable period, then heating: 30°C → 44°C in 1 hour = 14°C/hour
+        # Need stable baseline first, then clear rising trend
+        for i in range(5):  # Stable baseline at 30°C
+            scheduler.update_bt7_temperature(30.0, now - timedelta(minutes=90 - i * 5))
+
+        # Rising temps (heating cycle)
+        for i in range(12):  # 12 samples over 55 min
+            temp = 30.0 + (i * 14.0 / 11)  # 30°C → 44°C
+            scheduler.update_bt7_temperature(temp, now - timedelta(minutes=55 - i * 5))
+
+        rate = scheduler.calculate_heating_rate()
+        # Should be close to 14°C/hour (or learned rate if detection works)
+        assert 10.0 <= rate <= 20.0
+
+    def test_learned_rate_persists(self):
+        """Directly setting learned rate persists through calculations."""
+        scheduler = create_dhw_scheduler()
+
+        # Directly set learned rate (simulating restored state)
+        scheduler.learned_heating_rate = 12.0
+        scheduler.heating_rate_observations = 5
+
+        # Without history, should return learned rate
+        rate = scheduler.calculate_heating_rate()
+        assert rate == 12.0
+
+    def test_persistence_roundtrip(self):
+        """Heating rate survives save/restore cycle."""
+        scheduler = create_dhw_scheduler()
+        now = datetime.now()
+
+        # Build up learned data
+        scheduler.last_legionella_boost = now - timedelta(days=5)
+        scheduler.learned_heating_rate = 14.5
+        scheduler.heating_rate_observations = 10
+
+        # Save state
+        state = scheduler.get_dhw_state_for_persistence()
+
+        # Create new scheduler and restore
+        new_scheduler = create_dhw_scheduler()
+        new_scheduler.restore_from_persistence(state)
+
+        assert new_scheduler.last_legionella_boost == scheduler.last_legionella_boost
+        assert new_scheduler.learned_heating_rate == 14.5
+        assert new_scheduler.heating_rate_observations == 10
+
+    def test_estimate_heating_time_uses_learned_rate(self):
+        """Heating time estimate uses learned rate when set."""
+        scheduler = create_dhw_scheduler()
+        scheduler.learned_heating_rate = 10.0  # 10°C/hour
+        scheduler.heating_rate_observations = 5
+
+        # 30°C → 50°C = 20°C delta at 10°C/hour = 2 hours
+        hours = scheduler.estimate_heating_time(30.0, 50.0)
+        assert hours == pytest.approx(2.0, rel=0.1)
+
+    def test_rejects_unrealistic_rates(self):
+        """Rejects calculated rates outside realistic bounds (5-25°C/hour)."""
+        from custom_components.effektguard.const import DHW_DEFAULT_HEATING_RATE
+
+        scheduler = create_dhw_scheduler()
+        now = datetime.now()
+
+        # Simulate unrealistically fast heating: 50°C/hour
+        for i in range(13):
+            temp = 30.0 + (i * 50.0 / 12)  # Way too fast
+            scheduler.update_bt7_temperature(temp, now - timedelta(minutes=60 - i * 5))
+
+        rate = scheduler.calculate_heating_rate()
+        # Should fall back to default since 50°C/hour is unrealistic
+        assert rate == DHW_DEFAULT_HEATING_RATE
 
 
 if __name__ == "__main__":

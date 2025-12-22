@@ -497,14 +497,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Restore DHW optimizer state (critical for Legionella safety tracking)
                 if "dhw_state" in learned_data and self.dhw_optimizer:
                     dhw_state = learned_data["dhw_state"]
-                    if "last_legionella_boost" in dhw_state:
-                        self.dhw_optimizer.last_legionella_boost = datetime.fromisoformat(
-                            dhw_state["last_legionella_boost"]
-                        )
-                        _LOGGER.info(
-                            "Restored last Legionella boost: %s",
-                            self.dhw_optimizer.last_legionella_boost,
-                        )
+                    # Use the new restore method for all DHW state
+                    self.dhw_optimizer.restore_from_persistence(dhw_state)
 
                 # Initialize DHW history from Home Assistant recorder (resilience to restarts)
                 # This checks past 14 days of BT7 data to detect recent Legionella cycles
@@ -1941,6 +1935,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_evening_hour",
             "dhw_evening_enabled",
             "dhw_target_temp",
+            CONF_DHW_MIN_AMOUNT,  # Include min_amount to trigger rebuild when changed
         }
 
         if any(key in options for key in dhw_keys):
@@ -1951,6 +1946,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             from .optimization.dhw_optimizer import DHWDemandPeriod
 
             dhw_target = float(options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
+            # Get user-configured minimum hot water amount (default 5 minutes)
+            dhw_min_amount = int(options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT))
             demand_periods = []
 
             if options.get("dhw_morning_enabled", True):
@@ -1960,6 +1957,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         availability_hour=morning_hour,
                         target_temp=dhw_target,
                         duration_hours=2,
+                        min_amount_minutes=dhw_min_amount,  # Apply user's configured min amount
                     )
                 )
 
@@ -1970,6 +1968,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         availability_hour=evening_hour,
                         target_temp=dhw_target,
                         duration_hours=3,
+                        min_amount_minutes=dhw_min_amount,  # Apply user's configured min amount
                     )
                 )
 
@@ -2150,14 +2149,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 summary = weather_learner.get_pattern_database_summary()
                 learned_data["weather_summary"] = summary
 
-            # Save DHW optimizer state (critical for Legionella safety and max wait tracking)
+            # Save DHW optimizer state (critical for Legionella safety, heating rate learning)
             if self.dhw_optimizer:
-                dhw_state = {}
-                if self.dhw_optimizer.last_legionella_boost:
-                    dhw_state["last_legionella_boost"] = (
-                        self.dhw_optimizer.last_legionella_boost.isoformat()
-                    )
-                # Note: last_dhw_heating_time tracked by thermal debt tracker, not optimizer
+                dhw_state = self.dhw_optimizer.get_dhw_state_for_persistence()
                 if dhw_state:
                     learned_data["dhw_state"] = dhw_state
 
