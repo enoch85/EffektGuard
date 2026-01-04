@@ -15,14 +15,14 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BENEFICIAL_CLASSIFICATIONS,
-    OptimizationModeConfig,
     LAYER_WEIGHT_PRICE,
+    MINUTES_PER_QUARTER,
+    OptimizationModeConfig,
     PRICE_DAYTIME_MULTIPLIER,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_DM_DEBT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    PRICE_FORECAST_MIN_DURATION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
     PRICE_OFFSET_CHEAP,
@@ -40,6 +40,8 @@ from ..const import (
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
     QuarterClassification,
+    VOLATILE_MIN_DURATION_MINUTES,
+    VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
@@ -131,7 +133,7 @@ def get_fallback_prices() -> PriceData:
 
     for quarter in range(96):  # 96 quarters per day (15-min intervals)
         hour = quarter // 4
-        minute = (quarter % 4) * 15
+        minute = (quarter % 4) * MINUTES_PER_QUARTER
         start_time = base_date.replace(hour=hour, minute=minute)
         fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
 
@@ -824,8 +826,8 @@ class PriceAnalyzer:
             if (
                 expensive_quarters_away is not None
                 and expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                and expensive_duration >= PRICE_FORECAST_MIN_DURATION
-                and expensive_quarters_away >= PRICE_FORECAST_MIN_DURATION
+                and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
+                and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
                 increase_percent = int((expensive_ratio - 1) * 100)
                 forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
@@ -838,21 +840,21 @@ class PriceAnalyzer:
                 # Period meets price threshold but fails duration/lead-time requirements.
                 # Common cause: lookahead window boundary cuts off part of the period
                 # (e.g., we see 15min of a 45min peak because the rest is beyond horizon).
-                if expensive_duration < PRICE_FORECAST_MIN_DURATION:
+                if expensive_duration < VOLATILE_MIN_DURATION_QUARTERS:
                     _LOGGER.debug(
                         "Forecast: Expensive period too brief "
                         "(%dmin < %dmin) - may extend beyond lookahead",
-                        expensive_duration * 15,
-                        PRICE_FORECAST_MIN_DURATION * 15,
+                        expensive_duration * MINUTES_PER_QUARTER,
+                        VOLATILE_MIN_DURATION_MINUTES,
                     )
                 elif (
                     expensive_quarters_away is not None
-                    and expensive_quarters_away < PRICE_FORECAST_MIN_DURATION
+                    and expensive_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
                 ):
                     _LOGGER.debug(
                         "Forecast: Expensive period too soon " "(%dmin < %dmin lookahead)",
-                        expensive_quarters_away * 15,
-                        PRICE_FORECAST_MIN_DURATION * 15,
+                        expensive_quarters_away * MINUTES_PER_QUARTER,
+                        VOLATILE_MIN_DURATION_MINUTES,
                     )
 
         elif classification in [
@@ -863,8 +865,8 @@ class PriceAnalyzer:
             if (
                 cheap_quarters_away is not None
                 and cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                and cheap_duration >= PRICE_FORECAST_MIN_DURATION
-                and cheap_quarters_away >= PRICE_FORECAST_MIN_DURATION
+                and cheap_duration >= VOLATILE_MIN_DURATION_QUARTERS
+                and cheap_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
                 savings_percent = int((1 - cheap_ratio) * 100)
                 forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
@@ -877,35 +879,35 @@ class PriceAnalyzer:
                 # Period meets price threshold but fails duration/lead-time requirements.
                 # Common cause: lookahead window boundary cuts off part of the period
                 # (e.g., we see 15min of a 45min cheap period beyond horizon).
-                if cheap_duration < PRICE_FORECAST_MIN_DURATION:
+                if cheap_duration < VOLATILE_MIN_DURATION_QUARTERS:
                     _LOGGER.debug(
                         "Forecast: Cheap period too brief "
                         "(%dmin < %dmin) - may extend beyond lookahead",
-                        cheap_duration * 15,
-                        PRICE_FORECAST_MIN_DURATION * 15,
+                        cheap_duration * MINUTES_PER_QUARTER,
+                        VOLATILE_MIN_DURATION_MINUTES,
                     )
                 elif (
                     cheap_quarters_away is not None
-                    and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
+                    and cheap_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
                 ):
                     _LOGGER.debug(
                         "Forecast: Cheap period too soon " "(%dmin < %dmin lookahead)",
-                        cheap_quarters_away * 15,
-                        PRICE_FORECAST_MIN_DURATION * 15,
+                        cheap_quarters_away * MINUTES_PER_QUARTER,
+                        VOLATILE_MIN_DURATION_MINUTES,
                     )
 
         else:  # NORMAL - check both directions, take most significant sustained change
             expensive_valid = (
                 expensive_quarters_away is not None
                 and expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                and expensive_duration >= PRICE_FORECAST_MIN_DURATION
-                and expensive_quarters_away >= PRICE_FORECAST_MIN_DURATION
+                and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
+                and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             )
             cheap_valid = (
                 cheap_quarters_away is not None
                 and cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                and cheap_duration >= PRICE_FORECAST_MIN_DURATION
-                and cheap_quarters_away >= PRICE_FORECAST_MIN_DURATION
+                and cheap_duration >= VOLATILE_MIN_DURATION_QUARTERS
+                and cheap_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             )
 
             if expensive_valid and cheap_valid:
@@ -944,39 +946,39 @@ class PriceAnalyzer:
                 # Common cause: lookahead window boundary cuts off part of the period
                 # (e.g., we see 15min of a 45min peak beyond horizon). Expected behavior.
                 if expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                    if expensive_duration < PRICE_FORECAST_MIN_DURATION:
+                    if expensive_duration < VOLATILE_MIN_DURATION_QUARTERS:
                         _LOGGER.debug(
                             "Forecast NORMAL: Expensive period too brief "
                             "(%dmin < %dmin) - may extend beyond lookahead",
-                            expensive_duration * 15,
-                            PRICE_FORECAST_MIN_DURATION * 15,
+                            expensive_duration * MINUTES_PER_QUARTER,
+                            VOLATILE_MIN_DURATION_MINUTES,
                         )
                     elif (
                         expensive_quarters_away is not None
-                        and expensive_quarters_away < PRICE_FORECAST_MIN_DURATION
+                        and expensive_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
                     ):
                         _LOGGER.debug(
                             "Forecast NORMAL: Expensive period too soon "
                             "(%dmin < %dmin lookahead)",
-                            expensive_quarters_away * 15,
-                            PRICE_FORECAST_MIN_DURATION * 15,
+                            expensive_quarters_away * MINUTES_PER_QUARTER,
+                            VOLATILE_MIN_DURATION_MINUTES,
                         )
                 if cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
-                    if cheap_duration < PRICE_FORECAST_MIN_DURATION:
+                    if cheap_duration < VOLATILE_MIN_DURATION_QUARTERS:
                         _LOGGER.debug(
                             "Forecast NORMAL: Cheap period too brief "
                             "(%dmin < %dmin) - may extend beyond lookahead",
-                            cheap_duration * 15,
-                            PRICE_FORECAST_MIN_DURATION * 15,
+                            cheap_duration * MINUTES_PER_QUARTER,
+                            VOLATILE_MIN_DURATION_MINUTES,
                         )
                     elif (
                         cheap_quarters_away is not None
-                        and cheap_quarters_away < PRICE_FORECAST_MIN_DURATION
+                        and cheap_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
                     ):
                         _LOGGER.debug(
                             "Forecast NORMAL: Cheap period too soon " "(%dmin < %dmin lookahead)",
-                            cheap_quarters_away * 15,
-                            PRICE_FORECAST_MIN_DURATION * 15,
+                            cheap_quarters_away * MINUTES_PER_QUARTER,
+                            VOLATILE_MIN_DURATION_MINUTES,
                         )
 
         # DM debt gate: Don't suppress heating when thermal debt exists (Dec 13, 2025)

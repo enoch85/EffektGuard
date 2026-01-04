@@ -20,7 +20,7 @@ from custom_components.effektguard.const import (
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    PRICE_FORECAST_MIN_DURATION,
+    VOLATILE_MIN_DURATION_QUARTERS,
 )
 
 
@@ -380,8 +380,8 @@ class TestGetPriceForecast:
             lookahead_hours=4.0,
         )
 
-        # Current run of 1 quarter < PRICE_FORECAST_MIN_DURATION (3)
-        assert forecast.current_run_length < PRICE_FORECAST_MIN_DURATION
+        # Current run of 1 quarter < VOLATILE_MIN_DURATION_QUARTERS (3)
+        assert forecast.current_run_length < VOLATILE_MIN_DURATION_QUARTERS
         assert forecast.is_volatile is True
 
 

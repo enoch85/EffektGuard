@@ -35,6 +35,7 @@ from .const import (
     DHW_MIN_AMOUNT_DEFAULT,
     DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
+    DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
@@ -62,6 +63,7 @@ from .optimization.price_layer import get_fallback_prices
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 from .utils.time_utils import get_current_quarter
+from .utils.volatile_helpers import OffsetVolatilityTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -267,18 +269,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             minutes=UPDATE_INTERVAL_MINUTES
         )  # Throttle to coordinator update interval
 
+        # Offset volatility tracking (prevents rapid back-and-forth offset changes)
+        # Uses same min duration as price volatility (45 min) for consistency
+        self._offset_volatility_tracker = OffsetVolatilityTracker()
+
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
         self.peak_today_source: str = "unknown"  # external_meter, nibe_currents, estimate
         self.peak_today_quarter: int | None = None  # 15-min quarter (0-95) for effect tariff
         self.yesterday_peak: float = 0.0  # Yesterday's peak for comparison
 
-        # DHW tracking
+        # DHW tracking (unified: is_hot_water OR temp_lux active)
         self.last_dhw_heated = None  # Last time DHW was in heating mode
         self.last_dhw_temp = None  # Last BT7 temperature for trend analysis
         self.dhw_heating_start = None  # When current/last DHW cycle started
         self.dhw_heating_end = None  # When last DHW cycle ended
-        self.dhw_was_heating = False  # Track state changes
+        self.dhw_was_active = False  # Track DHW state (is_hot_water OR temp_lux)
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -497,14 +503,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Restore DHW optimizer state (critical for Legionella safety tracking)
                 if "dhw_state" in learned_data and self.dhw_optimizer:
                     dhw_state = learned_data["dhw_state"]
-                    if "last_legionella_boost" in dhw_state:
-                        self.dhw_optimizer.last_legionella_boost = datetime.fromisoformat(
-                            dhw_state["last_legionella_boost"]
-                        )
-                        _LOGGER.info(
-                            "Restored last Legionella boost: %s",
-                            self.dhw_optimizer.last_legionella_boost,
-                        )
+                    # Use the new restore method for all DHW state
+                    self.dhw_optimizer.restore_from_persistence(dhw_state)
 
                 # Initialize DHW history from Home Assistant recorder (resilience to restarts)
                 # This checks past 14 days of BT7 data to detect recent Legionella cycles
@@ -825,12 +825,36 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 else:
                     current_power_for_decision = self.peak_today
 
-                # Check if DHW temporary lux is active
+                # Check if DHW is active (EITHER is_hot_water sensor OR temp_lux switch)
                 # When NIBE heats DHW, flow temp reads charging temp (45-60°C), not space heating
+                is_hot_water = (
+                    nibe_data.is_hot_water if hasattr(nibe_data, "is_hot_water") else False
+                )
                 temp_lux_active = False
                 if self.temp_lux_entity:
                     lux_state = self.hass.states.get(self.temp_lux_entity)
                     temp_lux_active = lux_state is not None and lux_state.state == STATE_ON
+
+                # Unified DHW active state: either source means DHW is heating
+                dhw_is_active = is_hot_water or temp_lux_active
+
+                # Track DHW transition: active → inactive triggers weather layer cooldown
+                # When DHW stops, flow temp remains elevated - needs cooldown period
+                # Uses DHW_WEATHER_COOLDOWN_MINUTES (30 min) before weather comp re-enables
+                if self.dhw_was_active and not dhw_is_active:
+                    self.dhw_heating_end = dt_util.now()
+                    _LOGGER.info(
+                        "DHW heating stopped - triggering weather layer cooldown (%d min)",
+                        DHW_WEATHER_COOLDOWN_MINUTES,
+                    )
+                elif not self.dhw_was_active and dhw_is_active:
+                    self.dhw_heating_start = dt_util.now()
+                    _LOGGER.info(
+                        "DHW heating started (is_hot_water=%s, temp_lux=%s)",
+                        is_hot_water,
+                        temp_lux_active,
+                    )
+                self.dhw_was_active = dhw_is_active
 
                 decision = await self.hass.async_add_executor_job(
                     self.engine.calculate_decision,
@@ -839,7 +863,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     weather_data,
                     self.peak_this_month,  # Monthly peak threshold to protect
                     current_power_for_decision,  # Current whole-house power consumption
-                    temp_lux_active,  # DHW heating active - skip weather comp
+                    dhw_is_active,  # DHW heating active - skip weather comp
                     self.dhw_heating_end,  # When DHW last stopped - for cooldown
                 )
 
@@ -883,6 +907,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Optimization failed: %s", err)
                 # Fall back to safe operation (no offset)
                 decision = get_safe_default_decision()
+
+        # Check for volatile offset reversal before applying
+        # Prevents rapid back-and-forth that the heat pump can't follow (same logic as price volatility)
+        if self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
+            volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
+            _LOGGER.info(
+                "Offset change blocked: %s (keeping %.1f°C)",
+                volatile_reason,
+                self._offset_volatility_tracker.last_offset,
+            )
+            # Keep the previous offset
+            decision = OptimizationDecision(
+                offset=self._offset_volatility_tracker.last_offset,
+                reasoning=f"[{volatile_reason}] {decision.reasoning}",
+            )
+        else:
+            # Record the new offset for volatility tracking
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
 
         # Update current state
         self.current_offset = decision.offset
@@ -1052,29 +1094,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if nibe_data and hasattr(nibe_data, "dhw_top_temp") and nibe_data.dhw_top_temp is not None:
             current_dhw_temp = nibe_data.dhw_top_temp
 
-            # Check if DHW is actively heating (from NIBE MyUplink sensor)
-            # This is more accurate than temperature thresholds alone
-            is_actively_heating = (
-                nibe_data.is_hot_water if hasattr(nibe_data, "is_hot_water") else False
-            )
-
-            # Track DHW heating cycle transitions (start/stop)
-            if is_actively_heating and not self.dhw_was_heating:
-                # DHW heating just started
-                self.dhw_heating_start = now_time
-                _LOGGER.info("DHW heating started at %s", now_time.strftime("%H:%M:%S"))
-            elif not is_actively_heating and self.dhw_was_heating:
-                # DHW heating just stopped
-                self.dhw_heating_end = now_time
-                if self.dhw_heating_start:
-                    duration = (now_time - self.dhw_heating_start).total_seconds() / 60
-                    _LOGGER.info(
-                        "DHW heating stopped at %s (duration: %.1f minutes)",
-                        now_time.strftime("%H:%M:%S"),
-                        duration,
-                    )
-
-            self.dhw_was_heating = is_actively_heating
+            # Use unified DHW active state (tracked earlier in update cycle)
+            # dhw_was_active combines is_hot_water sensor + temp_lux switch
+            is_actively_heating = self.dhw_was_active
 
             # Determine status using actual heating status + temperature
             if is_actively_heating:
@@ -1941,6 +1963,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "dhw_evening_hour",
             "dhw_evening_enabled",
             "dhw_target_temp",
+            CONF_DHW_MIN_AMOUNT,  # Include min_amount to trigger rebuild when changed
         }
 
         if any(key in options for key in dhw_keys):
@@ -1951,6 +1974,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             from .optimization.dhw_optimizer import DHWDemandPeriod
 
             dhw_target = float(options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
+            # Get user-configured minimum hot water amount (default 5 minutes)
+            dhw_min_amount = int(options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT))
             demand_periods = []
 
             if options.get("dhw_morning_enabled", True):
@@ -1960,6 +1985,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         availability_hour=morning_hour,
                         target_temp=dhw_target,
                         duration_hours=2,
+                        min_amount_minutes=dhw_min_amount,  # Apply user's configured min amount
                     )
                 )
 
@@ -1970,6 +1996,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         availability_hour=evening_hour,
                         target_temp=dhw_target,
                         duration_hours=3,
+                        min_amount_minutes=dhw_min_amount,  # Apply user's configured min amount
                     )
                 )
 
@@ -2150,14 +2177,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 summary = weather_learner.get_pattern_database_summary()
                 learned_data["weather_summary"] = summary
 
-            # Save DHW optimizer state (critical for Legionella safety and max wait tracking)
+            # Save DHW optimizer state (critical for Legionella safety, heating rate learning)
             if self.dhw_optimizer:
-                dhw_state = {}
-                if self.dhw_optimizer.last_legionella_boost:
-                    dhw_state["last_legionella_boost"] = (
-                        self.dhw_optimizer.last_legionella_boost.isoformat()
-                    )
-                # Note: last_dhw_heating_time tracked by thermal debt tracker, not optimizer
+                dhw_state = self.dhw_optimizer.get_dhw_state_for_persistence()
                 if dhw_state:
                     learned_data["dhw_state"] = dhw_state
 

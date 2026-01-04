@@ -26,7 +26,9 @@ from typing import TypedDict
 
 from ..const import (
     DEFAULT_DHW_TARGET_TEMP,
+    DHW_AMOUNT_HEATING_BUFFER,
     DHW_COOLING_RATE,
+    DHW_DEFAULT_HEATING_RATE,
     DHW_EXTENDED_RUNTIME_MINUTES,
     DHW_LEGIONELLA_DETECT,
     DHW_LEGIONELLA_MAX_DAYS,
@@ -248,6 +250,11 @@ class IntelligentDHWScheduler:
         self.last_legionella_boost: datetime | None = None
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
+        # Learned DHW heating rate (persisted across restarts)
+        # Uses weighted average of observations for accuracy
+        self.learned_heating_rate: float | None = None
+        self.heating_rate_observations: int = 0  # Count for weighted average
+
         # Set user target temperature
         # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
         if user_target_temp is not None:
@@ -301,6 +308,173 @@ class IntelligentDHWScheduler:
                 max(t for _, t in self.bt7_history),
                 timestamp,
             )
+
+    def calculate_heating_rate(self) -> float:
+        """Calculate actual DHW heating rate from recent temperature history.
+
+        Analyzes BT7 temperature history to find heating cycles and calculate
+        the real heating rate in °C/hour. This is more accurate than static
+        estimates because it adapts to actual heat pump performance.
+
+        Returns:
+            Heating rate in °C/hour. Returns learned rate if available,
+            otherwise default estimate if insufficient data.
+
+        Based on debug log analysis from 2025-12-22:
+        - 19:00 → 20:00: 23.8°C → 37.8°C = 14°C in 60 min = 14°C/hour
+        """
+        if len(self.bt7_history) < 6:  # Need at least 30 min of data (5 min intervals)
+            # Return learned rate if available, otherwise default
+            if self.learned_heating_rate is not None:
+                return self.learned_heating_rate
+            return DHW_DEFAULT_HEATING_RATE
+
+        # Find the most recent heating cycle (temperature increasing)
+        temps = list(self.bt7_history)
+
+        # Look for continuous temperature increase
+        heating_start_idx = None
+        heating_end_idx = None
+
+        for i in range(len(temps) - 1, 0, -1):
+            curr_temp = temps[i][1]
+            prev_temp = temps[i - 1][1]
+
+            # If temperature dropped, this is the end of heating
+            if curr_temp < prev_temp - 0.5:  # 0.5°C tolerance for noise
+                if heating_end_idx is None:
+                    continue  # Skip if we haven't found rising temp yet
+                heating_start_idx = i
+                break
+            elif curr_temp > prev_temp + 0.3:  # Temperature rising
+                if heating_end_idx is None:
+                    heating_end_idx = i
+
+        # Calculate rate if we found a valid heating period
+        if heating_start_idx is not None and heating_end_idx is not None:
+            start_time, start_temp = temps[heating_start_idx]
+            end_time, end_temp = temps[heating_end_idx]
+
+            duration_hours = (end_time - start_time).total_seconds() / 3600
+            temp_change = end_temp - start_temp
+
+            if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
+                calculated_rate = temp_change / duration_hours
+                # Sanity check: rate should be between 5-25°C/hour for heat pumps
+                if 5.0 <= calculated_rate <= 25.0:
+                    # Update learned rate with weighted average
+                    self._update_learned_rate(calculated_rate)
+                    _LOGGER.debug(
+                        "DHW heating rate calculated: %.1f°C/hour (%.1f°C in %.1f min), "
+                        "learned rate: %.1f°C/hour (%d observations)",
+                        calculated_rate,
+                        temp_change,
+                        duration_hours * 60,
+                        self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
+                        self.heating_rate_observations,
+                    )
+                    # Return learned rate (more stable than single measurement)
+                    return self.learned_heating_rate or calculated_rate
+
+        # Return learned rate if available, otherwise default
+        if self.learned_heating_rate is not None:
+            return self.learned_heating_rate
+        return DHW_DEFAULT_HEATING_RATE
+
+    def _update_learned_rate(self, new_rate: float) -> None:
+        """Update learned heating rate with weighted average.
+
+        Uses exponential moving average to weight recent observations more heavily
+        while still incorporating historical learning. The weight decreases as we
+        get more observations, making the rate more stable over time.
+
+        Args:
+            new_rate: Newly calculated heating rate (°C/hour)
+        """
+        if self.learned_heating_rate is None:
+            # First observation
+            self.learned_heating_rate = new_rate
+            self.heating_rate_observations = 1
+        else:
+            # Weighted average: newer observations have more weight initially,
+            # but as we accumulate data, the weight decreases (more stable)
+            # Weight formula: 1 / (observations + 1), capped at 0.1 minimum
+            weight = max(0.1, 1.0 / (self.heating_rate_observations + 1))
+            self.learned_heating_rate = (1 - weight) * self.learned_heating_rate + weight * new_rate
+            self.heating_rate_observations += 1
+
+        _LOGGER.debug(
+            "DHW learned heating rate updated: %.1f°C/hour (%d observations)",
+            self.learned_heating_rate,
+            self.heating_rate_observations,
+        )
+
+    def get_dhw_state_for_persistence(self) -> dict:
+        """Get DHW optimizer state for persistence.
+
+        Returns:
+            Dict with state that should be persisted across restarts.
+        """
+        state = {}
+        if self.last_legionella_boost:
+            state["last_legionella_boost"] = self.last_legionella_boost.isoformat()
+        if self.learned_heating_rate is not None:
+            state["learned_heating_rate"] = self.learned_heating_rate
+            state["heating_rate_observations"] = self.heating_rate_observations
+        return state
+
+    def restore_from_persistence(self, state: dict) -> None:
+        """Restore DHW optimizer state from persistence.
+
+        Args:
+            state: Dict with persisted state from get_dhw_state_for_persistence()
+        """
+        if "last_legionella_boost" in state:
+            self.last_legionella_boost = datetime.fromisoformat(state["last_legionella_boost"])
+            _LOGGER.info(
+                "Restored last Legionella boost: %s",
+                self.last_legionella_boost,
+            )
+        if "learned_heating_rate" in state:
+            self.learned_heating_rate = state["learned_heating_rate"]
+            self.heating_rate_observations = state.get("heating_rate_observations", 1)
+            _LOGGER.info(
+                "Restored DHW heating rate: %.1f°C/hour (%d observations)",
+                self.learned_heating_rate,
+                self.heating_rate_observations,
+            )
+
+    def estimate_heating_time(
+        self, current_temp: float, target_temp: float, heating_rate: float | None = None
+    ) -> float:
+        """Estimate time needed to heat DHW from current to target temperature.
+
+        Args:
+            current_temp: Current BT7 temperature (°C)
+            target_temp: Target BT7 temperature (°C)
+            heating_rate: Optional override for heating rate (°C/hour).
+                         If None, uses calculated rate from history.
+
+        Returns:
+            Estimated heating time in hours.
+        """
+        if heating_rate is None:
+            heating_rate = self.calculate_heating_rate()
+
+        temp_deficit = target_temp - current_temp
+        if temp_deficit <= 0:
+            return 0.0
+
+        hours_needed = temp_deficit / heating_rate
+        _LOGGER.debug(
+            "DHW heating time estimate: %.1f°C → %.1f°C (Δ%.1f°C) at %.1f°C/h = %.2fh",
+            current_temp,
+            target_temp,
+            temp_deficit,
+            heating_rate,
+            hours_needed,
+        )
+        return hours_needed
 
     def _detect_legionella_boost_completion(self) -> bool:
         """Detect when NIBE's automatic Legionella boost just completed.
@@ -553,47 +727,145 @@ class IntelligentDHWScheduler:
                 within_scheduled_window,
             )
 
-            # === RULE 0: AMOUNT-BASED SCHEDULING ===
-            # Two lanes:
-            # 1. Normal: 24h price optimization continues regardless of scheduling
-            # 2. Scheduled window: Additionally check if we have enough hot water for target time
+            # === RULE 0: TWO-LANE SCHEDULING ===
             #
-            # Within scheduled window: If target amount reached, STOP heating to avoid waste
-            # Outside scheduled window: Normal price optimization continues (no blocking)
-            if within_scheduled_window and dhw_amount_minutes is not None:
-                if dhw_amount_minutes >= scheduled_min_amount:
-                    # Target amount reached within scheduled window - stop heating
-                    _LOGGER.info(
-                        "DHW target amount reached: %.0f min ≥ %d min target - stopping",
-                        dhw_amount_minutes,
-                        scheduled_min_amount,
+            # LANE 1: Within scheduled window (within_scheduled_window=True)
+            #   - PRIORITY: Meet the scheduled target (time-critical)
+            #   - If target reached → STOP heating to avoid waste
+            #   - If target NOT reached → HEAT NOW (ignore price, schedule is priority)
+            #
+            # LANE 2: Outside scheduled window (within_scheduled_window=False)
+            #   - Normal price optimization continues
+            #   - Heat to target temp during cheapest available window
+            #   - No blocking, no urgency
+            #
+            # Calculate heating time estimate
+            hours_needed_to_heat = self.estimate_heating_time(
+                current_temp=current_dhw_temp,
+                target_temp=self.user_target_temp,
+            )
+            hours_with_buffer = hours_needed_to_heat + DHW_AMOUNT_HEATING_BUFFER
+
+            _LOGGER.debug(
+                "DHW scheduling: current %.1f°C → target %.1f°C, "
+                "hours_needed %.1fh (+%.1fh buffer = %.1fh), hours_until %.1fh",
+                current_dhw_temp,
+                self.user_target_temp,
+                hours_needed_to_heat,
+                DHW_AMOUNT_HEATING_BUFFER,
+                hours_with_buffer,
+                hours_until_target,
+            )
+
+            # Check if target is reached (either temperature OR amount)
+            temp_target_reached = current_dhw_temp >= self.user_target_temp
+            amount_target_reached = (
+                dhw_amount_minutes is not None
+                and scheduled_min_amount is not None
+                and dhw_amount_minutes >= scheduled_min_amount
+            )
+            target_reached = temp_target_reached or amount_target_reached
+
+            if within_scheduled_window:
+                # === LANE 1: SCHEDULED WINDOW - PRIORITY MODE ===
+                if target_reached:
+                    # Target fully reached - STOP heating to avoid waste
+                    reason = (
+                        f"DHW_SCHEDULED_TARGET_REACHED_TEMP_{current_dhw_temp:.0f}C"
+                        if temp_target_reached
+                        else f"DHW_SCHEDULED_TARGET_REACHED_{dhw_amount_minutes:.0f}MIN"
                     )
-                    # Find next cheap window (when we'd next consider heating)
+                    _LOGGER.info(
+                        "DHW scheduled target reached: temp %.1f°C (target %.1f°C), "
+                        "amount %.0f min (target %d min) - stopping",
+                        current_dhw_temp,
+                        self.user_target_temp,
+                        dhw_amount_minutes or 0,
+                        scheduled_min_amount or 0,
+                    )
                     next_opportunity = self._find_next_dhw_opportunity(
                         current_time=current_time,
                         current_dhw_temp=current_dhw_temp,
                         thermal_debt_dm=thermal_debt_dm,
                         outdoor_temp=outdoor_temp,
                         price_periods=price_periods,
-                        blocking_reason="DHW_AMOUNT_TARGET_REACHED",
+                        blocking_reason=reason,
                         dm_block_threshold=dm_block_threshold,
                     )
                     return DHWScheduleDecision(
                         should_heat=False,
-                        priority_reason=f"DHW_AMOUNT_TARGET_REACHED_{dhw_amount_minutes:.0f}MIN",
+                        priority_reason=reason,
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
                         recommended_start_time=next_opportunity,
                     )
-                # Below target within window - continue to price rules, they'll find cheap time
-                _LOGGER.debug(
-                    "DHW below target (%.0f < %d min) within scheduled window - "
-                    "continuing to price optimization",
-                    dhw_amount_minutes,
-                    scheduled_min_amount,
-                )
-            # Outside scheduled window: Normal 24h price optimization continues (no special handling)
+                elif current_dhw_temp >= MIN_DHW_TARGET_TEMP:
+                    # Temp is adequate (≥45°C) - can wait for cheap prices
+                    # Fall through to normal price optimization rules
+                    _LOGGER.debug(
+                        "DHW within scheduled window but adequate (%.1f°C ≥ %.1f°C) - "
+                        "normal price optimization continues",
+                        current_dhw_temp,
+                        MIN_DHW_TARGET_TEMP,
+                    )
+                    # Continue to normal rules below (wait for cheap prices)
+                else:
+                    # Target NOT reached AND temp too low - HEAT NOW (priority)
+                    # But still try to use optimal window if in one
+                    is_in_cheap_window = price_classification in ["cheap"]
+
+                    if is_in_cheap_window:
+                        _LOGGER.info(
+                            "DHW within scheduled window: temp too low "
+                            "(%.1f°C < %.1f°C), price CHEAP - heating NOW",
+                            current_dhw_temp,
+                            MIN_DHW_TARGET_TEMP,
+                        )
+                        reason = f"DHW_SCHEDULED_PRIORITY_CHEAP_{hours_until_target:.1f}H"
+                    else:
+                        _LOGGER.info(
+                            "DHW within scheduled window: temp too low "
+                            "(%.1f°C < %.1f°C), price %s - heating NOW (priority)",
+                            current_dhw_temp,
+                            MIN_DHW_TARGET_TEMP,
+                            price_classification,
+                        )
+                        reason = f"DHW_SCHEDULED_PRIORITY_{hours_until_target:.1f}H"
+
+                    return DHWScheduleDecision(
+                        should_heat=True,
+                        priority_reason=reason,
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        abort_conditions=[
+                            f"thermal_debt < {dm_abort_threshold:.0f}",
+                            f"indoor_temp < {target_indoor_temp - 0.5}",
+                            f"dhw_temp >= {self.user_target_temp}",
+                        ],
+                        recommended_start_time=current_time,
+                    )
+            else:
+                # === LANE 2: OUTSIDE SCHEDULED WINDOW - NORMAL OPTIMIZATION ===
+                # Check if we need to START heating soon to meet the upcoming target
+                if hours_until_target <= hours_with_buffer:
+                    _LOGGER.info(
+                        "DHW timing urgent: Need %.1fh to heat %.1f°C → %.1f°C, "
+                        "only %.1fh until target - transitioning to scheduled mode",
+                        hours_needed_to_heat,
+                        current_dhw_temp,
+                        self.user_target_temp,
+                        hours_until_target,
+                    )
+                    # Fall through to normal price optimization, but with urgency noted
+                else:
+                    _LOGGER.debug(
+                        "DHW timing OK: %.1fh until target, only need %.1fh to heat - "
+                        "normal price optimization continues",
+                        hours_until_target,
+                        hours_with_buffer,
+                    )
+                # Continue to normal rules below (LANE 2 = normal optimization)
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if should_block_for_thermal_debt:
@@ -917,15 +1189,109 @@ class IntelligentDHWScheduler:
                 recommended_start_time=next_opportunity,
             )
 
-        # NOTE: Rule 5 (demand period urgent heating) removed - KISS!
-        # Rule 0 checks if target amount reached → stops heating
-        # Existing window logic finds cheapest time → starts heating
-        # No need for complex "behind schedule" detection
+        # === RULE 4.5: PRE-SCHEDULED WINDOW HEATING ===
+        # When OUTSIDE scheduled window but approaching the deadline, find cheapest window
+        # to start heating. This bridges LANE 2 (normal optimization) to LANE 1 (priority).
+        # Only applies if:
+        # - We have an upcoming demand period
+        # - We're NOT yet in the scheduled window (within_scheduled handled by RULE 0)
+        # - We're running out of time to heat before the target
+        if (
+            upcoming_demand is not None
+            and hours_until_target is not None
+            and not within_scheduled_window  # IMPORTANT: Only for Lane 2 → Lane 1 transition
+            and current_dhw_temp < self.user_target_temp
+        ):
+            # Calculate time needed using temperature-based estimation
+            hours_needed_to_heat = self.estimate_heating_time(
+                current_temp=current_dhw_temp,
+                target_temp=self.user_target_temp,
+            )
+            hours_with_buffer = hours_needed_to_heat + DHW_AMOUNT_HEATING_BUFFER
 
-        # === RULE 5: SMART WINDOW-BASED SCHEDULING ===
-        # If DHW is adequate, only heat during CHEAP periods
-        # This mirrors space heating logic: adequate = no urgency = wait for cheap
-        # Adequate temp = one shower guaranteed (morning/evening usage pattern)
+            # If we're running out of time, find optimal window within remaining time
+            if hours_until_target <= hours_with_buffer:
+                # Find cheapest window within remaining time
+                optimal_window = None
+                if price_periods and self.price_analyzer:
+                    optimal_window = self.price_analyzer.find_cheapest_window(
+                        current_time=current_time,
+                        price_periods=price_periods,
+                        duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        lookahead_hours=max(hours_until_target, 0.5),  # At least 30 min lookahead
+                    )
+
+                temp_deficit = self.user_target_temp - current_dhw_temp
+
+                # If optimal window is NOW (within 15 min), heat immediately
+                if optimal_window and optimal_window.hours_until <= 0.25:
+                    _LOGGER.info(
+                        "DHW pre-schedule: %.1f°C → %.1f°C (need %.1fh), "
+                        "heating NOW @ %.1före/kWh (cheapest before deadline)",
+                        current_dhw_temp,
+                        self.user_target_temp,
+                        hours_needed_to_heat,
+                        optimal_window.avg_price,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=True,
+                        priority_reason=f"DHW_PRESCHEDULED_{temp_deficit:.0f}C_Q{optimal_window.quarters[0]}",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        abort_conditions=[
+                            f"thermal_debt < {dm_abort_threshold:.0f}",
+                            f"indoor_temp < {target_indoor_temp - 0.5}",
+                            f"dhw_temp >= {self.user_target_temp}",
+                        ],
+                        recommended_start_time=current_time,
+                    )
+                elif optimal_window:
+                    # Best window is coming up - wait for it
+                    _LOGGER.info(
+                        "DHW pre-schedule: %.1f°C → %.1f°C, waiting for optimal window at %s "
+                        "(%.1fh, %.1före - cheapest before deadline)",
+                        current_dhw_temp,
+                        self.user_target_temp,
+                        optimal_window.start_time.strftime("%H:%M"),
+                        optimal_window.hours_until,
+                        optimal_window.avg_price,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=False,
+                        priority_reason=f"DHW_PRESCHEDULED_WAITING_{optimal_window.hours_until:.1f}H",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=0,
+                        abort_conditions=[],
+                        recommended_start_time=optimal_window.start_time,
+                    )
+                else:
+                    # No price data - heat now to avoid missing target
+                    _LOGGER.warning(
+                        "DHW pre-schedule: %.1f°C → %.1f°C (%.1fh), no price data - heating now",
+                        current_dhw_temp,
+                        self.user_target_temp,
+                        hours_needed_to_heat,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=True,
+                        priority_reason=f"DHW_PRESCHEDULED_{temp_deficit:.0f}C_NO_PRICE",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                        abort_conditions=[
+                            f"thermal_debt < {dm_abort_threshold:.0f}",
+                            f"indoor_temp < {target_indoor_temp - 0.5}",
+                            f"dhw_temp >= {self.user_target_temp}",
+                        ],
+                        recommended_start_time=current_time,
+                    )
+
+        # === RULE 5: NORMAL PRICE OPTIMIZATION (LANE 2) ===
+        # This is LANE 2 behavior - normal price optimization when:
+        # - NOT within scheduled window (RULE 0 handles that as LANE 1)
+        # - NOT approaching deadline (RULE 4.5 handles that transition)
+        #
+        # Logic: Heat to target temp during cheapest available window
+        # If DHW is adequate (≥45°C), wait for CHEAP prices
         if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
             _LOGGER.info(
                 "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - no heating needed",
@@ -1051,11 +1417,20 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
-        # Heat below minimum user target during stable cheap prices (no window check - urgent enough)
-        if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_stable_cheap:
+        # Heat below minimum user target if price is not expensive/peak
+        # This prevents stopping mid-heating-cycle just because price isn't "cheap"
+        # User comfort requires minimum temperature - only expensive prices should defer
+        is_acceptable_price = price_classification in ["cheap", "normal"]
+        if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_acceptable_price:
+            _LOGGER.info(
+                "DHW comfort heating: %.1f°C < %.1f°C, price %s - heating to MIN_DHW_TARGET_TEMP",
+                current_dhw_temp,
+                MIN_DHW_TARGET_TEMP,
+                price_classification,
+            )
             return DHWScheduleDecision(
                 should_heat=True,
-                priority_reason="DHW_COMFORT_LOW_CHEAP",
+                priority_reason=f"DHW_COMFORT_LOW_{price_classification.upper()}",
                 target_temp=self.user_target_temp,
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                 abort_conditions=[

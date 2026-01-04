@@ -380,8 +380,9 @@ class TestPersistentState:
         """Test loading peaks from storage."""
         manager = EffectManager(hass_mock)
 
-        # Use current month (December 2025) to avoid _clean_old_peaks() removing it
-        timestamp = datetime(2025, 12, 1, 12, 0)
+        # Use current month dynamically to avoid _clean_old_peaks() removing it
+        now = datetime.now()
+        timestamp = datetime(now.year, now.month, 1, 12, 0)
         stored_data = {
             "peaks": [
                 {

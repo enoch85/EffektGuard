@@ -204,11 +204,16 @@ def test_oct28_at_04_00_exactly():
         f"Must heat at 04:00 (optimal window start). " f"Reason: {decision.priority_reason}"
     )
 
-    # Should be either optimal window activation OR emergency heating completion
-    # (both are valid - emergency heating gets priority when DHW is in 30-45°C range)
-    valid_reasons = ["OPTIMAL_WINDOW", "DHW_COMPLETE_EMERGENCY_HEATING", "DHW_COMFORT_LOW_CHEAP"]
+    # Should be either optimal window activation OR scheduled priority when cheap
+    # (temp < MIN_DHW_TARGET_TEMP triggers scheduled priority heating)
+    valid_reasons = [
+        "OPTIMAL_WINDOW",
+        "DHW_COMPLETE_EMERGENCY_HEATING",
+        "DHW_COMFORT_LOW_CHEAP",
+        "DHW_SCHEDULED_PRIORITY_CHEAP",  # New: scheduled window + cheap price
+    ]
     assert any(reason in decision.priority_reason for reason in valid_reasons), (
-        f"Should use optimal window or emergency heating logic. " f"Got: {decision.priority_reason}"
+        f"Should use optimal window or scheduled priority logic. " f"Got: {decision.priority_reason}"
     )
 
     # Should target reasonable temp (either pre-heat or user target)
