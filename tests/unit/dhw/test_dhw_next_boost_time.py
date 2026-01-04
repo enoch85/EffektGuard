@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from custom_components.effektguard.const import (
-    COMPRESSOR_MIN_CYCLE_MINUTES,
+    VOLATILE_MIN_DURATION_MINUTES,
     DHW_COOLING_RATE,
     DHW_SCHEDULING_WINDOW_MAX,
     DHW_SCHEDULING_WINDOW_MIN,
@@ -107,9 +107,9 @@ def test_space_heating_emergency_has_next_time(scheduler_with_climate, current_t
     assert decision.priority_reason == "SPACE_HEATING_EMERGENCY"
     assert decision.recommended_start_time is not None
     assert decision.recommended_start_time > current_time
-    # Should estimate indoor temp recovery (min from COMPRESSOR_MIN_CYCLE_MINUTES, max from const)
+    # Should estimate indoor temp recovery (min from VOLATILE_MIN_DURATION_MINUTES, max from const)
     hours_until = (decision.recommended_start_time - current_time).total_seconds() / 3600
-    min_hours = COMPRESSOR_MIN_CYCLE_MINUTES / 60.0
+    min_hours = VOLATILE_MIN_DURATION_MINUTES / 60.0
     assert min_hours <= hours_until <= INDOOR_TEMP_RECOVERY_MAX_HOURS
 
 

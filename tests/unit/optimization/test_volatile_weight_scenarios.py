@@ -15,7 +15,7 @@ from custom_components.effektguard.const import (
     VOLATILE_WEIGHT_REDUCTION,
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    PRICE_FORECAST_MIN_DURATION,
+    VOLATILE_MIN_DURATION_QUARTERS,
     LAYER_WEIGHT_PRICE,
 )
 
@@ -737,13 +737,13 @@ class TestVolatileWeightReduction:
 
     def test_constants_relationship(self):
         """Verify constants have sensible relationships."""
-        # Run-length volatility uses PRICE_FORECAST_MIN_DURATION (3 quarters / 45 min)
+        # Run-length volatility uses VOLATILE_MIN_DURATION_QUARTERS (3 quarters / 45 min)
         # Any run shorter than this is considered "brief" and triggers volatility
         assert (
-            PRICE_FORECAST_MIN_DURATION >= 2
+            VOLATILE_MIN_DURATION_QUARTERS >= 2
         ), "Min duration should be at least 2 quarters (30 min) for compressor efficiency"
         assert (
-            PRICE_FORECAST_MIN_DURATION <= 4
+            VOLATILE_MIN_DURATION_QUARTERS <= 4
         ), "Min duration shouldn't be too long or real price changes get ignored"
 
         # Weight reduction during volatility - moderate to prevent chasing erratic prices

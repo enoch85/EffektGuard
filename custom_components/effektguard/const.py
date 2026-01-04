@@ -627,9 +627,18 @@ PRICE_TOLERANCE_FACTOR_MAX: Final = 1.0  # Maximum scaling factor (100%)
 # Based on typical NIBE F-series compressor behavior
 COMPRESSOR_RAMP_UP_MINUTES: Final = 30  # Minutes to reach full speed from idle
 COMPRESSOR_COOL_DOWN_MINUTES: Final = 15  # Minutes for thermal stabilization after reduction
-COMPRESSOR_MIN_CYCLE_MINUTES: Final = (
+
+# Minimum duration for volatility detection (Jan 4, 2026)
+# Used by both price volatility (short price runs) and offset volatility (rapid reversals)
+# Based on compressor dynamics: 30 min ramp-up + 15 min cool-down = 45 min
+# Single source of truth - use MINUTES for offset tracking, QUARTERS for price logic
+MINUTES_PER_QUARTER: Final = 15  # 15-minute price quarters
+VOLATILE_MIN_DURATION_MINUTES: Final = (
     COMPRESSOR_RAMP_UP_MINUTES + COMPRESSOR_COOL_DOWN_MINUTES
 )  # 45min total
+VOLATILE_MIN_DURATION_QUARTERS: Final = (
+    VOLATILE_MIN_DURATION_MINUTES // MINUTES_PER_QUARTER
+)  # 3 quarters (45min / 15min)
 
 # Price forecast lookahead (Nov 27, 2025)
 # Forward-looking price optimization: reduce heating when cheaper period coming soon
@@ -646,9 +655,6 @@ PRICE_FORECAST_CHEAP_THRESHOLD: Final = (
 PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
     1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
 )
-PRICE_FORECAST_MIN_DURATION: Final = (
-    COMPRESSOR_MIN_CYCLE_MINUTES // 15
-)  # quarters - derived from compressor dynamics (45min / 15min = 3)
 PRICE_FORECAST_REDUCTION_OFFSET: Final = (
     -1.5
 )  # °C - reduce heating when cheap period coming (Dec 5, 2025: strengthened from -1.0)
