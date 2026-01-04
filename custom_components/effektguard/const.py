@@ -600,13 +600,13 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 #          resulting in thermal debt spirals (DM -1000) followed by 26°C overshoot.
 #
 # Solution: Simple forecast-based pre-heating scaled by thermal mass:
-#   - Forecast ≥5°C drop in next 12h → +0.6°C gentle pre-heat
+#   - Forecast ≥4°C drop in next 12h → +0.6°C gentle pre-heat
 #   - Indoor cooling ≥0.5°C/h → confirms forecast, maintains +0.6°C
 #   - Weight scaled by thermal mass: Concrete 1.28x, Timber 0.85x, Radiator 0.43x
 #   - Let SAFETY, COMFORT, EFFECT layers moderate naturally via weighted aggregation
 #
 # Real-world validation: Prevents 20:00→04:00 emergency cycles and 16:00 overshoot
-WEATHER_FORECAST_DROP_THRESHOLD: Final = -5.0  # °C drop in forecast (increased sensitivity)
+WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy

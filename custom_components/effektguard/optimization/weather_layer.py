@@ -633,8 +633,8 @@ class WeatherPredictionLayer:
     massive overshoot (26°C @ 16:00 from heat added 6 hours earlier).
 
     Solution: Simple proactive pre-heating:
-    1. PRIMARY: Forecast shows ≥5°C drop in next 12h → +0.5°C gentle pre-heat
-    2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains +0.5°C
+    1. PRIMARY: Forecast shows ≥4°C drop in next 12h → +0.83°C gentle pre-heat
+    2. CONFIRMATION: Indoor cooling ≥0.5°C/h → Confirms forecast, maintains offset
     3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
     """
 
@@ -707,7 +707,7 @@ class WeatherPredictionLayer:
         min_temp = min(f.temperature for f in forecast_hours)
         temp_drop = min_temp - current_outdoor
 
-        # PRIMARY TRIGGER: Forecast shows ≥5°C drop
+        # PRIMARY TRIGGER: Forecast shows ≥3°C drop
         forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
 
         # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
@@ -717,6 +717,23 @@ class WeatherPredictionLayer:
         indoor_cooling = (
             trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION
             and trend_confidence > 0.4  # Sufficient data confidence
+        )
+
+        # Debug logging for weather pre-heat decisions
+        _LOGGER.debug(
+            "Weather Pre-heat check: outdoor=%.1f°C, forecast_min=%.1f°C, "
+            "temp_drop=%.1f°C (threshold=%.1f°C), forecast_triggered=%s, "
+            "trend_rate=%.2f°C/h (threshold=%.1f°C/h), trend_confidence=%.2f, "
+            "indoor_cooling=%s",
+            current_outdoor,
+            min_temp,
+            temp_drop,
+            WEATHER_FORECAST_DROP_THRESHOLD,
+            forecast_triggered,
+            trend_rate,
+            WEATHER_INDOOR_COOLING_CONFIRMATION,
+            trend_confidence,
+            indoor_cooling,
         )
 
         if forecast_triggered or indoor_cooling:
