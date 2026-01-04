@@ -897,6 +897,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 elif not getattr(self, "_grace_period_ended_logged", False):
                     _LOGGER.info("Startup complete - active control enabled")
                     self._grace_period_ended_logged = True
+                    # Initialize volatility tracker with actual NIBE offset
+                    # This prevents false "reversal" detection on first active cycle
+                    nibe_offset = nibe_data.current_offset if nibe_data else 0.0
+                    self._offset_volatility_tracker.record_change(
+                        nibe_offset, "startup_init_from_nibe"
+                    )
+                    _LOGGER.debug(
+                        "Volatility tracker initialized with NIBE offset: %.1f°C", nibe_offset
+                    )
 
                 _LOGGER.info(
                     "Decision: offset %.2f°C, reasoning: %s",
@@ -910,7 +919,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Check for volatile offset reversal before applying
         # Prevents rapid back-and-forth that the heat pump can't follow (same logic as price volatility)
-        if self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
+        # Skip volatility tracking during startup - we're not applying offsets yet
+        if is_grace_period:
+            # During startup, don't track decisions - they're not being applied
+            # The tracker will be initialized with actual NIBE offset when startup completes
+            pass
+        elif self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
             volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
             _LOGGER.info(
                 "Offset change blocked: %s (keeping %.1f°C)",
