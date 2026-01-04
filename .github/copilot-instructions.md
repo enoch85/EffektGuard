@@ -37,6 +37,12 @@ source .venv/bin/activate
 14. **Use Black formatting** - All Python code must be formatted with Black (line length 100)
 15. **No `Any` type imports** - Use specific types (dataclasses, TypedDict, Protocol, etc.)
 16. **All imports at file top** - Place all imports at the top of files to avoid circular imports
+17. **Fetch real prices for debugging** - When investigating price volatility or any price-related issue:
+    - First check which price region is configured (SE1-SE4, NO1-NO5, DK1-DK2, FI, etc.) from logs or config
+    - Fetch current prices from Nordpool API for that **same region**
+    - Use: `curl "https://www.nordpoolgroup.com/api/marketdata/page/10?currency=SEK&endDate=YYYY-MM-DD"` or fetch via `fetch_webpage` tool
+    - Alternative: `curl "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=YYYY-MM-DD&market=DayAhead&deliveryArea=SE4&currency=SEK"`
+    - Compare actual API prices with values in debug logs to verify correct behavior
 
 ---
 
