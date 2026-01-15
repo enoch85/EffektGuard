@@ -204,19 +204,20 @@ def test_oct28_at_04_00_exactly():
         f"Must heat at 04:00 (optimal window start). " f"Reason: {decision.priority_reason}"
     )
 
-    # Should be either optimal window activation OR scheduled priority when cheap
-    # (temp < MIN_DHW_TARGET_TEMP triggers scheduled priority heating)
-    # Phase 1 (Jan 2026): New optimal window logic produces different reason format
+    # Should be either optimal window activation OR scheduled priority
+    # Phase 1 (Jan 2026): New optimal window logic produces these reason formats:
+    # - DHW_SCHEDULED_OPTIMAL_Q{n}_@{price}öre: heating in optimal window
+    # - DHW_SCHEDULED_WAITING_OPTIMAL_{hours}H_@{price}: waiting for optimal window
+    # - DHW_SCHEDULED_PRIORITY_{hours}H: heating immediately (priority)
     valid_reasons = [
-        "OPTIMAL_WINDOW",
-        "DHW_COMPLETE_EMERGENCY_HEATING",
-        "DHW_COMFORT_LOW_CHEAP",
-        "DHW_SCHEDULED_PRIORITY_CHEAP",  # Old: scheduled window + cheap price
-        "DHW_SCHEDULED_PRIORITY",  # New: scheduled priority (may already be in optimal window)
-        "DHW_SCHEDULED_OPTIMAL",  # New: heating in optimal window
+        "OPTIMAL_WINDOW",  # Legacy reason (pre-Phase 1)
+        "DHW_COMPLETE_EMERGENCY_HEATING",  # Emergency completion
+        "DHW_SCHEDULED_PRIORITY",  # Phase 1: immediate priority heating
+        "DHW_SCHEDULED_OPTIMAL",  # Phase 1: heating in optimal window
     ]
     assert any(reason in decision.priority_reason for reason in valid_reasons), (
-        f"Should use optimal window or scheduled priority logic. " f"Got: {decision.priority_reason}"
+        f"Should use optimal window or scheduled priority logic. "
+        f"Got: {decision.priority_reason}"
     )
 
     # Should target reasonable temp (either pre-heat or user target)
@@ -341,7 +342,7 @@ def test_comparison_operator_fix():
 
     October 28 logs showed DHW at 36.1°C trying to use > comparison with 45°C,
     which incorrectly failed. Should use >= so exactly 45°C also waits for window.
-    
+
     Updated: With the new "adequate + not cheap = wait" rule, DHW at 45°C with
     normal prices will wait for cheap prices, which is the correct behavior.
     """
