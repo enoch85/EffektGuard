@@ -37,6 +37,8 @@ from ..const import (
     DHW_MAX_TEMP_VALIDATION,
     DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
+    DHW_OPTIMAL_WINDOW_MIN_SAVINGS,
+    DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER,
     DHW_PREHEAT_TARGET_OFFSET,
     DHW_SCHEDULED_WINDOW_HOURS,
     DHW_SAFETY_CRITICAL,
@@ -811,28 +813,142 @@ class IntelligentDHWScheduler:
                     )
                     # Continue to normal rules below (wait for cheap prices)
                 else:
-                    # Target NOT reached AND temp too low - HEAT NOW (priority)
-                    # But still try to use optimal window if in one
-                    is_in_cheap_window = price_classification in ["cheap"]
+                    # Target NOT reached AND temp too low
+                    # Check if we have time to wait for optimal window
+                    _LOGGER.debug(
+                        "DHW within scheduled window: temp %.1f°C < %.1f°C, checking optimal window",
+                        current_dhw_temp,
+                        MIN_DHW_TARGET_TEMP,
+                    )
 
-                    if is_in_cheap_window:
-                        _LOGGER.info(
-                            "DHW within scheduled window: temp too low "
-                            "(%.1f°C < %.1f°C), price CHEAP - heating NOW",
-                            current_dhw_temp,
-                            MIN_DHW_TARGET_TEMP,
+                    # Calculate if we have time to wait
+                    can_wait_for_optimal = False
+                    optimal_window = None
+
+                    if (
+                        price_periods
+                        and self.price_analyzer
+                        and hours_until_target > hours_with_buffer
+                    ):
+                        # Find cheapest window within remaining time (leave buffer for emergencies)
+                        search_horizon = hours_until_target - hours_with_buffer
+
+                        optimal_window = self.price_analyzer.find_cheapest_window(
+                            current_time=current_time,
+                            price_periods=price_periods,
+                            duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                            lookahead_hours=max(search_horizon, 0.5),  # At least 30 min lookahead
                         )
-                        reason = f"DHW_SCHEDULED_PRIORITY_CHEAP_{hours_until_target:.1f}H"
+
+                        if optimal_window:
+                            # Check if waiting is worth it (significant savings AND reachable in time)
+                            # Get current price for comparison
+                            # QuarterPeriod spans 15 minutes from start_time
+                            current_quarter_price = next(
+                                (
+                                    p.price
+                                    for p in price_periods
+                                    if p.start_time
+                                    <= current_time
+                                    < p.start_time + timedelta(minutes=15)
+                                ),
+                                None,
+                            )
+
+                            if current_quarter_price:
+                                price_savings_pct = (
+                                    current_quarter_price - optimal_window.avg_price
+                                ) / current_quarter_price
+
+                                # Can wait if:
+                                # 1. Savings significant (≥15%)
+                                # 2. Optimal window reachable (time_to_window + heat_time < time_until_target)
+                                time_to_complete = optimal_window.hours_until + hours_with_buffer
+
+                                if (
+                                    price_savings_pct >= DHW_OPTIMAL_WINDOW_MIN_SAVINGS
+                                    and time_to_complete < hours_until_target
+                                ):
+                                    can_wait_for_optimal = True
+
+                                    _LOGGER.info(
+                                        "DHW within scheduled: temp low but waiting for optimal window - "
+                                        "%.1f%% savings (%.1före→%.1före), window in %.1fh, target in %.1fh",
+                                        price_savings_pct * 100,
+                                        current_quarter_price,
+                                        optimal_window.avg_price,
+                                        optimal_window.hours_until,
+                                        hours_until_target,
+                                    )
+
+                    # Decision: Wait for optimal window or heat now?
+                    if can_wait_for_optimal and optimal_window:
+                        # Check if optimal window is NOW (within 15 min)
+                        if optimal_window.hours_until <= DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER:
+                            # We're in the optimal window - heat NOW
+                            _LOGGER.info(
+                                "DHW within scheduled: IN optimal window now (%.1före) - heating",
+                                optimal_window.avg_price,
+                            )
+                            reason = f"DHW_SCHEDULED_OPTIMAL_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre"
+                        else:
+                            # Wait for upcoming optimal window
+                            _LOGGER.info(
+                                "DHW within scheduled: waiting for optimal window at %s (%.1fh away, %.1före)",
+                                optimal_window.start_time.strftime("%H:%M"),
+                                optimal_window.hours_until,
+                                optimal_window.avg_price,
+                            )
+                            return DHWScheduleDecision(
+                                should_heat=False,
+                                priority_reason=f"DHW_SCHEDULED_WAITING_OPTIMAL_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
+                                target_temp=self.user_target_temp,
+                                max_runtime_minutes=0,
+                                abort_conditions=[],
+                                recommended_start_time=optimal_window.start_time,
+                            )
                     else:
-                        _LOGGER.info(
-                            "DHW within scheduled window: temp too low "
-                            "(%.1f°C < %.1f°C), price %s - heating NOW (priority)",
-                            current_dhw_temp,
-                            MIN_DHW_TARGET_TEMP,
-                            price_classification,
-                        )
+                        # No optimal window or not worth waiting - heat NOW (priority)
+                        if optimal_window:
+                            # Get current price for logging
+                            # QuarterPeriod spans 15 minutes from start_time
+                            current_quarter_price = (
+                                next(
+                                    (
+                                        p.price
+                                        for p in price_periods
+                                        if p.start_time
+                                        <= current_time
+                                        < p.start_time + timedelta(minutes=15)
+                                    ),
+                                    None,
+                                )
+                                if price_periods
+                                else None
+                            )
+
+                            _LOGGER.info(
+                                "DHW within scheduled: savings insufficient (%.1f%%) or not enough time - heating NOW (priority)",
+                                (
+                                    (
+                                        (current_quarter_price - optimal_window.avg_price)
+                                        / current_quarter_price
+                                        * 100
+                                    )
+                                    if current_quarter_price
+                                    else 0
+                                ),
+                            )
+                        else:
+                            _LOGGER.info(
+                                "DHW within scheduled: temp too low (%.1f°C < %.1f°C), no optimal window - heating NOW (priority)",
+                                current_dhw_temp,
+                                MIN_DHW_TARGET_TEMP,
+                            )
+
                         reason = f"DHW_SCHEDULED_PRIORITY_{hours_until_target:.1f}H"
 
+                    # Heat NOW (either in optimal window or priority override)
                     return DHWScheduleDecision(
                         should_heat=True,
                         priority_reason=reason,
@@ -843,7 +959,9 @@ class IntelligentDHWScheduler:
                             f"indoor_temp < {target_indoor_temp - 0.5}",
                             f"dhw_temp >= {self.user_target_temp}",
                         ],
-                        recommended_start_time=current_time,
+                        recommended_start_time=(
+                            current_time if not optimal_window else optimal_window.start_time
+                        ),
                     )
             else:
                 # === LANE 2: OUTSIDE SCHEDULED WINDOW - NORMAL OPTIMIZATION ===

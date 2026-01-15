@@ -942,6 +942,12 @@ CONF_DHW_MIN_AMOUNT: Final = "dhw_min_amount"  # Config key for min hot water mi
 DHW_DEFAULT_HEATING_RATE: Final = 14.0  # °C/hour (measured from debug log)
 DHW_AMOUNT_HEATING_BUFFER: Final = 0.5  # Hours buffer for scheduling (arrive early, not late)
 
+# DHW optimal window price optimization (Phase 1 fix - Jan 2026)
+# When DHW temp < MIN_DHW_TARGET_TEMP within scheduled window, check if waiting
+# for cheaper optimal window is worth it before heating immediately
+DHW_OPTIMAL_WINDOW_MIN_SAVINGS: Final = 0.15  # 15% minimum price savings to wait for optimal window
+DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER: Final = 0.25  # 15 min buffer before considering "in optimal window"
+
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM

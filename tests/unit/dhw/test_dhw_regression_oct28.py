@@ -206,11 +206,14 @@ def test_oct28_at_04_00_exactly():
 
     # Should be either optimal window activation OR scheduled priority when cheap
     # (temp < MIN_DHW_TARGET_TEMP triggers scheduled priority heating)
+    # Phase 1 (Jan 2026): New optimal window logic produces different reason format
     valid_reasons = [
         "OPTIMAL_WINDOW",
         "DHW_COMPLETE_EMERGENCY_HEATING",
         "DHW_COMFORT_LOW_CHEAP",
-        "DHW_SCHEDULED_PRIORITY_CHEAP",  # New: scheduled window + cheap price
+        "DHW_SCHEDULED_PRIORITY_CHEAP",  # Old: scheduled window + cheap price
+        "DHW_SCHEDULED_PRIORITY",  # New: scheduled priority (may already be in optimal window)
+        "DHW_SCHEDULED_OPTIMAL",  # New: heating in optimal window
     ]
     assert any(reason in decision.priority_reason for reason in valid_reasons), (
         f"Should use optimal window or scheduled priority logic. " f"Got: {decision.priority_reason}"
