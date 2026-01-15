@@ -946,7 +946,9 @@ DHW_AMOUNT_HEATING_BUFFER: Final = 0.5  # Hours buffer for scheduling (arrive ea
 # When DHW temp < MIN_DHW_TARGET_TEMP within scheduled window, check if waiting
 # for cheaper optimal window is worth it before heating immediately
 DHW_OPTIMAL_WINDOW_MIN_SAVINGS: Final = 0.15  # 15% minimum price savings to wait for optimal window
-DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER: Final = 0.25  # 15 min buffer before considering "in optimal window"
+DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER: Final = (
+    0.25  # 15 min buffer before considering "in optimal window"
+)
 
 # DHW thermal debt fallback thresholds (used only if climate detector unavailable)
 # These are balanced fixed values for rare fallback scenarios
