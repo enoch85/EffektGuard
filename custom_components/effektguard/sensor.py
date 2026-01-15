@@ -315,7 +315,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="dhw_next_boost_time",
-        name="DHW Next Boost Time",
+        name="DHW Scheduled Start",
         icon="mdi:clock-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -629,12 +629,34 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             if "dhw_planning_summary" in self.coordinator.data:
                 attrs["summary"] = self.coordinator.data["dhw_planning_summary"]
 
-            # If blocked, show time until boost
+            # Add schedule stability indicator (Phase 2 - Jan 2026)
             if self.native_value:
                 time_until = self.native_value - dt_util.now()
                 hours_until = time_until.total_seconds() / 3600
+
+                # Mark as "confirmed" if within 30 minutes (imminent)
+                # Mark as "planning" if further out (may change)
+                if hours_until <= 0:
+                    attrs["schedule_status"] = "heating_now"
+                elif hours_until <= 0.5:
+                    attrs["schedule_status"] = "confirmed"  # <30 min: definite
+                else:
+                    attrs["schedule_status"] = "planning"  # >30 min: may adjust
+
                 if hours_until > 0:
                     attrs["hours_until_boost"] = round(hours_until, 1)
+
+                    # Add helpful description
+                    if hours_until <= 0.25:  # <15 min
+                        attrs["status_description"] = f"Starting in {int(hours_until * 60)} minutes"
+                    elif hours_until <= 1:  # <1h
+                        attrs["status_description"] = (
+                            f"Scheduled in {int(hours_until * 60)} minutes"
+                        )
+                    else:  # >1h
+                        attrs["status_description"] = (
+                            f"Planned for {self.native_value.strftime('%H:%M')}"
+                        )
 
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
