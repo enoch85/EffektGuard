@@ -155,7 +155,7 @@ def test_oct28_failure_scenario_at_03_45():
     )
 
     # Should be optimal window activation or DHW low cheap heating
-    assert "OPTIMAL_WINDOW" in decision.priority_reason or "DHW" in decision.priority_reason
+    assert "DHW" in decision.priority_reason or "OPTIMAL" in decision.priority_reason
 
     # Verify DM is actually safe (better than warning)
     dm_range = climate_detector.get_expected_dm_range(8.2)
@@ -210,7 +210,6 @@ def test_oct28_at_04_00_exactly():
     # - DHW_SCHEDULED_WAITING_OPTIMAL_{hours}H_@{price}: waiting for optimal window
     # - DHW_SCHEDULED_PRIORITY_{hours}H: heating immediately (priority)
     valid_reasons = [
-        "OPTIMAL_WINDOW",  # Legacy reason (pre-Phase 1)
         "DHW_COMPLETE_EMERGENCY_HEATING",  # Emergency completion
         "DHW_SCHEDULED_PRIORITY",  # Phase 1: immediate priority heating
         "DHW_SCHEDULED_OPTIMAL",  # Phase 1: heating in optimal window
