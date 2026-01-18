@@ -617,13 +617,18 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             if "dhw_planning" in self.coordinator.data:
                 planning = self.coordinator.data.get("dhw_planning", {})
 
-                # Add blocking reason if available
-                if "priority_reason" in planning:
-                    attrs["blocking_reason"] = planning["priority_reason"]
-
-                # Add DHW status
+                # Add DHW status and reason (only show blocking_reason when NOT heating)
                 if "should_heat" in planning:
-                    attrs["dhw_status"] = "heating" if planning["should_heat"] else "blocked"
+                    if planning["should_heat"]:
+                        attrs["dhw_status"] = "heating"
+                        # When heating, show the reason as heating_reason (not blocking)
+                        if "priority_reason" in planning:
+                            attrs["heating_reason"] = planning["priority_reason"]
+                    else:
+                        attrs["dhw_status"] = "blocked"
+                        # When blocked, show why we're blocked
+                        if "priority_reason" in planning:
+                            attrs["blocking_reason"] = planning["priority_reason"]
 
             # Add human-readable summary
             if "dhw_planning_summary" in self.coordinator.data:

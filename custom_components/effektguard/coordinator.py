@@ -1164,7 +1164,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_planning_details = dhw_result.details
 
                 # Use the optimizer's recommended start time (timezone-aware from spot price)
+                # When should_heat=True, recommended_start_time is None (heating now)
+                # When should_heat=False, recommended_start_time is a future timestamp
+                #   (guaranteed by DHWScheduleDecision dataclass validation)
                 dhw_next_boost = dhw_planning_details.get("recommended_start_time")
+
+                # Set schedule_status for UI display
+                if dhw_result.decision:
+                    if dhw_result.decision.should_heat:
+                        dhw_planning_details["schedule_status"] = "heating_now"
+                    else:
+                        # Dataclass validation guarantees recommended_start_time exists
+                        dhw_planning_details["schedule_status"] = "scheduled"
+                else:
+                    # Edge case: no decision (shouldn't happen in normal operation)
+                    dhw_planning_details["schedule_status"] = "unknown"
             except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
                 _LOGGER.error(
                     "DHW recommendation calculation failed: %s. "

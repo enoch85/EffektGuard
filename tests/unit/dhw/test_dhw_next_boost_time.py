@@ -162,12 +162,14 @@ def test_dhw_adequate_has_next_time(scheduler_with_climate, current_time):
 
 
 # ==============================================================================
-# HEATING CASES - SHOULD HAVE recommended_start_time = current_time
+# HEATING CASES - SHOULD HAVE recommended_start_time = None (heating now)
+# When should_heat=True, there's no future start time - heating is happening now.
+# This prevents sensor spam from constantly updating current_time.
 # ==============================================================================
 
 
-def test_dhw_safety_minimum_has_current_time(scheduler_with_climate, current_time):
-    """Verify DHW_SAFETY_MINIMUM sets recommended_start_time=current_time."""
+def test_dhw_safety_minimum_heats_immediately(scheduler_with_climate, current_time):
+    """Verify DHW_SAFETY_MINIMUM sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=25.0,  # Below safety minimum
         space_heating_demand_kw=2.0,
@@ -183,12 +185,12 @@ def test_dhw_safety_minimum_has_current_time(scheduler_with_climate, current_tim
 
     assert decision.should_heat is True
     assert decision.priority_reason == "DHW_SAFETY_MINIMUM"
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_dhw_hygiene_boost_has_current_time(scheduler_with_climate, current_time):
-    """Verify DHW_HYGIENE_BOOST sets recommended_start_time=current_time."""
+def test_dhw_hygiene_boost_heats_immediately(scheduler_with_climate, current_time):
+    """Verify DHW_HYGIENE_BOOST sets recommended_start_time=None (heating now)."""
     # Force Legionella boost needed
     scheduler_with_climate.last_legionella_boost = None
 
@@ -207,12 +209,12 @@ def test_dhw_hygiene_boost_has_current_time(scheduler_with_climate, current_time
 
     assert decision.should_heat is True
     assert decision.priority_reason == "DHW_HYGIENE_BOOST"
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_dhw_complete_emergency_heating_has_current_time(scheduler_with_climate, current_time):
-    """Verify DHW_COMPLETE_EMERGENCY_HEATING sets recommended_start_time=current_time."""
+def test_dhw_complete_emergency_heating_heats_immediately(scheduler_with_climate, current_time):
+    """Verify DHW_COMPLETE_EMERGENCY_HEATING sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=35.0,  # In 30-45°C range
         space_heating_demand_kw=2.0,
@@ -228,12 +230,12 @@ def test_dhw_complete_emergency_heating_has_current_time(scheduler_with_climate,
 
     assert decision.should_heat is True
     assert decision.priority_reason == "DHW_COMPLETE_EMERGENCY_HEATING"
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_dhw_max_wait_exceeded_has_current_time(scheduler_with_climate, current_time):
-    """Verify DHW_MAX_WAIT_EXCEEDED sets recommended_start_time=current_time."""
+def test_dhw_max_wait_exceeded_heats_immediately(scheduler_with_climate, current_time):
+    """Verify DHW_MAX_WAIT_EXCEEDED sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=45.0,
         space_heating_demand_kw=2.0,
@@ -249,12 +251,12 @@ def test_dhw_max_wait_exceeded_has_current_time(scheduler_with_climate, current_
 
     assert decision.should_heat is True
     assert "DHW_MAX_WAIT_EXCEEDED" in decision.priority_reason
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_dhw_comfort_low_cheap_has_current_time(scheduler_with_climate, current_time):
-    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=current_time (fallback when no price data)."""
+def test_dhw_comfort_low_cheap_heats_immediately(scheduler_with_climate, current_time):
+    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=47.0,  # Below minimum target (45°C) but above emergency range
         space_heating_demand_kw=2.0,
@@ -270,12 +272,12 @@ def test_dhw_comfort_low_cheap_has_current_time(scheduler_with_climate, current_
 
     assert decision.should_heat is True
     assert decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY"
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_cheap_no_window_data_has_current_time(scheduler_with_climate, current_time):
-    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=current_time."""
+def test_cheap_no_window_data_heats_immediately(scheduler_with_climate, current_time):
+    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=48.0,  # Needs heating
         space_heating_demand_kw=2.0,
@@ -291,12 +293,12 @@ def test_cheap_no_window_data_has_current_time(scheduler_with_climate, current_t
 
     assert decision.should_heat is True
     assert decision.priority_reason == "CHEAP_ELECTRICITY_OPPORTUNITY"
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
-def test_cheap_electricity_opportunity_has_current_time(scheduler_with_climate, current_time):
-    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=current_time."""
+def test_cheap_electricity_opportunity_heats_immediately(scheduler_with_climate, current_time):
+    """Verify CHEAP_ELECTRICITY_OPPORTUNITY sets recommended_start_time=None (heating now)."""
     decision = scheduler_with_climate.should_start_dhw(
         current_dhw_temp=48.0,  # Needs heating
         space_heating_demand_kw=2.0,
@@ -313,8 +315,8 @@ def test_cheap_electricity_opportunity_has_current_time(scheduler_with_climate, 
     assert decision.should_heat is True
     # Could be CHEAP_NO_WINDOW_DATA or CHEAP_ELECTRICITY_OPPORTUNITY
     assert "CHEAP" in decision.priority_reason
-    assert decision.recommended_start_time is not None
-    assert decision.recommended_start_time == current_time
+    # When heating now, recommended_start_time should be None (no future time needed)
+    assert decision.recommended_start_time is None
 
 
 # ==============================================================================

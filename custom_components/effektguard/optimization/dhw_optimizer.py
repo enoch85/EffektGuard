@@ -673,22 +673,23 @@ class IntelligentDHWScheduler:
             should_block_for_thermal_debt = self.emergency_layer.should_block_dhw(
                 thermal_debt_dm, outdoor_temp
             )
-            # Get thresholds from emergency layer's climate detector for logging/abort conditions
-            if self.emergency_layer.climate_detector:
-                dm_thresholds = self.emergency_layer.climate_detector.get_expected_dm_range(
-                    outdoor_temp
-                )
-                dm_block_threshold = dm_thresholds["warning"]
-                dm_abort_threshold = dm_thresholds["warning"] - 80
-            else:
-                dm_block_threshold = DM_DHW_BLOCK_FALLBACK
-                dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+            # Get THERMAL MASS ADJUSTED thresholds for abort conditions
+            # CRITICAL: Must use same adjusted thresholds as should_block_dhw() uses internally
+            # to prevent start-then-abort cycles when block passes but abort fails
+            dm_thresholds = self.emergency_layer.get_adjusted_dm_thresholds(outdoor_temp)
+            dm_block_threshold = dm_thresholds["warning"]
+            # Abort threshold should be LESS strict (more negative) than block threshold
+            # to avoid immediate abort after starting. Use 80 DM buffer beyond warning.
+            dm_abort_threshold = dm_thresholds["warning"] - 80
 
             _LOGGER.debug(
-                "DHW using shared EmergencyLayer: should_block=%s, DM=%.0f, outdoor=%.1f°C",
+                "DHW using shared EmergencyLayer: should_block=%s, DM=%.0f, outdoor=%.1f°C, "
+                "adjusted_warning=%.0f, abort_threshold=%.0f",
                 should_block_for_thermal_debt,
                 thermal_debt_dm,
                 outdoor_temp,
+                dm_thresholds["warning"],
+                dm_abort_threshold,
             )
         elif self.climate_detector:
             # Fallback to local climate detector
@@ -1149,7 +1150,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
-                recommended_start_time=current_time,  # Heat NOW
+                recommended_start_time=None,  # Heating now - no future time needed
             )
 
         # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
@@ -1216,7 +1217,7 @@ class IntelligentDHWScheduler:
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
                     ],
-                    recommended_start_time=current_time,
+                    recommended_start_time=None,  # Heating now - no future time needed
                 )
             elif is_cheap_price and is_volatile:
                 # Cheap but volatile - wait for stable window
@@ -1254,7 +1255,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
-                recommended_start_time=current_time,
+                recommended_start_time=None,  # Heating now - no future time needed
             )
 
         # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
@@ -1276,7 +1277,7 @@ class IntelligentDHWScheduler:
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
                     ],
-                    recommended_start_time=current_time,
+                    recommended_start_time=None,  # Heating now - no future time needed
                 )
 
         # === RULE 4: HIGH SPACE HEATING DEMAND - DELAY DHW ===
@@ -1361,7 +1362,7 @@ class IntelligentDHWScheduler:
                             f"indoor_temp < {target_indoor_temp - 0.5}",
                             f"dhw_temp >= {self.user_target_temp}",
                         ],
-                        recommended_start_time=current_time,
+                        recommended_start_time=None,  # Heating now - no future time needed
                     )
                 elif optimal_window:
                     # Best window is coming up - wait for it
@@ -1400,7 +1401,7 @@ class IntelligentDHWScheduler:
                             f"indoor_temp < {target_indoor_temp - 0.5}",
                             f"dhw_temp >= {self.user_target_temp}",
                         ],
-                        recommended_start_time=current_time,
+                        recommended_start_time=None,  # Heating now - no future time needed
                     )
 
         # === RULE 5: NORMAL PRICE OPTIMIZATION (LANE 2) ===
@@ -1410,9 +1411,10 @@ class IntelligentDHWScheduler:
         #
         # Logic: Heat to target temp during cheapest available window
         # If DHW is adequate (≥45°C), wait for CHEAP prices
+
         if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
             _LOGGER.info(
-                "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - no heating needed",
+                "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - waiting for cheap",
                 current_dhw_temp,
                 MIN_DHW_TARGET_TEMP,
                 price_classification,
@@ -1462,7 +1464,7 @@ class IntelligentDHWScheduler:
                                 f"thermal_debt < {dm_abort_threshold:.0f}",
                                 f"indoor_temp < {target_indoor_temp - 0.5}",
                             ],
-                            recommended_start_time=current_time,
+                            recommended_start_time=None,  # Heating now - no future time needed
                         )
 
                 # STEP 1: Check if we're in the optimal window (within 15 min of start)
@@ -1531,15 +1533,100 @@ class IntelligentDHWScheduler:
                         f"thermal_debt < {dm_abort_threshold:.0f}",
                         f"indoor_temp < {target_indoor_temp - 0.5}",
                     ],
-                    recommended_start_time=current_time,
+                    recommended_start_time=None,  # Heating now - no future time needed
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
         # Heat below minimum user target if price is not expensive/peak
         # This prevents stopping mid-heating-cycle just because price isn't "cheap"
         # User comfort requires minimum temperature - only expensive prices should defer
+        #
+        # PRICE LOOKAHEAD: Before heating at normal price, check if cheaper window coming
+        # that would save significant money without risking comfort.
         is_acceptable_price = price_classification in ["cheap", "normal"]
         if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_acceptable_price:
+            # Check for cheaper window in the coming hours (use scheduled window hours)
+            comfort_lookahead_hours = DHW_SCHEDULED_WINDOW_HOURS
+            optimal_window = None
+            can_wait_for_optimal = False
+
+            if price_periods and self.price_analyzer and price_classification == "normal":
+                # Only look for cheaper windows when at "normal" price (not already cheap)
+                optimal_window = self.price_analyzer.find_cheapest_window(
+                    current_time=current_time,
+                    price_periods=price_periods,
+                    duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                    lookahead_hours=comfort_lookahead_hours,
+                )
+
+                if optimal_window:
+                    # Get current price for comparison
+                    current_quarter_price = next(
+                        (
+                            p.price
+                            for p in price_periods
+                            if p.start_time <= current_time < p.start_time + timedelta(minutes=15)
+                        ),
+                        None,
+                    )
+
+                    if current_quarter_price and optimal_window.avg_price < current_quarter_price:
+                        price_savings_pct = (
+                            current_quarter_price - optimal_window.avg_price
+                        ) / current_quarter_price
+
+                        # Can wait if:
+                        # 1. Savings significant (≥15%)
+                        # 2. Optimal window is not too far away (within lookahead)
+                        # 3. Temperature won't drop too low (still above safety minimum)
+                        if (
+                            price_savings_pct >= DHW_OPTIMAL_WINDOW_MIN_SAVINGS
+                            and optimal_window.hours_until <= comfort_lookahead_hours
+                            and current_dhw_temp >= DHW_SAFETY_MIN  # Don't wait if already critical
+                        ):
+                            can_wait_for_optimal = True
+                            _LOGGER.info(
+                                "DHW comfort: temp low (%.1f°C) but waiting for cheaper window - "
+                                "%.1f%% savings (%.1före→%.1före), window in %.1fh at %s",
+                                current_dhw_temp,
+                                price_savings_pct * 100,
+                                current_quarter_price,
+                                optimal_window.avg_price,
+                                optimal_window.hours_until,
+                                optimal_window.start_time.strftime("%H:%M"),
+                            )
+
+            if can_wait_for_optimal and optimal_window:
+                # Check if optimal window is NOW (within 15 min)
+                if optimal_window.hours_until <= DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER:
+                    # We're in the optimal window - heat NOW
+                    _LOGGER.info(
+                        "DHW comfort: IN optimal window now (%.1före) - heating",
+                        optimal_window.avg_price,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=True,
+                        priority_reason=f"DHW_COMFORT_OPTIMAL_@{optimal_window.avg_price:.1f}öre",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
+                        abort_conditions=[
+                            f"thermal_debt < {dm_abort_threshold:.0f}",
+                            f"indoor_temp < {target_indoor_temp - 0.5}",
+                        ],
+                        recommended_start_time=None,  # Heating now - no future time needed
+                    )
+                else:
+                    # Wait for upcoming optimal window
+                    return DHWScheduleDecision(
+                        should_heat=False,
+                        priority_reason=f"DHW_COMFORT_WAITING_OPTIMAL_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=0,
+                        abort_conditions=[],
+                        recommended_start_time=optimal_window.start_time,
+                    )
+
+            # No optimal window worth waiting for - heat now
             _LOGGER.info(
                 "DHW comfort heating: %.1f°C < %.1f°C, price %s - heating to MIN_DHW_TARGET_TEMP",
                 current_dhw_temp,
@@ -1555,7 +1642,7 @@ class IntelligentDHWScheduler:
                     f"thermal_debt < {dm_abort_threshold:.0f}",
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
-                recommended_start_time=current_time,
+                recommended_start_time=None,  # Heating now - no future time needed
             )
 
         # === RULE 8: ALL CONDITIONS FAIL - DON'T HEAT ===

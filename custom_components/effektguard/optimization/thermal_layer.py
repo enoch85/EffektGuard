@@ -1037,6 +1037,22 @@ class EmergencyLayer:
 
         return False
 
+    def get_adjusted_dm_thresholds(self, outdoor_temp: float) -> dict:
+        """Get thermal mass adjusted DM thresholds for DHW decisions.
+
+        Provides consistent thresholds for DHW optimizer to use for both
+        blocking AND abort conditions, ensuring no mismatch.
+
+        Args:
+            outdoor_temp: Current outdoor temperature
+
+        Returns:
+            Dict with 'warning', 'critical', 'normal_min', 'normal_max' keys,
+            all adjusted for thermal mass.
+        """
+        expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+        return self._get_thermal_mass_adjusted_thresholds(expected_dm_range)
+
 
 class ProactiveLayer:
     """Proactive thermal debt prevention with climate-aware thresholds.
