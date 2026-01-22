@@ -470,9 +470,7 @@ class TestEvaluateLayer:
         await effect_manager.record_quarter_measurement(8.0, 48, timestamp)
 
         # Mock dt_util.now() to ensure daytime (quarter calculation is correct)
-        with patch(
-            "custom_components.effektguard.utils.time_utils.dt_util"
-        ) as mock_dt:
+        with patch("custom_components.effektguard.utils.time_utils.dt_util") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 10, 14, 12, 30)  # Daytime, Q50
 
             # Now test with power exceeding that peak

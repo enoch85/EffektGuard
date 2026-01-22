@@ -40,7 +40,9 @@ def mock_price_data_normal():
     """Create mock price data with NORMAL classification."""
     data = MagicMock()
     # Create 96 quarters (24 hours) of NORMAL prices
-    data.today = [MagicMock(price=1.0, classification=QuarterClassification.NORMAL) for _ in range(96)]
+    data.today = [
+        MagicMock(price=1.0, classification=QuarterClassification.NORMAL) for _ in range(96)
+    ]
     data.quarters = data.today
     data.current_price = 1.0
     data.has_tomorrow = False
@@ -50,7 +52,9 @@ def mock_price_data_normal():
 class TestEvaluateLayerDisabled:
     """Test evaluate_layer when price optimization is disabled."""
 
-    def test_disabled_returns_zero_offset(self, price_analyzer, mock_nibe_state, mock_price_data_normal):
+    def test_disabled_returns_zero_offset(
+        self, price_analyzer, mock_nibe_state, mock_price_data_normal
+    ):
         """When disabled, returns offset=0.0, weight=0.0."""
         result = price_analyzer.evaluate_layer(
             nibe_state=mock_nibe_state,
@@ -68,7 +72,9 @@ class TestEvaluateLayerDisabled:
         assert result.weight == 0.0
         assert "Disabled by user" in result.reason
 
-    def test_disabled_returns_spot_price_name(self, price_analyzer, mock_nibe_state, mock_price_data_normal):
+    def test_disabled_returns_spot_price_name(
+        self, price_analyzer, mock_nibe_state, mock_price_data_normal
+    ):
         """Disabled layer still returns proper name."""
         result = price_analyzer.evaluate_layer(
             nibe_state=mock_nibe_state,
@@ -87,7 +93,9 @@ class TestEvaluateLayerDisabled:
 class TestEvaluateLayerEnabled:
     """Test evaluate_layer when price optimization is enabled."""
 
-    def test_enabled_returns_price_layer_decision(self, price_analyzer, mock_nibe_state, mock_price_data_normal):
+    def test_enabled_returns_price_layer_decision(
+        self, price_analyzer, mock_nibe_state, mock_price_data_normal
+    ):
         """When enabled, returns PriceLayerDecision with proper structure."""
         result = price_analyzer.evaluate_layer(
             nibe_state=mock_nibe_state,
@@ -107,7 +115,9 @@ class TestEvaluateLayerEnabled:
         assert isinstance(result.weight, float)
         assert "Disabled by user" not in result.reason
 
-    def test_enabled_includes_adapter_in_reason(self, price_analyzer, mock_nibe_state, mock_price_data_normal):
+    def test_enabled_includes_adapter_in_reason(
+        self, price_analyzer, mock_nibe_state, mock_price_data_normal
+    ):
         """Reason string includes adapter entity name."""
         result = price_analyzer.evaluate_layer(
             nibe_state=mock_nibe_state,
@@ -126,7 +136,9 @@ class TestEvaluateLayerEnabled:
 class TestEvaluateLayerModeConfigs:
     """Test evaluate_layer respects mode configurations."""
 
-    def test_comfort_mode_reduces_price_influence(self, price_analyzer, mock_nibe_state, mock_price_data_normal):
+    def test_comfort_mode_reduces_price_influence(
+        self, price_analyzer, mock_nibe_state, mock_price_data_normal
+    ):
         """Comfort mode has lower price_tolerance_multiplier."""
         comfort_result = price_analyzer.evaluate_layer(
             nibe_state=mock_nibe_state,

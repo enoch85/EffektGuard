@@ -55,7 +55,6 @@ class TestPredictionLayerSetup:
 class TestPredictionLayerMethod:
     """Test the _prediction_layer method exists and works."""
 
-
     def test_prediction_layer_returns_decision(self):
         """Test prediction layer returns valid LayerDecision."""
         predictor = ThermalStatePredictor()
@@ -102,7 +101,7 @@ class TestPredictionLayerMethod:
         mock_decision.offset = 0.0
         mock_decision.weight = 0.0
         mock_decision.reason = "Mock"
-        
+
         engine.price.evaluate_layer.return_value = mock_decision
         engine.effect.evaluate_layer.return_value = mock_decision
 
@@ -118,9 +117,11 @@ class TestPredictionLayerMethod:
 
         assert decision is not None
         # With no predictor, should return neutral/minimal offset
-        
+
         # Verify Prediction layer decision specifically
-        prediction_layer = next(l for l in decision.layers if l.name == "Prediction" or l.name == "Learned Pre-heat")
+        prediction_layer = next(
+            l for l in decision.layers if l.name == "Prediction" or l.name == "Learned Pre-heat"
+        )
         assert prediction_layer.reason == "Predictor not initialized"
         assert prediction_layer.offset == 0.0
         assert prediction_layer.weight == 0.0

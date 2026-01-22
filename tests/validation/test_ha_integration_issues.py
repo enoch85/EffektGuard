@@ -11,7 +11,6 @@ import ast
 from pathlib import Path
 
 
-
 class ImportAnalyzer(ast.NodeVisitor):
     """Analyze Python AST to find potential variable shadowing issues."""
 

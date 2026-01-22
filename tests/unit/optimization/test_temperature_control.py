@@ -49,10 +49,10 @@ def create_comfort_layer(
 ) -> ComfortLayer:
     """Create comfort layer with specified settings."""
     thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
-    
+
     # Mock get_thermal_trend
     get_thermal_trend = MagicMock(return_value={"rate_per_hour": 0.0, "confidence": 0.8})
-    
+
     mode_config = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
     tolerance_range = tolerance * TOLERANCE_RANGE_MULTIPLIER
 
@@ -290,6 +290,7 @@ def test_comfort_layer_too_cold():
     # Current implementation uses LAYER_WEIGHT_COMFORT_MAX (0.5)
     assert decision.weight >= LAYER_WEIGHT_COMFORT_MAX
     assert "Too cold" in decision.reason
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

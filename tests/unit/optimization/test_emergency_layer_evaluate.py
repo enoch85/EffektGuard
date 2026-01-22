@@ -254,19 +254,19 @@ class TestEmergencyLayerThermalMass:
 
     def test_concrete_slab_tighter_thresholds(self):
         """Test that concrete slab has tighter thresholds.
-        
+
         At 0°C in Stockholm:
         - Radiator warning: -540 (no adjustment)
         - Concrete warning: -702 (1.3× adjustment)
-        
+
         Using DM -600 should be WARNING for radiator but within normal for concrete
         (because concrete thresholds are multiplied, making them MORE negative).
-        
+
         Wait, that's backwards - concrete has TIGHTER thresholds meaning it triggers
         WARNING at LESS negative values. Let me check:
         - Base warning: -540
         - Concrete: -540 × 1.3 = -702 (MORE negative = later warning)
-        
+
         Actually the multiplier makes it MORE negative (later warning), not tighter.
         Let me test at -580 which should be WARNING for radiator but OK for concrete.
         """

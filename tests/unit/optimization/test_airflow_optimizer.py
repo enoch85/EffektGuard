@@ -188,7 +188,9 @@ class TestEvaluateAirflow:
         decision = evaluate_airflow(state)
 
         assert decision.mode == FlowMode.STANDARD
-        assert "near target" in decision.reason.lower() or "no enhancement" in decision.reason.lower()
+        assert (
+            "near target" in decision.reason.lower() or "no enhancement" in decision.reason.lower()
+        )
 
     def test_no_enhance_already_warming(self):
         """Should not enhance when indoor temp already rising."""

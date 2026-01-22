@@ -1,6 +1,6 @@
 """Tests for weather prediction layer (Phase 2 critical fix).
 
-Tests the proactive pre-heating logic that ensures pre-heating starts 
+Tests the proactive pre-heating logic that ensures pre-heating starts
 before cold arrives, based on forecast drops or indoor cooling trends.
 """
 
@@ -50,15 +50,11 @@ def weather_data_mock():
 class TestWeatherPredictionLayer:
     """Test WeatherPredictionLayer logic."""
 
-    def test_stable_conditions_no_action(
-        self, weather_layer, nibe_state_mock, weather_data_mock
-    ):
+    def test_stable_conditions_no_action(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Stable forecast and indoor temp -> no pre-heating."""
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
-        decision = weather_layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         assert decision.offset == 0.0
         assert decision.weight == 0.0
@@ -74,12 +70,10 @@ class TestWeatherPredictionLayer:
         weather_data_mock.forecast_hours = [
             MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
         ]
-        
+
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
-        decision = weather_layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
@@ -92,48 +86,41 @@ class TestWeatherPredictionLayer:
         """Indoor cooling >= threshold triggers pre-heating (confirmation)."""
         # Stable forecast
         thermal_trend = {
-            "rate_per_hour": WEATHER_INDOOR_COOLING_CONFIRMATION - 0.1, # Cooling faster than threshold (negative)
-            "confidence": 0.8
+            "rate_per_hour": WEATHER_INDOOR_COOLING_CONFIRMATION
+            - 0.1,  # Cooling faster than threshold (negative)
+            "confidence": 0.8,
         }
 
-        decision = weather_layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
         assert "indoor cooling" in decision.reason.lower()
 
-    def test_combined_triggers_preheat(
-        self, weather_layer, nibe_state_mock, weather_data_mock
-    ):
+    def test_combined_triggers_preheat(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Both forecast drop and indoor cooling trigger pre-heating."""
         # Forecast drop
         drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
         weather_data_mock.forecast_hours = [
             MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
         ]
-        
+
         # Indoor cooling
         thermal_trend = {
             "rate_per_hour": WEATHER_INDOOR_COOLING_CONFIRMATION - 0.1,
-            "confidence": 0.8
+            "confidence": 0.8,
         }
 
-        decision = weather_layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
         assert "confirmed" in decision.reason.lower()
 
-    def test_thermal_mass_scaling_concrete(
-        self, nibe_state_mock, weather_data_mock
-    ):
+    def test_thermal_mass_scaling_concrete(self, nibe_state_mock, weather_data_mock):
         """Test weight scaling for concrete slab (high thermal mass)."""
-        layer = WeatherPredictionLayer(thermal_mass=1.5) # Concrete
-        
+        layer = WeatherPredictionLayer(thermal_mass=1.5)  # Concrete
+
         # Trigger pre-heat
         drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
         weather_data_mock.forecast_hours = [
@@ -141,19 +128,15 @@ class TestWeatherPredictionLayer:
         ]
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
-        decision = layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         expected_weight = min(LAYER_WEIGHT_WEATHER_PREDICTION * 1.5, WEATHER_WEIGHT_CAP)
         assert decision.weight == pytest.approx(expected_weight)
 
-    def test_thermal_mass_scaling_radiators(
-        self, nibe_state_mock, weather_data_mock
-    ):
+    def test_thermal_mass_scaling_radiators(self, nibe_state_mock, weather_data_mock):
         """Test weight scaling for radiators (low thermal mass)."""
-        layer = WeatherPredictionLayer(thermal_mass=0.5) # Radiators
-        
+        layer = WeatherPredictionLayer(thermal_mass=0.5)  # Radiators
+
         # Trigger pre-heat
         drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
         weather_data_mock.forecast_hours = [
@@ -161,16 +144,12 @@ class TestWeatherPredictionLayer:
         ]
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
-        decision = layer.evaluate_layer(
-            nibe_state_mock, weather_data_mock, thermal_trend
-        )
+        decision = layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
         expected_weight = min(LAYER_WEIGHT_WEATHER_PREDICTION * 0.5, WEATHER_WEIGHT_CAP)
         assert decision.weight == pytest.approx(expected_weight)
 
-    def test_disabled_layer(
-        self, weather_layer, nibe_state_mock, weather_data_mock
-    ):
+    def test_disabled_layer(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Test disabled layer returns 0."""
         # Trigger condition present
         drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
@@ -187,19 +166,16 @@ class TestWeatherPredictionLayer:
         assert decision.weight == 0.0
         assert "disabled" in decision.reason.lower()
 
-    def test_no_weather_data(
-        self, weather_layer, nibe_state_mock
-    ):
+    def test_no_weather_data(self, weather_layer, nibe_state_mock):
         """Test missing weather data handles gracefully."""
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
-        decision = weather_layer.evaluate_layer(
-            nibe_state_mock, None, thermal_trend
-        )
+        decision = weather_layer.evaluate_layer(nibe_state_mock, None, thermal_trend)
 
         assert decision.offset == 0.0
         assert decision.weight == 0.0
         assert "no weather data" in decision.reason.lower()
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -275,9 +275,7 @@ class TestGetPriceForecast:
         self, prices_today: list[float], prices_tomorrow: list[float] | None = None
     ) -> PriceData:
         """Helper to create PriceData from price lists."""
-        base_today = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        base_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today = []
         for i, price in enumerate(prices_today):
             start_time = base_today + timedelta(minutes=15 * i)
