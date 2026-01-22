@@ -417,6 +417,31 @@ ANTI_WINDUP_MIN_POSITIVE_OFFSET: Final = 0.5  # Offset must be at least +0.5°C
 # This allows some recovery but prevents escalation
 ANTI_WINDUP_OFFSET_CAP_MULTIPLIER: Final = 0.7  # Cap at 70% of normal recovery offset
 
+# Anti-windup cooldown period (Jan 2026 DM spiral analysis)
+# After anti-windup prevents an offset raise, wait this long before trying again.
+# Gives pump time to stabilize at achievable targets.
+# Problem: Raising offset when DM is dropping makes DM drop FASTER (S1 increases but BT25 can't catch up).
+# Solution: Prevent the raise AND wait before retrying to avoid oscillation.
+ANTI_WINDUP_COOLDOWN_MINUTES: Final = 30
+
+# Anti-windup active offset REDUCTION (Jan 2026 enhancement)
+# When DM is dropping severely despite positive offset, actively REDUCE offset
+# to give the pump achievable targets. Reduction is proportional to spiral severity.
+#
+# Based on debug.log analysis showing spirals from -53/h (mild) to -456/h (severe):
+#   -50 to -100/h: Mild spiral - just prevent raise (existing behavior)
+#   -100/h and worse: Active reduction needed
+#
+# Reduction formula: reduction = 1.0°C × (|dm_rate| / 100)
+#   -100/h: reduce by 1.0°C
+#   -200/h: reduce by 2.0°C
+#   -300/h: reduce by 3.0°C
+#   -400/h: reduce by 4.0°C
+#   -456/h (observed max): reduce by 4.6°C
+ANTI_WINDUP_REDUCTION_THRESHOLD: Final = -100.0  # DM/h - start reducing when spiral this bad
+ANTI_WINDUP_REDUCTION_RATE_DIVISOR: Final = 100.0  # DM/h - divisor for proportional reduction
+ANTI_WINDUP_REDUCTION_MULTIPLIER: Final = 1.0  # °C per unit of (|dm_rate| / divisor)
+
 # ============================================================================
 # Thermal Mass Buffer Multipliers (DM Threshold Adjustment)
 # ============================================================================
@@ -505,7 +530,7 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # DESIGN: All proactive zones trigger BEFORE warning threshold!
 # Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
 #
-PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.10  # 10% of normal max (early warning)
+PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.02  # 2% of normal max (ultra-early warning, Jan 2026)
 PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
 PROACTIVE_ZONE3_THRESHOLD_PERCENT: Final = 0.50  # 50% of normal max (significant)
 PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 0.75  # 75% of normal max (strong)

@@ -127,9 +127,7 @@ class TestAntiWindupCheck:
         dm_rate = -150.0  # More negative than threshold
         current_offset = 2.0  # Positive offset (adding heat)
 
-        anti_windup, reason = layer._check_anti_windup(
-            current_offset, dm_rate, has_valid_rate=True
-        )
+        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is True
         assert "anti-windup" in reason
@@ -142,9 +140,7 @@ class TestAntiWindupCheck:
         dm_rate = -150.0
         current_offset = 0.0  # No positive offset
 
-        anti_windup, reason = layer._check_anti_windup(
-            current_offset, dm_rate, has_valid_rate=True
-        )
+        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -155,9 +151,7 @@ class TestAntiWindupCheck:
         dm_rate = -10.0  # DM not dropping fast (above threshold)
         current_offset = 2.0
 
-        anti_windup, reason = layer._check_anti_windup(
-            current_offset, dm_rate, has_valid_rate=True
-        )
+        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -168,9 +162,7 @@ class TestAntiWindupCheck:
         dm_rate = 50.0  # DM improving (positive rate)
         current_offset = 2.0
 
-        anti_windup, reason = layer._check_anti_windup(
-            current_offset, dm_rate, has_valid_rate=True
-        )
+        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -248,9 +240,7 @@ class TestAntiWindupOffsetCapping:
 class TestAntiWindupIntegration:
     """Test anti-windup in full evaluate_layer flow."""
 
-    def test_tier_includes_anti_windup_info(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_tier_includes_anti_windup_info(self, emergency_layer, nibe_state_factory):
         """EmergencyLayerDecision includes anti-windup status."""
         layer = emergency_layer
         now = datetime.now()
@@ -282,9 +272,7 @@ class TestAntiWindupIntegration:
         assert hasattr(decision, "dm_rate")
         assert hasattr(decision, "anti_windup_active")
 
-    def test_prevents_escalation_during_heat_transit(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_prevents_escalation_during_heat_transit(self, emergency_layer, nibe_state_factory):
         """Anti-windup prevents offset escalation during heat transit.
 
         Scenario: DM at -700, offset already +2°C, but DM still dropping.
@@ -316,19 +304,27 @@ class TestAntiWindupIntegration:
             tolerance_range=0.5,
         )
 
-        # Anti-windup should have capped escalation
+        # Anti-windup should have prevented escalation or reduced offset (Jan 2026)
         if decision.anti_windup_active:
-            # Offset should not exceed current_offset significantly
-            assert decision.offset <= 2.0 * (1 + 0.1)  # Allow small margin
-            assert "anti-windup" in decision.reason
+            # With severe dm_rate (-1200/h in this test), offset may be REDUCED
+            # Jan 2026 enhancement: At -1200/h, reduction = 1200/100 = 12°C
+            # So offset goes from +2 to -10 (capped at MIN_OFFSET)
+            # Offset should be <= current_offset (kept or reduced, never raised)
+            assert decision.offset <= 2.0, f"Anti-windup should prevent raise, got {decision.offset}"
+            # New format options:
+            # - Mild: "DM dropping -XX/h while offset +X°C - not raising"
+            # - Severe: "DM dropping -XX/h - reducing offset by X°C..."
+            assert (
+                "not raising" in decision.reason
+                or "reducing offset" in decision.reason
+                or "anti-windup" in decision.reason.lower()
+            )
 
 
 class TestAntiWindupRealScenario:
     """Test real-world scenario from Dec 9, 2025 debug.log."""
 
-    def test_prevents_dm_chasing_scenario(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_prevents_dm_chasing_scenario(self, emergency_layer, nibe_state_factory):
         """Reproduce and prevent the DM oscillation scenario.
 
         Real scenario observed:
@@ -375,8 +371,7 @@ class TestAntiWindupRealScenario:
         # Once positive offset is applied and DM is dropping,
         # anti-windup should prevent further escalation
         escalation_count = sum(
-            1 for i in range(1, len(offsets_applied))
-            if offsets_applied[i] > offsets_applied[i - 1]
+            1 for i in range(1, len(offsets_applied)) if offsets_applied[i] > offsets_applied[i - 1]
         )
 
         # Should not escalate many times - anti-windup should cap

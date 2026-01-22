@@ -260,9 +260,17 @@ class TestProactiveLayerZones:
         assert result.offset == 0.0
 
     def test_no_proactive_when_dm_healthy(self, layer):
-        """Test no proactive action when DM is healthy (above Z1)."""
-        # Z1 starts at -54, so -20 is healthier
-        nibe_state = MockNibeState(degree_minutes=-20.0, outdoor_temp=0.0)
+        """Test no proactive action when DM is healthy (above Z1).
+
+        Jan 2026: Z1 threshold changed from 10% to 2% for earlier intervention.
+        At 0°C, normal_max is around -540, so:
+        - Old Z1 (10%): -540 × 0.10 = -54
+        - New Z1 (2%): -540 × 0.02 = -10.8
+
+        DM must be above -10 to not trigger Z1.
+        """
+        # Z1 starts at ~-11 (2% of -540), so -5 is healthier
+        nibe_state = MockNibeState(degree_minutes=-5.0, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,

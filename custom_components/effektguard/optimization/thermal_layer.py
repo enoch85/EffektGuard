@@ -9,15 +9,19 @@ Includes proactive debt prevention layer (Phase 7 refactor).
 import logging
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Optional, Protocol
 
 from ..const import (
+    ANTI_WINDUP_COOLDOWN_MINUTES,
     ANTI_WINDUP_DM_DROPPING_RATE,
     ANTI_WINDUP_DM_HISTORY_BASE_SIZE,
     ANTI_WINDUP_MIN_POSITIVE_OFFSET,
     ANTI_WINDUP_MIN_SAMPLES,
     ANTI_WINDUP_OFFSET_CAP_MULTIPLIER,
+    ANTI_WINDUP_REDUCTION_MULTIPLIER,
+    ANTI_WINDUP_REDUCTION_RATE_DIVISOR,
+    ANTI_WINDUP_REDUCTION_THRESHOLD,
     DM_CRITICAL_T1_MARGIN,
     DM_CRITICAL_T1_OFFSET,
     DM_CRITICAL_T1_WEIGHT,
@@ -350,6 +354,11 @@ class EmergencyLayer:
         history_size = self._get_dm_history_size_for_heating_type(heating_type)
         self._dm_history: deque[tuple[datetime, float]] = deque(maxlen=history_size)
 
+        # Anti-windup cooldown: After detecting spiral, wait before trying to raise again
+        # Jan 2026: Raising offset when DM is dropping makes DM drop FASTER
+        # (S1 increases but BT25 can't catch up). Wait for pump to stabilize.
+        self._anti_windup_cooldown_until: Optional[datetime] = None
+
     def _get_dm_history_size_for_heating_type(self, heating_type: str) -> int:
         """Get DM history size based on heating system thermal lag.
 
@@ -407,6 +416,35 @@ class EmergencyLayer:
         dm_rate = dm_change / time_diff  # DM/hour
 
         return dm_rate, True
+
+    def _is_in_cooldown(self, timestamp: datetime) -> bool:
+        """Check if still in cooldown from previous anti-windup activation.
+
+        Args:
+            timestamp: Current timestamp
+
+        Returns:
+            True if in cooldown period, False otherwise
+        """
+        if self._anti_windup_cooldown_until is None:
+            return False
+        return timestamp < self._anti_windup_cooldown_until
+
+    def _start_cooldown(self, timestamp: datetime) -> None:
+        """Start cooldown period after anti-windup activation.
+
+        Prevents oscillation by waiting before trying to raise offset again.
+
+        Args:
+            timestamp: Current timestamp
+        """
+        self._anti_windup_cooldown_until = timestamp + timedelta(
+            minutes=ANTI_WINDUP_COOLDOWN_MINUTES
+        )
+        _LOGGER.info(
+            "Anti-windup cooldown started: no offset raises until %s",
+            self._anti_windup_cooldown_until.strftime("%H:%M"),
+        )
 
     def _check_anti_windup(
         self, current_offset: float, dm_rate: float, has_valid_rate: bool
@@ -524,6 +562,72 @@ class EmergencyLayer:
         )
 
         temp_deviation = indoor_temp - target_temp
+
+        # ========================================
+        # ANTI-WINDUP: Prevent offset raises that make DM worse (Jan 2026 fix)
+        # ========================================
+        # Physics: Raising offset increases S1 (target), but BT25 (actual) can't catch up
+        # → Gap (BT25 - S1) becomes MORE negative → DM drops FASTER
+        # Solution: If anti-windup detects this pattern, don't calculate higher offsets at all
+
+        # Check 1: Are we in cooldown from a previous anti-windup activation?
+        if self._is_in_cooldown(timestamp):
+            return EmergencyLayerDecision(
+                name="Anti-windup Cooldown",
+                offset=current_offset,
+                weight=0.5,
+                reason=f"In cooldown ({ANTI_WINDUP_COOLDOWN_MINUTES}min) - not raising offset",
+                tier="COOLDOWN",
+                degree_minutes=degree_minutes,
+                anti_windup_active=True,
+                dm_rate=dm_rate,
+            )
+
+        # Check 2: Is anti-windup detecting a spiral (DM dropping while offset positive)?
+        if anti_windup_active and current_offset >= ANTI_WINDUP_MIN_POSITIVE_OFFSET:
+            # Start cooldown to prevent oscillation
+            self._start_cooldown(timestamp)
+
+            # Calculate reduction based on severity (Jan 2026 enhancement)
+            # If dm_rate is worse than REDUCTION_THRESHOLD, actively reduce offset
+            # Formula: reduction = 1.0°C × (|dm_rate| / 100)
+            if dm_rate < ANTI_WINDUP_REDUCTION_THRESHOLD:
+                # Severe spiral - actively reduce offset
+                reduction = (
+                    abs(dm_rate) / ANTI_WINDUP_REDUCTION_RATE_DIVISOR
+                ) * ANTI_WINDUP_REDUCTION_MULTIPLIER
+                new_offset = max(-10.0, current_offset - reduction)  # Floor at MIN_OFFSET
+                reason = (
+                    f"DM dropping {dm_rate:.0f}/h - reducing offset by {reduction:.1f}°C "
+                    f"(from +{current_offset:.0f}°C to {new_offset:.1f}°C)"
+                )
+                _LOGGER.info(
+                    "Anti-windup REDUCTION: dm_rate=%d/h, reduction=%.1f°C, "
+                    "offset %+.1f → %+.1f",
+                    dm_rate,
+                    reduction,
+                    current_offset,
+                    new_offset,
+                )
+            else:
+                # Mild spiral - just keep current offset, don't raise
+                new_offset = current_offset
+                reason = (
+                    f"DM dropping {dm_rate:.0f}/h while offset +{current_offset:.0f}°C - "
+                    f"not raising"
+                )
+
+            return EmergencyLayerDecision(
+                name="Anti-windup",
+                offset=new_offset,
+                weight=0.5,
+                reason=reason,
+                tier="ANTI_WINDUP",
+                degree_minutes=degree_minutes,
+                threshold_used=0.0,
+                anti_windup_active=True,
+                dm_rate=dm_rate,
+            )
 
         # Case 1: Too warm (above tolerance)
         if temp_deviation > tolerance_range:
