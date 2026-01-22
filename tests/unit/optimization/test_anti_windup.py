@@ -380,3 +380,197 @@ class TestAntiWindupRealScenario:
             f"Anti-windup should prevent continuous escalation. "
             f"Escalated {escalation_count} times: {offsets_applied}"
         )
+
+
+class TestCausationWindow:
+    """Test causation window feature for anti-windup (Jan 2026).
+
+    The causation window distinguishes between:
+    - Self-induced spiral: We raised offset recently → DM dropping → our fault
+    - Environmental drop: Offset stable for hours → DM dropping → cold snap arrived
+
+    Anti-windup should only trigger for self-induced spirals.
+    """
+
+    def test_tracks_offset_raises(self, emergency_layer):
+        """_track_offset_change records when offset is raised."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # First call - establishes baseline
+        layer._track_offset_change(now, 0.0)
+        assert layer._last_offset_value == 0.0
+        assert layer._last_offset_raise_time is None
+
+        # Raise offset - should record timestamp
+        layer._track_offset_change(now + timedelta(minutes=5), 2.0)
+        assert layer._last_offset_value == 2.0
+        assert layer._last_offset_raise_time == now + timedelta(minutes=5)
+
+    def test_does_not_track_offset_decreases(self, emergency_layer):
+        """_track_offset_change ignores decreases (only raises cause spirals)."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # Set baseline
+        layer._track_offset_change(now, 3.0)
+        layer._last_offset_raise_time = now  # Simulate previous raise
+
+        # Decrease offset - should NOT update raise time
+        old_raise_time = layer._last_offset_raise_time
+        layer._track_offset_change(now + timedelta(minutes=30), 1.0)
+
+        assert layer._last_offset_value == 1.0  # Value updated
+        assert layer._last_offset_raise_time == old_raise_time  # Time NOT updated
+
+    def test_raised_recently_true_within_window(self, emergency_layer):
+        """_raised_offset_recently returns True if raise within 90 min."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # Raise was 30 minutes ago
+        layer._last_offset_raise_time = now - timedelta(minutes=30)
+
+        assert layer._raised_offset_recently(now) is True
+
+    def test_raised_recently_false_outside_window(self, emergency_layer):
+        """_raised_offset_recently returns False if raise > 90 min ago."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # Raise was 120 minutes ago (outside 90 min window)
+        layer._last_offset_raise_time = now - timedelta(minutes=120)
+
+        assert layer._raised_offset_recently(now) is False
+
+    def test_raised_recently_false_when_never_raised(self, emergency_layer):
+        """_raised_offset_recently returns False if no raise recorded."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # No raise ever recorded
+        assert layer._last_offset_raise_time is None
+        assert layer._raised_offset_recently(now) is False
+
+    def test_anti_windup_triggers_for_recent_raise(
+        self, emergency_layer, nibe_state_factory
+    ):
+        """Anti-windup triggers when offset was raised recently and DM dropping."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # Simulate: offset was raised 30 minutes ago (within 90 min window)
+        layer._last_offset_raise_time = now - timedelta(minutes=30)
+        layer._last_offset_value = 2.0
+
+        # Build DM history showing drop
+        layer._update_dm_history(-400.0, now - timedelta(minutes=15))
+        layer._update_dm_history(-500.0, now - timedelta(minutes=10))
+        layer._update_dm_history(-600.0, now - timedelta(minutes=5))
+        layer._update_dm_history(-700.0, now)
+
+        state = nibe_state_factory(
+            degree_minutes=-700.0,
+            current_offset=2.0,  # Positive offset
+            timestamp=now,
+        )
+
+        decision = layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=None,
+            price_data=None,
+            target_temp=21.5,
+            tolerance_range=0.5,
+        )
+
+        # Anti-windup should be active (recent raise + DM dropping)
+        assert decision.anti_windup_active is True
+        assert decision.tier == "ANTI_WINDUP"
+
+    def test_anti_windup_skipped_for_old_offset(
+        self, emergency_layer, nibe_state_factory
+    ):
+        """Anti-windup skipped when offset was raised long ago (environmental drop)."""
+        layer = emergency_layer
+        now = datetime.now()
+
+        # Simulate: offset was raised 6 hours ago (way outside 90 min window)
+        # This represents a preemptive weather response that's now stable
+        layer._last_offset_raise_time = now - timedelta(hours=6)
+        layer._last_offset_value = 4.0
+
+        # Build DM history showing drop (cold snap arriving)
+        layer._update_dm_history(-200.0, now - timedelta(minutes=15))
+        layer._update_dm_history(-300.0, now - timedelta(minutes=10))
+        layer._update_dm_history(-400.0, now - timedelta(minutes=5))
+        layer._update_dm_history(-500.0, now)
+
+        state = nibe_state_factory(
+            degree_minutes=-500.0,
+            current_offset=4.0,  # Offset has been stable
+            timestamp=now,
+        )
+
+        decision = layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=None,
+            price_data=None,
+            target_temp=21.5,
+            tolerance_range=0.5,
+        )
+
+        # Anti-windup should be SKIPPED (old offset, likely environmental)
+        # System should be allowed to respond with tier calculations
+        assert decision.anti_windup_active is not True or decision.tier != "ANTI_WINDUP"
+
+    def test_full_scenario_weather_response(self, emergency_layer, nibe_state_factory):
+        """Full scenario: Weather forecast → raise offset → cold arrives → allow response.
+
+        Timeline:
+        - T+0h: Forecast shows cold snap at T+12h, system raises offset to +4
+        - T+12h: Cold snap arrives, DM starts dropping
+        - Expected: Anti-windup should NOT block response (offset was raised 12h ago)
+        """
+        layer = emergency_layer
+        base_time = datetime.now()
+
+        # Establish baseline offset (before forecast)
+        layer._track_offset_change(base_time - timedelta(minutes=5), 0.0)
+
+        # T+0h: System raises offset for forecast
+        layer._track_offset_change(base_time, 4.0)
+        assert layer._last_offset_raise_time == base_time
+
+        # Simulate 12 hours passing - offset stays stable
+        for i in range(1, 13):
+            t = base_time + timedelta(hours=i)
+            layer._track_offset_change(t, 4.0)  # No raise, just tracking
+
+        # T+12h: Cold snap arrives, DM starts dropping
+        now = base_time + timedelta(hours=12)
+
+        # Build DM history for the cold snap arrival
+        layer._update_dm_history(-100.0, now - timedelta(minutes=15))
+        layer._update_dm_history(-200.0, now - timedelta(minutes=10))
+        layer._update_dm_history(-300.0, now - timedelta(minutes=5))
+        layer._update_dm_history(-400.0, now)
+
+        state = nibe_state_factory(
+            degree_minutes=-400.0,
+            current_offset=4.0,  # Still at +4 from 12 hours ago
+            timestamp=now,
+        )
+
+        decision = layer.evaluate_layer(
+            nibe_state=state,
+            weather_data=None,
+            price_data=None,
+            target_temp=21.5,
+            tolerance_range=0.5,
+        )
+
+        # Causation window (90 min) expired long ago
+        # System should be allowed to respond to environmental change
+        assert not (
+            decision.anti_windup_active and decision.tier == "ANTI_WINDUP"
+        ), "Anti-windup should not block environmental response after 12 hours"

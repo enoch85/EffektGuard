@@ -442,6 +442,13 @@ ANTI_WINDUP_REDUCTION_THRESHOLD: Final = -100.0  # DM/h - start reducing when sp
 ANTI_WINDUP_REDUCTION_RATE_DIVISOR: Final = 100.0  # DM/h - divisor for proportional reduction
 ANTI_WINDUP_REDUCTION_MULTIPLIER: Final = 1.0  # °C per unit of (|dm_rate| / divisor)
 
+# Anti-windup causation window (Jan 2026 enhancement)
+# Only trigger anti-windup if we raised offset recently.
+# If offset has been stable for longer than this, DM drop is likely environmental
+# (e.g., forecasted cold snap arrived), not a self-induced spiral.
+# 90 min = long enough to see effect of raise, short enough to allow weather response.
+ANTI_WINDUP_CAUSATION_WINDOW_MINUTES: Final = 90
+
 # ============================================================================
 # Thermal Mass Buffer Multipliers (DM Threshold Adjustment)
 # ============================================================================
