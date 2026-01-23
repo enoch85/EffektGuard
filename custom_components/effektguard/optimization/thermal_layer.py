@@ -628,11 +628,12 @@ class EmergencyLayer:
 
         # Check 1: Are we in cooldown from a previous anti-windup activation?
         if self._is_in_cooldown(timestamp):
+            remaining_min = int((self._anti_windup_cooldown_until - timestamp).total_seconds() / 60)
             return EmergencyLayerDecision(
                 name="Anti-windup Cooldown",
                 offset=current_offset,
-                weight=0.5,
-                reason=f"In cooldown ({ANTI_WINDUP_COOLDOWN_MINUTES}min) - not raising offset",
+                weight=0.7,
+                reason=f"In cooldown ({remaining_min} min remaining) - not raising offset",
                 tier="COOLDOWN",
                 degree_minutes=degree_minutes,
                 anti_windup_active=True,
@@ -690,7 +691,7 @@ class EmergencyLayer:
                 return EmergencyLayerDecision(
                     name="Anti-windup",
                     offset=new_offset,
-                    weight=0.5,
+                    weight=0.7,
                     reason=reason,
                     tier="ANTI_WINDUP",
                     degree_minutes=degree_minutes,
