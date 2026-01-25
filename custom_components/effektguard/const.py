@@ -417,6 +417,38 @@ ANTI_WINDUP_MIN_POSITIVE_OFFSET: Final = 0.5  # Offset must be at least +0.5°C
 # This allows some recovery but prevents escalation
 ANTI_WINDUP_OFFSET_CAP_MULTIPLIER: Final = 0.7  # Cap at 70% of normal recovery offset
 
+# Anti-windup cooldown period (Jan 2026 DM spiral analysis)
+# After anti-windup prevents an offset raise, wait this long before trying again.
+# Gives pump time to stabilize at achievable targets.
+# Problem: Raising offset when DM is dropping makes DM drop FASTER (S1 increases but BT25 can't catch up).
+# Solution: Prevent the raise AND wait before retrying to avoid oscillation.
+ANTI_WINDUP_COOLDOWN_MINUTES: Final = 30
+
+# Anti-windup active offset REDUCTION (Jan 2026 enhancement)
+# When DM is dropping severely despite positive offset, actively REDUCE offset
+# to give the pump achievable targets. Reduction is proportional to spiral severity.
+#
+# Based on debug.log analysis showing spirals from -53/h (mild) to -456/h (severe):
+#   -50 to -100/h: Mild spiral - just prevent raise (existing behavior)
+#   -100/h and worse: Active reduction needed
+#
+# Reduction formula: reduction = 1.0°C × (|dm_rate| / 100)
+#   -100/h: reduce by 1.0°C
+#   -200/h: reduce by 2.0°C
+#   -300/h: reduce by 3.0°C
+#   -400/h: reduce by 4.0°C
+#   -456/h (observed max): reduce by 4.6°C
+ANTI_WINDUP_REDUCTION_THRESHOLD: Final = -100.0  # DM/h - start reducing when spiral this bad
+ANTI_WINDUP_REDUCTION_RATE_DIVISOR: Final = 100.0  # DM/h - divisor for proportional reduction
+ANTI_WINDUP_REDUCTION_MULTIPLIER: Final = 1.0  # °C per unit of (|dm_rate| / divisor)
+
+# Anti-windup causation window (Jan 2026 enhancement)
+# Only trigger anti-windup if we raised offset recently.
+# If offset has been stable for longer than this, DM drop is likely environmental
+# (e.g., forecasted cold snap arrived), not a self-induced spiral.
+# 90 min = long enough to see effect of raise, short enough to allow weather response.
+ANTI_WINDUP_CAUSATION_WINDOW_MINUTES: Final = 90
+
 # ============================================================================
 # Thermal Mass Buffer Multipliers (DM Threshold Adjustment)
 # ============================================================================
@@ -505,7 +537,7 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # DESIGN: All proactive zones trigger BEFORE warning threshold!
 # Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
 #
-PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.10  # 10% of normal max (early warning)
+PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.02  # 2% of normal max (ultra-early warning, Jan 2026)
 PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
 PROACTIVE_ZONE3_THRESHOLD_PERCENT: Final = 0.50  # 50% of normal max (significant)
 PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 0.75  # 75% of normal max (strong)
@@ -1022,8 +1054,10 @@ AIRFLOW_INDOOR_DEFICIT_MIN: Final = 0.2  # °C - Minimum deficit to trigger enha
 # Compressor threshold calculation
 # Minimum compressor % needed for enhanced flow to be beneficial
 # Colder outside → need higher compressor output to justify extra ventilation
-# Formula: threshold = 50 + slope * outdoor_temp (for outdoor_temp < 0)
-AIRFLOW_COMPRESSOR_BASE_THRESHOLD: Final = 50.0  # % base threshold at 0°C
+# Formula: threshold = 61 + slope * outdoor_temp (for outdoor_temp < 0)
+# Base raised from 50% to 61% (81 Hz) based on real-world observations showing
+# enhancement at lower Hz caused cooling during periods when pump was struggling
+AIRFLOW_COMPRESSOR_BASE_THRESHOLD: Final = 61.0  # % base threshold at 0°C (81 Hz)
 AIRFLOW_COMPRESSOR_SLOPE: Final = -2.5  # Increase by 2.5% per degree below 0°C
 
 # Temperature deficit thresholds for duration calculation (°C)
@@ -1045,7 +1079,7 @@ AIRFLOW_DURATION_COOL_CAP: Final = 30  # minutes cap when outdoor < -5°C
 
 # Indoor temperature trend threshold for enhancement decision
 AIRFLOW_TREND_WARMING_THRESHOLD: Final = 0.1  # °C/h - already warming, let stabilize
-AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.15  # °C/h - cooling despite enhanced = stop
+AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.10  # °C/h - cooling despite enhanced = stop
 
 # Configuration keys
 CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"

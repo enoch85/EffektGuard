@@ -34,22 +34,22 @@ from custom_components.effektguard.const import (
 def emergency_layer():
     """Create emergency layer with mock dependencies."""
     climate_detector = ClimateZoneDetector(latitude=59.33)
-    
+
     # Mock trend callbacks
     mock_thermal_trend = MagicMock(return_value={"rate_per_hour": 0.0, "confidence": 0.8})
     mock_outdoor_trend = MagicMock(return_value={"rate_per_hour": 0.0, "confidence": 0.8})
-    
+
     layer = EmergencyLayer(
         climate_detector=climate_detector,
         heating_type="radiator",
         get_thermal_trend=mock_thermal_trend,
         get_outdoor_trend=mock_outdoor_trend,
     )
-    
+
     # Attach mocks to layer for easy access in tests
     layer.mock_thermal_trend = mock_thermal_trend
     layer.mock_outdoor_trend = mock_outdoor_trend
-    
+
     return layer
 
 
@@ -88,7 +88,7 @@ class TestOvershootOnlyDamping:
     def test_moderate_overshoot_1_2c(self, emergency_layer):
         """Moderate 1.2°C overshoot → 90% strength (0.9 multiplier)."""
         layer = emergency_layer
-        
+
         layer.mock_thermal_trend.return_value = {
             "rate_per_hour": 0.1,
             "confidence": 0.8,
@@ -111,7 +111,7 @@ class TestOvershootOnlyDamping:
     def test_mild_overshoot_0_7c(self, emergency_layer):
         """Mild 0.7°C overshoot → 95% strength (0.95 multiplier)."""
         layer = emergency_layer
-        
+
         layer.mock_thermal_trend.return_value = {
             "rate_per_hour": 0.1,
             "confidence": 0.8,
@@ -134,7 +134,7 @@ class TestOvershootOnlyDamping:
     def test_no_overshoot_no_damping(self, emergency_layer):
         """No overshoot (<0.5°C) → No damping (1.0 multiplier)."""
         layer = emergency_layer
-        
+
         layer.mock_thermal_trend.return_value = {
             "rate_per_hour": 0.1,
             "confidence": 0.8,
@@ -181,7 +181,7 @@ class TestCombinedOvershootAndWarming:
         # 5.0 × 0.8 (overshoot) × 0.4 (warming) = 1.6°C
         # But clamped to min_damped_offset (1.5°C)
         # Wait, 1.6 > 1.5, so it should be 1.6
-        
+
         expected = 5.0 * 0.8 * 0.4  # 1.6
         assert damped_offset == pytest.approx(expected)
         assert "severe overshoot" in reason
@@ -219,7 +219,7 @@ class TestV010FailurePrevention:
 
     def test_prevents_2c_overshoot_during_recovery(self, emergency_layer):
         """Scenario: DM recovery active, indoor temp hits 23.6°C (target 21.5°C).
-        
+
         v0.1.0 behavior: Kept pushing +3.0°C offset because DM was low.
         New behavior: Should clamp offset aggressively.
         """
@@ -254,10 +254,10 @@ class TestSafetyMinimums:
     def test_t1_minimum_respected(self, emergency_layer):
         """T1 minimum (1.0°C) must be respected."""
         layer = emergency_layer
-        
+
         # Extreme damping conditions
         layer.mock_thermal_trend.return_value = {"rate_per_hour": 1.0, "confidence": 1.0}
-        
+
         base_offset = 2.0
         damped_offset, _ = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -274,9 +274,9 @@ class TestSafetyMinimums:
     def test_t2_minimum_respected(self, emergency_layer):
         """T2 minimum (1.5°C) must be respected."""
         layer = emergency_layer
-        
+
         layer.mock_thermal_trend.return_value = {"rate_per_hour": 1.0, "confidence": 1.0}
-        
+
         base_offset = 3.0
         damped_offset, _ = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -297,10 +297,10 @@ class TestOvershootWithoutTrendData:
     def test_overshoot_applies_without_trend_data(self, emergency_layer):
         """Overshoot damping should work even if trend data is unavailable."""
         layer = emergency_layer
-        
+
         # No trend data
         layer.mock_thermal_trend.return_value = None
-        
+
         base_offset = 2.5
         damped_offset, reason = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -323,7 +323,7 @@ class TestEdgeCases:
         """Exactly at 1.5°C overshoot should trigger severe damping."""
         layer = emergency_layer
         layer.mock_thermal_trend.return_value = {"rate_per_hour": 0.0, "confidence": 0.8}
-        
+
         base_offset = 2.0
         damped_offset, reason = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -341,7 +341,7 @@ class TestEdgeCases:
         """Negative overshoot (too cold) should be ignored."""
         layer = emergency_layer
         layer.mock_thermal_trend.return_value = {"rate_per_hour": 0.0, "confidence": 0.8}
-        
+
         base_offset = 2.0
         damped_offset, reason = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -358,7 +358,7 @@ class TestEdgeCases:
         """Missing indoor temp should disable overshoot damping."""
         layer = emergency_layer
         layer.mock_thermal_trend.return_value = {"rate_per_hour": 0.0, "confidence": 0.8}
-        
+
         base_offset = 2.0
         damped_offset, reason = layer._apply_thermal_recovery_damping(
             base_offset=base_offset,
@@ -370,6 +370,7 @@ class TestEdgeCases:
 
         assert damped_offset == 2.0
         assert reason == ""
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

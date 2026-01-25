@@ -114,25 +114,25 @@ class TestTrendHelperMethods:
     def test_is_cooling_rapidly_true(self):
         """Verify is_cooling_rapidly returns True for steep drop."""
         thermal_trend = {"rate_per_hour": -0.4, "confidence": 0.8}
-        
+
         assert is_cooling_rapidly(thermal_trend, threshold=-0.3) is True
 
     def test_is_cooling_rapidly_false(self):
         """Verify is_cooling_rapidly returns False for gentle drop."""
         thermal_trend = {"rate_per_hour": -0.2, "confidence": 0.8}
-        
+
         assert is_cooling_rapidly(thermal_trend, threshold=-0.3) is False
 
     def test_is_warming_rapidly_true(self):
         """Verify is_warming_rapidly returns True for steep rise."""
         thermal_trend = {"rate_per_hour": 0.4, "confidence": 0.8}
-        
+
         assert is_warming_rapidly(thermal_trend, threshold=0.3) is True
 
     def test_is_warming_rapidly_false(self):
         """Verify is_warming_rapidly returns False for gentle rise."""
         thermal_trend = {"rate_per_hour": 0.2, "confidence": 0.8}
-        
+
         assert is_warming_rapidly(thermal_trend, threshold=0.3) is False
 
 
@@ -142,72 +142,67 @@ class TestRapidCoolingDetection:
     def test_rapid_cooling_triggers_proactive_boost(self, hass_mock, nibe_state_mock):
         """Rapid cooling should trigger proactive boost even if DM is fine."""
         engine = create_engine_with_predictor(hass_mock)
-        
+
         # Mock rapid cooling
         engine.predictor.get_current_trend.return_value = {
             "trend": "falling",
             "rate_per_hour": -0.5,  # Very rapid cooling
             "confidence": 0.9,
         }
-        
+
         # DM is fine (-150), but cooling is rapid
         nibe_state_mock.degree_minutes = -150
         nibe_state_mock.outdoor_temp = -5.0  # Cold enough
-        
+
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock,
-            weather_data=None,
-            target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
         )
-        
+
         assert decision.offset > 0
         assert "Rapid cooling" in decision.reason
 
     def test_rapid_cooling_warm_outdoor_no_boost(self, hass_mock, nibe_state_mock):
         """Rapid cooling should NOT trigger boost if outdoor is warm."""
         engine = create_engine_with_predictor(hass_mock)
-        
+
         # Mock rapid cooling
         engine.predictor.get_current_trend.return_value = {
             "trend": "falling",
             "rate_per_hour": -0.5,
             "confidence": 0.9,
         }
-        
+
         # Warm outdoor temp
         nibe_state_mock.outdoor_temp = 15.0
-        nibe_state_mock.degree_minutes = -10  # Ensure we are not in any Proactive Zone
-        
+        # Jan 2026: Z1 threshold changed from 10% to 2%, so need DM above ~-5 to avoid Z1
+        nibe_state_mock.degree_minutes = -3  # Ensure we are not in any Proactive Zone
+
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock,
-            weather_data=None,
-            target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
         )
-        
+
         assert decision.offset == 0.0
         assert "Rapid cooling" not in decision.reason
 
     def test_cooling_below_target_with_cold_outdoor(self, hass_mock, nibe_state_mock):
         """Cooling below target with cold outdoor should trigger boost."""
         engine = create_engine_with_predictor(hass_mock)
-        
+
         # Mock moderate cooling
         engine.predictor.get_current_trend.return_value = {
             "trend": "falling",
             "rate_per_hour": -0.2,
             "confidence": 0.9,
         }
-        
+
         # Below target and cold outside
         nibe_state_mock.indoor_temp = 20.5  # Target 21.0
         nibe_state_mock.outdoor_temp = -10.0
-        
+
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock,
-            weather_data=None,
-            target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
         )
-        
+
         # Should trigger Zone 1 or 2 boost
         assert decision.offset > 0
 
@@ -218,37 +213,35 @@ class TestTrendAwareZoneBoost:
     def test_zone1_with_rapid_cooling_gets_boost(self, hass_mock, nibe_state_mock):
         """Zone 1 (gentle nudge) should get extra boost if cooling rapidly."""
         engine = create_engine_with_predictor(hass_mock)
-        
+
         # Mock rapid cooling
         engine.predictor.get_current_trend.return_value = {
             "trend": "falling",
             "rate_per_hour": -0.4,
             "confidence": 0.9,
         }
-        
+
         # Zone 1 DM range (e.g. -200)
         nibe_state_mock.degree_minutes = -200
         nibe_state_mock.outdoor_temp = -5.0
-        
+
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock,
-            weather_data=None,
-            target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
         )
-        
+
         # Should be boosted
         assert decision.offset > 0.5  # Normal Zone 1 is 0.5, boost adds more
 
 
 class TestOvershootPrevention:
     """Test overshoot prevention using trend data."""
-    
+
     # Note: Overshoot prevention logic is now in EmergencyLayer (damping)
     # or handled by ComfortLayer.
     # But let's check if we can test it via EmergencyLayer or ComfortLayer.
     # The original tests were testing _apply_overshoot_damping which was in DecisionEngine.
     # Now it's likely in EmergencyLayer.
-    
+
     pass
 
 
@@ -258,23 +251,21 @@ class TestPredictiveDeficitCalculation:
     def test_predicted_deficit_calculation(self, hass_mock, nibe_state_mock):
         """Verify deficit calculation uses trend correctly."""
         engine = create_engine_with_predictor(hass_mock)
-        
+
         # Mock trend
         engine.predictor.get_current_trend.return_value = {
             "trend": "falling",
             "rate_per_hour": -0.5,
             "confidence": 0.9,
         }
-        
+
         # Current DM -200
         nibe_state_mock.degree_minutes = -200
         nibe_state_mock.outdoor_temp = -5.0
-        
+
         # Proactive layer uses predicted deficit
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock,
-            weather_data=None,
-            target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
         )
-        
+
         assert decision.offset > 0

@@ -62,6 +62,7 @@ class TestVolatileWeightReduction:
         state.degree_minutes = -100.0
         state.compressor_frequency = 50
         state.current_power = 2.5
+        state.current_offset = 0.0  # Required for anti-windup tracking (Jan 2026)
         state.supply_temp = None
         state.return_temp = None
         state.hot_water_temp = None

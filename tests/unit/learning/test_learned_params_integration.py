@@ -126,9 +126,10 @@ class TestPredictTemperatureWithLearnedParams:
         # With low confidence, should get same results as without learned params
         # (within floating point tolerance)
         for i in range(4):
-            assert abs(
-                result_with_low_conf.predicted_temps[i] - result_without.predicted_temps[i]
-            ) < 0.01
+            assert (
+                abs(result_with_low_conf.predicted_temps[i] - result_without.predicted_temps[i])
+                < 0.01
+            )
 
     def test_uses_none_learned_params_gracefully(self, predictor_with_history):
         """Verify prediction works when learned_params is None."""
@@ -270,7 +271,9 @@ class TestCalculatePreHeatDecisionIntegration:
     def test_works_with_thermal_model_without_get_parameters(self, predictor_with_history):
         """Verify evaluate_layer works with ThermalModel (no get_parameters)."""
         # Create mock ThermalModel (old-style, no get_parameters)
-        mock_thermal_model = MagicMock(spec=["thermal_mass", "insulation_quality", "get_prediction_horizon"])
+        mock_thermal_model = MagicMock(
+            spec=["thermal_mass", "insulation_quality", "get_prediction_horizon"]
+        )
         mock_thermal_model.thermal_mass = 1.0
         mock_thermal_model.insulation_quality = 1.0
         mock_thermal_model.get_prediction_horizon.return_value = 12.0
@@ -282,9 +285,7 @@ class TestCalculatePreHeatDecisionIntegration:
 
         # Create mock weather data
         mock_weather_data = MagicMock()
-        mock_weather_data.forecast_hours = [
-            MagicMock(temperature=0.0 - i * 0.3) for i in range(24)
-        ]
+        mock_weather_data.forecast_hours = [MagicMock(temperature=0.0 - i * 0.3) for i in range(24)]
 
         result = predictor_with_history.evaluate_layer(
             nibe_state=mock_nibe_state,
@@ -306,9 +307,7 @@ class TestConfidenceThreshold:
         """Verify LEARNING_CONFIDENCE_THRESHOLD is 0.7."""
         assert LEARNING_CONFIDENCE_THRESHOLD == 0.7
 
-    def test_exactly_at_threshold_uses_learned(
-        self, predictor_with_history
-    ):
+    def test_exactly_at_threshold_uses_learned(self, predictor_with_history):
         """Verify learned params at exactly threshold are used."""
         params_at_threshold = LearnedThermalParameters(
             thermal_mass=1.0,
@@ -332,9 +331,7 @@ class TestConfidenceThreshold:
 
         assert result is not None
 
-    def test_just_below_threshold_falls_back(
-        self, predictor_with_history
-    ):
+    def test_just_below_threshold_falls_back(self, predictor_with_history):
         """Verify learned params just below threshold fall back."""
         params_below_threshold = LearnedThermalParameters(
             thermal_mass=1.0,

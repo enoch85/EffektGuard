@@ -68,7 +68,7 @@ class TestWeatherLayerTempLuxSkip:
 
     def test_temp_lux_active_skips_weather_compensation(self, weather_layer):
         """When temp_lux_active=True, weather compensation should be skipped.
-        
+
         This prevents incorrect offsets when DHW heating causes flow temp to read
         DHW charging temperature (45-60°C) instead of space heating flow.
         """
@@ -142,7 +142,7 @@ class TestWeatherLayerTempLuxSkip:
 
     def test_high_flow_temp_with_temp_lux_active_returns_zero(self, weather_layer):
         """High flow temp during DHW should not produce negative offset.
-        
+
         This was the original bug: flow=54.8°C caused large negative offsets
         because weather comp thought the system was overheating.
         """
@@ -170,7 +170,7 @@ class TestWeatherLayerTempLuxSkip:
 
     def test_high_flow_temp_without_temp_lux_produces_offset(self, weather_layer):
         """High flow temp during normal heating should produce offset.
-        
+
         When temp_lux_active=False but flow is high, weather comp should
         still calculate (this is legitimate overheating, not DHW).
         """
@@ -205,22 +205,22 @@ class TestDecisionEngineTempLuxParameter:
 
         # Just verify the method signature accepts the parameter
         import inspect
+
         sig = inspect.signature(DecisionEngine.calculate_decision)
         param_names = list(sig.parameters.keys())
-        
-        assert "temp_lux_active" in param_names, (
-            "DecisionEngine.calculate_decision() must accept temp_lux_active parameter"
-        )
+
+        assert (
+            "temp_lux_active" in param_names
+        ), "DecisionEngine.calculate_decision() must accept temp_lux_active parameter"
 
     def test_temp_lux_active_has_default_value(self):
         """temp_lux_active parameter should have a default value of False."""
         from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 
         import inspect
+
         sig = inspect.signature(DecisionEngine.calculate_decision)
         param = sig.parameters.get("temp_lux_active")
-        
+
         assert param is not None
-        assert param.default is False, (
-            "temp_lux_active should default to False"
-        )
+        assert param.default is False, "temp_lux_active should default to False"

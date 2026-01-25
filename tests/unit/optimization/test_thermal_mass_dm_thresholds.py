@@ -79,7 +79,9 @@ class TestThermalMassMultipliers:
 
         # Should be identical (1.0× multiplier)
         assert adjusted["warning"] == pytest.approx(base_warning, abs=1)
-        assert adjusted["warning"] == pytest.approx(base_warning * DM_THERMAL_MASS_BUFFER_RADIATOR, abs=1)
+        assert adjusted["warning"] == pytest.approx(
+            base_warning * DM_THERMAL_MASS_BUFFER_RADIATOR, abs=1
+        )
 
     def test_unknown_type_defaults_to_radiator(self, climate_detector):
         """Unknown heating types should default to radiator (safest option)."""
@@ -103,12 +105,12 @@ class TestCriticalThresholdPreservation:
 
         # Stockholm at -30°C (extreme case)
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=-30.0)
-        
+
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         # Warning should be adjusted
         assert adjusted["warning"] < base_thresholds["warning"]
-        
+
         # Critical MUST remain -1500
         assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
         assert adjusted["critical"] == -1500
@@ -128,7 +130,7 @@ class TestRealWorldScenarioPrevention:
 
     def test_prevents_v010_dm_700_overshoot(self, climate_detector):
         """Prevent v0.1.0 scenario: DM -700 allowed on concrete slab.
-        
+
         In v0.1.0, DM -700 was considered "normal" for Stockholm.
         On concrete slab, this caused massive overshoot when sun came out.
         With 1.3× multiplier, -700 should be flagged as WARNING much earlier.
@@ -138,14 +140,14 @@ class TestRealWorldScenarioPrevention:
         # Stockholm at 10°C (mild spring day)
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
         # Base warning is around -340
-        
+
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
-        
+
         # Adjusted warning should be around -442 (-340 * 1.3)
         # This means DM -700 is DEEP into warning/critical territory
-        
+
         assert adjusted["warning"] > -500  # Warning triggers before -500 (e.g. at -442)
-        
+
         # If current DM is -700, it should be well past warning
         current_dm = -700
         assert current_dm < adjusted["warning"]  # -700 < -442 (True)
@@ -178,14 +180,15 @@ class TestRealWorldScenarioPrevention:
         actual_ratio = concrete_thresholds["warning"] / radiator_thresholds["warning"]
         assert actual_ratio == pytest.approx(expected_ratio, abs=0.01)
 
+
 class TestClimateZoneIntegration:
     """Test that thermal mass adjustments work across climate zones."""
 
     def test_arctic_concrete_vs_mild_concrete(self):
         """Test concrete slab adjustments in different climates."""
         arctic_detector = ClimateZoneDetector(latitude=67.85)  # Kiruna
-        mild_detector = ClimateZoneDetector(latitude=55.60)    # Malmö
-        
+        mild_detector = ClimateZoneDetector(latitude=55.60)  # Malmö
+
         arctic_layer = EmergencyLayer(arctic_detector, heating_type="concrete_ufh")
         mild_layer = EmergencyLayer(mild_detector, heating_type="concrete_ufh")
 
@@ -209,12 +212,12 @@ class TestClimateZoneIntegration:
         """Multiplier ratio should be consistent regardless of base threshold magnitude."""
         detector = ClimateZoneDetector(latitude=67.85)  # Kiruna
         layer = EmergencyLayer(detector, heating_type="concrete_ufh")
-        
+
         # Test across wide temp range
         for temp in [10.0, 0.0, -10.0, -30.0]:
             base_thresholds = detector.get_expected_dm_range(temp)
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
-            
+
             ratio = adjusted["warning"] / base_thresholds["warning"]
             assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
@@ -225,7 +228,7 @@ class TestEdgeCases:
     def test_alternative_concrete_naming(self, climate_detector):
         """Test alternative names for concrete slab."""
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
-        
+
         for name in ["concrete_ufh", "concrete_slab"]:
             layer = EmergencyLayer(climate_detector, heating_type=name)
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
@@ -235,7 +238,7 @@ class TestEdgeCases:
     def test_alternative_timber_naming(self, climate_detector):
         """Test alternative names for timber."""
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
-        
+
         for name in ["timber", "timber_ufh"]:
             layer = EmergencyLayer(climate_detector, heating_type=name)
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
@@ -246,9 +249,9 @@ class TestEdgeCases:
         """Empty string should default to radiator."""
         layer = EmergencyLayer(climate_detector, heating_type="")
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
-        
+
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
-        
+
         # Should be 1.0×
         assert adjusted["warning"] == pytest.approx(base_thresholds["warning"], abs=1)
 
@@ -256,11 +259,16 @@ class TestEdgeCases:
         """Both normal_min and normal_max should be adjusted."""
         layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=0.0)
-        
+
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
-        
-        assert adjusted["normal_min"] == pytest.approx(base_thresholds["normal_min"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1)
-        assert adjusted["normal_max"] == pytest.approx(base_thresholds["normal_max"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1)
+
+        assert adjusted["normal_min"] == pytest.approx(
+            base_thresholds["normal_min"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
+        )
+        assert adjusted["normal_max"] == pytest.approx(
+            base_thresholds["normal_max"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

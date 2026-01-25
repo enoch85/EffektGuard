@@ -65,7 +65,9 @@ async def test_startup_pending_arms_aligned_timer(monkeypatch):
     )
 
     fixed_next = datetime(2025, 12, 19, 1, 0, 10, tzinfo=timezone.utc)
-    monkeypatch.setattr(EffektGuardCoordinator, "_calculate_next_aligned_time", lambda self: fixed_next)
+    monkeypatch.setattr(
+        EffektGuardCoordinator, "_calculate_next_aligned_time", lambda self: fixed_next
+    )
 
     hass = _make_minimal_hass()
 
@@ -160,23 +162,31 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
     coordinator._apply_airflow_decision.assert_not_awaited()
     assert result.get("airflow_decision") is not None
 
+
 @pytest.mark.asyncio
 async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
     """Verify that updates happening very close together don't consume the grace period."""
     hass = _make_minimal_hass()
-    
+
     # Mock dependencies
     nibe = MagicMock()
     nibe_data = SimpleNamespace(
-        indoor_temp=21.0, outdoor_temp=5.0, flow_temp=30.0, degree_minutes=-300.0,
-        compressor_hz=40, timestamp=datetime.now(timezone.utc), power_kw=1.0,
-        is_hot_water=False, dhw_top_temp=45.0, power_sensor_entity="sensor.power",
-        dhw_amount_minutes=10
+        indoor_temp=21.0,
+        outdoor_temp=5.0,
+        flow_temp=30.0,
+        degree_minutes=-300.0,
+        compressor_hz=40,
+        timestamp=datetime.now(timezone.utc),
+        power_kw=1.0,
+        is_hot_water=False,
+        dhw_top_temp=45.0,
+        power_sensor_entity="sensor.power",
+        dhw_amount_minutes=10,
     )
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
     nibe.set_curve_offset = AsyncMock(return_value=True)
     nibe._power_sensor_entity = "sensor.power"
-    
+
     engine = MagicMock()
     engine.calculate_decision.return_value = OptimizationDecision(
         offset=1.0, reasoning="Test", layers=[]
@@ -189,31 +199,34 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
     engine.climate_detector.zone_info = zone_info
     engine.emergency_layer = MagicMock()
     engine.price = MagicMock()
-    
+
     effect = MagicMock()
     effect.async_save = AsyncMock()
     effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
-    
+
     gespot = MagicMock()
     gespot.get_prices = AsyncMock(return_value=None)
-    
+
     weather = MagicMock()
     weather.get_forecast = AsyncMock(return_value=None)
-    
+
     # Mock Store to avoid filesystem access
     with monkeypatch.context() as m:
-        m.setattr("custom_components.effektguard.coordinator.Store.async_load", AsyncMock(return_value=None))
+        m.setattr(
+            "custom_components.effektguard.coordinator.Store.async_load",
+            AsyncMock(return_value=None),
+        )
         m.setattr("custom_components.effektguard.coordinator.Store.async_save", AsyncMock())
-        
+
         # Mock dt_util.now to control time
         start_time = datetime(2025, 12, 19, 4, 0, 0, tzinfo=timezone.utc)
         current_time = start_time
-        
+
         def mock_now():
             return current_time
-            
+
         m.setattr(dt_util, "now", mock_now)
-        
+
         coordinator = EffektGuardCoordinator(
             hass=hass,
             nibe_adapter=nibe,
@@ -223,21 +236,21 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
             effect_manager=effect,
             entry=MagicMock(data={"enable_optimization": True}, options={}),
         )
-        
+
         # Update 1: Startup (0s)
         await coordinator._async_update_data()
         assert coordinator._startup_update_count == 0  # Lockout active (60s)
-        
+
         # Update 2: 1 second later (e.g. power sensor available)
         current_time = start_time + timedelta(seconds=1)
         await coordinator._async_update_data()
         assert coordinator._startup_update_count == 0  # Still lockout
-        
+
         # Update 3: 30 seconds later (still in lockout)
         current_time = start_time + timedelta(seconds=30)
         await coordinator._async_update_data()
         assert coordinator._startup_update_count == 0  # Still lockout
-        
+
         # Update 4: 2 minutes later (lockout passed, first observation)
         current_time = start_time + timedelta(minutes=2)
         await coordinator._async_update_data()

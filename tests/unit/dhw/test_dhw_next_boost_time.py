@@ -153,7 +153,9 @@ def test_dhw_adequate_has_next_time(scheduler_with_climate, current_time):
     )
 
     assert decision.should_heat is False
-    assert "DHW_ADEQUATE" in decision.priority_reason  # Can be DHW_ADEQUATE or DHW_ADEQUATE_WAITING_CHEAP_*
+    assert (
+        "DHW_ADEQUATE" in decision.priority_reason
+    )  # Can be DHW_ADEQUATE or DHW_ADEQUATE_WAITING_CHEAP_*
     assert decision.recommended_start_time is not None
     assert decision.recommended_start_time > current_time
     # Should estimate when DHW will cool (constrained by DHW_SCHEDULING_WINDOW_MIN/MAX)

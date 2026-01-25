@@ -31,25 +31,19 @@ class TestCompressorHzPowerEstimation:
 
     def test_zero_hz_returns_standby_power(self, effect_manager):
         """Test that 0 Hz returns standby power (0.1 kW)."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=0, outdoor_temp=5.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=0, outdoor_temp=5.0)
         assert power == POWER_STANDBY_KW  # Standby power
 
     def test_minimum_compressor_20hz(self, effect_manager):
         """Test power estimation at minimum compressor frequency (20 Hz)."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=20, outdoor_temp=5.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=20, outdoor_temp=5.0)
         # At 20 Hz: base ~1.5-2.0 kW
         assert power >= COMPRESSOR_POWER_MIN_KW
         assert power <= 2.5
 
     def test_mid_range_compressor_50hz(self, effect_manager):
         """Test power estimation at mid-range frequency (50 Hz)."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=50, outdoor_temp=0.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=50, outdoor_temp=0.0)
         # At 50 Hz with 0°C (MILD factor 1.0):
         # base = 1.5 + (50-20) * (5.0/100) = 3.0 kW
         assert power >= 2.5
@@ -57,9 +51,7 @@ class TestCompressorHzPowerEstimation:
 
     def test_maximum_compressor_80hz(self, effect_manager):
         """Test power estimation at maximum frequency (80 Hz)."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=80, outdoor_temp=-10.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=80, outdoor_temp=-10.0)
         # At 80 Hz with -10°C (COLD factor 1.2):
         # base = 1.5 + (80-20) * (5.0/100) = 4.5 kW
         # result = 4.5 * 1.2 = 5.4 kW
@@ -79,9 +71,7 @@ class TestCompressorHzPowerEstimation:
 
     def test_extreme_cold_applies_max_factor(self, effect_manager):
         """Test that extreme cold (<-15°C) applies maximum temp factor."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=50, outdoor_temp=-20.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=50, outdoor_temp=-20.0)
         # Extreme cold applies 1.3x factor
         # Base at 50 Hz: 1.5 + (50-20)*0.05 = 3.0 kW
         # With 1.3x = 3.9 kW
@@ -90,9 +80,7 @@ class TestCompressorHzPowerEstimation:
 
     def test_mild_weather_no_temp_factor(self, effect_manager):
         """Test that mild weather (>0°C) applies no temp factor."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=50, outdoor_temp=10.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=50, outdoor_temp=10.0)
         # Mild weather: temp_factor = 1.0, so base power only
         # Base at 50 Hz: ~3.5-4.5 kW
         assert power >= 3.0
@@ -100,9 +88,7 @@ class TestCompressorHzPowerEstimation:
 
     def test_zero_hz_compressor_returns_standby(self, effect_manager):
         """Test that 0 Hz compressor returns standby power."""
-        power = effect_manager.estimate_power_from_compressor(
-            compressor_hz=0, outdoor_temp=5.0
-        )
+        power = effect_manager.estimate_power_from_compressor(compressor_hz=0, outdoor_temp=5.0)
         assert power == POWER_STANDBY_KW
 
 

@@ -183,7 +183,9 @@ class TestSustainedOperationWarnings:
 
             # Should have info about sustained space heating operation (changed from warning to info)
             info_calls = [
-                str(call) for call in mock_logger.info.call_args_list if "space" in str(call).lower()
+                str(call)
+                for call in mock_logger.info.call_args_list
+                if "space" in str(call).lower()
             ]
             assert len(info_calls) > 0
 

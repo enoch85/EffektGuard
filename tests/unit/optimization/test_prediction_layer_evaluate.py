@@ -34,9 +34,7 @@ def mock_weather_data():
     """Create mock weather data with forecast."""
     weather = MagicMock()
     # 24 hours of forecast, starting at 0°C and dropping to -10°C
-    weather.forecast_hours = [
-        MagicMock(temperature=0.0 - (i * 0.4)) for i in range(24)
-    ]
+    weather.forecast_hours = [MagicMock(temperature=0.0 - (i * 0.4)) for i in range(24)]
     return weather
 
 
@@ -103,9 +101,7 @@ class TestEvaluateLayerInsufficientData:
 class TestEvaluateLayerNoWeatherData:
     """Test evaluate_layer when weather data unavailable."""
 
-    def test_no_weather_data_returns_zero(
-        self, predictor, mock_nibe_state, mock_thermal_model
-    ):
+    def test_no_weather_data_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When weather_data is None, returns no pre-heat."""
         # Add enough observations
         for i in range(100):
@@ -130,9 +126,7 @@ class TestEvaluateLayerNoWeatherData:
         assert result.weight == 0.0
         assert "No weather forecast" in result.reason
 
-    def test_empty_forecast_returns_zero(
-        self, predictor, mock_nibe_state, mock_thermal_model
-    ):
+    def test_empty_forecast_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When forecast_hours is empty, returns no pre-heat."""
         # Add enough observations
         for i in range(100):

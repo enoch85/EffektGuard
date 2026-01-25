@@ -224,9 +224,7 @@ class TestEvaluateLayerThermalMassWeight:
         expected_weight = min(LAYER_WEIGHT_WEATHER_PREDICTION * 1.5, WEATHER_WEIGHT_CAP)
         assert result.weight == expected_weight
 
-    def test_light_thermal_mass_lower_weight(
-        self, mock_nibe_state, mock_weather_data_dropping
-    ):
+    def test_light_thermal_mass_lower_weight(self, mock_nibe_state, mock_weather_data_dropping):
         """Light thermal mass (0.5) gets lower weight."""
         light_layer = WeatherPredictionLayer(thermal_mass=0.5)
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}

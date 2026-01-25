@@ -4,7 +4,6 @@ Tests the insulation_quality property that bridges the old ThermalModel API
 with the new adaptive learning approach.
 """
 
-
 from custom_components.effektguard.optimization.adaptive_learning import (
     AdaptiveThermalModel,
 )

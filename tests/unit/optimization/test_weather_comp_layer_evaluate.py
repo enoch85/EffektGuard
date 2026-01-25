@@ -87,9 +87,7 @@ class TestWeatherCompensationLayerEvaluate:
         """Test that disabled feature returns zero offset/weight."""
         layer = self._create_layer()
         nibe_state = MockNibeState()
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -142,9 +140,7 @@ class TestWeatherCompensationLayerEvaluate:
         """Test that result is WeatherCompensationLayerDecision with diagnostic fields."""
         layer = self._create_layer()
         nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=35.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -166,9 +162,7 @@ class TestWeatherCompensationLayerEvaluate:
         layer = self._create_layer()
         # Low outdoor temp should calculate higher optimal flow temp
         nibe_state = MockNibeState(outdoor_temp=-10.0, flow_temp=30.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-10.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-10.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -187,12 +181,8 @@ class TestWeatherCompensationLayerEvaluate:
         layer = self._create_layer()
         nibe_state_cold = MockNibeState(outdoor_temp=-15.0, flow_temp=35.0)
         nibe_state_warm = MockNibeState(outdoor_temp=10.0, flow_temp=25.0)
-        weather_cold = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-15.0)]
-        )
-        weather_warm = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=10.0)]
-        )
+        weather_cold = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-15.0)])
+        weather_warm = MockWeatherData(forecast_hours=[MockForecastHour(temperature=10.0)])
 
         result_cold = layer.evaluate_layer(
             nibe_state=nibe_state_cold,
@@ -233,9 +223,7 @@ class TestWeatherCompensationDeferral:
         """Test that no deferral occurs when DM is positive."""
         layer = self._create_layer()
         nibe_state = MockNibeState(degree_minutes=0.0, outdoor_temp=-5.0, flow_temp=35.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -255,9 +243,7 @@ class TestWeatherCompensationDeferral:
             outdoor_temp=-5.0,
             flow_temp=35.0,
         )
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -278,9 +264,7 @@ class TestWeatherCompensationDeferral:
             outdoor_temp=-5.0,
             flow_temp=35.0,
         )
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
@@ -297,9 +281,7 @@ class TestWeatherCompensationDeferral:
     def test_deferral_reduces_weight(self):
         """Test that deferral actually reduces the final weight."""
         layer = self._create_layer()
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         # No debt
         nibe_no_debt = MockNibeState(degree_minutes=0.0, outdoor_temp=-5.0, flow_temp=35.0)
@@ -355,9 +337,7 @@ class TestWeatherCompensationUnusualWeather:
         )
 
         nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=35.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         # Provide a callable for get_current_datetime to avoid dt_util import
         mock_datetime = datetime(2024, 1, 15, 12, 0, 0)
@@ -399,9 +379,7 @@ class TestWeatherCompensationUnusualWeather:
         )
 
         nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=35.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         mock_datetime = datetime(2024, 1, 15, 12, 0, 0)
         result = layer.evaluate_layer(
@@ -438,9 +416,7 @@ class TestWeatherCompensationUserWeight:
         )
 
         nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=35.0)
-        weather_data = MockWeatherData(
-            forecast_hours=[MockForecastHour(temperature=-5.0)]
-        )
+        weather_data = MockWeatherData(forecast_hours=[MockForecastHour(temperature=-5.0)])
 
         result_half = layer_half.evaluate_layer(
             nibe_state=nibe_state,

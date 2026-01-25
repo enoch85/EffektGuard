@@ -314,7 +314,9 @@ class TestRealWorldScenario:
         ), f"Weather/preheat should be considered. Active layers: {active_layer_names}"
 
         # Price layer should be active
-        assert "Spot Price" in active_layer_names, f"Price layer should be active. Active layers: {active_layer_names}"
+        assert (
+            "Spot Price" in active_layer_names
+        ), f"Price layer should be active. Active layers: {active_layer_names}"
 
         # Expected range: Price optimization may win if not urgent
         # If offset is negative: cost optimization dominant (correct when not urgent)

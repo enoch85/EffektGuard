@@ -4,7 +4,6 @@ Validates universal flow temperature formula, heat transfer method, and UFH adju
 against real-world production data.
 """
 
-
 from custom_components.effektguard.const import (
     UFH_FLOW_REDUCTION_CONCRETE,
     UFH_FLOW_REDUCTION_TIMBER,

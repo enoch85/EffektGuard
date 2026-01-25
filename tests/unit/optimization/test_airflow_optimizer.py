@@ -96,16 +96,16 @@ class TestCompressorThresholds:
         assert threshold == AIRFLOW_COMPRESSOR_BASE_THRESHOLD
 
     def test_threshold_at_minus_10c(self):
-        """At -10°C, threshold should be 75%."""
+        """At -10°C, threshold should be 86%."""
         threshold = minimum_compressor_threshold(-10.0)
-        # 50 + (-2.5 * -10) = 50 + 25 = 75
-        assert threshold == 75.0
+        # 61 + (-2.5 * -10) = 61 + 25 = 86
+        assert threshold == 86.0
 
     def test_threshold_at_minus_5c(self):
-        """At -5°C, threshold should be ~62.5%."""
+        """At -5°C, threshold should be ~73.5%."""
         threshold = minimum_compressor_threshold(-5.0)
-        # 50 + (-2.5 * -5) = 50 + 12.5 = 62.5
-        assert 62 < threshold < 63
+        # 61 + (-2.5 * -5) = 61 + 12.5 = 73.5
+        assert 73 < threshold < 74
 
 
 class TestNetThermalGain:
@@ -188,7 +188,9 @@ class TestEvaluateAirflow:
         decision = evaluate_airflow(state)
 
         assert decision.mode == FlowMode.STANDARD
-        assert "near target" in decision.reason.lower() or "no enhancement" in decision.reason.lower()
+        assert (
+            "near target" in decision.reason.lower() or "no enhancement" in decision.reason.lower()
+        )
 
     def test_no_enhance_already_warming(self):
         """Should not enhance when indoor temp already rising."""
