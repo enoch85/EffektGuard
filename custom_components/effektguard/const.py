@@ -1054,8 +1054,10 @@ AIRFLOW_INDOOR_DEFICIT_MIN: Final = 0.2  # °C - Minimum deficit to trigger enha
 # Compressor threshold calculation
 # Minimum compressor % needed for enhanced flow to be beneficial
 # Colder outside → need higher compressor output to justify extra ventilation
-# Formula: threshold = 50 + slope * outdoor_temp (for outdoor_temp < 0)
-AIRFLOW_COMPRESSOR_BASE_THRESHOLD: Final = 50.0  # % base threshold at 0°C
+# Formula: threshold = 61 + slope * outdoor_temp (for outdoor_temp < 0)
+# Base raised from 50% to 61% (81 Hz) based on real-world observations showing
+# enhancement at lower Hz caused cooling during periods when pump was struggling
+AIRFLOW_COMPRESSOR_BASE_THRESHOLD: Final = 61.0  # % base threshold at 0°C (81 Hz)
 AIRFLOW_COMPRESSOR_SLOPE: Final = -2.5  # Increase by 2.5% per degree below 0°C
 
 # Temperature deficit thresholds for duration calculation (°C)
@@ -1077,7 +1079,7 @@ AIRFLOW_DURATION_COOL_CAP: Final = 30  # minutes cap when outdoor < -5°C
 
 # Indoor temperature trend threshold for enhancement decision
 AIRFLOW_TREND_WARMING_THRESHOLD: Final = 0.1  # °C/h - already warming, let stabilize
-AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.15  # °C/h - cooling despite enhanced = stop
+AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.10  # °C/h - cooling despite enhanced = stop
 
 # Configuration keys
 CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"
