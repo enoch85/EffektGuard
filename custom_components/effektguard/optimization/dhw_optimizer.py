@@ -927,11 +927,7 @@ class IntelligentDHWScheduler:
                                 "Next non-peak: %s",
                                 current_dhw_temp,
                                 hours_until_target,
-                                (
-                                    next_non_peak.strftime("%H:%M")
-                                    if next_non_peak
-                                    else "unknown"
-                                ),
+                                (next_non_peak.strftime("%H:%M") if next_non_peak else "unknown"),
                             )
                             return DHWScheduleDecision(
                                 should_heat=False,
@@ -1921,9 +1917,7 @@ class IntelligentDHWScheduler:
                 return period.start_time
 
         # No non-peak period found in forecast - try again in 2 hours
-        _LOGGER.warning(
-            "No non-peak period found in price forecast - will retry in 2 hours"
-        )
+        _LOGGER.warning("No non-peak period found in price forecast - will retry in 2 hours")
         return current_time + timedelta(hours=2)
 
     def _predict_dm_at_time(
