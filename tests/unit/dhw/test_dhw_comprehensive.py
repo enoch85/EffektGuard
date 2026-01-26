@@ -514,7 +514,7 @@ class TestMaximumWaitEnforcement:
         assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
     def test_max_wait_deferred_during_peak(self):
-        """RULE 4: Max 36h wait does NOT override peak pricing."""
+        """RULE 2.6: NEVER heat at PEAK prices (even if max wait exceeded)."""
         scheduler = create_dhw_scheduler()
 
         # Even with max wait exceeded, peak pricing blocks
@@ -525,14 +525,14 @@ class TestMaximumWaitEnforcement:
             indoor_temp=DEFAULT_INDOOR_TEMP,
             target_indoor_temp=DEFAULT_INDOOR_TEMP,
             outdoor_temp=0.0,
-            price_classification="peak",  # Peak pricing (even worse!)
+            price_classification="peak",  # Peak pricing - NEVER heat
             current_time=datetime(2025, 10, 20, 12, 0),
             hours_since_last_dhw=36.1,
         )
 
-        # Should definitely NOT heat during peak
+        # Should definitely NOT heat during peak - new PEAK avoidance rule
         assert decision.should_heat is False
-        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
+        assert "DHW_PEAK_AVOIDED" in decision.priority_reason
 
     def test_max_wait_under_36_hours_no_heating(self):
         """DHW adequate at 48°C, under 36h wait, no heating needed."""

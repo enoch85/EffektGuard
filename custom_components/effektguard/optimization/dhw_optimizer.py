@@ -631,6 +631,7 @@ class IntelligentDHWScheduler:
         hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
         dhw_amount_minutes: float | None = None,  # Current hot water amount from sensor
+        weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
     ) -> DHWScheduleDecision:
         """Decide if DHW heating should start based on priority rules.
 
@@ -653,6 +654,8 @@ class IntelligentDHWScheduler:
                 instead of triggering immediately. Matches space heating behavior.
             dhw_amount_minutes: Current hot water amount from NIBE sensor (minutes).
                 When scheduling is active and amount >= target, stop heating.
+            weather_forecast: Optional list of WeatherForecastHour for predictive pre-heating.
+                Used to anticipate cold periods that may cause thermal debt blocking.
 
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
@@ -909,7 +912,37 @@ class IntelligentDHWScheduler:
                                 recommended_start_time=optimal_window.start_time,
                             )
                     else:
-                        # No optimal window or not worth waiting - heat NOW (priority)
+                        # No optimal window or not worth waiting
+                        # BUT: Never heat at PEAK prices (unless critically low)
+                        if (
+                            price_classification == "peak"
+                            and current_dhw_temp >= DHW_SAFETY_CRITICAL
+                        ):
+                            next_non_peak = self._find_next_non_peak_window(
+                                current_time, price_periods
+                            )
+                            _LOGGER.warning(
+                                "DHW scheduled deadline approaching but PEAK price - deferring. "
+                                "Temp: %.1f°C, deadline: %.1fh away. May miss scheduled demand. "
+                                "Next non-peak: %s",
+                                current_dhw_temp,
+                                hours_until_target,
+                                (
+                                    next_non_peak.strftime("%H:%M")
+                                    if next_non_peak
+                                    else "unknown"
+                                ),
+                            )
+                            return DHWScheduleDecision(
+                                should_heat=False,
+                                priority_reason="DHW_PEAK_AVOIDED_SCHEDULED",
+                                target_temp=self.user_target_temp,
+                                max_runtime_minutes=0,
+                                abort_conditions=[],
+                                recommended_start_time=next_non_peak,
+                            )
+
+                        # Heat NOW (priority) - not PEAK price
                         if optimal_window:
                             # Get current price for logging
                             # QuarterPeriod spans 15 minutes from start_time
@@ -1151,6 +1184,26 @@ class IntelligentDHWScheduler:
                     f"indoor_temp < {target_indoor_temp - 0.5}",
                 ],
                 recommended_start_time=None,  # Heating now - no future time needed
+            )
+
+        # === RULE 2.6: NEVER HEAT AT PEAK PRICES ===
+        # If we reach here, DHW temp >= safety minimum (30°C) - safe to defer
+        # Exception: Critical safety (< 20°C) already handled by RULE 3 above
+        if price_classification == "peak" and current_dhw_temp >= DHW_SAFETY_CRITICAL:
+            next_non_peak = self._find_next_non_peak_window(current_time, price_periods)
+            _LOGGER.info(
+                "DHW deferred: PEAK pricing active, temp %.1f°C is safe. "
+                "Next non-peak opportunity: %s",
+                current_dhw_temp,
+                next_non_peak.strftime("%H:%M") if next_non_peak else "unknown",
+            )
+            return DHWScheduleDecision(
+                should_heat=False,
+                priority_reason="DHW_PEAK_AVOIDED",
+                target_temp=self.user_target_temp,
+                max_runtime_minutes=0,
+                abort_conditions=[],
+                recommended_start_time=next_non_peak,
             )
 
         # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
@@ -1403,6 +1456,41 @@ class IntelligentDHWScheduler:
                         ],
                         recommended_start_time=None,  # Heating now - no future time needed
                     )
+
+        # === RULE 4.7: PREDICTIVE PRE-HEATING TO AVOID PEAK ===
+        # If we're in cheap/normal pricing AND an upcoming PEAK period would force us
+        # to heat during peak (due to predicted thermal debt + DHW cooling), pre-heat NOW
+        if price_classification in ("very_cheap", "cheap", "normal"):
+            should_preheat, preheat_reason = self._should_preheat_to_avoid_peak(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                current_dm=thermal_debt_dm,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                weather_forecast=weather_forecast,
+                dm_block_threshold=dm_block_threshold,
+            )
+
+            if should_preheat:
+                _LOGGER.info(
+                    "DHW predictive pre-heating: %s (temp: %.1f°C, DM: %.0f, price: %s)",
+                    preheat_reason,
+                    current_dhw_temp,
+                    thermal_debt_dm,
+                    price_classification,
+                )
+                return DHWScheduleDecision(
+                    should_heat=True,
+                    priority_reason=preheat_reason,
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                    abort_conditions=[
+                        f"thermal_debt < {dm_abort_threshold:.0f}",
+                        f"indoor_temp < {target_indoor_temp - 0.5}",
+                        f"dhw_temp >= {self.user_target_temp}",
+                    ],
+                    recommended_start_time=None,  # Heating now
+                )
 
         # === RULE 5: NORMAL PRICE OPTIMIZATION (LANE 2) ===
         # This is LANE 2 behavior - normal price optimization when:
@@ -1788,6 +1876,216 @@ class IntelligentDHWScheduler:
         else:
             return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
 
+    def _find_next_non_peak_window(
+        self,
+        current_time: datetime,
+        price_periods: list | None,
+    ) -> datetime | None:
+        """Find the next time period that is NOT peak pricing.
+
+        Used to defer DHW heating during PEAK prices to the next non-peak window.
+
+        Args:
+            current_time: Current datetime
+            price_periods: List of QuarterPeriod with price data
+
+        Returns:
+            Start time of next non-peak period, or fallback time if no data
+        """
+        if not price_periods or not self.price_analyzer:
+            # No price data - try again in 1 hour (conservative fallback)
+            return current_time + timedelta(hours=1)
+
+        from ..const import QuarterClassification
+
+        # Search through upcoming periods for the first non-peak
+        for period in price_periods:
+            if period.start_time <= current_time:
+                continue
+
+            # Get classification for this quarter
+            quarter = period.quarter_of_day
+            is_tomorrow = period.start_time.date() > current_time.date()
+
+            if is_tomorrow:
+                classification = self.price_analyzer.get_tomorrow_classification(quarter)
+            else:
+                classification = self.price_analyzer.get_current_classification(quarter)
+
+            if classification != QuarterClassification.PEAK:
+                _LOGGER.debug(
+                    "Next non-peak window at %s (classification: %s)",
+                    period.start_time.strftime("%H:%M"),
+                    classification.value,
+                )
+                return period.start_time
+
+        # No non-peak period found in forecast - try again in 2 hours
+        _LOGGER.warning(
+            "No non-peak period found in price forecast - will retry in 2 hours"
+        )
+        return current_time + timedelta(hours=2)
+
+    def _predict_dm_at_time(
+        self,
+        target_time: datetime,
+        current_time: datetime,
+        current_dm: float,
+        outdoor_temp: float,
+        weather_forecast: list | None,
+    ) -> float:
+        """Predict what DM (thermal debt) will be at a future time.
+
+        Uses weather forecast to estimate DM trajectory based on outdoor temperatures
+        and heating system recovery rates.
+
+        Args:
+            target_time: Future datetime to predict DM for
+            current_time: Current datetime
+            current_dm: Current degree minutes value
+            outdoor_temp: Current outdoor temperature
+            weather_forecast: List of WeatherForecastHour with temperature predictions
+
+        Returns:
+            Predicted DM value at target_time
+        """
+        hours_ahead = (target_time - current_time).total_seconds() / 3600
+
+        if hours_ahead <= 0:
+            return current_dm
+
+        # Get outdoor temp at target time from forecast, or use current
+        predicted_outdoor_temp = outdoor_temp
+        if weather_forecast:
+            for forecast_hour in weather_forecast:
+                if hasattr(forecast_hour, "datetime") and hasattr(forecast_hour, "temperature"):
+                    if forecast_hour.datetime >= target_time:
+                        predicted_outdoor_temp = forecast_hour.temperature
+                        break
+
+        # DM recovery rate depends on outdoor temp (from thermal_layer.py constants)
+        # Mild (>5°C): +40 DM/hour toward 0
+        # Cold (0-5°C): +30 DM/hour toward 0
+        # Very cold (<0°C): +20 DM/hour toward 0 (or negative if heating can't keep up)
+        if predicted_outdoor_temp > 5:
+            recovery_rate = 40.0  # DM per hour toward 0
+        elif predicted_outdoor_temp > 0:
+            recovery_rate = 30.0
+        else:
+            # Very cold: system may struggle, use lower recovery or even decline
+            # If outdoor is very cold and current DM is already negative,
+            # assume DM will stay negative or get worse
+            recovery_rate = 20.0
+            if current_dm < -500 and predicted_outdoor_temp < -5:
+                # Severe cold - DM likely to worsen
+                recovery_rate = -10.0  # DM getting worse
+
+        # Simple linear prediction toward 0 (or away if very cold)
+        if recovery_rate > 0:
+            # Recovery toward 0
+            if current_dm < 0:
+                predicted_dm = min(0, current_dm + (recovery_rate * hours_ahead))
+            else:
+                predicted_dm = max(0, current_dm - (recovery_rate * hours_ahead))
+        else:
+            # DM getting worse (very cold weather)
+            predicted_dm = current_dm + (recovery_rate * hours_ahead)
+
+        return predicted_dm
+
+    def _should_preheat_to_avoid_peak(
+        self,
+        current_time: datetime,
+        current_dhw_temp: float,
+        current_dm: float,
+        outdoor_temp: float,
+        price_periods: list | None,
+        weather_forecast: list | None,
+        dm_block_threshold: float,
+    ) -> tuple[bool, str]:
+        """Check if we should pre-heat DHW now to avoid being forced into PEAK later.
+
+        Looks ahead at price forecast to identify PEAK periods, then estimates whether
+        DHW would be blocked by thermal debt during hours preceding those peaks.
+        If so, recommends pre-heating NOW during cheaper prices.
+
+        Args:
+            current_time: Current datetime
+            current_dhw_temp: Current DHW temperature
+            current_dm: Current degree minutes value
+            outdoor_temp: Current outdoor temperature
+            price_periods: Price forecast periods
+            weather_forecast: Weather forecast for temperature predictions
+            dm_block_threshold: DM threshold below which DHW is blocked
+
+        Returns:
+            Tuple of (should_preheat, reason_string)
+        """
+        if not price_periods or not self.price_analyzer:
+            return False, ""
+
+        from ..const import QuarterClassification
+
+        # Find upcoming PEAK periods in next 24 hours
+        peak_periods = []
+        for period in price_periods:
+            if period.start_time <= current_time:
+                continue
+            if period.start_time > current_time + timedelta(hours=24):
+                break
+
+            # Get classification for this quarter
+            quarter = period.quarter_of_day
+            is_tomorrow = period.start_time.date() > current_time.date()
+
+            if is_tomorrow:
+                classification = self.price_analyzer.get_tomorrow_classification(quarter)
+            else:
+                classification = self.price_analyzer.get_current_classification(quarter)
+
+            if classification == QuarterClassification.PEAK:
+                peak_periods.append(period)
+
+        if not peak_periods:
+            return False, ""
+
+        # Check each PEAK period
+        for peak in peak_periods:
+            hours_until_peak = (peak.start_time - current_time).total_seconds() / 3600
+
+            # Estimate: will DHW be blocked by thermal debt 2 hours before this peak?
+            check_time = peak.start_time - timedelta(hours=2)
+            if check_time <= current_time:
+                check_time = current_time + timedelta(minutes=30)
+
+            predicted_dm = self._predict_dm_at_time(
+                target_time=check_time,
+                current_time=current_time,
+                current_dm=current_dm,
+                outdoor_temp=outdoor_temp,
+                weather_forecast=weather_forecast,
+            )
+
+            # Will DHW be cold by then?
+            predicted_dhw_temp = current_dhw_temp - (hours_until_peak * DHW_COOLING_RATE)
+
+            dm_will_block = predicted_dm < dm_block_threshold
+            dhw_will_need_heating = predicted_dhw_temp < DHW_SAFETY_MIN
+
+            if dm_will_block and dhw_will_need_heating:
+                _LOGGER.info(
+                    "PEAK avoidance: Pre-heating recommended. PEAK at %s (%.1fh away), "
+                    "predicted DM=%.0f (threshold=%.0f), predicted DHW=%.1f°C",
+                    peak.start_time.strftime("%H:%M"),
+                    hours_until_peak,
+                    predicted_dm,
+                    dm_block_threshold,
+                    predicted_dhw_temp,
+                )
+                return True, f"PEAK_AVOIDANCE_PREHEAT_{hours_until_peak:.0f}H"
+
+        return False, ""
+
     def format_planning_summary(
         self,
         recommendation: str,
@@ -1923,6 +2221,7 @@ class IntelligentDHWScheduler:
         weather_current_temp: float | None = None,
         price_data=None,  # PriceData for volatility calculation
         dhw_amount_minutes: float | None = None,  # Hot water amount for scheduled check
+        weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
     ) -> DHWRecommendation:
         """Calculate complete DHW heating recommendation.
 
@@ -2024,6 +2323,7 @@ class IntelligentDHWScheduler:
             hours_since_last_dhw=hours_since_last_dhw,
             is_volatile=is_volatile,
             dhw_amount_minutes=dhw_amount_minutes,
+            weather_forecast=weather_forecast,
         )
 
         # Get scheduled target for amount tracking

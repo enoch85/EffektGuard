@@ -233,9 +233,12 @@ def test_dhw_heats_priority_when_not_enough_time():
         dhw_amount_minutes=9.0,
     )
 
-    # Assert: Should heat NOW (not enough time to wait)
-    assert decision.should_heat is True
-    assert "PRIORITY" in decision.priority_reason
+    # Assert: With PEAK pricing, we NEVER heat - even if deadline approaching
+    # User explicitly requested: "NEVER heat at PEAK prices"
+    # The system logs a warning that scheduled demand may be missed
+    assert decision.should_heat is False
+    assert "DHW_PEAK_AVOIDED_SCHEDULED" in decision.priority_reason
+    assert decision.recommended_start_time is not None  # Should suggest next non-peak
 
 
 def test_dhw_adequate_temp_continues_normal_rules():

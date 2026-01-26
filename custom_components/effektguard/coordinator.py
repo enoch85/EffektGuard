@@ -1369,6 +1369,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get DHW amount from NIBE state for scheduled amount check (RULE 0)
         dhw_amount_minutes = nibe_data.dhw_amount_minutes if nibe_data else None
 
+        # Get weather forecast for predictive pre-heating
+        weather_forecast = None
+        if weather_data and hasattr(weather_data, "forecast_hours"):
+            weather_forecast = weather_data.forecast_hours
+
         # Call pure logic in dhw_optimizer (volatility calculated internally)
         result = self.dhw_optimizer.calculate_recommendation(
             current_dhw_temp=current_dhw_temp,
@@ -1386,6 +1391,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             weather_current_temp=weather_current_temp,
             price_data=price_data,
             dhw_amount_minutes=dhw_amount_minutes,
+            weather_forecast=weather_forecast,
         )
 
         return result
