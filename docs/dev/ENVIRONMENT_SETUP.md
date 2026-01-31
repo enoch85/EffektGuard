@@ -66,9 +66,38 @@ Key dependencies:
 - Black formatter (line length 100)
 - Type checking tools
 
-## Dev Container
+## GitHub Codespaces (Option 1: Cloud)
 
+Use this option if you want a cloud-hosted development environment.
+Codespaces already runs inside a container, so you do not use the Dev Containers menu.
+
+1. Create a Codespace from the repository.
+2. Open the workspace and wait for it to finish starting.
+3. Run the setup script:
+
+```bash
+bash scripts/setup_dev.sh
+```
+
+4. Activate the virtual environment when needed:
+
+```bash
+source .venv/bin/activate
+```
+
+## Dev Container (Option 2: Local Docker)
+
+Use this option if you want a local containerized environment in VS Code.
 This project includes a dev container configuration for consistent development environments.
+
+### VS Code
+
+1. Install the "Dev Containers" extension.
+2. Open the project folder in VS Code.
+3. Run "Dev Containers: Reopen in Container".
+
+The container will automatically run the setup script to create `.venv` and install test
+dependencies.
 
 The container runs:
 - Ubuntu 24.04.2 LTS
