@@ -58,6 +58,7 @@ class EffektGuardSensorEntityDescription:
 
     # EntityDescription fields required by Home Assistant base entity
     translation_key: str | None = None
+    translation_placeholders: dict[str, str] | None = None
     has_entity_name: bool = False
     entity_registry_enabled_default: bool = True
     entity_registry_visible_default: bool = True

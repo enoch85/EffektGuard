@@ -48,6 +48,7 @@ class EffektGuardSwitchEntityDescription:
     icon: str | None = None
     device_class: str | None = None
     translation_key: str | None = None
+    translation_placeholders: dict[str, str] | None = None
     has_entity_name: bool = False
     entity_registry_enabled_default: bool = True
     entity_registry_visible_default: bool = True
