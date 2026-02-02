@@ -4,6 +4,7 @@ Feature enable/disable switches for optimization features.
 """
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
@@ -30,6 +31,7 @@ from .models import HeatPumpModelRegistry
 _LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, kw_only=True)
 class EffektGuardSwitchEntityDescription(SwitchEntityDescription):
     """Describes EffektGuard switch entity."""
 

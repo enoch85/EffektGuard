@@ -6,6 +6,7 @@ thermal debt, and system performance.
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -32,6 +33,7 @@ from .coordinator import EffektGuardCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, kw_only=True)
 class EffektGuardSensorEntityDescription(SensorEntityDescription):
     """Describes EffektGuard sensor entity."""
 
