@@ -16,10 +16,9 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower, UnitOfTemperature
+from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -56,6 +55,12 @@ class EffektGuardSensorEntityDescription:
     suggested_unit_of_measurement: str | None = None
     last_reset: datetime | None = None
     options: list[str] | None = None
+
+    # EntityDescription fields required by Home Assistant base entity
+    translation_key: str | None = None
+    has_entity_name: bool = False
+    entity_registry_enabled_default: bool = True
+    entity_registry_visible_default: bool = True
 
     # EffektGuard-specific field
     value_fn: Callable[[EffektGuardCoordinator], float | str | None] | None = None
@@ -401,10 +406,11 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
+class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity, RestoreEntity):
     """EffektGuard diagnostic sensor with state restoration."""
 
     entity_description: EffektGuardSensorEntityDescription
+    coordinator: EffektGuardCoordinator
     _attr_has_entity_name = True
     _restored_value: float | None = None
 
@@ -475,7 +481,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     )
 
     @property
-    def native_value(self) -> float | str | None:
+    def native_value(self) -> float | str | datetime | None:
         """Return the state of the sensor."""
         # For restorable sensors, use restored value if coordinator not ready
         if self._restored_value is not None and not self.coordinator.data:
@@ -655,8 +661,9 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 attrs["summary"] = self.coordinator.data["dhw_planning_summary"]
 
             # Add schedule stability indicator (Phase 2 - Jan 2026)
-            if self.native_value:
-                time_until = self.native_value - dt_util.now()
+            native_val = self.native_value
+            if native_val and isinstance(native_val, datetime):
+                time_until = native_val - dt_util.now()
                 hours_until = time_until.total_seconds() / 3600
 
                 # Mark as "confirmed" if within 30 minutes (imminent)
@@ -680,7 +687,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                         )
                     else:  # >1h
                         attrs["status_description"] = (
-                            f"Planned for {self.native_value.strftime('%H:%M')}"
+                            f"Planned for {native_val.strftime('%H:%M')}"
                         )
 
         elif key == "temperature_trend":
@@ -781,7 +788,10 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
                     # Show if multi-sensor averaging is being used
                     try:
-                        config = self.coordinator.config_entry.data
+                        config_entry = self.coordinator.config_entry
+                        if config_entry is None:
+                            return attrs
+                        config = config_entry.data
                         additional_sensors = config.get("additional_indoor_sensors", [])
 
                         if additional_sensors:
@@ -985,8 +995,8 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
             attrs["daily_peak"] = self.coordinator.peak_today
 
             # Check if user has real power measurement configured
-            has_external_power = hasattr(self.coordinator.nibe, "_power_sensor_entity") and bool(
-                self.coordinator.nibe._power_sensor_entity
+            has_external_power = hasattr(self.coordinator.nibe, "power_sensor_entity") and bool(
+                self.coordinator.nibe.power_sensor_entity
             )
             has_phase_currents = False
             if "nibe" in self.coordinator.data and self.coordinator.data["nibe"]:
@@ -1048,7 +1058,10 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
         elif key == "optional_features_status":
             # Show detailed status of all optional features
-            config = self.coordinator.config_entry.data
+            config_entry = self.coordinator.config_entry
+            if config_entry is None:
+                return attrs
+            config = config_entry.data
 
             # Degree minutes status
             dm_entity = config.get("degree_minutes_entity")
@@ -1169,10 +1182,12 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                 )
                 attrs["cop_range"] = f"{model.typical_cop_range[0]}-{model.typical_cop_range[1]}"
                 attrs["optimal_flow_delta"] = model.optimal_flow_delta
-                if hasattr(model, "compressor_type"):
-                    attrs["compressor_type"] = model.compressor_type
-                if hasattr(model, "refrigerant"):
-                    attrs["refrigerant"] = model.refrigerant
+                compressor_type = getattr(model, "compressor_type", None)
+                if compressor_type:
+                    attrs["compressor_type"] = compressor_type
+                refrigerant = getattr(model, "refrigerant", None)
+                if refrigerant:
+                    attrs["refrigerant"] = refrigerant
 
         elif key == "dhw_status":
             # Add DHW-specific attributes

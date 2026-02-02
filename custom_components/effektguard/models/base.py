@@ -87,7 +87,7 @@ class HeatPumpProfile(ABC):
         Returns:
             Optimal flow temperature (°C) for maximum efficiency
         """
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def validate_power_consumption(
@@ -106,7 +106,7 @@ class HeatPumpProfile(ABC):
         Returns:
             ValidationResult with status and recommendations
         """
-        pass
+        raise NotImplementedError
 
     def get_cop_at_temperature(self, outdoor_temp: float) -> float:
         """Get COP for given outdoor temperature using interpolation.

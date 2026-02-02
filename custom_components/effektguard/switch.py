@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -32,9 +32,26 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class EffektGuardSwitchEntityDescription(SwitchEntityDescription):
-    """Describes EffektGuard switch entity."""
+class EffektGuardSwitchEntityDescription:
+    """Custom switch entity description for EffektGuard.
 
+    Uses composition instead of inheritance from SwitchEntityDescription
+    to avoid Pylance/Pylint type-checking issues with Home Assistant's FrozenOrThawed metaclass.
+    All fields that SwitchEntity reads from entity_description are included.
+    """
+
+    # Required field
+    key: str
+
+    # Optional fields matching what SwitchEntity reads from entity_description
+    name: str | None = None
+    icon: str | None = None
+    translation_key: str | None = None
+    has_entity_name: bool = False
+    entity_registry_enabled_default: bool = True
+    entity_registry_visible_default: bool = True
+
+    # EffektGuard-specific field
     config_key: str | None = None
 
 
@@ -158,6 +175,14 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
         }
 
         return self._entry.data.get(config_key, defaults.get(config_key, False))
+
+    def turn_on(self, **kwargs: Any) -> None:
+        """Turn the switch on (sync wrapper)."""
+        raise NotImplementedError("Use async_turn_on instead")
+
+    def turn_off(self, **kwargs: Any) -> None:
+        """Turn the switch off (sync wrapper)."""
+        raise NotImplementedError("Use async_turn_off instead")
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on."""
