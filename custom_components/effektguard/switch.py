@@ -46,10 +46,12 @@ class EffektGuardSwitchEntityDescription:
     # Optional fields matching what SwitchEntity reads from entity_description
     name: str | None = None
     icon: str | None = None
+    device_class: str | None = None
     translation_key: str | None = None
     has_entity_name: bool = False
     entity_registry_enabled_default: bool = True
     entity_registry_visible_default: bool = True
+    force_update: bool = False
 
     # EffektGuard-specific field
     config_key: str | None = None

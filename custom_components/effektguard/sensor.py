@@ -61,6 +61,7 @@ class EffektGuardSensorEntityDescription:
     has_entity_name: bool = False
     entity_registry_enabled_default: bool = True
     entity_registry_visible_default: bool = True
+    force_update: bool = False
 
     # EffektGuard-specific field
     value_fn: Callable[[EffektGuardCoordinator], float | str | None] | None = None
@@ -686,9 +687,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                             f"Scheduled in {int(hours_until * 60)} minutes"
                         )
                     else:  # >1h
-                        attrs["status_description"] = (
-                            f"Planned for {native_val.strftime('%H:%M')}"
-                        )
+                        attrs["status_description"] = f"Planned for {native_val.strftime('%H:%M')}"
 
         elif key == "temperature_trend":
             # Show prediction and trend details for INDOOR temperature
