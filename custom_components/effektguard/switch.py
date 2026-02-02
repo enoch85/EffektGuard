@@ -9,6 +9,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -47,6 +48,7 @@ class EffektGuardSwitchEntityDescription:
     name: str | None = None
     icon: str | None = None
     device_class: str | None = None
+    entity_category: EntityCategory | None = None
     translation_key: str | None = None
     translation_placeholders: dict[str, str] | None = None
     has_entity_name: bool = False
