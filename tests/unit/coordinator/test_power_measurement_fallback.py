@@ -329,15 +329,13 @@ class TestPeakTrackingOnlyWithRealMeasurements:
         coordinator = coordinator_with_external_meter
 
         # Test that external meter is detected
-        has_meter = hasattr(coordinator.nibe, "_power_sensor_entity") and bool(
-            coordinator.nibe._power_sensor_entity
-        )
+        has_meter = coordinator.nibe.power_sensor_entity is not None
 
         # Should have external meter configured
         assert has_meter, "External meter should be configured"
 
         # Verify power sensor entity is accessible
-        power_entity_id = coordinator.nibe._power_sensor_entity
+        power_entity_id = coordinator.nibe.power_sensor_entity
         assert power_entity_id is not None
         print(f"External power meter entity: {power_entity_id}")
 
@@ -393,6 +391,7 @@ def coordinator_with_external_meter():
     hass.config.longitude = 18.07  # Stockholm longitude
     nibe_adapter = MagicMock()
     nibe_adapter._power_sensor_entity = "sensor.house_power"  # External meter configured
+    nibe_adapter.power_sensor_entity = "sensor.house_power"
     gespot_adapter = MagicMock()
     weather_adapter = MagicMock()
     decision_engine = MagicMock()
@@ -432,6 +431,7 @@ def coordinator_without_external_meter():
     hass.config.longitude = 18.07  # Stockholm longitude
     nibe_adapter = MagicMock()
     nibe_adapter._power_sensor_entity = None  # No external meter
+    nibe_adapter.power_sensor_entity = None
     # Mock calculate_power_from_currents method
     nibe_adapter.calculate_power_from_currents.side_effect = lambda p1, p2, p3: (
         (240 * (p1 + (p2 or 0) + (p3 or 0)) * 0.95 / 1000) if p1 is not None else None

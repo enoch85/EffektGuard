@@ -29,6 +29,7 @@ from ..const import (
     QuarterClassification,
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
+    VOLATILE_TIMING_TOLERANCE_SECONDS,
 )
 from .time_utils import get_current_quarter
 
@@ -354,7 +355,9 @@ class OffsetVolatilityTracker:
         time_since_last = time.time() - self._last_change.timestamp
         min_duration_seconds = self._min_duration_minutes * SECONDS_PER_MINUTE
 
-        if time_since_last < min_duration_seconds:
+        # Tolerance prevents floating-point rounding from blocking at the displayed boundary
+        # (e.g., 2699.8s displays as "45min" but is still < 2700s without tolerance)
+        if time_since_last < (min_duration_seconds - VOLATILE_TIMING_TOLERANCE_SECONDS):
             return True  # Volatile reversal - block it
 
         return False

@@ -1,7 +1,7 @@
 """Options flow for EffektGuard integration."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
 import voluptuous as vol
 
@@ -38,6 +38,9 @@ from .const import (
     OPTIMIZATION_MODE_SAVINGS,
 )
 from .models import HeatPumpModelRegistry
+
+if TYPE_CHECKING:
+    from .models.types import EffektGuardConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -125,7 +128,9 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
 
         return validated
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_init(
+        self, user_input: "EffektGuardConfigDict | None" = None
+    ) -> FlowResult:
         """Manage runtime options."""
         if user_input is not None:
             validated_input = self._validate_and_convert_dhw_config(user_input)

@@ -672,6 +672,12 @@ VOLATILE_MIN_DURATION_QUARTERS: Final = (
     VOLATILE_MIN_DURATION_MINUTES // MINUTES_PER_QUARTER
 )  # 3 quarters (45min / 15min)
 
+# Volatile timing tolerance (Feb 2, 2026)
+# Prevents floating-point rounding in time.time() from blocking at the displayed boundary.
+# Jan 31 2026 incident: log showed "45min < 45min" still blocking because actual seconds
+# were 2699.x which rounds to 45min display but is still < 2700 seconds.
+VOLATILE_TIMING_TOLERANCE_SECONDS: Final = 2
+
 # Price forecast lookahead (Nov 27, 2025)
 # Forward-looking price optimization: reduce heating when cheaper period coming soon
 # Updated Nov 28, 2025: Horizon scales with thermal_mass (configurable 0.5-2.0)

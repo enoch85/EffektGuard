@@ -1,0 +1,14 @@
+{
+    "include": ["custom_components"],
+    "exclude": ["**/__pycache__", "**/.*"],
+    "reportMissingImports": false,
+    "reportMissingModuleSource": false,
+    "reportGeneralTypeIssues": "warning",
+    "reportOptionalMemberAccess": "warning",
+    "reportArgumentType": "warning",
+    "reportCallIssue": false,
+    "reportReturnType": false,
+    "reportAbstractUsage": false,
+    "pythonVersion": "3.13",
+    "typeCheckingMode": "basic"
+}

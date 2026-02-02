@@ -13,12 +13,15 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import CONF_WEATHER_ENTITY
+
+if TYPE_CHECKING:
+    from ..models.types import AdapterConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +48,7 @@ class WeatherData:
 class WeatherAdapter:
     """Adapter for reading weather forecast entities."""
 
-    def __init__(self, hass: HomeAssistant, config: dict[str, Any]):
+    def __init__(self, hass: HomeAssistant, config: "AdapterConfigDict"):
         """Initialize weather adapter.
 
         Args:
@@ -177,14 +180,14 @@ class WeatherAdapter:
                         source_method = "service_call"
                     else:
                         _LOGGER.warning(
-                            "Service call succeeded but returned no forecast data. " "Response: %s",
+                            "Service call succeeded but returned no forecast data. Response: %s",
                             forecast_data,
                         )
                         # Schedule next random attempt
                         self._schedule_next_random_attempt()
                 else:
                     _LOGGER.warning(
-                        "Service call succeeded but returned no forecast data. " "Response: %s",
+                        "Service call succeeded but returned no forecast data. Response: %s",
                         forecast_data,
                     )
                     # Schedule next random attempt

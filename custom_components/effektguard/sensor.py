@@ -7,13 +7,12 @@ thermal debt, and system performance.
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -35,10 +34,31 @@ _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class EffektGuardSensorEntityDescription(SensorEntityDescription):
-    """Describes EffektGuard sensor entity."""
+class EffektGuardSensorEntityDescription:
+    """Custom sensor entity description for EffektGuard.
 
-    value_fn: Callable[[EffektGuardCoordinator], Any] | None = None
+    Uses composition instead of inheritance from SensorEntityDescription
+    to avoid Pylance type-checking issues with Home Assistant's FrozenOrThawed metaclass.
+    All fields that SensorEntity reads from entity_description are included.
+    """
+
+    # Required field
+    key: str
+
+    # Optional fields matching what SensorEntity reads from entity_description
+    name: str | None = None
+    icon: str | None = None
+    device_class: SensorDeviceClass | None = None
+    native_unit_of_measurement: str | None = None
+    state_class: SensorStateClass | str | None = None
+    entity_category: EntityCategory | None = None
+    suggested_display_precision: int | None = None
+    suggested_unit_of_measurement: str | None = None
+    last_reset: datetime | None = None
+    options: list[str] | None = None
+
+    # EffektGuard-specific field
+    value_fn: Callable[[EffektGuardCoordinator], float | str | None] | None = None
 
 
 SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
@@ -386,7 +406,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
 
     entity_description: EffektGuardSensorEntityDescription
     _attr_has_entity_name = True
-    _restored_value: Any = None
+    _restored_value: float | None = None
 
     def __init__(
         self,
@@ -455,7 +475,7 @@ class EffektGuardSensor(CoordinatorEntity, SensorEntity, RestoreEntity):
                     )
 
     @property
-    def native_value(self) -> Any:
+    def native_value(self) -> float | str | None:
         """Return the state of the sensor."""
         # For restorable sensors, use restored value if coordinator not ready
         if self._restored_value is not None and not self.coordinator.data:

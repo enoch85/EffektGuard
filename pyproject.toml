@@ -54,3 +54,11 @@ exclude_lines = [
     "class .*\\bProtocol\\):",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.pylint.format]
+# Line length is handled by Black (100 chars), so disable pylint's check
+max-line-length = 200
+
+[tool.pylint."messages control"]
+# Disable line-too-long - Black handles line length formatting
+disable = ["C0301"]

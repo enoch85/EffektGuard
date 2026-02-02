@@ -186,6 +186,7 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
     nibe.set_curve_offset = AsyncMock(return_value=True)
     nibe._power_sensor_entity = "sensor.power"
+    nibe.power_sensor_entity = "sensor.power"
 
     engine = MagicMock()
     engine.calculate_decision.return_value = OptimizationDecision(

@@ -17,7 +17,7 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Optional, TypedDict
+from typing import TYPE_CHECKING, Optional, TypedDict
 
 from homeassistant.util import dt as dt_util
 
@@ -45,6 +45,7 @@ from ..const import (
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
 )
+from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
 from .comfort_layer import ComfortLayer
 from .thermal_layer import (
@@ -53,13 +54,15 @@ from .thermal_layer import (
     is_cooling_rapidly,
     is_warming_rapidly,
 )
-from ..utils.volatile_helpers import get_volatile_info
 from .weather_layer import (
     AdaptiveClimateSystem,
     WeatherCompensationCalculator,
     WeatherCompensationLayer,
     WeatherPredictionLayer,
 )
+
+if TYPE_CHECKING:
+    from ..models.types import EffektGuardConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,6 +106,7 @@ class OptimizationDecision:
     offset: float  # Final heating curve offset (°C)
     layers: list[LayerDecision] = field(default_factory=list)
     reasoning: str = ""
+    anti_windup_active: bool = False  # True when anti-windup is driving the decision
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -149,7 +153,7 @@ class DecisionEngine:
         price_analyzer,
         effect_manager,
         thermal_model,
-        config: dict[str, Any],
+        config: "EffektGuardConfigDict",
         thermal_predictor=None,  # Phase 6 - Optional predictor
         weather_learner=None,  # Phase 6 - Optional weather pattern learner
         heat_pump_model=None,  # Heat pump model profile
@@ -180,7 +184,7 @@ class DecisionEngine:
 
         # Optimization mode configuration (comfort/balanced/savings)
         # This affects dead zones, layer weights, and price behavior
-        self._update_mode_config()
+        self.update_mode_config()
 
         # Weather compensation enabled/disabled
         self.enable_weather_compensation = config.get("enable_weather_compensation", True)
@@ -284,7 +288,7 @@ class DecisionEngine:
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
 
-    def _update_mode_config(self) -> None:
+    def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
 
         Called on init and when mode changes. Caches the mode config to avoid
@@ -622,14 +626,22 @@ class DecisionEngine:
         final_offset = raw_offset * damping_factor
 
         # Generate human-readable reasoning
-        reasoning = self._generate_reasoning(layers, final_offset) + reason_suffix
+        reasoning = self._generate_reasoning(layers) + reason_suffix
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
+
+        # Propagate anti-windup flag from emergency layer to final decision (Feb 2026)
+        # When anti-windup is active, the coordinator must bypass the volatile blocker
+        # to allow the offset reduction to take effect immediately.
+        # Physics: Anti-windup detects that raising S1 is making DM worse (BT25-S1 gap grows).
+        # The volatile blocker must not block this safety-critical reduction.
+        anti_windup = getattr(emergency_decision, "anti_windup_active", False)
 
         return OptimizationDecision(
             offset=final_offset,
             layers=layers,
             reasoning=reasoning,
+            anti_windup_active=anti_windup,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
@@ -771,7 +783,6 @@ class DecisionEngine:
     def _generate_reasoning(
         self,
         layers: list[LayerDecision],
-        final_offset: float,
     ) -> str:
         """Generate human-readable reasoning from layer decisions.
 
@@ -780,7 +791,6 @@ class DecisionEngine:
 
         Args:
             layers: List of layer decisions
-            final_offset: Final aggregated offset
 
         Returns:
             Reasoning string with critical layers highlighted
