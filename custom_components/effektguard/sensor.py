@@ -5,7 +5,7 @@ thermal debt, and system performance.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -20,6 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import UNDEFINED, UndefinedType
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -37,6 +38,27 @@ _LOGGER = logging.getLogger(__name__)
 class EffektGuardSensorEntityDescription(SensorEntityDescription):
     """Describes EffektGuard sensor entity."""
 
+    # Redeclare parent fields for Pylance compatibility (HA uses special metaclass)
+    key: str
+    device_class: SensorDeviceClass | None = None
+    entity_category: EntityCategory | None = None
+    entity_registry_enabled_default: bool = True
+    entity_registry_visible_default: bool = True
+    force_update: bool = False
+    icon: str | None = None
+    has_entity_name: bool = False
+    name: str | UndefinedType | None = UNDEFINED
+    translation_key: str | None = None
+    translation_placeholders: Mapping[str, str] | None = None
+    unit_of_measurement: None = None
+    # SensorEntityDescription specific
+    last_reset: datetime | None = None
+    native_unit_of_measurement: str | None = None
+    options: list[str] | None = None
+    state_class: SensorStateClass | str | None = None
+    suggested_display_precision: int | None = None
+    suggested_unit_of_measurement: str | None = None
+    # EffektGuard specific
     value_fn: Callable[[EffektGuardCoordinator], Any] | None = None
 
 

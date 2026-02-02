@@ -4,13 +4,16 @@ Feature enable/disable switches for optimization features.
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import UNDEFINED, UndefinedType
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -35,6 +38,20 @@ _LOGGER = logging.getLogger(__name__)
 class EffektGuardSwitchEntityDescription(SwitchEntityDescription):
     """Describes EffektGuard switch entity."""
 
+    # Redeclare parent fields for Pylance compatibility (HA uses special metaclass)
+    key: str
+    device_class: SwitchDeviceClass | None = None
+    entity_category: EntityCategory | None = None
+    entity_registry_enabled_default: bool = True
+    entity_registry_visible_default: bool = True
+    force_update: bool = False
+    icon: str | None = None
+    has_entity_name: bool = False
+    name: str | UndefinedType | None = UNDEFINED
+    translation_key: str | None = None
+    translation_placeholders: Mapping[str, str] | None = None
+    unit_of_measurement: None = None
+    # EffektGuard specific
     config_key: str | None = None
 
 
