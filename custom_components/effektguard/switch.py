@@ -4,12 +4,10 @@ Feature enable/disable switches for optimization features.
 """
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity
+from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -32,31 +30,9 @@ from .models import HeatPumpModelRegistry
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class EffektGuardSwitchEntityDescription:
-    """Custom switch entity description for EffektGuard.
+class EffektGuardSwitchEntityDescription(SwitchEntityDescription):
+    """Describes EffektGuard switch entity."""
 
-    Uses composition instead of inheritance from SwitchEntityDescription
-    to avoid Pylance/Pylint type-checking issues with Home Assistant's FrozenOrThawed metaclass.
-    All fields that SwitchEntity reads from entity_description are included.
-    """
-
-    # Required field
-    key: str
-
-    # Optional fields matching what SwitchEntity reads from entity_description
-    name: str | None = None
-    icon: str | None = None
-    device_class: str | None = None
-    entity_category: EntityCategory | None = None
-    translation_key: str | None = None
-    translation_placeholders: dict[str, str] | None = None
-    has_entity_name: bool = False
-    entity_registry_enabled_default: bool = True
-    entity_registry_visible_default: bool = True
-    force_update: bool = False
-
-    # EffektGuard-specific field
     config_key: str | None = None
 
 

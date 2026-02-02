@@ -6,13 +6,13 @@ thermal debt, and system performance.
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -32,40 +32,10 @@ from .coordinator import EffektGuardCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class EffektGuardSensorEntityDescription:
-    """Custom sensor entity description for EffektGuard.
+class EffektGuardSensorEntityDescription(SensorEntityDescription):
+    """Describes EffektGuard sensor entity."""
 
-    Uses composition instead of inheritance from SensorEntityDescription
-    to avoid Pylance type-checking issues with Home Assistant's FrozenOrThawed metaclass.
-    All fields that SensorEntity reads from entity_description are included.
-    """
-
-    # Required field
-    key: str
-
-    # Optional fields matching what SensorEntity reads from entity_description
-    name: str | None = None
-    icon: str | None = None
-    device_class: SensorDeviceClass | None = None
-    native_unit_of_measurement: str | None = None
-    state_class: SensorStateClass | str | None = None
-    entity_category: EntityCategory | None = None
-    suggested_display_precision: int | None = None
-    suggested_unit_of_measurement: str | None = None
-    last_reset: datetime | None = None
-    options: list[str] | None = None
-
-    # EntityDescription fields required by Home Assistant base entity
-    translation_key: str | None = None
-    translation_placeholders: dict[str, str] | None = None
-    has_entity_name: bool = False
-    entity_registry_enabled_default: bool = True
-    entity_registry_visible_default: bool = True
-    force_update: bool = False
-
-    # EffektGuard-specific field
-    value_fn: Callable[[EffektGuardCoordinator], float | str | None] | None = None
+    value_fn: Callable[[EffektGuardCoordinator], Any] | None = None
 
 
 SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (

@@ -9,6 +9,10 @@
     "reportCallIssue": false,
     "reportReturnType": false,
     "reportAbstractUsage": false,
+    "reportUnknownMemberType": false,
+    "reportUnknownArgumentType": false,
     "pythonVersion": "3.13",
-    "typeCheckingMode": "basic"
+    "typeCheckingMode": "basic",
+    "stubPath": "",
+    "extraPaths": []
 }
