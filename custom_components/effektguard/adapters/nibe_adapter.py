@@ -17,8 +17,8 @@ Data read includes:
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
@@ -43,6 +43,9 @@ from ..const import (
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
+
+if TYPE_CHECKING:
+    from ..models.types import AdapterConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,7 +100,7 @@ class NibeState:
 class NibeAdapter:
     """Adapter for reading NIBE Myuplink entities."""
 
-    def __init__(self, hass: HomeAssistant, config: dict[str, Any]):
+    def __init__(self, hass: HomeAssistant, config: "AdapterConfigDict"):
         """Initialize NIBE adapter.
 
         Args:
@@ -111,6 +114,7 @@ class NibeAdapter:
         self._additional_indoor_sensors = config.get(CONF_ADDITIONAL_INDOOR_SENSORS, [])  # Optional
         self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
         self._last_write: datetime | None = None
+        self._last_ventilation_write: datetime | None = None
         self._entity_cache: dict[str, str] = {}
         # Fractional accumulator for precise offset tracking
         # NIBE only accepts integers, so we accumulate fractional parts
@@ -118,6 +122,20 @@ class NibeAdapter:
         self._fractional_accumulator: float = 0.0
         # Track last integer offset sent to NIBE (to avoid redundant writes)
         self._last_nibe_offset: int | None = None
+
+    @property
+    def entity_cache(self) -> dict[str, str]:
+        """Public access to discovered entity cache."""
+        return self._entity_cache
+
+    @property
+    def power_sensor_entity(self) -> str | None:
+        """Public access to configured power sensor entity."""
+        return self._power_sensor_entity
+
+    async def discover_entities(self) -> None:
+        """Discover NIBE entities (public wrapper)."""
+        await self._discover_nibe_entities()
 
     async def get_current_state(self) -> NibeState:
         """Read current NIBE heat pump state from entities.
@@ -291,8 +309,6 @@ class NibeAdapter:
         Note:
             Requires NIBE Myuplink Premium subscription for write access.
         """
-        from datetime import timedelta
-
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
         if self._last_write and now - self._last_write < timedelta(
@@ -339,7 +355,7 @@ class NibeAdapter:
         self._fractional_accumulator = offset - self._last_nibe_offset
 
         _LOGGER.debug(
-            "Offset calculation: calculated=%.2f°C, NIBE_current=%d°C, " "accumulator=%.2f°C",
+            "Offset calculation: calculated=%.2f°C, NIBE_current=%d°C, accumulator=%.2f°C",
             offset,
             self._last_nibe_offset,
             self._fractional_accumulator,
@@ -433,8 +449,6 @@ class NibeAdapter:
         Note:
             Based on NIBE myuplink entity: switch.f750_cu_3x400v_increased_ventilation
         """
-        from datetime import timedelta
-
         # Get ventilation switch entity from cache
         ventilation_entity = self._entity_cache.get("increased_ventilation")
 
@@ -463,9 +477,6 @@ class NibeAdapter:
 
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if not hasattr(self, "_last_ventilation_write"):
-            self._last_ventilation_write = None
-
         if self._last_ventilation_write and now - self._last_ventilation_write < timedelta(
             minutes=SERVICE_RATE_LIMIT_MINUTES
         ):

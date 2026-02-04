@@ -126,6 +126,7 @@ async def test_power_sensor_listener_no_event_filter_param():
 
     # Configure nibe adapter to have power sensor (so listener is registered)
     nibe._power_sensor_entity = "sensor.power"
+    nibe.power_sensor_entity = "sensor.power"
 
     coordinator = EffektGuardCoordinator(mock_hass, nibe, gespot, weather, engine, effect, entry)
 

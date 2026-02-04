@@ -22,10 +22,12 @@ Author: Original work
 License: MIT
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from ..const import (
     AIRFLOW_AIR_DENSITY,
@@ -56,6 +58,9 @@ from ..const import (
     COMPRESSOR_HZ_MAX,
     COMPRESSOR_HZ_MIN,
 )
+
+if TYPE_CHECKING:
+    from .prediction_layer import ThermalTrendDict
 
 
 class FlowMode(Enum):
@@ -254,7 +259,7 @@ def calculate_duration(deficit: float, temp_outdoor: float) -> int:
     # Reduce duration in cold conditions
     if temp_outdoor < AIRFLOW_TEMP_COLD_THRESHOLD:
         return min(base_duration, AIRFLOW_DURATION_COLD_CAP)
-    elif temp_outdoor < AIRFLOW_TEMP_COOL_THRESHOLD:
+    if temp_outdoor < AIRFLOW_TEMP_COOL_THRESHOLD:
         return min(base_duration, AIRFLOW_DURATION_COOL_CAP)
 
     return base_duration
@@ -471,7 +476,7 @@ class AirflowOptimizer:
         self,
         nibe_data,
         target_temp: float,
-        thermal_trend: dict | None = None,
+        thermal_trend: ThermalTrendDict | dict[str, float] | None = None,
     ) -> FlowDecision:
         """Evaluate using NIBE adapter data directly.
 

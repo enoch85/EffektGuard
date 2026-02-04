@@ -6,9 +6,9 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import selector
+from homeassistant.helpers import entity_registry as er, selector
 
 from .options import EffektGuardOptionsFlow
 from .const import (
@@ -36,11 +36,16 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize config flow."""
         self._data: dict[str, Any] = {}
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    def is_matching(self, other_flow: "EffektGuardConfigFlow") -> bool:
+        """Return True if this flow matches another flow in progress."""
+        # Only one EffektGuard instance is supported
+        return True
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step - NIBE integration selection."""
         errors = {}
 
@@ -87,7 +92,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_gespot(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_gespot(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Configure spot price integration."""
         errors = {}
 
@@ -154,7 +159,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_model(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_model(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle heat pump model selection."""
         errors = {}
 
@@ -185,7 +190,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_optional(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_optional(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Configure optional features."""
         if user_input is not None:
             # Store optional settings
@@ -219,7 +226,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_optional_sensors(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Configure optional sensors (degree minutes, power meter, extra temp sensors)."""
         if user_input is not None:
             # Store optional sensor settings
@@ -346,8 +353,6 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         - OR number.* entities with 'offset' in name AND 'nibe' in entity_id
         - Excludes entities with translation errors
         """
-        from homeassistant.helpers import entity_registry as er
-
         entities = []
         ent_reg = er.async_get(self.hass)
 
@@ -528,8 +533,6 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         - switch.*50004* (NIBE parameter ID)
         - Related to NIBE/MyUplink integration
         """
-        from homeassistant.helpers import entity_registry as er
-
         entities = []
         ent_reg = er.async_get(self.hass)
 
@@ -566,7 +569,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return entities
 
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle reconfiguration of entity selections.
 
         Allows users to change entity selections (weather, power sensor, etc.)

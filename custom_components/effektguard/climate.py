@@ -7,12 +7,10 @@ and allows manual control.
 import logging
 from typing import Any
 
-from homeassistant.components.climate import (
-    ClimateEntity,
+from homeassistant.components.climate import ClimateEntity
+from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
-)
-from homeassistant.components.climate.const import (
     PRESET_AWAY,
     PRESET_COMFORT,
     PRESET_ECO,
@@ -54,13 +52,14 @@ async def async_setup_entry(
     async_add_entities([EffektGuardClimate(coordinator, entry)])
 
 
-class EffektGuardClimate(CoordinatorEntity, RestoreEntity, ClimateEntity):
+class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntity, ClimateEntity):
     """Climate entity for EffektGuard.
 
     Main user interface displaying current optimization status and allowing
     manual control of target temperature and optimization mode via presets.
     """
 
+    coordinator: EffektGuardCoordinator
     _attr_has_entity_name = True
     _attr_name = None
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -229,6 +228,48 @@ class EffektGuardClimate(CoordinatorEntity, RestoreEntity, ClimateEntity):
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         # This automatically calls async_reload_entry() which updates coordinator config
         # via async_update_config() - no need for explicit refresh
+
+    # Sync method stubs required by ClimateEntity abstract base class.
+    # These delegate to async versions - Home Assistant handles the async call.
+    def set_temperature(self, **kwargs: Any) -> None:
+        """Set new target temperature (sync wrapper)."""
+        raise NotImplementedError("Use async_set_temperature")
+
+    def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set new target hvac mode (sync wrapper)."""
+        raise NotImplementedError("Use async_set_hvac_mode")
+
+    def set_preset_mode(self, preset_mode: str) -> None:
+        """Set new preset mode (sync wrapper)."""
+        raise NotImplementedError("Use async_set_preset_mode")
+
+    def turn_on(self) -> None:
+        """Turn the entity on (not used - use set_hvac_mode)."""
+        raise NotImplementedError("Use async_set_hvac_mode with HVACMode.HEAT")
+
+    def turn_off(self) -> None:
+        """Turn the entity off (not used - use set_hvac_mode)."""
+        raise NotImplementedError("Use async_set_hvac_mode with HVACMode.OFF")
+
+    def toggle(self) -> None:
+        """Toggle the entity (not supported)."""
+        raise NotImplementedError("Toggle not supported")
+
+    def set_humidity(self, humidity: int) -> None:
+        """Set new target humidity (not supported)."""
+        raise NotImplementedError("Humidity control not supported")
+
+    def set_fan_mode(self, fan_mode: str) -> None:
+        """Set new target fan mode (not supported)."""
+        raise NotImplementedError("Fan mode not supported")
+
+    def set_swing_mode(self, swing_mode: str) -> None:
+        """Set new target swing mode (not supported)."""
+        raise NotImplementedError("Swing mode not supported")
+
+    def set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
+        """Set new target horizontal swing mode (not supported)."""
+        raise NotImplementedError("Horizontal swing mode not supported")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

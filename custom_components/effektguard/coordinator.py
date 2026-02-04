@@ -1,8 +1,10 @@
 """Data update coordinator for EffektGuard."""
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
@@ -53,17 +55,26 @@ from .models.nibe import (
     NibeS1155Profile,
 )
 from .optimization.adaptive_learning import AdaptiveThermalModel
+from .optimization.airflow_optimizer import AirflowOptimizer
 from .optimization.decision_engine import (
     OptimizationDecision,
     get_safe_default_decision,
 )
+from .optimization.dhw_optimizer import (
+    DHWDemandPeriod,
+    DHWRecommendation,
+    IntelligentDHWScheduler,
+)
 from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.price_layer import get_fallback_prices
-
+from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 from .utils.time_utils import get_current_quarter
 from .utils.volatile_helpers import OffsetVolatilityTracker
+
+if TYPE_CHECKING:
+    from .models.types import EffektGuardConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +130,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Load heat pump model profile
         model_key = entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
         model_class = HEAT_PUMP_MODELS.get(model_key, NibeF750Profile)
-        self.heat_pump_model = model_class()
+        # type: ignore - concrete profile dataclasses have defaults
+        self.heat_pump_model = model_class()  # type: ignore[call-arg]
 
         _LOGGER.info(
             "Loaded heat pump model: %s (%s)",
@@ -143,9 +155,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.temp_lux_entity = entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
 
         # DHW optimizer - pass climate detector for climate-aware thresholds
-        from .optimization.dhw_optimizer import DHWDemandPeriod, IntelligentDHWScheduler
-        from .optimization.savings_calculator import SavingsCalculator
-
         # Get user-configured DHW target temperature (default 50°C)
         dhw_target_temp = float(entry.options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
 
@@ -197,8 +206,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Only created if model supports exhaust airflow optimization
         self.airflow_optimizer = None
         if self.heat_pump_model.supports_exhaust_airflow:
-            from .optimization.airflow_optimizer import AirflowOptimizer
-
             flow_standard = float(
                 entry.options.get(
                     CONF_AIRFLOW_STANDARD_RATE,
@@ -264,7 +271,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.peak_this_month: float = 0.0
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
+        self._last_learning_save: datetime | None = None  # Track last learned data save time
         self._last_predictor_save: datetime | None = None  # Track last thermal predictor save
+        self._grace_period_ended_logged = False  # Track if grace period end was logged
+        self._last_update_date = dt_util.now().date()  # Track date for daily resets
+        self._last_dhw_control_time: datetime | None = None  # Track last DHW control action
+        self._last_weather_record_date = dt_util.now().date()  # Track weather recording date
         self._predictor_save_interval = timedelta(
             minutes=UPDATE_INTERVAL_MINUTES
         )  # Throttle to coordinator update interval
@@ -426,7 +438,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.data = await self._async_update_data()
             self.last_update_success = True
             self.async_set_updated_data(self.data)
-        except Exception as err:  # noqa: BLE001
+        except (UpdateFailed, OSError, ValueError, TypeError, KeyError, AttributeError) as err:
             self.last_update_success = False
             _LOGGER.error("Update failed: %s", err)
             # Still need to schedule next update even on failure
@@ -447,7 +459,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Restore last_applied_offset - try NIBE entity first (source of truth),
                 # fall back to stored value if entity not available during startup
                 offset_synced = False
-                offset_entity = self.nibe._entity_cache.get("offset")
+                offset_entity = self.nibe.entity_cache.get("offset")
                 if offset_entity:
                     state = self.hass.states.get(offset_entity)
                     if state and state.state not in ["unavailable", "unknown"]:
@@ -511,10 +523,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # even if the system was restarted after a high-temp cycle
                 if self.dhw_optimizer and self.nibe:
                     # Ensure NIBE entities are discovered first
-                    if not self.nibe._entity_cache:
-                        await self.nibe._discover_nibe_entities()
+                    if not self.nibe.entity_cache:
+                        await self.nibe.discover_entities()
 
-                    bt7_entity = self.nibe._entity_cache.get("dhw_top_temp")
+                    bt7_entity = self.nibe.entity_cache.get("dhw_top_temp")
                     if bt7_entity:
                         await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
                     else:
@@ -560,11 +572,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         so there's no ongoing event processing overhead.
         """
         # Check if we have an external power sensor configured
-        if not hasattr(self.nibe, "_power_sensor_entity") or not self.nibe._power_sensor_entity:
+        if not self.nibe.power_sensor_entity:
             _LOGGER.debug("No external power sensor configured - skipping availability listener")
             return
 
-        power_entity_id = self.nibe._power_sensor_entity
+        power_entity_id = self.nibe.power_sensor_entity
 
         # Check if sensor is already available (immediate check)
         power_state = self.hass.states.get(power_entity_id)
@@ -628,7 +640,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         try:
             # Unsubscribe aligned refresh timer (if active)
-            if (unsub := getattr(self, "_unsub_aligned_refresh", None)) is not None:
+            unsub = getattr(self, "_unsub_aligned_refresh", None)
+            if unsub is not None:
                 unsub()
                 self._unsub_aligned_refresh = None
 
@@ -656,7 +669,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Error during coordinator shutdown: %s", err, exc_info=True)
             # Don't raise - allow shutdown to complete
 
-    async def _async_update_data(self) -> dict[str, Any]:
+    async def _async_update_data(self) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
 
         This method:
@@ -748,10 +761,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "peak_this_month": 0.0,
                     "startup_pending": True,  # Flag for entities to show proper status
                 }
-            else:
-                # After first success, NIBE failures are real errors
-                _LOGGER.error("Failed to read NIBE data: %s", err)
-                raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
+            # After first success, NIBE failures are real errors
+            _LOGGER.error("Failed to read NIBE data: %s", err)
+            raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
         # Spot price data (native 15-minute intervals)
@@ -764,7 +776,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 # Get unit from spot price entity for accurate logging
-                gespot_entity = self.hass.states.get(self.entry.data.get("gespot_entity"))
+                gespot_id: str = self.entry.data.get("gespot_entity", "")
+                gespot_entity = self.hass.states.get(gespot_id) if gespot_id else None
                 unit = (
                     gespot_entity.attributes.get("unit_of_measurement", "units")
                     if gespot_entity
@@ -816,9 +829,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Validate peak tracking data
                 if self.peak_today is None or self.peak_today < 0:
                     _LOGGER.error(
-                        "Peak tracking error: peak_today is %s (should have actual power measurement). "
-                        "This indicates power sensor is not configured or unavailable. "
-                        "Peak protection will be disabled until sensors are available.",
+                        "Peak tracking error: peak_today is %s "
+                        "(should have actual power measurement). "
+                        "This indicates power sensor is not "
+                        "configured or unavailable. Peak protection "
+                        "will be disabled until sensors are available.",
                         self.peak_today,
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
@@ -918,12 +933,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision = get_safe_default_decision()
 
         # Check for volatile offset reversal before applying
-        # Prevents rapid back-and-forth that the heat pump can't follow (same logic as price volatility)
+        # Prevents rapid back-and-forth that the heat pump can't follow
+        # (same logic as price volatility)
         # Skip volatility tracking during startup - we're not applying offsets yet
+        #
+        # Anti-windup bypass (Feb 2026): When anti-windup is active, it means the system
+        # detected a self-induced DM spiral (raising S1 makes BT25-S1 gap grow → DM drops
+        # faster). The volatile blocker must NOT block anti-windup reductions — doing so
+        # keeps the harmful high offset active for 45 minutes while DM plunges.
+        # Jan 31 2026 incident: volatile blocked anti-windup reduction 10→3°C for 45 min,
+        # DM dropped from -1566 to -1855.
         if is_grace_period:
             # During startup, don't track decisions - they're not being applied
             # The tracker will be initialized with actual NIBE offset when startup completes
             pass
+        elif decision.anti_windup_active:
+            # Anti-windup is a safety mechanism — always apply immediately
+            # Record the change so volatile tracker knows the new baseline
+            _LOGGER.info(
+                "Anti-windup active: bypassing volatile check (offset %.1f°C → %.1f°C)",
+                (
+                    self._offset_volatility_tracker.last_offset
+                    if self._offset_volatility_tracker.last_offset is not None
+                    else 0.0
+                ),
+                decision.offset,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
             volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
             _LOGGER.info(
@@ -931,9 +967,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 volatile_reason,
                 self._offset_volatility_tracker.last_offset,
             )
-            # Keep the previous offset
+            # Keep the previous offset (last_offset is always set when is_reversal_volatile is True)
+            last_offset = self._offset_volatility_tracker.last_offset or 0.0
             decision = OptimizationDecision(
-                offset=self._offset_volatility_tracker.last_offset,
+                offset=last_offset,
                 reasoning=f"[{volatile_reason}] {decision.reasoning}",
             )
         else:
@@ -957,7 +994,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.last_applied_offset
         ):
             _LOGGER.debug(
-                "Offset %.2f°C → int(%d°C) matches last applied int(%d°C), skipping adapter call",
+                "Offset %.2f°C → int(%d°C) matches last "
+                "applied int(%d°C), skipping adapter call",
                 decision.offset,
                 int(decision.offset),
                 int(self.last_applied_offset),
@@ -1046,7 +1084,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if self._learned_data_changed:
             now = dt_util.now()
             if (
-                not hasattr(self, "_last_learning_save")
+                self._last_learning_save is None
                 or (now - self._last_learning_save).total_seconds() > 3600
             ):
                 await self._save_learned_data(
@@ -1064,13 +1102,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         current_classification = self.engine.price.get_current_classification(current_quarter)
 
         # Calculate estimated savings
-        # Get average price today for comparison
-        average_price_today = 0.0
         current_price = 0.0
         if price_data and hasattr(price_data, "today") and price_data.today:
-            prices_today = [q.price for q in price_data.today]
-            if prices_today:
-                average_price_today = sum(prices_today) / len(prices_today)
             # Get current price
             if current_quarter < len(price_data.today):
                 current_price = price_data.today[current_quarter].price
@@ -1147,13 +1180,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self._save_dhw_state_immediate()
 
             # Get DHW recommendation from optimizer with detailed planning
-            # Initialize defaults first to prevent UnboundLocalError if exception occurs
-            dhw_result = {
-                "recommendation": "DHW calculation pending",
-                "summary": "Calculating DHW planning",
-                "details": {},
-                "decision": None,
-            }
+            dhw_result: DHWRecommendation | None = None
 
             try:
                 dhw_result = await self._calculate_dhw_recommendation(
@@ -1193,12 +1220,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Core heating optimization continues to work
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
-            if self.entry.data.get("enable_hot_water_optimization", False) and dhw_result.decision:
+            if (
+                self.entry.data.get("enable_hot_water_optimization", False)
+                and dhw_result is not None
+                and dhw_result.decision is not None
+            ):
                 if is_grace_period:
                     _LOGGER.info("Skipping DHW control during startup grace period")
                 else:
                     await self._apply_dhw_control(
-                        dhw_result.decision,  # Reuse decision from recommendation
+                        dhw_result.decision,
                         current_dhw_temp,
                         now_time,
                     )
@@ -1206,7 +1237,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
                 _LOGGER.warning(
-                    "DHW sensor (BT7) not found - check MyUplink integration has exposed BT7/40013 sensor"
+                    "DHW sensor (BT7) not found - check MyUplink "
+                    "integration has exposed BT7/40013 sensor"
                 )
                 dhw_recommendation = "DHW sensor not found - check MyUplink integration"
                 dhw_planning_summary = "DHW sensor not found"
@@ -1298,7 +1330,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
     async def _calculate_dhw_recommendation(
         self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
-    ) -> dict[str, Any]:
+    ) -> DHWRecommendation:
         """Calculate DHW heating recommendation with detailed planning.
 
         Thin wrapper that gathers HA-specific data and delegates to
@@ -1312,7 +1344,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             now_time: Current datetime
 
         Returns:
-            Dictionary with recommendation text and detailed planning info
+            DHWRecommendation with recommendation text and detailed planning info
         """
         # Gather HA-specific data
         # CRITICAL: Check options first (runtime changes), fall back to data then default
@@ -1353,7 +1385,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             climate_zone_name = self.engine.climate_detector.zone_info.name
         else:
             # Show HA notification for missing climate detector
-            self.hass.components.persistent_notification.async_create(
+            # HA dynamic component access (not in type stubs)
+            self.hass.components.persistent_notification.async_create(  # type: ignore[attr-defined]
                 "EffektGuard could not detect your climate zone. "
                 "Using balanced thermal debt thresholds. "
                 "Configure latitude in integration settings for optimal climate-aware operation.",
@@ -1427,14 +1460,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 end_time = dt_util.utcnow()
 
                 # Get recorder instance and use its executor
-                rec = recorder.get_instance(self.hass)
+                # (get_instance/history are runtime attributes not in HA type stubs)
+                rec = recorder.get_instance(self.hass)  # type: ignore[attr-defined]
                 if rec is None:
                     _LOGGER.warning("Recorder not available, cannot check DHW history")
                     return None
 
                 # Get state history using recorder instance executor
                 states = await rec.async_add_executor_job(
-                    recorder.history.state_changes_during_period,
+                    recorder.history.state_changes_during_period,  # type: ignore[attr-defined]
                     self.hass,
                     start_time,
                     end_time,
@@ -1461,7 +1495,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
 
         # Fall back to stored value (if any)
-        if hasattr(self, "_last_dhw_control_time") and self._last_dhw_control_time:
+        if self._last_dhw_control_time is not None:
             _LOGGER.debug("Using fallback stored DHW time: %s", self._last_dhw_control_time)
             return self._last_dhw_control_time
 
@@ -1577,7 +1611,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Check temporary lux entity
         if not self.temp_lux_entity:
             _LOGGER.debug(
-                "DHW control disabled: No temporary lux entity configured (switch.temporary_lux_50004)"
+                "DHW control disabled: No temporary lux entity "
+                "configured (switch.temporary_lux_50004)"
             )
             return
 
@@ -1637,7 +1672,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 return  # Exit early - abort handled
 
         # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
-        if hasattr(self, "_last_dhw_control_time"):
+        if self._last_dhw_control_time is not None:
             time_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
             if time_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
                 _LOGGER.debug(
@@ -1707,7 +1742,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             # Check if we have external power sensor (whole house)
             has_external_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
-                self.nibe._power_sensor_entity
+                self.nibe.power_sensor_entity
             )
 
             # PRIORITY 1: External power meter (whole house including NIBE)
@@ -1715,7 +1750,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Used for: Monthly peak tracking (effect tariff billing)
             current_power = None
             if has_external_power_sensor:
-                power_entity_id = self.nibe._power_sensor_entity
+                power_entity_id = self.nibe.power_sensor_entity
                 power_state = self.hass.states.get(power_entity_id)
 
                 # Only attempt to use external sensor if it's available
@@ -1819,7 +1854,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if estimated_power > 1.0:  # Estimated power seems reasonable
                         _LOGGER.info(
                             "Smart fallback: Using estimated power %.2f kW "
-                            "(meter shows %.2f kW - likely solar/battery offset, compressor: %d Hz)",
+                            "(meter shows %.2f kW - likely solar/"
+                            "battery offset, compressor: %d Hz)",
                             estimated_power,
                             current_power,
                             compressor_hz,
@@ -1925,7 +1961,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             except (AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to reset offset: %s", err)
 
-    async def async_update_config(self, options: dict[str, Any]) -> None:
+    async def async_update_config(self, options: "EffektGuardConfigDict") -> None:
         """Update configuration without full reload.
 
         Allows hot-reload of runtime options like target temperature,
@@ -1963,7 +1999,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Update optimization mode and recalculate mode config
         if "optimization_mode" in options:
             self.engine.config["optimization_mode"] = options["optimization_mode"]
-            self.engine._update_mode_config()  # Recalculate mode-specific settings
+            self.engine.update_mode_config()  # Recalculate mode-specific settings
             _LOGGER.debug("Updated optimization mode: %s", options["optimization_mode"])
 
         # Update control priority (note: stored in config dict, not cached)
@@ -2005,8 +2041,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         if dhw_config_changed:
             # Rebuild DHW demand periods
-            from .optimization.dhw_optimizer import DHWDemandPeriod
-
             dhw_target = float(options.get("dhw_target_temp", DEFAULT_DHW_TARGET_TEMP))
             # Get user-configured minimum hot water amount (default 5 minutes)
             dhw_min_amount = int(options.get(CONF_DHW_MIN_AMOUNT, DHW_MIN_AMOUNT_DEFAULT))
@@ -2138,9 +2172,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if weather_data and weather_data.forecast_hours:
                 current_date = now.date()
 
-                if not hasattr(self, "_last_weather_record_date") or (
-                    self._last_weather_record_date != current_date
-                ):
+                if self._last_weather_record_date != current_date:
                     # Extract daily temperature pattern from forecast
                     daily_temps = [hour.temperature for hour in weather_data.forecast_hours[:24]]
 
@@ -2223,7 +2255,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.error("Failed to save learned data: %s", err, exc_info=True)
 
-    async def _load_learned_data(self) -> dict[str, Any] | None:
+    async def _load_learned_data(self) -> dict[str, object] | None:
         """Load persisted learning data from storage.
 
         Returns:
@@ -2239,9 +2271,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     data.get("last_updated"),
                 )
                 return data
-            else:
-                _LOGGER.debug("No learned data in storage yet")
-                return None
+
+            _LOGGER.debug("No learned data in storage yet")
+            return None
 
         except (OSError, ValueError, KeyError) as err:
             _LOGGER.warning("Failed to load learned data: %s", err)
@@ -2251,7 +2283,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Save thermal predictor state immediately (throttled to avoid excessive disk writes).
 
         Called after each temperature trend update to persist state_history across reboots.
-        Uses throttling to limit disk writes to UPDATE_INTERVAL_MINUTES (same as coordinator updates).
+        Uses throttling to limit disk writes to UPDATE_INTERVAL_MINUTES
+        (same as coordinator updates).
         """
         now = dt_util.utcnow()
 

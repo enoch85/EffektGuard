@@ -20,13 +20,16 @@ This adapter:
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..const import CONF_GESPOT_ENTITY, DAYTIME_END_HOUR, DAYTIME_START_HOUR
 from ..utils.time_utils import get_current_quarter
+
+if TYPE_CHECKING:
+    from ..models.types import AdapterConfigDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -109,7 +112,7 @@ class PriceData:
 class GESpotAdapter:
     """Adapter for reading GE-Spot price entities."""
 
-    def __init__(self, hass: HomeAssistant, config: dict[str, Any]):
+    def __init__(self, hass: HomeAssistant, config: "AdapterConfigDict"):
         """Initialize GE-Spot adapter.
 
         Args:
