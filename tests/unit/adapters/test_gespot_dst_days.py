@@ -141,3 +141,41 @@ class TestResolvePeriodIndex:
     def test_none_price_data_resolves_to_none(self):
         assert resolve_period_index(None) is None
         assert resolve_period_index(PriceData(today=[], tomorrow=[], has_tomorrow=False)) is None
+
+    def test_failed_timestamp_lookup_never_guesses_positionally(self):
+        """A 96-entry day can still have a gap (dropped interval + duplicate).
+
+        When the authoritative timestamp lookup finds nothing, the answer is
+        None - falling back to the wall-clock position would return an
+        unrelated interval's price.
+        """
+        base = datetime(2026, 1, 7, 0, 0, tzinfo=timezone.utc)
+        periods = [
+            QuarterPeriod(start_time=base + timedelta(minutes=15 * q), price=float(q))
+            for q in range(QUARTERS_PER_DAY)
+        ]
+        # Drop 10:00-10:15 (quarter 40) and duplicate 11:00 to keep len == 96
+        del periods[40]
+        periods.append(QuarterPeriod(start_time=base.replace(hour=11), price=999.0))
+        price_data = PriceData(today=periods, tomorrow=[], has_tomorrow=False)
+        assert len(price_data.today) == QUARTERS_PER_DAY
+
+        when = base.replace(hour=10, minute=7)
+        assert price_data.get_period_index(when) is None
+        assert resolve_period_index(price_data, when) is None
+
+
+class TestMalformedTimestamps:
+    def test_invalid_time_string_skips_one_interval_not_the_day(self):
+        adapter = make_adapter()
+        base = datetime(2026, 1, 7, 0, 0, tzinfo=timezone.utc)
+        raw = make_raw_day(base)
+        raw[10]["time"] = "not-a-timestamp"
+
+        periods = adapter._parse_periods(raw)
+
+        # One interval dropped; the remaining 95 parse and sort normally
+        # (previously QuarterPeriod(start_time=None) crashed the sort and
+        # degraded the whole day to fallback prices)
+        assert len(periods) == 95
+        assert all(period.start_time is not None for period in periods)

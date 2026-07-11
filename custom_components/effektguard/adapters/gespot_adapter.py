@@ -245,6 +245,12 @@ class GESpotAdapter:
                 time_str = item.get("time")
                 if isinstance(time_str, str):
                     start_time = dt_util.parse_datetime(time_str)
+                    if start_time is None:
+                        # parse_datetime signals invalid input with None, not
+                        # an exception; letting it through would break the
+                        # whole day at sort time instead of one interval here
+                        _LOGGER.warning("Skipping price period with invalid time: %s", time_str)
+                        continue
                 elif isinstance(time_str, datetime):
                     start_time = time_str
                 else:

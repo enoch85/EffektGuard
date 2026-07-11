@@ -39,6 +39,7 @@ from ..const import (
     PRICE_TOLERANCE_FACTOR_MIN,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
+    QUARTERS_PER_DAY,
     QuarterClassification,
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
@@ -76,7 +77,10 @@ class CheapestWindowResult:
 
     start_time: datetime
     end_time: datetime
-    quarters: list[int]  # List of quarter IDs in window
+    # DISPLAY-ONLY wall-clock quarter labels for logs/reason strings: not
+    # unique during autumn DST's repeated hour. Identify the window by
+    # start_time/end_time, never by these numbers.
+    quarters: list[int]
     avg_price: float  # Average price in window (öre/kWh)
     hours_until: float  # Hours from current_time until window starts
     savings_vs_current: float | None = None  # % cheaper than current price (optional)
@@ -474,9 +478,11 @@ class PriceAnalyzer:
 
             # Check if within lookahead window
             if period_time >= current_time and period_time < end_time:
-                # Calculate quarter ID based on actual datetime to distinguish duplicates
+                # Display-only label (day-offset + wall-clock quarter): repeats
+                # during autumn DST's second 02:xx hour. Selection and
+                # continuity below use timestamps, never this number.
                 days_ahead = (period_time.date() - current_time.date()).days
-                quarter_id = period.quarter_of_day + (days_ahead * 96)
+                quarter_id = period.quarter_of_day + (days_ahead * QUARTERS_PER_DAY)
 
                 available_quarters.append(
                     {

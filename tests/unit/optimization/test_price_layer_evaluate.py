@@ -4,11 +4,16 @@ Phase 2 of layer refactor: Tests for the extracted price layer evaluation logic.
 """
 
 import pytest
+from datetime import timedelta
 from unittest.mock import MagicMock
+
+from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.optimization.price_layer import (
     PriceAnalyzer,
+    PriceData,
     PriceLayerDecision,
+    QuarterPeriod,
 )
 from custom_components.effektguard.const import (
     MODE_CONFIGS,
@@ -37,16 +42,16 @@ def mock_nibe_state():
 
 @pytest.fixture
 def mock_price_data_normal():
-    """Create mock price data with NORMAL classification."""
-    data = MagicMock()
-    # Create 96 quarters (24 hours) of NORMAL prices
-    data.today = [
-        MagicMock(price=1.0, classification=QuarterClassification.NORMAL) for _ in range(96)
+    """Real PriceData with 96 uniform-price quarters anchored to today.
+
+    Uniform prices classify NORMAL at every position, so assertions hold
+    regardless of the wall-clock quarter the test happens to run in.
+    """
+    base = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    periods = [
+        QuarterPeriod(start_time=base + timedelta(minutes=15 * q), price=1.0) for q in range(96)
     ]
-    data.quarters = data.today
-    data.current_price = 1.0
-    data.has_tomorrow = False
-    return data
+    return PriceData(today=periods, tomorrow=[], has_tomorrow=False)
 
 
 class TestEvaluateLayerDisabled:

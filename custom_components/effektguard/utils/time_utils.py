@@ -36,10 +36,11 @@ def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> 
 
     Classifications and period lists are position-keyed, while wall-clock
     quarter numbers are ambiguous on DST days (92 or 100 native intervals).
-    Prefer PriceData.get_period_index (timestamp containment); fall back to
-    the wall-clock quarter only for plain 96-interval days, where position
-    and wall-clock quarter coincide (keeps simple test/simulation stand-ins
-    without the method working).
+    PriceData.get_period_index (timestamp containment) is authoritative:
+    when it finds no interval - a data gap, a stale day - the honest answer
+    is None, never a positional guess. Only stand-ins WITHOUT the method
+    (simple test doubles) fall back to the wall-clock quarter, and only on
+    dense 96-interval days where position and wall-clock coincide.
 
     Args:
         price_data: PriceData or a stand-in with a ``today`` list
@@ -58,8 +59,7 @@ def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> 
     finder = getattr(price_data, "get_period_index", None)
     if callable(finder):
         index = finder(now)
-        if isinstance(index, int):
-            return index
+        return index if isinstance(index, int) else None
 
     quarter = get_current_quarter(now)
     if len(periods) == QUARTERS_PER_DAY and quarter < len(periods):

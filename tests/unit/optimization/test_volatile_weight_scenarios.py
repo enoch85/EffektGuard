@@ -7,17 +7,39 @@ trigger pre-heating through weighted aggregation.
 
 import pytest
 from unittest.mock import MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from freezegun import freeze_time
+
+from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
-    VOLATILE_WEIGHT_REDUCTION,
-    PRICE_FORECAST_PREHEAT_OFFSET,
-    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    VOLATILE_MIN_DURATION_QUARTERS,
     LAYER_WEIGHT_PRICE,
+    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
+    PRICE_FORECAST_PREHEAT_OFFSET,
+    QuarterClassification,
+    VOLATILE_MIN_DURATION_QUARTERS,
+    VOLATILE_WEIGHT_REDUCTION,
 )
+
+VOLATILE_TEST_BASE = datetime(2025, 11, 30, 0, 0, tzinfo=timezone.utc)
+
+
+def realize_price_data(period_stubs, base=VOLATILE_TEST_BASE, tomorrow_stubs=None):
+    """Convert price stubs (only .price used) into a real PriceData.
+
+    Real timestamps let the production timestamp-containment lookup resolve
+    the current interval; tests pin the clock with freeze_time to match.
+    """
+
+    def day(stubs, day_base):
+        return [
+            QuarterPeriod(start_time=day_base + timedelta(minutes=15 * q), price=stub.price)
+            for q, stub in enumerate(stubs)
+        ]
+
+    tomorrow = day(tomorrow_stubs, base + timedelta(days=1)) if tomorrow_stubs else []
+    return PriceData(today=day(period_stubs, base), tomorrow=tomorrow, has_tomorrow=bool(tomorrow))
 
 
 class TestVolatileWeightReduction:
@@ -130,22 +152,17 @@ class TestVolatileWeightReduction:
             period.is_daytime = False
             price_periods.append(period)
 
-        price_data = MagicMock()
-        price_data.today = price_periods
-        price_data.tomorrow = []
-        price_data.has_tomorrow = False
+        price_data = realize_price_data(price_periods)
 
         # Get decision at 06:00 (Q24)
-        # Mock current time to 06:00
-        engine.price._current_time_override = datetime(2025, 11, 30, 6, 0)
-
-        decision = engine.calculate_decision(
-            nibe_state=base_nibe_state,
-            price_data=price_data,
-            weather_data=base_weather_data,
-            current_peak=5.0,
-            current_power=2.0,
-        )
+        with freeze_time("2025-11-30 06:00:00"):
+            decision = engine.calculate_decision(
+                nibe_state=base_nibe_state,
+                price_data=price_data,
+                weather_data=base_weather_data,
+                current_peak=5.0,
+                current_power=2.0,
+            )
 
         # Verify decision
         # The system sees:
@@ -214,21 +231,17 @@ class TestVolatileWeightReduction:
             period.is_daytime = is_day
             price_periods.append(period)
 
-        price_data = MagicMock()
-        price_data.today = price_periods
-        price_data.tomorrow = []
-        price_data.has_tomorrow = False
+        price_data = realize_price_data(price_periods)
 
         # Get decision at 10:00 (Q40)
-        engine.price._current_time_override = datetime(2025, 11, 30, 10, 0)
-
-        decision = engine.calculate_decision(
-            nibe_state=base_nibe_state,
-            price_data=price_data,
-            weather_data=base_weather_data,
-            current_peak=5.0,
-            current_power=2.0,
-        )
+        with freeze_time("2025-11-30 10:00:00"):
+            decision = engine.calculate_decision(
+                nibe_state=base_nibe_state,
+                price_data=price_data,
+                weather_data=base_weather_data,
+                current_peak=5.0,
+                current_power=2.0,
+            )
 
         # Verify system holds steady during normal volatility
         # Offset should be small (no extreme changes to react to)
@@ -309,20 +322,17 @@ class TestVolatileWeightReduction:
             period.is_daytime = i >= 24
             price_periods_min.append(period)
 
-        price_data_min = MagicMock()
-        price_data_min.today = price_periods_min
-        price_data_min.tomorrow = []
-        price_data_min.has_tomorrow = False
+        price_data_min = realize_price_data(price_periods_min)
 
-        engine.price._current_time_override = datetime(2025, 11, 30, 0, 0)
-
-        decision_min = engine.calculate_decision(
-            base_nibe_state, price_data_min, base_weather_data, 5.0, 2.0
-        )
+        with freeze_time("2025-11-30 00:00:00"):
+            decision_min = engine.calculate_decision(
+                base_nibe_state, price_data_min, base_weather_data, 5.0, 2.0
+            )
 
         # Should detect volatility (3 non-NORMAL with mix in scan window)
         # Weight should be reduced
         # Note: We can't directly check internal weight, but reasoning should reflect volatile behavior
+        assert decision_min is not None, "Should handle min-threshold volatile window"
 
         # Scenario 2: Max threshold (6 non-NORMAL)
         price_periods_max = []
@@ -345,17 +355,16 @@ class TestVolatileWeightReduction:
             period.is_daytime = i >= 24
             price_periods_max.append(period)
 
-        price_data_max = MagicMock()
-        price_data_max.today = price_periods_max
-        price_data_max.tomorrow = []
-        price_data_max.has_tomorrow = False
+        price_data_max = realize_price_data(price_periods_max)
 
-        decision_max = engine.calculate_decision(
-            base_nibe_state, price_data_max, base_weather_data, 5.0, 2.0
-        )
+        with freeze_time("2025-11-30 00:00:00"):
+            decision_max = engine.calculate_decision(
+                base_nibe_state, price_data_max, base_weather_data, 5.0, 2.0
+            )
 
         # Should definitely detect volatility (6 non-NORMAL = 75% of scan window)
         # Decision should reflect reduced price influence
+        assert decision_max is not None, "Should handle max-threshold volatile window"
 
         # Scenario 4 (NEW Dec 1, 2025): 5 EXPENSIVE+PEAK (no CHEAP) → NOT volatile
         # This is the fix for the reported issue - sustained expensive period is NOT chaos
@@ -383,14 +392,12 @@ class TestVolatileWeightReduction:
             period.is_daytime = i >= 24
             price_periods_sustained.append(period)
 
-        price_data_sustained = MagicMock()
-        price_data_sustained.today = price_periods_sustained
-        price_data_sustained.tomorrow = []
-        price_data_sustained.has_tomorrow = False
+        price_data_sustained = realize_price_data(price_periods_sustained)
 
-        decision_sustained = engine.calculate_decision(
-            base_nibe_state, price_data_sustained, base_weather_data, 5.0, 2.0
-        )
+        with freeze_time("2025-11-30 00:00:00"):
+            decision_sustained = engine.calculate_decision(
+                base_nibe_state, price_data_sustained, base_weather_data, 5.0, 2.0
+            )
 
         # Should NOT detect volatility (5 non-NORMAL but no CHEAP+EXPENSIVE mix)
         # EXPENSIVE+PEAK on same side = normal price progression, not chaos
@@ -487,15 +494,12 @@ class TestVolatileWeightReduction:
             period.quarter_of_day = q
             price_periods.append(period)
 
-        price_data = MagicMock()
-        price_data.today = price_periods
-        price_data.tomorrow = []
-        price_data.has_tomorrow = False
+        price_data = realize_price_data(price_periods)
 
         # Let price analyzer classify the periods normally
         # This happens automatically in calculate_decision via get_current_classification()
         # But we need to populate _classifications_today for backward scan to work
-        classifications = engine.price.classify_quarterly_periods(price_periods)
+        classifications = engine.price.classify_quarterly_periods(price_data.today)
         engine.price._classifications_today = classifications
 
         decision = engine.calculate_decision(
@@ -587,37 +591,32 @@ class TestVolatileWeightReduction:
             period.is_daytime = i >= 24
             price_periods.append(period)
 
-        price_data = MagicMock()
-        price_data.today = price_periods
-        price_data.tomorrow = []
-        price_data.has_tomorrow = False
+        price_data = realize_price_data(price_periods)
 
         # Test at Q1 (00:15) - only 2 quarters of history
-        engine.price._current_time_override = datetime(2025, 11, 30, 0, 15)
-
-        # Should not crash
-        decision = engine.calculate_decision(
-            nibe_state=base_nibe_state,
-            price_data=price_data,
-            weather_data=base_weather_data,
-            current_peak=5.0,
-            current_power=2.0,
-        )
+        with freeze_time("2025-11-30 00:15:00"):
+            # Should not crash
+            decision = engine.calculate_decision(
+                nibe_state=base_nibe_state,
+                price_data=price_data,
+                weather_data=base_weather_data,
+                current_peak=5.0,
+                current_power=2.0,
+            )
 
         # Should complete successfully
         assert decision is not None, "Decision should complete even with partial scan window"
         assert decision.offset is not None, "Should return valid offset"
 
         # Test at Q7 (01:45) - 8 quarters available (full window)
-        engine.price._current_time_override = datetime(2025, 11, 30, 1, 45)
-
-        decision_q7 = engine.calculate_decision(
-            nibe_state=base_nibe_state,
-            price_data=price_data,
-            weather_data=base_weather_data,
-            current_peak=5.0,
-            current_power=2.0,
-        )
+        with freeze_time("2025-11-30 01:45:00"):
+            decision_q7 = engine.calculate_decision(
+                nibe_state=base_nibe_state,
+                price_data=price_data,
+                weather_data=base_weather_data,
+                current_peak=5.0,
+                current_power=2.0,
+            )
 
         # Should also work fine
         assert decision_q7 is not None, "Decision should work with full 8-quarter window"
@@ -683,14 +682,17 @@ class TestVolatileWeightReduction:
             price_periods_tomorrow.append(period)
 
         # Test WITH tomorrow prices
-        price_data_with_tomorrow = MagicMock()
-        price_data_with_tomorrow.today = price_periods_today
-        price_data_with_tomorrow.tomorrow = price_periods_tomorrow
-        price_data_with_tomorrow.has_tomorrow = True
+        price_data_with_tomorrow = realize_price_data(
+            price_periods_today, tomorrow_stubs=price_periods_tomorrow
+        )
 
         # Populate classifications for both days
-        classifications_today = engine.price.classify_quarterly_periods(price_periods_today)
-        classifications_tomorrow = engine.price.classify_quarterly_periods(price_periods_tomorrow)
+        classifications_today = engine.price.classify_quarterly_periods(
+            price_data_with_tomorrow.today
+        )
+        classifications_tomorrow = engine.price.classify_quarterly_periods(
+            price_data_with_tomorrow.tomorrow
+        )
         engine.price._classifications_today = classifications_today
         engine.price._classifications_tomorrow = classifications_tomorrow
 
@@ -710,10 +712,7 @@ class TestVolatileWeightReduction:
         ), f"Should be conservative during day transition volatility, offset: {decision_with_tomorrow.offset}"
 
         # Test WITHOUT tomorrow prices (partial scan)
-        price_data_no_tomorrow = MagicMock()
-        price_data_no_tomorrow.today = price_periods_today
-        price_data_no_tomorrow.tomorrow = []
-        price_data_no_tomorrow.has_tomorrow = False
+        price_data_no_tomorrow = realize_price_data(price_periods_today)
 
         # Only today classifications
         engine.price._classifications_today = classifications_today
@@ -775,12 +774,6 @@ class TestVolatileWeightReduction:
           - Use PEAK offset (-10.0 or scaled)
           - Weight = 1.0 (critical priority)
         """
-        from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
-        from datetime import timezone
-        from custom_components.effektguard.const import (
-            QuarterClassification,
-        )
-
         # Build evening price data with PEAK cluster pattern
         price_periods = []
         classifications = []
@@ -820,11 +813,8 @@ class TestVolatileWeightReduction:
                 price_periods.append(period)
                 classifications.append(QuarterClassification.NORMAL)
 
-        # Set up price data
-        price_data = MagicMock()
-        price_data.today = price_periods
-        price_data.tomorrow = []
-        price_data.has_tomorrow = False
+        # Set up price data (periods are real QuarterPeriods on 2025-01-15)
+        price_data = PriceData(today=price_periods, tomorrow=[], has_tomorrow=False)
 
         # Configure classifier
         engine.price._classifications_today = classifications
