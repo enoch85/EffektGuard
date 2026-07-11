@@ -572,9 +572,11 @@ the multi-source branch), one commit + regression test per finding:
   assumptions section above and the profile docstrings.
 - **R5 (quarantined): learned heat-loss coefficient is not W/°C** — relabeled
   a relative index; verified no consumer feeds it into the control path.
-- **R6 (medium, fixed): savings math assumed öre/kWh.** Cost conversion now
-  honors the GE-Spot unit attribute (öre/cent subunits ÷100, SEK/EUR main
-  units as-is, unknown units keep legacy behavior with a one-time log).
+- **R6 (medium, partially fixed): savings math assumed öre/kWh.** Price-unit
+  conversion now honors the GE-Spot unit attribute (öre/cent subunits ÷100,
+  main units as-is), so price ranking and a single-currency spot calculation
+  no longer apply an unconditional ÷100. See the open global-currency follow-up
+  below before treating the resulting amount as SEK.
 - **R7 (medium, fixed): DST days.** 92/100-quarter days are normalized
   honestly: duplicates dedupe first-occurrence-wins, gaps forward-fill from
   the nearest real price instead of a fabricated day-average, and empty days
@@ -583,6 +585,17 @@ the multi-source branch), one commit + regression test per finding:
 - **R8 (medium, fixed): DHW next-opportunity constraint algebra** — mandatory
   lower bounds now use max(), cheap-window candidates are clamped inside
   them, and the cooling deadline caps the result.
+- **R9 (open, global-currency/tariff reporting):** Price optimization itself is
+  currency-invariant: percentiles, price ratios, and cheapest-window selection
+  work with any configured currency or subunit. Monetary reporting is not yet
+  global. `SavingsEstimate` and the Estimated Monthly Savings sensor are SEK,
+  while spot feeds can be EUR, NOK, DKK, or another currency; mixing a spot
+  amount in one currency with Swedish effect-tariff savings in SEK is invalid.
+  Current safe behavior must either report spot savings in its source currency
+  separately, or omit it from a SEK total. A complete design needs explicit
+  currency metadata for every monetary value, a configurable local effect-tariff
+  model (or disabled tariff estimate), and an explicit FX source/date before a
+  combined total is shown. Deferred by maintainer request (2026-07-11).
 - Also: dead demo/simulation scripts removed (compileall-breaking
   triple-quote, hardcoded workspace paths); harness comfort accounting
   tightened to the configured tolerance with a `--baseline` matched-neutral
