@@ -48,6 +48,7 @@ from .const import (
     STARTUP_GRACE_MIN_INTERVAL,
     STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
+    WATTS_PER_KILOWATT,
 )
 from .models.nibe import NibeF750Profile
 from .models.registry import HeatPumpModelRegistry
@@ -1764,8 +1765,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Availability is tracked via event listener for fast startup detection
                 if power_state and power_state.state not in ["unknown", "unavailable"]:
                     try:
-                        # Power sensor typically in watts, convert to kW
-                        current_power = float(power_state.state) / 1000
+                        # Convert to kW only when the meter reports watts -
+                        # a kW meter must not be divided a second time
+                        # (a 6.0 kW whole-house meter would become 0.006 kW,
+                        # invalidating peak protection and peak records)
+                        power_unit = str(
+                            power_state.attributes.get("unit_of_measurement", "W")
+                        ).lower()
+                        current_power = float(power_state.state)
+                        if power_unit == "w":
+                            current_power = current_power / WATTS_PER_KILOWATT
                         _LOGGER.debug(
                             "📊 External power meter (whole house): %.3f kW from %s",
                             current_power,

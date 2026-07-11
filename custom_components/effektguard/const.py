@@ -1109,6 +1109,9 @@ DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (e
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
+# Unit conversion
+WATTS_PER_KILOWATT: Final = 1000.0
+
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (

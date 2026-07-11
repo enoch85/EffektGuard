@@ -103,6 +103,7 @@ class TestPowerMeasurementPriority:
         # Mock power sensor entity
         mock_state = MagicMock()
         mock_state.state = "5500"  # 5500W = 5.5 kW
+        mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
 
         # Mock NIBE data
@@ -210,6 +211,40 @@ class TestPowerMeasurementPriority:
         assert coordinator.peak_today <= 6.0
 
 
+class TestKilowattMeterNotDividedTwice:
+    """A kW-unit whole-house meter must not be divided by 1000 again.
+
+    Regression: the coordinator divided every external meter reading by
+    1000 ("typically in watts"), so a 6.0 kW meter became 0.006 kW and
+    invalidated peak protection and peak records.
+    """
+
+    @pytest.mark.asyncio
+    async def test_kw_meter_used_verbatim(self, coordinator_with_external_meter):
+        coordinator = coordinator_with_external_meter
+
+        mock_state = MagicMock()
+        mock_state.state = "6.0"
+        mock_state.attributes = {"unit_of_measurement": "kW"}
+        coordinator.hass.states.get.return_value = mock_state
+
+        nibe_data = NibeState(
+            outdoor_temp=5.0,
+            indoor_temp=21.0,
+            supply_temp=35.0,
+            return_temp=30.0,
+            degree_minutes=-50.0,
+            current_offset=0.0,
+            is_heating=True,
+            is_hot_water=False,
+            timestamp=datetime.now(),
+        )
+
+        await coordinator._update_peak_tracking(nibe_data)
+
+        assert coordinator.peak_today == 6.0
+
+
 class TestSmartFallbackSolarOffset:
     """Test smart fallback for grid meters with solar/battery offset."""
 
@@ -223,6 +258,7 @@ class TestSmartFallbackSolarOffset:
         # Mock external meter showing low reading (solar export offset)
         mock_state = MagicMock()
         mock_state.state = "300"  # Only 300W (likely solar offset)
+        mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
 
         # Mock NIBE data showing compressor working hard
@@ -266,6 +302,7 @@ class TestSmartFallbackSolarOffset:
         # Mock external meter showing low reading
         mock_state = MagicMock()
         mock_state.state = "300"  # 300W
+        mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
 
         # Mock NIBE data showing compressor idle
