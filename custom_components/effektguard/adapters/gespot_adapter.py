@@ -248,32 +248,59 @@ class GESpotAdapter:
         self,
         periods: list[QuarterPeriod],
     ) -> list[QuarterPeriod]:
-        """Fill missing periods to ensure 96 quarters per day.
+        """Normalize a day to a dense list of 96 wall-clock quarters.
 
-        Args:
-            periods: Partial list of periods
+        The coordinator indexes today[current_quarter] POSITIONALLY, so the
+        list must stay dense: a shorter list would shift every price after a
+        gap by the gap's length. Non-96 days are real, not errors:
 
-        Returns:
-            Complete list of 96 periods (missing filled with average price)
+        - Spring DST (92 periods): the skipped hour's quarters never occur on
+          the wall clock, so the filled entries are never indexed that day;
+          they only preserve alignment.
+        - Autumn DST (100 periods): the repeated hour yields duplicate
+          quarter_of_day values; the first occurrence wins, so the repeated
+          wall-clock hour reads the first pass's prices.
+        - Mid-day data gaps: filled from the nearest earlier real price
+          (prices are step functions; a neighbor beats a day average and
+          does not skew cheap/expensive classification toward the mean).
         """
-        # Calculate average price from available periods
-        avg_price = sum(p.price for p in periods) / len(periods) if periods else 1.0
+        if not periods:
+            # Nothing real to anchor on: an empty day is honest (all callers
+            # guard on truthiness); 96 fabricated prices are not.
+            return []
 
-        # Create lookup dict
-        period_dict = {p.quarter_of_day: p for p in periods}
+        period_dict: dict[int, QuarterPeriod] = {}
+        for period in periods:
+            # Keep the first occurrence (autumn DST duplicates)
+            period_dict.setdefault(period.quarter_of_day, period)
 
-        # Fill all 96 quarters
+        if len(period_dict) < len(periods):
+            _LOGGER.info(
+                "Dropped %d duplicate quarter(s) (autumn DST repeated hour)",
+                len(periods) - len(period_dict),
+            )
+
+        # Derive the day from the real data, not from now(): this method also
+        # normalizes tomorrow's list, whose filled entries must carry
+        # tomorrow's date.
+        base_date = periods[0].start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
         complete_periods = []
-        base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
+        last_real: QuarterPeriod | None = None
         for quarter in range(96):
-            if quarter in period_dict:
-                complete_periods.append(period_dict[quarter])
-            else:
-                # Fill missing with average price at calculated time
-                hour = quarter // 4
-                minute = (quarter % 4) * 15
-                start_time = base_date.replace(hour=hour, minute=minute)
-                complete_periods.append(QuarterPeriod(start_time=start_time, price=avg_price))
+            period = period_dict.get(quarter)
+            if period is not None:
+                last_real = period
+                complete_periods.append(period)
+                continue
+            # Forward-fill from the nearest earlier real price; a leading gap
+            # takes the first real price of the day.
+            neighbor = last_real if last_real is not None else periods[0]
+            complete_periods.append(
+                QuarterPeriod(
+                    start_time=base_date.replace(hour=quarter // 4, minute=(quarter % 4) * 15),
+                    price=neighbor.price,
+                )
+            )
 
         return complete_periods
