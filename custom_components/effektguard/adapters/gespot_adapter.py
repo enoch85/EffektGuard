@@ -120,6 +120,7 @@ class GESpotAdapter:
             config: Configuration dictionary with entity IDs
         """
         self.hass = hass
+        self.price_unit: str | None = None
         self._gespot_entity = config.get(CONF_GESPOT_ENTITY)
 
     async def get_prices(self) -> PriceData:
@@ -150,9 +151,11 @@ class GESpotAdapter:
             else:
                 _LOGGER.debug("  - %s: %s", attr_name, attr_value)
 
-        # Get GE-Spot unit configuration for logging
-        # We don't convert - just use whatever the user configured
+        # Get GE-Spot unit configuration. Prices are used as-is for
+        # ranking/classification (unit-invariant); the unit is exposed so the
+        # savings calculator can convert to the main currency unit correctly.
         unit_of_measurement = state.attributes.get("unit_of_measurement", "unknown")
+        self.price_unit = unit_of_measurement
 
         _LOGGER.debug(
             "GE-Spot configured unit: %s (using prices as-is, no conversion)",

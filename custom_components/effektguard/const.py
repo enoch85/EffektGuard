@@ -1296,6 +1296,13 @@ SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
 # If no baseline observed, estimate unoptimized peak from current optimized peak
 BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
 
+# Price-unit handling for savings math. GE-Spot preserves whatever display
+# unit the user configured; savings must convert to the MAIN currency unit
+# accordingly instead of assuming öre/kWh. Prefix match on the normalized
+# (lowercase, spaceless) unit string; sub-units (öre, cents) divide by 100.
+PRICE_SUBUNIT_PREFIXES: Final[tuple[str, ...]] = ("öre", "ore", "cent", "snt")
+PRICE_MAINUNIT_PREFIXES: Final[tuple[str, ...]] = ("sek", "eur", "nok", "dkk", "€", "kr")
+
 # Monthly calculation constants
 DAYS_PER_MONTH: Final = 30.0  # Average days for monthly savings calculation
 ORE_TO_SEK_CONVERSION: Final = 100.0  # Convert öre to SEK (1 SEK = 100 öre)

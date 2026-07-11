@@ -1045,6 +1045,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_price = price_data.today[current_quarter].price
 
                 # Calculate savings using ACTUAL power consumption
+                self.savings_calculator.price_unit = getattr(self.gespot, "price_unit", None)
                 cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
                     actual_power_kw=nibe_data.power_kw,
                     current_price=current_price,
