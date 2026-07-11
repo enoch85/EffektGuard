@@ -25,7 +25,6 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from tests.conftest import create_mock_price_analyzer
 
-
 # ==============================================================================
 # TEST FIXTURES
 # ==============================================================================
@@ -517,3 +516,37 @@ def test_dataclass_validation_allows_heating_without_timestamp():
         recommended_start_time=datetime.now(),
     )
     assert heating_with_time.recommended_start_time is not None
+
+
+def test_next_opportunity_never_before_debt_recovery(scheduler_with_climate, current_time):
+    """A cheap price window that starts before thermal debt has recovered
+    must not be recommended: the hard safety constraint is a lower bound,
+    not one candidate among equals (review finding: min() over mixed
+    constraint types)."""
+    scheduler = scheduler_with_climate
+
+    recovery_hours = scheduler._estimate_dm_recovery_time(
+        current_dm=-900.0,
+        target_dm=-600.0 + 20.0,
+        outdoor_temp=0.0,
+    )
+    earliest_allowed = current_time + timedelta(hours=recovery_hours)
+
+    # Cheap window starting immediately (before recovery completes)
+    class _Window:
+        start_time = current_time + timedelta(minutes=15)
+
+    scheduler.price_analyzer.find_cheapest_window = lambda **kwargs: _Window()
+
+    result = scheduler._find_next_dhw_opportunity(
+        current_time=current_time,
+        current_dhw_temp=48.0,
+        thermal_debt_dm=-900.0,
+        outdoor_temp=0.0,
+        price_periods=[object()],
+        blocking_reason="THERMAL_DEBT",
+        dm_block_threshold=-600.0,
+    )
+
+    assert result >= earliest_allowed
+    assert result > current_time + timedelta(minutes=15)
