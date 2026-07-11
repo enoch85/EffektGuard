@@ -60,7 +60,7 @@ while [[ $# -gt 0 ]]; do
             TAIL_LINES="$2"
             shift 2
             ;;
-        unit|validation|integration|all)
+        unit|validation|integration|all|optimization|climate|learning|models|dhw|effect|simulation)
             CATEGORY="$1"
             shift
             ;;
@@ -183,6 +183,13 @@ case $CATEGORY in
     effect)
         echo -e "${BLUE}📊 Running: ${BOLD}Effect Unit Tests${NC}"
         PYTEST_ARGS="tests/unit/effect/"
+        ;;
+    simulation)
+        # Month-long optimization simulation (real DecisionEngine + plant model).
+        # Self-test uses 2 synthetic days; see scripts/simulation/README.md.
+        echo -e "${BLUE}📊 Running: ${BOLD}Optimization Simulation (self-test)${NC}"
+        python scripts/simulation/sim_harness.py --selftest
+        exit $?
         ;;
     *)
         echo -e "${RED}✗ Unknown category: $CATEGORY${NC}"
