@@ -6,7 +6,7 @@ gaps previously got synthetic day-average prices (skewing classification) and
 filled entries stamped with today's date even in tomorrow's list.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from custom_components.effektguard.adapters.gespot_adapter import GESpotAdapter
@@ -33,47 +33,35 @@ def make_raw_day(base: datetime, skip_hours: tuple[int, ...] = ()) -> list[dict]
 
 
 class TestSpringDstDay:
-    def test_92_period_day_stays_dense_and_forward_fills(self):
+    def test_92_period_day_preserves_only_real_intervals(self):
         adapter = make_adapter()
         base = datetime(2026, 3, 29, 0, 0)  # EU spring DST: 02:00 skipped
         periods = adapter._parse_periods(make_raw_day(base, skip_hours=(2,)))
 
-        assert len(periods) == 96
-        # Positional alignment preserved: quarter 12 (03:00) is still 03:00.
-        assert periods[12].price == 12.0
-        # The skipped hour forward-fills from 01:45 (quarter 7), not a
-        # day-average (which would be ~47.6 and skew classification).
-        for quarter in range(8, 12):
-            assert periods[quarter].price == 7.0
-
-    def test_filled_entries_carry_the_days_date(self):
-        adapter = make_adapter()
-        tomorrow = datetime(2026, 3, 29, 0, 0)
-        periods = adapter._parse_periods(make_raw_day(tomorrow, skip_hours=(2,)))
-        # Previously stamped with dt_util.now()'s date (today), corrupting
-        # tomorrow's timeline.
-        assert periods[8].start_time.date() == tomorrow.date()
+        assert len(periods) == 92
+        assert all(period.start_time.hour != 2 for period in periods)
+        assert periods[8].start_time.hour == 3
 
 
 class TestAutumnDstDay:
-    def test_100_period_day_dedupes_first_occurrence_wins(self):
+    def test_100_period_day_preserves_both_delivery_hours(self):
         adapter = make_adapter()
-        base = datetime(2026, 10, 25, 0, 0)
-        raw = make_raw_day(base)
-        # Repeated 02:00 hour: 4 extra periods with duplicate wall-clock
-        # quarters but different prices (second Nord Pool delivery hour).
-        for quarter in range(8, 12):
-            raw.append(
-                {
-                    "time": (base + timedelta(minutes=15 * quarter)).isoformat(),
-                    "value": 999.0,
-                }
-            )
+        raw = [
+            {"time": "2026-10-25T02:00:00+02:00", "value": 10.0},
+            {"time": "2026-10-25T02:15:00+02:00", "value": 11.0},
+            {"time": "2026-10-25T02:00:00+01:00", "value": 90.0},
+            {"time": "2026-10-25T02:15:00+01:00", "value": 91.0},
+        ]
         periods = adapter._parse_periods(raw)
 
-        assert len(periods) == 96
-        for quarter in range(8, 12):
-            assert periods[quarter].price == float(quarter)  # first pass wins
+        assert len(periods) == 4
+        first_hour = datetime(2026, 10, 25, 0, 0, tzinfo=timezone.utc)
+        second_hour = datetime(2026, 10, 25, 1, 0, tzinfo=timezone.utc)
+        from custom_components.effektguard.adapters.gespot_adapter import PriceData
+
+        price_data = PriceData(today=periods, tomorrow=[], has_tomorrow=False)
+        assert price_data.get_period(first_hour).price == 10.0
+        assert price_data.get_period(second_hour).price == 90.0
 
 
 class TestDegenerateDays:
@@ -85,6 +73,6 @@ class TestDegenerateDays:
         adapter = make_adapter()
         base = datetime(2026, 1, 7, 0, 0)
         periods = adapter._parse_periods(make_raw_day(base, skip_hours=(0,)))
-        assert len(periods) == 96
-        for quarter in range(4):
-            assert periods[quarter].price == 4.0  # first real quarter (01:00)
+        assert len(periods) == 92
+        assert periods[0].start_time.hour == 1
+        assert periods[0].price == 4.0

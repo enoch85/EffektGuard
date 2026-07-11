@@ -67,6 +67,17 @@ class SavingsCalculator:
             )
         return 1.0 / ORE_TO_SEK_CONVERSION
 
+    @property
+    def is_sek_price_unit(self) -> bool:
+        """Return whether spot savings are denominated in SEK.
+
+        Effect-tariff savings are always SEK. A price feed in another currency
+        may still guide ranking, but its monetary spot result must never be
+        combined with a SEK tariff result without an explicit FX conversion.
+        """
+        unit = (self.price_unit or "").lower().replace(" ", "")
+        return not unit or unit.startswith(("sek", "öre", "ore"))
+
     def __init__(self):
         """Initialize savings calculator."""
         self.price_unit: str | None = None

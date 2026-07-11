@@ -51,3 +51,10 @@ def test_ore_per_kwh_unchanged():
         average_price_today=200.0,
     )
     assert savings == pytest.approx(1.0)
+
+
+def test_eur_spot_savings_are_not_aggregated_as_sek():
+    calc = SavingsCalculator()
+    calc.price_unit = "EUR/kWh"
+
+    assert calc.is_sek_price_unit is False

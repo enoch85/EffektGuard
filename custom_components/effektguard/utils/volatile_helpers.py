@@ -104,8 +104,11 @@ def get_volatile_info(
     run_length = 1
     remaining_quarters = 1  # Track forward quarters separately
 
+    today_length = len(price_data.today)
+    tomorrow_length = len(price_data.tomorrow)
+
     # Scan backwards
-    for offset in range(1, 96):
+    for offset in range(1, today_length):
         check_quarter = current_quarter - offset
         if check_quarter < 0:
             break
@@ -115,13 +118,13 @@ def get_volatile_info(
             break
 
     # Scan forwards (count both run_length and remaining_quarters)
-    for offset in range(1, 96):
+    for offset in range(1, today_length + tomorrow_length):
         check_quarter = current_quarter + offset
-        if check_quarter < 96:
+        if check_quarter < today_length:
             check_class = price_analyzer.get_current_classification(check_quarter)
         elif price_data.has_tomorrow:
-            tomorrow_quarter = check_quarter - 96
-            if tomorrow_quarter < 96:
+            tomorrow_quarter = check_quarter - today_length
+            if tomorrow_quarter < tomorrow_length:
                 check_class = price_analyzer.get_tomorrow_classification(tomorrow_quarter)
             else:
                 break
@@ -173,11 +176,11 @@ def get_volatile_info(
         if has_peak_before:
             for fwd_offset in range(1, VOLATILE_MIN_DURATION_QUARTERS + 1):
                 check_quarter = current_quarter + fwd_offset
-                if check_quarter < 96:
+                if check_quarter < today_length:
                     check_class = price_analyzer.get_current_classification(check_quarter)
                 elif price_data.has_tomorrow:
-                    tomorrow_quarter = check_quarter - 96
-                    if tomorrow_quarter < 96:
+                    tomorrow_quarter = check_quarter - today_length
+                    if tomorrow_quarter < tomorrow_length:
                         check_class = price_analyzer.get_tomorrow_classification(tomorrow_quarter)
                     else:
                         break

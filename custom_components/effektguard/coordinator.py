@@ -43,6 +43,7 @@ from .const import (
     DOMAIN,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
+    QUARTER_INTERVAL_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     STARTUP_GRACE_MIN_INTERVAL,
@@ -269,8 +270,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
         # instantaneous sample: accumulate real measurements within the
         # quarter and record the mean when the quarter completes
-        self._quarter_power_samples: list[float] = []
-        self._quarter_power_id: int | None = None
+        self._quarter_power_samples: list[tuple[datetime, float]] = []
+        self._quarter_power_id: tuple[object, int] | None = None
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
         self._last_learning_save: datetime | None = None  # Track last learned data save time
@@ -772,9 +773,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             price_data = await self.gespot.get_prices()
             if price_data and price_data.today:
-                current_q = (dt_util.now().hour * 4) + (dt_util.now().minute // 15)
+                current_index = price_data.get_period_index(dt_util.now())
                 current_price = (
-                    price_data.today[current_q].price if current_q < len(price_data.today) else 0
+                    price_data.today[current_index].price if current_index is not None else 0
                 )
 
                 # Get unit from spot price entity for accurate logging
@@ -789,7 +790,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug(
                     "Spot price data retrieved: %d quarters today, current Q%d = %.2f %s",
                     len(price_data.today),
-                    current_q,
+                    current_index if current_index is not None else -1,
                     current_price,
                     unit,
                 )
@@ -1031,7 +1032,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Calculate actual spot savings for this cycle using real NIBE power
         now_time = dt_util.now()
-        current_quarter = get_current_quarter(now_time)
+        current_quarter = price_data.get_period_index(now_time) if price_data else None
         if (
             price_data
             and hasattr(price_data, "today")
@@ -1040,7 +1041,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             and nibe_data.power_kw is not None
         ):
             prices_today = [q.price for q in price_data.today]
-            if prices_today and current_quarter < len(price_data.today):
+            if prices_today and current_quarter is not None:
                 average_price = sum(prices_today) / len(prices_today)
                 current_price = price_data.today[current_quarter].price
 
@@ -1052,7 +1053,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     average_price_today=average_price,
                     cycle_minutes=UPDATE_INTERVAL_MINUTES,
                 )
-                self._daily_spot_savings += cycle_savings
+                if self.savings_calculator.is_sek_price_unit:
+                    self._daily_spot_savings += cycle_savings
+                else:
+                    _LOGGER.debug(
+                        "Skipping non-SEK spot-savings aggregation for price unit %s",
+                        self.savings_calculator.price_unit,
+                    )
 
         # Check for day change and save yesterday's peak
         now = dt_util.now()
@@ -1110,14 +1117,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Get current quarter classification from price analyzer
         # Use Home Assistant timezone-aware helper to avoid naive datetimes
         now_time = dt_util.now()
-        current_quarter = get_current_quarter(now_time)
-        current_classification = self.engine.price.get_current_classification(current_quarter)
+        current_quarter = price_data.get_period_index(now_time) if price_data else None
+        current_classification = (
+            self.engine.price.get_current_classification(current_quarter)
+            if current_quarter is not None
+            else None
+        )
 
         # Calculate estimated savings
         current_price = 0.0
         if price_data and hasattr(price_data, "today") and price_data.today:
             # Get current price
-            if current_quarter < len(price_data.today):
+            if current_quarter is not None:
                 current_price = price_data.today[current_quarter].price
 
         # Calculate savings estimate
@@ -1373,10 +1384,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
 
         # Get price classification and volatility
-        current_quarter = get_current_quarter(now_time)
+        current_quarter = price_data.get_period_index(now_time) if price_data else None
         price_classification = (
             self.engine.price.get_current_classification(current_quarter)
-            if price_data
+            if current_quarter is not None
             else "normal"
         )
 
@@ -1901,7 +1912,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Get current timestamp for peak tracking
             now = dt_util.now()
-            quarter_of_day = (now.hour * 4) + (now.minute // 15)  # 0-95
+            quarter_of_day = get_current_quarter(now)
+            quarter_id = (now.date(), quarter_of_day)
 
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
@@ -1941,21 +1953,37 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # quarter completes.
             peak_event = None
             if self._quarter_power_id is None:
-                self._quarter_power_id = quarter_of_day
-            elif quarter_of_day != self._quarter_power_id:
+                if now.minute % QUARTER_INTERVAL_MINUTES:
+                    _LOGGER.debug("Discarding partial effect-tariff quarter at startup")
+                    return
+                quarter_start = now.replace(second=0, microsecond=0)
+                self._quarter_power_id = quarter_id
+                self._quarter_power_samples = [(quarter_start, current_power)]
+                return
+            elif quarter_id != self._quarter_power_id:
                 if self._quarter_power_samples:
-                    quarter_mean = sum(self._quarter_power_samples) / len(
-                        self._quarter_power_samples
-                    )
+                    quarter_start, first_power = self._quarter_power_samples[0]
+                    quarter_end = quarter_start + timedelta(minutes=QUARTER_INTERVAL_MINUTES)
+                    weighted_power = 0.0
+                    previous_time = quarter_start
+                    previous_power = first_power
+                    for sample_time, sample_power in self._quarter_power_samples[1:]:
+                        weighted_power += (
+                            previous_power * (sample_time - previous_time).total_seconds()
+                        )
+                        previous_time = sample_time
+                        previous_power = sample_power
+                    weighted_power += previous_power * (quarter_end - previous_time).total_seconds()
+                    quarter_mean = weighted_power / (quarter_end - quarter_start).total_seconds()
                     peak_event = await self.effect.record_quarter_measurement(
                         power_kw=quarter_mean,
-                        quarter=self._quarter_power_id,
+                        quarter=self._quarter_power_id[1],
                         timestamp=now,
                     )
                 self._quarter_power_samples = []
-                self._quarter_power_id = quarter_of_day
+                self._quarter_power_id = quarter_id
 
-            self._quarter_power_samples.append(current_power)
+            self._quarter_power_samples.append((now, current_power))
 
             if peak_event:
                 self.peak_this_month = peak_event.effective_power

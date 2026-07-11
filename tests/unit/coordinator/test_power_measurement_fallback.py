@@ -573,7 +573,7 @@ class TestQuarterMeanRecording:
             mock_state.state = watts
             mock_state.attributes = {"unit_of_measurement": "W"}
             coordinator.hass.states.get.return_value = mock_state
-            frozen = datetime(2026, 1, 15, 10, minute, 10, tzinfo=timezone.utc)
+            frozen = datetime(2026, 1, 15, 10, minute, tzinfo=timezone.utc)
             monkeypatch.setattr(dt_util, "now", lambda tz=None, _f=frozen: _f)
             await coordinator._update_peak_tracking(nibe_state())
 
@@ -585,7 +585,7 @@ class TestQuarterMeanRecording:
         mock_state.state = "1500"
         mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
-        frozen = datetime(2026, 1, 15, 10, 15, 10, tzinfo=timezone.utc)
+        frozen = datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc)
         monkeypatch.setattr(dt_util, "now", lambda tz=None, _f=frozen: _f)
         await coordinator._update_peak_tracking(nibe_state())
 
@@ -594,3 +594,58 @@ class TestQuarterMeanRecording:
         assert recorded["quarter"] == 40
         # Mean of 1, 9, 2 kW = 4.0 kW - NOT the 9 kW spike
         assert recorded["power_kw"] == pytest.approx(4.0)
+
+    @pytest.mark.asyncio
+    async def test_partial_startup_quarter_is_discarded(
+        self, coordinator_with_external_meter, monkeypatch
+    ):
+        from datetime import datetime, timezone
+        from homeassistant.util import dt as dt_util
+
+        coordinator = coordinator_with_external_meter
+        coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+        state = MagicMock()
+        state.state = "9000"
+        state.attributes = {"unit_of_measurement": "W"}
+        coordinator.hass.states.get.return_value = state
+        nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
+
+        monkeypatch.setattr(
+            dt_util, "now", lambda tz=None: datetime(2026, 1, 15, 10, 10, tzinfo=timezone.utc)
+        )
+        await coordinator._update_peak_tracking(nibe_data)
+        monkeypatch.setattr(
+            dt_util, "now", lambda tz=None: datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc)
+        )
+        await coordinator._update_peak_tracking(nibe_data)
+
+        coordinator.effect.record_quarter_measurement.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_irregular_samples_use_time_weighted_mean(
+        self, coordinator_with_external_meter, monkeypatch
+    ):
+        from datetime import datetime, timezone
+        from homeassistant.util import dt as dt_util
+
+        coordinator = coordinator_with_external_meter
+        coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+        nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
+
+        for watts, minute in (("1000", 0), ("9000", 1), ("1000", 14), ("1000", 15)):
+            state = MagicMock()
+            state.state = watts
+            state.attributes = {"unit_of_measurement": "W"}
+            coordinator.hass.states.get.return_value = state
+            monkeypatch.setattr(
+                dt_util,
+                "now",
+                lambda tz=None, minute=minute: datetime(
+                    2026, 1, 15, 10, minute, tzinfo=timezone.utc
+                ),
+            )
+            await coordinator._update_peak_tracking(nibe_data)
+
+        recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+        # 1 kW for 1 min, 9 kW for 13 min, 1 kW for 1 min = 119 / 15 kW.
+        assert recorded["power_kw"] == pytest.approx(119 / 15)
