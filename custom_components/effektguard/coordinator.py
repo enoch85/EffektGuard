@@ -266,6 +266,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.last_offset_timestamp: datetime | None = None  # When offset was last applied
         self.peak_today: float = 0.0
         self.peak_this_month: float = 0.0
+        # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
+        # instantaneous sample: accumulate real measurements within the
+        # quarter and record the mean when the quarter completes
+        self._quarter_power_samples: list[float] = []
+        self._quarter_power_id: int | None = None
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
         self._last_learning_save: datetime | None = None  # Track last learned data save time
@@ -1928,12 +1933,28 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-            # Update monthly peak through effect manager
-            peak_event = await self.effect.record_quarter_measurement(
-                power_kw=current_power,
-                quarter=quarter_of_day,
-                timestamp=now,
-            )
+            # Swedish effect tariffs bill the 15-minute MEAN power. Recording
+            # each instantaneous sample would register a short spike (e.g. a
+            # 9 kW start among 1 kW readings) as a full quarter peak. Instead,
+            # accumulate this quarter's samples and record the mean when the
+            # quarter completes.
+            peak_event = None
+            if self._quarter_power_id is None:
+                self._quarter_power_id = quarter_of_day
+            elif quarter_of_day != self._quarter_power_id:
+                if self._quarter_power_samples:
+                    quarter_mean = sum(self._quarter_power_samples) / len(
+                        self._quarter_power_samples
+                    )
+                    peak_event = await self.effect.record_quarter_measurement(
+                        power_kw=quarter_mean,
+                        quarter=self._quarter_power_id,
+                        timestamp=now,
+                    )
+                self._quarter_power_samples = []
+                self._quarter_power_id = quarter_of_day
+
+            self._quarter_power_samples.append(current_power)
 
             if peak_event:
                 self.peak_this_month = peak_event.effective_power

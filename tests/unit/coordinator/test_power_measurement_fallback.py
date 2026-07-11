@@ -533,3 +533,64 @@ def coordinator():
     )
 
     return coordinator
+
+
+class TestQuarterMeanRecording:
+    """Effect tariff quarters bill the 15-minute MEAN, not a sample.
+
+    Regression: every 5-minute instantaneous reading was recorded as a
+    quarter measurement, so one short 9 kW spike among 1 kW readings
+    became a 9 kW tariff peak.
+    """
+
+    @pytest.mark.asyncio
+    async def test_spike_recorded_as_quarter_mean(
+        self, coordinator_with_external_meter, monkeypatch
+    ):
+        from homeassistant.util import dt as dt_util
+        from datetime import datetime, timezone
+
+        coordinator = coordinator_with_external_meter
+        coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+
+        def nibe_state():
+            return NibeState(
+                outdoor_temp=5.0,
+                indoor_temp=21.0,
+                supply_temp=35.0,
+                return_temp=30.0,
+                degree_minutes=-50.0,
+                current_offset=0.0,
+                is_heating=True,
+                is_hot_water=False,
+                timestamp=datetime.now(),
+            )
+
+        # Three samples within quarter 40 (10:00-10:15): 1, 9 (spike), 2 kW
+        samples = [("1000", 0), ("9000", 5), ("2000", 10)]
+        for watts, minute in samples:
+            mock_state = MagicMock()
+            mock_state.state = watts
+            mock_state.attributes = {"unit_of_measurement": "W"}
+            coordinator.hass.states.get.return_value = mock_state
+            frozen = datetime(2026, 1, 15, 10, minute, 10, tzinfo=timezone.utc)
+            monkeypatch.setattr(dt_util, "now", lambda tz=None, _f=frozen: _f)
+            await coordinator._update_peak_tracking(nibe_state())
+
+        # Nothing recorded yet - the quarter has not completed
+        coordinator.effect.record_quarter_measurement.assert_not_awaited()
+
+        # First sample of the NEXT quarter completes quarter 40
+        mock_state = MagicMock()
+        mock_state.state = "1500"
+        mock_state.attributes = {"unit_of_measurement": "W"}
+        coordinator.hass.states.get.return_value = mock_state
+        frozen = datetime(2026, 1, 15, 10, 15, 10, tzinfo=timezone.utc)
+        monkeypatch.setattr(dt_util, "now", lambda tz=None, _f=frozen: _f)
+        await coordinator._update_peak_tracking(nibe_state())
+
+        coordinator.effect.record_quarter_measurement.assert_awaited_once()
+        recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+        assert recorded["quarter"] == 40
+        # Mean of 1, 9, 2 kW = 4.0 kW - NOT the 9 kW spike
+        assert recorded["power_kw"] == pytest.approx(4.0)
