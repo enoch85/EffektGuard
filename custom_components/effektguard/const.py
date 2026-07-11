@@ -861,6 +861,10 @@ UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
 QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
+# Native interval counts a day can have: 92 (spring DST), 96 (normal),
+# 100 (autumn DST). Anything else means the source delivered a data gap.
+NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control
 STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before observation cycles
 

@@ -54,6 +54,7 @@ from ..const import (
     DM_RECOVERY_SAFETY_BUFFER,
     DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
+    QuarterClassification,
     SPACE_HEATING_DEMAND_DROP_HOURS,
     SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
     SPACE_HEATING_DEMAND_LOW_THRESHOLD,
@@ -1911,21 +1912,12 @@ class IntelligentDHWScheduler:
             # No price data - try again in 1 hour (conservative fallback)
             return current_time + timedelta(hours=1)
 
-        from ..const import QuarterClassification
-
         # Search through upcoming periods for the first non-peak
         for period in price_periods:
             if period.start_time <= current_time:
                 continue
 
-            # Get classification for this quarter
-            quarter = period.quarter_of_day
-            is_tomorrow = period.start_time.date() > current_time.date()
-
-            if is_tomorrow:
-                classification = self.price_analyzer.get_tomorrow_classification(quarter)
-            else:
-                classification = self.price_analyzer.get_current_classification(quarter)
+            classification = self.price_analyzer.get_classification_for_period(period)
 
             if classification != QuarterClassification.PEAK:
                 _LOGGER.debug(
@@ -2037,8 +2029,6 @@ class IntelligentDHWScheduler:
         if not price_periods or not self.price_analyzer:
             return False, ""
 
-        from ..const import QuarterClassification
-
         # Find upcoming PEAK periods in next 24 hours
         peak_periods = []
         for period in price_periods:
@@ -2047,14 +2037,7 @@ class IntelligentDHWScheduler:
             if period.start_time > current_time + timedelta(hours=24):
                 break
 
-            # Get classification for this quarter
-            quarter = period.quarter_of_day
-            is_tomorrow = period.start_time.date() > current_time.date()
-
-            if is_tomorrow:
-                classification = self.price_analyzer.get_tomorrow_classification(quarter)
-            else:
-                classification = self.price_analyzer.get_current_classification(quarter)
+            classification = self.price_analyzer.get_classification_for_period(period)
 
             if classification == QuarterClassification.PEAK:
                 peak_periods.append(period)

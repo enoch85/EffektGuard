@@ -101,7 +101,7 @@ from ..const import (
     DM_RECOVERY_RATE_VERY_COLD,
 )
 from .climate_zones import ClimateZoneDetector
-from ..utils.time_utils import get_current_quarter
+from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
@@ -1005,10 +1005,10 @@ class EmergencyLayer:
             if get_current_datetime:
                 now = get_current_datetime()
             else:
-                now = None  # get_current_quarter will use dt_util.now()
+                now = None  # resolve_period_index will use dt_util.now()
 
-            current_quarter = get_current_quarter(now)
-            if current_quarter < len(price_data.today):
+            current_quarter = resolve_period_index(price_data, now)
+            if current_quarter is not None:
                 classification = self.price_analyzer.get_current_classification(current_quarter)
                 return classification in (
                     QuarterClassification.CHEAP,

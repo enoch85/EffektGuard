@@ -20,18 +20,26 @@ This adapter:
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_GESPOT_ENTITY, DAYTIME_END_HOUR, DAYTIME_START_HOUR
-from ..utils.time_utils import get_current_quarter
+from ..const import (
+    CONF_GESPOT_ENTITY,
+    DAYTIME_END_HOUR,
+    DAYTIME_START_HOUR,
+    NATIVE_DAY_QUARTER_COUNTS,
+    QUARTER_INTERVAL_MINUTES,
+)
+from ..utils.time_utils import QUARTERS_PER_HOUR
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
 
 _LOGGER = logging.getLogger(__name__)
+
+QUARTER_DURATION: Final = timedelta(minutes=QUARTER_INTERVAL_MINUTES)
 
 
 @dataclass
@@ -47,8 +55,15 @@ class QuarterPeriod:
 
     @property
     def quarter_of_day(self) -> int:
-        """Quarter number 0-95 for this period."""
-        return (self.start_time.hour * 4) + (self.start_time.minute // 15)
+        """Wall-clock quarter number 0-95 for this period.
+
+        Ambiguous during the repeated hour when daylight saving time ends;
+        use list positions or timestamps to identify a period, and this
+        number only for display and tariff bookkeeping.
+        """
+        return (self.start_time.hour * QUARTERS_PER_HOUR) + (
+            self.start_time.minute // QUARTER_INTERVAL_MINUTES
+        )
 
     @property
     def hour(self) -> int:
@@ -77,25 +92,39 @@ class PriceData:
     tomorrow: list[QuarterPeriod]  # Native intervals for tomorrow (if available)
     has_tomorrow: bool
 
-    def get_period_index(self, when: datetime) -> int | None:
-        """Return the index of the native interval containing ``when``.
+    @staticmethod
+    def _index_containing(periods: list[QuarterPeriod], when: datetime) -> int | None:
+        """Return the index of the interval in ``periods`` containing ``when``.
 
-        Interval timestamps, rather than wall-clock quarter numbers, preserve
-        both occurrences of the repeated hour when daylight saving time ends.
+        Timestamp containment, rather than wall-clock quarter numbers,
+        preserves both occurrences of the repeated hour when daylight saving
+        time ends. Mixed naive/aware timestamps resolve to None rather than
+        raising - price lookups must never crash pump control.
         """
-        for index, period in enumerate(self.today):
-            if period.start_time <= when < period.start_time + timedelta(minutes=15):
-                return index
+        try:
+            for index, period in enumerate(periods):
+                if period.start_time <= when < period.start_time + QUARTER_DURATION:
+                    return index
+        except TypeError:
+            return None
         return None
 
+    def get_period_index(self, when: datetime) -> int | None:
+        """Return the index into ``today`` of the interval containing ``when``."""
+        return self._index_containing(self.today, when)
+
+    def get_tomorrow_period_index(self, when: datetime) -> int | None:
+        """Return the index into ``tomorrow`` of the interval containing ``when``."""
+        return self._index_containing(self.tomorrow, when)
+
     def get_period(self, when: datetime) -> QuarterPeriod | None:
-        """Return the native price interval containing ``when``."""
+        """Return today's native price interval containing ``when``."""
         index = self.get_period_index(when)
         return self.today[index] if index is not None else None
 
     @property
     def current_price(self) -> float | None:
-        """Get current quarter's price.
+        """Get the current interval's price.
 
         Returns:
             Current price in user's configured GE-Spot unit, or None if not available
@@ -105,16 +134,6 @@ class PriceData:
 
         period = self.get_period(dt_util.now())
         return period.price if period else None
-
-    @property
-    def current_quarter(self) -> int | None:
-        """Get current quarter of day (0-95).
-
-        Returns:
-            Quarter number 0-95, or None if not available
-        """
-        now = dt_util.now()
-        return (now.hour * 4) + (now.minute // 15)
 
 
 class GESpotAdapter:
@@ -210,7 +229,9 @@ class GESpotAdapter:
             raw_prices: List of dicts with 'time' (datetime string) and 'value' (float)
 
         Returns:
-            List of 96 QuarterPeriod objects for the day
+            The day's native intervals sorted by absolute instant: 96 on a
+            normal day, 92/100 on DST days. Nothing is fabricated for gaps;
+            consumers locate intervals by timestamp or list position.
 
         Note:
             Prices are used exactly as GE-Spot provides them.
@@ -243,9 +264,10 @@ class GESpotAdapter:
         # the two 02:xx delivery hours when daylight saving time ends.
         periods.sort(key=lambda p: p.start_time.timestamp())
 
-        if len(periods) not in (92, 96, 100):
+        if periods and len(periods) not in NATIVE_DAY_QUARTER_COUNTS:
             _LOGGER.warning(
-                "Received %d native price intervals; preserving available timestamps without fabricating prices",
+                "Received %d native price intervals; preserving available "
+                "timestamps without fabricating prices",
                 len(periods),
             )
 

@@ -596,6 +596,47 @@ class TestQuarterMeanRecording:
         assert recorded["power_kw"] == pytest.approx(4.0)
 
     @pytest.mark.asyncio
+    async def test_recording_starts_from_any_update_phase(
+        self, coordinator_with_external_meter, monkeypatch
+    ):
+        """Seeding must not require an update landing on a boundary minute.
+
+        Regression: seeding was gated on minute % 15 == 0, but a 5-minute
+        cadence starting at e.g. minute 7 visits minutes 7/12/2 mod 15 and
+        never hits a boundary minute - no tariff quarter was EVER recorded
+        until scheduler drift eventually shifted the phase.
+        """
+        from datetime import datetime, timezone
+        from homeassistant.util import dt as dt_util
+
+        coordinator = coordinator_with_external_meter
+        coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+        state = MagicMock()
+        state.state = "2000"
+        state.attributes = {"unit_of_measurement": "W"}
+        coordinator.hass.states.get.return_value = state
+        nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
+
+        # Updates every 5 min from minute 7: 10:07, 10:12 (partial quarter 40),
+        # 10:17, 10:22, 10:27 (quarter 41), 10:32 (quarter 42 begins)
+        for minute in (7, 12, 17, 22, 27, 32):
+            monkeypatch.setattr(
+                dt_util,
+                "now",
+                lambda tz=None, minute=minute: datetime(
+                    2026, 1, 15, 10, minute, tzinfo=timezone.utc
+                ),
+            )
+            await coordinator._update_peak_tracking(nibe_data)
+
+        # The partial startup quarter (10:00) is skipped; quarter 41 (10:15)
+        # is the first one observed from its start and must be recorded
+        coordinator.effect.record_quarter_measurement.assert_awaited_once()
+        recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+        assert recorded["quarter"] == 41
+        assert recorded["power_kw"] == pytest.approx(2.0)
+
+    @pytest.mark.asyncio
     async def test_partial_startup_quarter_is_discarded(
         self, coordinator_with_external_meter, monkeypatch
     ):

@@ -269,9 +269,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.peak_this_month: float = 0.0
         # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
         # instantaneous sample: accumulate real measurements within the
-        # quarter and record the mean when the quarter completes
+        # quarter and record the mean when the quarter completes. The quarter
+        # is identified by its start instant (fold-preserving aware local
+        # time), so autumn's repeated wall-clock hour yields two distinct
+        # quarters. The first quarter after startup is observed but never
+        # recorded - it began before we could watch it.
         self._quarter_power_samples: list[tuple[datetime, float]] = []
-        self._quarter_power_id: tuple[object, int] | None = None
+        self._quarter_power_start: datetime | None = None
+        self._quarter_power_number: int = 0
+        self._quarter_power_partial: bool = False
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
         self._last_learning_save: datetime | None = None  # Track last learned data save time
@@ -1913,7 +1919,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Get current timestamp for peak tracking
             now = dt_util.now()
             quarter_of_day = get_current_quarter(now)
-            quarter_id = (now.date(), quarter_of_day)
+            quarter_start = now.replace(
+                minute=now.minute - now.minute % QUARTER_INTERVAL_MINUTES,
+                second=0,
+                microsecond=0,
+            )
 
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
@@ -1952,21 +1962,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # accumulate this quarter's samples and record the mean when the
             # quarter completes.
             peak_event = None
-            if self._quarter_power_id is None:
-                if now.minute % QUARTER_INTERVAL_MINUTES:
-                    _LOGGER.debug("Discarding partial effect-tariff quarter at startup")
-                    return
-                quarter_start = now.replace(second=0, microsecond=0)
-                self._quarter_power_id = quarter_id
-                self._quarter_power_samples = [(quarter_start, current_power)]
-                return
-            elif quarter_id != self._quarter_power_id:
-                if self._quarter_power_samples:
-                    quarter_start, first_power = self._quarter_power_samples[0]
-                    quarter_end = quarter_start + timedelta(minutes=QUARTER_INTERVAL_MINUTES)
+            if quarter_start != self._quarter_power_start:
+                if (
+                    self._quarter_power_start is not None
+                    and self._quarter_power_samples
+                    and not self._quarter_power_partial
+                ):
+                    completed_start, previous_power = self._quarter_power_samples[0]
+                    quarter_end = completed_start + timedelta(minutes=QUARTER_INTERVAL_MINUTES)
                     weighted_power = 0.0
-                    previous_time = quarter_start
-                    previous_power = first_power
+                    previous_time = completed_start
                     for sample_time, sample_power in self._quarter_power_samples[1:]:
                         weighted_power += (
                             previous_power * (sample_time - previous_time).total_seconds()
@@ -1974,16 +1979,37 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         previous_time = sample_time
                         previous_power = sample_power
                     weighted_power += previous_power * (quarter_end - previous_time).total_seconds()
-                    quarter_mean = weighted_power / (quarter_end - quarter_start).total_seconds()
+                    quarter_mean = weighted_power / (quarter_end - completed_start).total_seconds()
+                    # Stamp the event with the quarter it measures, not the
+                    # boundary-crossing time: at a month boundary "now" would
+                    # attribute the old month's last quarter to the new month
                     peak_event = await self.effect.record_quarter_measurement(
                         power_kw=quarter_mean,
-                        quarter=self._quarter_power_id[1],
-                        timestamp=now,
+                        quarter=self._quarter_power_number,
+                        timestamp=completed_start,
                     )
-                self._quarter_power_samples = []
-                self._quarter_power_id = quarter_id
+                elif self._quarter_power_start is not None:
+                    _LOGGER.debug(
+                        "Discarding partial effect-tariff quarter %d (observation "
+                        "began mid-quarter)",
+                        self._quarter_power_number,
+                    )
 
-            self._quarter_power_samples.append((now, current_power))
+                # Only the first quarter after startup can be partial: it began
+                # before observation started (unless the first sample landed in
+                # the quarter's first minute). Later quarters anchor their first
+                # sample at the quarter boundary - the reading backfills at most
+                # one update cycle, mirroring the forward extrapolation to the
+                # boundary at the end of the quarter.
+                self._quarter_power_partial = self._quarter_power_start is None and bool(
+                    now.minute % QUARTER_INTERVAL_MINUTES
+                )
+                self._quarter_power_start = quarter_start
+                self._quarter_power_number = quarter_of_day
+                anchor = now if self._quarter_power_partial else quarter_start
+                self._quarter_power_samples = [(anchor, current_power)]
+            else:
+                self._quarter_power_samples.append((now, current_power))
 
             if peak_event:
                 self.peak_this_month = peak_event.effective_power

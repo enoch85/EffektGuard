@@ -31,7 +31,7 @@ from ..const import (
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_TIMING_TOLERANCE_SECONDS,
 )
-from .time_utils import get_current_quarter
+from .time_utils import resolve_period_index
 
 # Time conversion constant (for offset tracker)
 SECONDS_PER_MINUTE: int = 60
@@ -66,7 +66,8 @@ def get_volatile_info(
     Args:
         price_analyzer: PriceAnalyzer instance with classification methods
         price_data: Current price data (may be None)
-        current_quarter: Quarter to check (0-95). If None, uses current time.
+        current_quarter: Position in price_data.today to check. If None,
+            resolves the interval containing the current time.
 
     Returns:
         VolatileInfo with is_volatile flag, run length, cluster info, and reason
@@ -83,9 +84,9 @@ def get_volatile_info(
         )
 
     if current_quarter is None:
-        current_quarter = get_current_quarter()
+        current_quarter = resolve_period_index(price_data)
 
-    if current_quarter >= len(price_data.today):
+    if current_quarter is None or current_quarter >= len(price_data.today):
         return VolatileInfo(
             is_volatile=False,
             run_length=0,

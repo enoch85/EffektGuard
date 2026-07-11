@@ -45,7 +45,7 @@ from ..const import (
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
-from ..utils.time_utils import get_current_quarter
+from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
@@ -340,6 +340,28 @@ class PriceAnalyzer:
             Classification for the quarter, or NORMAL if tomorrow not available
         """
         return self._classifications_tomorrow.get(quarter, QuarterClassification.NORMAL)
+
+    def get_classification_for_period(self, period: QuarterPeriod) -> QuarterClassification:
+        """Get the classification of a specific native interval.
+
+        Classifications are position-keyed, so a period from a combined
+        today+tomorrow list must be located in its own day's list first -
+        wall-clock quarter numbers would misresolve on DST days.
+
+        Args:
+            period: A QuarterPeriod from the analyzer's current price data
+
+        Returns:
+            Classification for the interval, or NORMAL if it is unknown
+        """
+        for periods, classifications in (
+            (self._quarterly_periods_today, self._classifications_today),
+            (self._quarterly_periods_tomorrow, self._classifications_tomorrow),
+        ):
+            for index, candidate in enumerate(periods):
+                if candidate is period or candidate.start_time == period.start_time:
+                    return classifications.get(index, QuarterClassification.NORMAL)
+        return QuarterClassification.NORMAL
 
     def has_tomorrow_prices(self) -> bool:
         """Check if tomorrow's prices are available."""
@@ -638,7 +660,6 @@ class PriceAnalyzer:
 
         current_period = price_data.today[current_quarter]
         current_price = current_period.price
-        current_classification = self.get_current_classification(current_quarter)
 
         # Initialize forecast result values
         cheap_quarters_away = None
@@ -781,21 +802,15 @@ class PriceAnalyzer:
             )
 
         now = dt_util.now()
-        get_period_index = getattr(price_data, "get_period_index", None)
-        current_quarter = (
-            get_period_index(now) if callable(get_period_index) else get_current_quarter(now)
-        )
-        if not isinstance(current_quarter, int):
-            current_quarter = get_current_quarter(now)
-
-        # Bound check quarter index (safety)
-        if current_quarter >= len(price_data.today):
+        current_quarter = resolve_period_index(price_data, now)
+        if current_quarter is None:
             _LOGGER.warning(
-                "Current quarter %d exceeds available periods (%d)",
-                current_quarter,
+                "No price interval covers the current time (%d periods today)",
                 len(price_data.today),
             )
-            current_quarter = min(current_quarter, len(price_data.today) - 1)
+            return PriceLayerDecision(
+                name="Spot Price", offset=0.0, weight=0.0, reason="No price data"
+            )
 
         # Get current period classification and price
         classification = self.get_current_classification(current_quarter)
