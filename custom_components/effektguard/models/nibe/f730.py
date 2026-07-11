@@ -48,6 +48,11 @@ class NibeF730Profile(HeatPumpProfile):
     standard_airflow_m3h: float = 120.0  # Normal ventilation rate (smaller unit)
     enhanced_airflow_m3h: float = 200.0  # Maximum ventilation rate
 
+    # MODELING LIMITATION (review 2026-07): this is an exhaust-air heat pump;
+    # its COP depends primarily on exhaust-air (source) and flow (sink)
+    # temperatures, not outdoor temperature. The outdoor-keyed curve below is
+    # an indirect approximation - adequate for relative decisions, NOT
+    # validated for absolute energy/savings claims.
     def __post_init__(self):
         """Initialize COP curve."""
         # Same curve as F750 (same technology, different size)
