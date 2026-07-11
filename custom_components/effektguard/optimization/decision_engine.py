@@ -107,6 +107,7 @@ class OptimizationDecision:
     layers: list[LayerDecision] = field(default_factory=list)
     reasoning: str = ""
     anti_windup_active: bool = False  # True when anti-windup is driving the decision
+    is_manual_override: bool = False  # True for user-commanded offsets (force_offset/boost)
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -428,6 +429,7 @@ class DecisionEngine:
                     )
                 ],
                 reasoning=f"Manual override active: {manual_override:.1f}°C",
+                is_manual_override=True,
             )
 
         # Update price analyzer with latest data

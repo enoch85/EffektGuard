@@ -109,6 +109,7 @@ class TestNibeHeatpumpNaming:
         assert cache["offset"] == "number.heat_offset_s1_47011"
         assert cache["compressor_hz"] == "sensor.compressor_frequency_actual_43136"
         assert cache["compressor_status"] == "sensor.compressor_state_ep14_43427"
+        assert cache["prio"] == "sensor.prio_43086"
 
     async def test_prio_not_matched_as_phase_current(self, hass):
         """43086 is the Prio register, NOT a BE current sensor."""
@@ -118,13 +119,26 @@ class TestNibeHeatpumpNaming:
         for key in ("phase1_current", "phase2_current", "phase3_current"):
             assert adapter.entity_cache.get(key) != "sensor.prio_43086"
 
-    async def test_mapped_compressor_state_reads_as_active(self, hass):
-        """nibe_heatpump reports mapped strings like 'Running'."""
+    async def test_dhw_priority_run_is_not_heating(self, hass):
+        """The fixture's prio is 'Hot Water' while the compressor reports
+        'Running': that is a DHW production run, NOT space heating."""
         adapter = NibeAdapter(hass, {})
         await adapter.discover_entities()
 
         state = await adapter.get_current_state()
+        assert state.is_hot_water is True
+        assert state.is_heating is False
+
+    async def test_heating_priority_run_is_heating(self, hass, monkeypatch):
+        """With prio 'Heat' and compressor 'Running', the run counts as
+        space heating and not as hot water."""
+        adapter = NibeAdapter(hass, {})
+        await adapter.discover_entities()
+        hass.states.get("sensor.prio_43086").state = "Heat"
+
+        state = await adapter.get_current_state()
         assert state.is_heating is True
+        assert state.is_hot_water is False
 
 
 class TestMyUplinkNaming:
@@ -523,6 +537,53 @@ class TestStatusParsing:
         state = await adapter.get_current_state()
         assert state.is_heating is True
         assert state.compressor_hz == 62
+
+    async def test_numeric_dhw_priority_is_not_heating(self, monkeypatch):
+        """Raw Modbus priority 20 (Hot Water) with the compressor spinning:
+        DHW production, not space heating - even though the numeric status
+        enum is unreadable and the frequency fallback would fire."""
+        states = [
+            make_state("sensor.prio_43086", "20", {}),
+            make_state("sensor.compressor_status_ep14_43427", "60", {}),
+            make_state("sensor.compressor_frequency_43136", "62.0", {}),
+        ]
+        hass = make_hass(states, [], monkeypatch)
+        adapter = NibeAdapter(hass, {})
+        await adapter.discover_entities()
+
+        state = await adapter.get_current_state()
+        assert state.is_hot_water is True
+        assert state.is_heating is False
+
+    async def test_numeric_heating_priority_is_heating(self, monkeypatch):
+        """Raw Modbus priority 30 (Heat) with the compressor spinning."""
+        states = [
+            make_state("sensor.prio_43086", "30", {}),
+            make_state("sensor.compressor_frequency_43136", "62.0", {}),
+        ]
+        hass = make_hass(states, [], monkeypatch)
+        adapter = NibeAdapter(hass, {})
+        await adapter.discover_entities()
+
+        state = await adapter.get_current_state()
+        assert state.is_heating is True
+        assert state.is_hot_water is False
+
+    async def test_unknown_priority_leaves_status_reads_untouched(self, monkeypatch):
+        """MyUplink priority enums are not fully documented (raw 31 observed):
+        unknown values must not override the pattern-based status reads."""
+        states = [
+            make_state("sensor.gotham_city_priority", "31", {}),
+            make_state("sensor.gotham_city_status_compressor", "Running", {}),
+        ]
+        hass = make_hass(states, [], monkeypatch)
+        adapter = NibeAdapter(hass, {})
+        await adapter.discover_entities()
+
+        assert adapter.entity_cache["prio"] == "sensor.gotham_city_priority"
+        state = await adapter.get_current_state()
+        assert state.is_heating is True  # from compressor status, not prio
+        assert state.is_hot_water is False
 
     async def test_zero_frequency_is_not_heating_and_not_none(self, monkeypatch):
         states = [

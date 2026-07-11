@@ -1128,10 +1128,12 @@ NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
 # entity satisfies at most ONE key, so specific temperature keys MUST come before
 # broad status keys (e.g. sensor.*_hot_water_top_bt7 belongs to dhw_top_temp, not
 # hot_water_status).
-# Register references (yozik04/nibe f1155_f1255 map; F-series register ids double
-# as MyUplink parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
+# Register references (yozik04/nibe, file nibe/data/f1155_f1255.json — the map
+# HA's nibe_heatpump integration uses; F-series register ids double as MyUplink
+# parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
 # BT50=40033, BT25=40071, DM=40940 (32-bit)/43005 (16-bit, Modbus), offset S1=47011,
-# compressor state=43427, compressor frequency=43136, BE1/BE2/BE3=40083/40081/40079.
+# compressor state=43427, compressor frequency=43136, prio=43086,
+# BE1/BE2/BE3=40083/40081/40079.
 # 40941 is MyUplink's DM id on some models (second word of 40940).
 NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "outd_temp", "40004"],
@@ -1167,6 +1169,8 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "offset": ["heat_offset", "heating_offset", "offset", "47011"],
     "compressor_hz": ["compressor_frequency", "43136"],
     "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
+    # "prio" also matches "priority" (MyUplink naming) as a substring
+    "prio": ["prio", "43086"],
     "phase1_current": ["current_be1", "_be1", "phase_1_current", "40083"],
     "phase2_current": ["current_be2", "_be2", "phase_2_current", "40081"],
     "phase3_current": ["current_be3", "_be3", "phase_3_current", "40079"],
@@ -1244,6 +1248,17 @@ NIBE_OFFSET_RESYNC_MINUTES: Final = 15
 NIBE_STATUS_ACTIVE_STATES: Final[frozenset[str]] = frozenset(
     {"on", "true", "1", "yes", "running", "starting"}
 )
+
+# Priority register 43086 identifies what the compressor is serving:
+# 10=Off, 20=Hot Water, 30=Heat, 40=Pool, 41=Pool 2, 50=Transfer, 60=Cooling
+# (yozik04/nibe, nibe/data/f1155_f1255.json). nibe_heatpump exposes the mapped
+# strings, raw Modbus the numbers, MyUplink its own enum text. A run with
+# hot-water priority must NOT count as space heating. Compared lowercase;
+# unknown values leave the pattern-based status reads untouched.
+NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
+    {"hot water", "hot_water", "20", "20.0"}
+)
+NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
 
 # Compressor frequency above this means the compressor is running.
 # Used to derive is_heating when no parseable status entity exists

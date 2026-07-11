@@ -59,6 +59,8 @@ from ..const import (
     NIBE_MANUAL_OVERRIDE_KEYS,
     NIBE_OFFSET_RESYNC_MINUTES,
     NIBE_POWER_FACTOR,
+    NIBE_PRIO_HEATING_STATES,
+    NIBE_PRIO_HOT_WATER_STATES,
     NIBE_STATUS_ACTIVE_STATES,
     NIBE_SWITCH_DISCOVERY_PATTERNS,
     NIBE_TEMPERATURE_KEYS,
@@ -276,6 +278,16 @@ class NibeAdapter:
             self._entity_cache.get("hot_water_status"), default=False
         )
 
+        # Priority (register 43086) identifies what the compressor is serving.
+        # It overrides the broad status patterns: a DHW-priority run must not
+        # count as space heating (nibe_heatpump reports compressor "Running"
+        # during DHW production while no hot_water_status entity exists).
+        prio = self._read_prio_state()
+        if prio == "hot_water":
+            is_hot_water = True
+        elif prio == "heating":
+            is_hot_water = False
+
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_entity_float(
             self._entity_cache.get("dhw_top_temp"), default=None
@@ -317,6 +329,11 @@ class NibeAdapter:
         # the compressor, so hot-water production must not count as heating.
         if not is_heating and not is_hot_water and compressor_hz is not None:
             is_heating = compressor_hz > NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD
+
+        # Final priority override: whatever the status entities claimed, a
+        # hot-water-priority compressor run is not space heating
+        if prio == "hot_water":
+            is_heating = False
 
         # Log current sensors if available
         if phase1_current is not None:
@@ -883,6 +900,32 @@ class NibeAdapter:
         # Lowercase comparison covers on/off switches plus mapped coil states
         # from nibe_heatpump/myuplink ("Running", "Starting")
         return state.state.lower() in NIBE_STATUS_ACTIVE_STATES
+
+    def _read_prio_state(self) -> str | None:
+        """Read the pump priority (register 43086) and classify it.
+
+        Covers nibe_heatpump mapped strings ("Hot Water", "Heat"), raw Modbus
+        numbers (20, 30), and MyUplink enum text. Unknown or unavailable
+        values return None so the pattern-based status reads stay untouched
+        (MyUplink priority ids/texts are not fully documented).
+
+        Returns:
+            "hot_water", "heating", "other", or None when unavailable/unknown
+        """
+        prio_entity = self._entity_cache.get("prio")
+        if not prio_entity:
+            return None
+
+        state = self.hass.states.get(prio_entity)
+        if not state or state.state in ["unknown", "unavailable"]:
+            return None
+
+        prio_lower = state.state.lower()
+        if prio_lower in NIBE_PRIO_HOT_WATER_STATES:
+            return "hot_water"
+        if prio_lower in NIBE_PRIO_HEATING_STATES:
+            return "heating"
+        return "other"
 
     def _estimate_degree_minutes(
         self, indoor_temp: float, supply_temp: float, outdoor_temp: float

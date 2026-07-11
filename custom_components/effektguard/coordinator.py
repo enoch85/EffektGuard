@@ -943,6 +943,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, don't track decisions - they're not being applied
             # The tracker will be initialized with actual NIBE offset when startup completes
             pass
+        elif decision.is_manual_override:
+            # User-commanded offsets (force_offset/boost services) are
+            # authoritative — the volatile blocker must never defer an
+            # explicit user command for 45 minutes
+            _LOGGER.info(
+                "Manual override: bypassing volatile check (offset → %.1f°C)",
+                decision.offset,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.anti_windup_active:
             # Anti-windup is a safety mechanism — always apply immediately
             # Record the change so volatile tracker knows the new baseline
