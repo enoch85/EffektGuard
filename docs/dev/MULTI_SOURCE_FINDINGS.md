@@ -501,3 +501,28 @@ RESIDUAL RISK (honest boundary — cannot be ruled out in this environment):
     EUR-native (scraper repo, 960-point cross-validation, 0 mismatches) ×
     daily Fed H.10 EUR/SEK (~0.3% of ECB); 33..3748 SEK/MWh, mean 1084.
     Daily temp↔price correlation -0.40 (cold→expensive, sanity ✓).
+
+## External review outcome (2026-07-11)
+
+Independent review of PR #19 confirmed the implementation and found:
+
+- **High (fixed): DHW priority classified as space heating.** With nibe_heatpump
+  naming, no entity matches the hot_water_status patterns, so a DHW-priority
+  run (prio 43086 = "Hot Water") with compressor "Running" read as
+  is_heating=True / is_hot_water=False. Fix: new `prio` discovery key with
+  value mapping (mapped strings, raw numeric 20/30; unknown values are
+  conservative no-ops for undocumented MyUplink enums); priority now overrides
+  the broad status reads and a hot-water-priority run never counts as heating.
+  Tests cover mapped and raw numeric priorities plus the unknown-enum case.
+- **Medium (fixed, pre-existing): manual offsets were not authoritative.**
+  effektguard.force_offset(0) after +4°C was deferred 45 min by the
+  volatile-reversal blocker. Fix: OptimizationDecision.is_manual_override flag;
+  the coordinator applies user commands immediately and re-baselines the
+  volatility tracker; automatic reversals remain blocked (regression tests for
+  both).
+- **Medium (addressed): PR scope.** Feature PR now contains only the source-
+  support change + tests; the simulation harness, this findings record, and the
+  governance rule live in a separate dev-tooling PR (kept, per maintainer — no
+  work lost).
+- Register-map traceability: references now cite the exact upstream path
+  (yozik04/nibe, nibe/data/f1155_f1255.json).
