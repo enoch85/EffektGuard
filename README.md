@@ -100,10 +100,17 @@ Production-ready safety mechanisms:
 ## Requirements
 
 - **Home Assistant** 2025.10+
-- **Compatible heat pump** with [MyUplink integration](https://www.home-assistant.io/integrations/myuplink/)
-  - NIBE: F2040, F750, F730, S1155, S-series (currently supported)
-  - Additional brands: Planned for future releases
-- **MyUplink integration** configured
+- **Compatible NIBE heat pump** connected through ONE of these data sources:
+  - [MyUplink integration](https://www.home-assistant.io/integrations/myuplink/) (cloud;
+    writes may require a valid myUplink subscription)
+  - [nibe_heatpump integration](https://www.home-assistant.io/integrations/nibe_heatpump/)
+    (local: NibeGW/MODBUS40 for F-series, built-in Modbus TCP for S-series; no
+    subscription needed — recommended for local Modbus users)
+  - Generic [Modbus](https://www.home-assistant.io/integrations/modbus/) YAML sensors plus
+    [template numbers](https://www.home-assistant.io/integrations/template/) for writable
+    registers (see [Local Modbus setups](#local-modbus-setups))
+  - Models: F750, F730, F1155, F2040, S1155 (profiles); similar NIBE models work with the
+    nearest profile. Additional brands: planned for future releases
 - **Price integration** with 15-min data (GE-Spot, Nordpool, Tibber, etc.)
 - **Weather integration** (Met.no or equivalent)
 
@@ -139,6 +146,53 @@ System auto-detects:
 - UFH type (from thermal lag)
 - Heat pump model (from entity patterns)
 - Pump configuration (validates against system type)
+
+Sensors are found automatically by entity-name patterns (MyUplink, nibe_heatpump,
+and common Modbus namings). If discovery misses a sensor — typical for generic
+Modbus YAML setups — set it manually via the **override fields** in the Sensors
+step, or later via **Reconfigure** on the integration.
+
+### Local Modbus setups
+
+The recommended local path is the official
+[nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) integration:
+it exposes read-only registers as sensors (e.g. `sensor.bt1_outdoor_temperature_40004`)
+and writable registers as **numbers** (e.g. `number.heat_offset_s1_47011`,
+`number.degree_minutes_16_bit_43005`). All its entities are **disabled by default** —
+enable at least BT1, BT50, BT2/BT25, BT3, BT7, BT6, degree minutes, compressor state,
+and Heat Offset S1 in Settings → Devices & Services → NIBE → entities.
+
+With the generic `modbus` integration, define sensors for the registers above
+(F-series values are raw ×10 — use `scale: 0.1`) and wrap the offset register in a
+template number so EffektGuard can write it:
+
+```yaml
+template:
+  - number:
+      - name: "Heat Offset S1 47011"
+        unique_id: nibe_heat_offset_s1_47011
+        state: "{{ states('sensor.heat_offset_s1_47011') | float(0) }}"
+        availability: "{{ has_value('sensor.heat_offset_s1_47011') }}"
+        min: -10
+        max: 10
+        step: 1
+        set_value:
+          - action: modbus.write_register
+            data:
+              hub: nibe
+              slave: 1
+              address: 47011
+              value: "{{ (value | int) % 65536 }}"
+```
+
+`min`/`max`/`step` are required as shown — a template number defaults to
+0–100 and would reject negative offsets. `unique_id` registers the entity so
+it is UI-editable and preferred by discovery; the `availability` guard stops
+the number from erroring while the Modbus hub is down. Writes take effect
+immediately; the displayed value catches up on the sensor's next poll
+(`scan_interval`, 15 s default).
+
+Select that number as the offset entity in the first setup step.
 
 ## Architecture
 

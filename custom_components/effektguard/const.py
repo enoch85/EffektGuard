@@ -13,7 +13,15 @@ CONF_GESPOT_ENTITY: Final = "gespot_entity"
 CONF_WEATHER_ENTITY: Final = "weather_entity"
 CONF_DEGREE_MINUTES_ENTITY: Final = "degree_minutes_entity"  # Optional: NIBE degree minutes
 CONF_POWER_SENSOR_ENTITY: Final = "power_sensor_entity"  # Optional: Power meter
-CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"  # Optional: DHW temperature sensor (BT7)
+CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"  # Optional: DHW top temperature sensor (BT7)
+# Manual sensor overrides for setups where name-pattern discovery cannot work
+# (generic Modbus YAML, renamed entities, nibe_heatpump with re-added entries).
+# Issue #18: local Modbus/nibe_heatpump users need these; discovery is fallback only.
+CONF_OUTDOOR_TEMP_ENTITY: Final = "outdoor_temp_entity"  # Optional: BT1 override
+CONF_INDOOR_TEMP_ENTITY: Final = "indoor_temp_entity"  # Optional: BT50/room sensor override
+CONF_SUPPLY_TEMP_ENTITY: Final = "supply_temp_entity"  # Optional: BT2/BT25/BT63 override
+CONF_RETURN_TEMP_ENTITY: Final = "return_temp_entity"  # Optional: BT3 override
+CONF_DHW_CHARGING_TEMP_ENTITY: Final = "dhw_charging_temp_entity"  # Optional: BT6 override
 CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.temporary_lux_50004
 CONF_ENABLE_DHW_OPTIMIZATION: Final = "enable_dhw_optimization"  # Enable intelligent DHW scheduling
 CONF_DHW_DEMAND_PERIODS: Final = "dhw_demand_periods"  # High DHW demand periods (JSON list)
@@ -1106,6 +1114,156 @@ NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when se
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
     1.0  # °C - Write to NIBE when accumulator crosses ±1.0
 )
+
+# NIBE source-entity discovery patterns (issue #18: multi-source support)
+# EffektGuard reads NIBE data from entities created by ANY of these integrations:
+#   - myuplink (cloud): sensor.<system>_current_outd_temp_bt1,
+#     number.<system>_degree_minutes, number.<system>_heating_offset_climate_system_1
+#     (writable parameters are NUMBER entities; ids carry names, not parameter ids)
+#   - nibe_heatpump (local NibeGW/Modbus): ids from yozik04/nibe coil names, e.g.
+#     sensor.bt1_outdoor_temperature_40004, number.degree_minutes_16_bit_43005,
+#     number.heat_offset_s1_47011 (writable coils are NUMBER entities)
+#   - generic modbus YAML + template numbers (user-defined names)
+# Matching: lowercase substring of entity_id; keys are tried in dict order and each
+# entity satisfies at most ONE key, so specific temperature keys MUST come before
+# broad status keys (e.g. sensor.*_hot_water_top_bt7 belongs to dhw_top_temp, not
+# hot_water_status).
+# Register references (yozik04/nibe, file nibe/data/f1155_f1255.json — the map
+# HA's nibe_heatpump integration uses; F-series register ids double as MyUplink
+# parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
+# BT50=40033, BT25=40071, DM=40940 (32-bit)/43005 (16-bit, Modbus), offset S1=47011,
+# compressor state=43427, compressor frequency=43136, prio=43086,
+# BE1/BE2/BE3=40083/40081/40079.
+# 40941 is MyUplink's DM id on some models (second word of 40940).
+NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
+    "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "outd_temp", "40004"],
+    # NOTE: no short "room_temp" - "bedroom_temp" etc. contain it as a
+    # substring; BT50-suffixed ids (nibe_heatpump/myuplink) match via _bt50
+    "indoor_temp": ["_bt50", "bt50_", "room_temperature", "40033"],
+    # NOTE: no bare "_bt2"/"bt2_" - it would substring-match BT20/BT21/BT22
+    # exhaust-air sensors; BT2 entities are covered by "supply_temp"
+    # (nibe_heatpump bt2_supply_temp_s1_40008) and "supply_line" (MyUplink)
+    "supply_temp": [
+        "_bt25",
+        "bt25_",
+        "_bt63",
+        "bt63_",
+        "supply_temp",
+        "supply_line",
+        "heating_medium_supply",
+        "40008",
+        "40071",
+    ],
+    "return_temp": ["_bt3", "bt3_", "return_temp", "return_line", "40012"],
+    "dhw_top_temp": ["_bt7", "bt7_", "hw_top", "hot_water_top", "40013"],
+    "dhw_charging_temp": [
+        "_bt6",
+        "bt6_",
+        "hw_bottom",
+        "hw_charging",
+        "hw_load",
+        "hot_water_charging",
+        "40014",
+    ],
+    "degree_minutes": ["degree_minutes", "gradminuter", "40940", "43005", "40941"],
+    "offset": ["heat_offset", "heating_offset", "offset", "47011"],
+    "compressor_hz": ["compressor_frequency", "43136"],
+    "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
+    # "prio" also matches "priority" (MyUplink naming) as a substring
+    "prio": ["prio", "43086"],
+    "phase1_current": ["current_be1", "_be1", "phase_1_current", "40083"],
+    "phase2_current": ["current_be2", "_be2", "phase_2_current", "40081"],
+    "phase3_current": ["current_be3", "_be3", "phase_3_current", "40079"],
+    "dhw_amount": ["hot_water_amount", "hw_amount"],
+    "hot_water_status": ["hot_water", "dhw"],
+}
+
+# Entity-id substrings that must never be matched by discovery
+# 47394 = MyUplink "control room sensor syst" (configuration, not a temperature)
+# (EffektGuard's own entities are excluded by registry platform, not by name)
+NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = ["47394", "control_room_sensor"]
+
+# Keys that trigger re-discovery on the update cycle while missing.
+# Source integrations (modbus, nibe_heatpump, myuplink) may create their
+# entities AFTER EffektGuard's first discovery pass during HA startup.
+NIBE_DISCOVERY_CORE_KEYS: Final[tuple[str, ...]] = ("outdoor_temp", "indoor_temp", "supply_temp")
+
+# Re-discover fast for this many attempts, then fall back to a slow retry
+# so a source integration appearing hours after HA start is still picked up
+# without rescanning every cycle forever when a sensor genuinely does not
+# exist (e.g. no BT50 room sensor - a legitimate configuration).
+NIBE_DISCOVERY_MAX_ATTEMPTS: Final = 12
+NIBE_DISCOVERY_SLOW_RETRY_CYCLES: Final = 6  # every 6th update cycle (~30 min)
+
+# Cache keys that must be temperature sensors (validated by device_class/unit)
+NIBE_TEMPERATURE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "outdoor_temp",
+        "indoor_temp",
+        "supply_temp",
+        "return_temp",
+        "dhw_top_temp",
+        "dhw_charging_temp",
+    }
+)
+
+# Discovery candidate ranks: lower wins. Manual overrides always win; a live
+# entity backed by the entity registry (a real integration) beats a live
+# entity without a registry entry (template/MQTT/modbus YAML lookalikes),
+# which beats a registry entry without a state yet (stale/still-loading
+# entries otherwise win by iteration order and read as defaults forever).
+NIBE_DISCOVERY_RANK_MANUAL: Final = -1
+NIBE_DISCOVERY_RANK_LIVE: Final = 0
+NIBE_DISCOVERY_RANK_LIVE_UNREGISTERED: Final = 1
+NIBE_DISCOVERY_RANK_REGISTRY_ONLY: Final = 2
+
+# Switch entity discovery (separate domain scan)
+NIBE_SWITCH_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
+    "increased_ventilation": ["increased_ventilation"],
+}
+
+# Cache keys that hold manual config-flow overrides (override beats discovery)
+# Maps discovery cache key -> CONF_* config key
+NIBE_MANUAL_OVERRIDE_KEYS: Final[dict[str, str]] = {
+    "outdoor_temp": CONF_OUTDOOR_TEMP_ENTITY,
+    "indoor_temp": CONF_INDOOR_TEMP_ENTITY,
+    "supply_temp": CONF_SUPPLY_TEMP_ENTITY,
+    "return_temp": CONF_RETURN_TEMP_ENTITY,
+    "dhw_top_temp": CONF_DHW_TEMP_ENTITY,
+    "dhw_charging_temp": CONF_DHW_CHARGING_TEMP_ENTITY,
+}
+
+# Sensor states that mean "no valid reading": -32768 is the s16 unknown-value
+# marker (MyUplink API and disconnected Modbus sensors); -3276.8 is the same
+# marker after the common x10 scale factor. Treated as unavailable.
+NIBE_UNKNOWN_VALUE_MARKERS: Final[frozenset[float]] = frozenset({-32768.0, -3276.8})
+
+# Re-sync the tracked offset from the entity when it disagrees and no
+# write happened within this window (external change or failed write)
+NIBE_OFFSET_RESYNC_MINUTES: Final = 15
+
+# States treated as "active" when reading status entities.
+# Covers on/off style states plus nibe_heatpump mapped coil states
+# ("Running"/"Starting" from compressor state 43427). Compared lowercase.
+NIBE_STATUS_ACTIVE_STATES: Final[frozenset[str]] = frozenset(
+    {"on", "true", "1", "yes", "running", "starting"}
+)
+
+# Priority register 43086 identifies what the compressor is serving:
+# 10=Off, 20=Hot Water, 30=Heat, 40=Pool, 41=Pool 2, 50=Transfer, 60=Cooling
+# (yozik04/nibe, nibe/data/f1155_f1255.json). nibe_heatpump exposes the mapped
+# strings, raw Modbus the numbers, MyUplink its own enum text. A run with
+# hot-water priority must NOT count as space heating. Compared lowercase;
+# unknown values leave the pattern-based status reads untouched.
+NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
+    {"hot water", "hot_water", "20", "20.0"}
+)
+NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
+
+# Compressor frequency above this means the compressor is running.
+# Used to derive is_heating when no parseable status entity exists
+# (raw Modbus 43427 is a numeric enum: 20=Stopped 40=Starting 60=Running).
+NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD: Final = 1.0  # Hz
 
 # DHW Recovery Time Estimation
 # DM recovery rates based on heat pump efficiency at different outdoor temperatures

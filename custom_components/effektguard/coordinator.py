@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -48,12 +49,8 @@ from .const import (
     STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
 )
-from .models.nibe import (
-    NibeF2040Profile,
-    NibeF730Profile,
-    NibeF750Profile,
-    NibeS1155Profile,
-)
+from .models.nibe import NibeF750Profile
+from .models.registry import HeatPumpModelRegistry
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.airflow_optimizer import AirflowOptimizer
 from .optimization.decision_engine import (
@@ -77,15 +74,6 @@ if TYPE_CHECKING:
     from .models.types import EffektGuardConfigDict
 
 _LOGGER = logging.getLogger(__name__)
-
-
-# Model registry for quick lookup
-HEAT_PUMP_MODELS = {
-    "nibe_f730": NibeF730Profile,
-    "nibe_f750": NibeF750Profile,
-    "nibe_f2040": NibeF2040Profile,
-    "nibe_s1155": NibeS1155Profile,
-}
 
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
@@ -127,11 +115,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.effect = effect_manager
         self.entry = entry
 
-        # Load heat pump model profile
+        # Load heat pump model profile from the single registry
+        # (models self-register via decorator in models/nibe/)
         model_key = entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
-        model_class = HEAT_PUMP_MODELS.get(model_key, NibeF750Profile)
-        # type: ignore - concrete profile dataclasses have defaults
-        self.heat_pump_model = model_class()  # type: ignore[call-arg]
+        try:
+            self.heat_pump_model = HeatPumpModelRegistry.get_model(model_key)
+        except ValueError:
+            _LOGGER.warning(
+                "Unknown heat pump model '%s', falling back to %s - "
+                "check the heat pump model setting",
+                model_key,
+                DEFAULT_HEAT_PUMP_MODEL,
+            )
+            self.heat_pump_model = NibeF750Profile()  # type: ignore[call-arg]
 
         _LOGGER.info(
             "Loaded heat pump model: %s (%s)",
@@ -741,7 +737,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
                 _LOGGER.info(
-                    "Waiting for NIBE MyUplink entities to become available: %s "
+                    "Waiting for NIBE entities to become available: %s "
                     "(this is normal during HA startup, will retry in %d minutes)",
                     err,
                     UPDATE_INTERVAL_MINUTES,
@@ -947,6 +943,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, don't track decisions - they're not being applied
             # The tracker will be initialized with actual NIBE offset when startup completes
             pass
+        elif decision.is_manual_override:
+            # User-commanded offsets (force_offset/boost services) are
+            # authoritative — the volatile blocker must never defer an
+            # explicit user command for 45 minutes
+            _LOGGER.info(
+                "Manual override: bypassing volatile check (offset → %.1f°C)",
+                decision.offset,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.anti_windup_active:
             # Anti-windup is a safety mechanism — always apply immediately
             # Record the change so volatile tracker knows the new baseline
@@ -981,8 +986,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.current_offset = decision.offset
         self.last_decision_time = dt_util.utcnow()
 
-        # Apply offset to NIBE heat pump via MyUplink integration
-        # This sends the calculated offset to the MyUplink number entity (parameter 47011)
+        # Apply offset to the NIBE heating curve offset number entity
+        # (register 47011 on F-series; MyUplink, nibe_heatpump, or template number)
         # Rate limiting (5 min) handled in nibe_adapter to prevent excessive API calls
         #
         # Accumulation logic: We track fractional offsets but only write to NIBE when
@@ -1004,7 +1009,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             try:
                 was_applied = await self.nibe.set_curve_offset(decision.offset)
                 if was_applied:
-                    _LOGGER.info("Applied offset %.2f°C to NIBE via MyUplink", decision.offset)
+                    _LOGGER.info("Applied offset %.2f°C to NIBE", decision.offset)
                     # Track what NIBE actually has (integer) - synced from entity on restart
                     self.last_applied_offset = float(int(decision.offset))
                     self.last_offset_timestamp = dt_util.utcnow()
@@ -1014,7 +1019,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         "Offset %.2f°C unchanged (NIBE offset not changed)",
                         decision.offset,
                     )
-            except (AttributeError, OSError, ValueError) as err:
+            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
                 # Continue anyway - next cycle will retry
 
@@ -1237,10 +1242,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
                 _LOGGER.warning(
-                    "DHW sensor (BT7) not found - check MyUplink "
-                    "integration has exposed BT7/40013 sensor"
+                    "DHW sensor (BT7) not found - ensure your NIBE integration "
+                    "exposes the BT7/40013 sensor (enable the entity in "
+                    "nibe_heatpump/MyUplink) or select it manually via "
+                    "Reconfigure in EffektGuard"
                 )
-                dhw_recommendation = "DHW sensor not found - check MyUplink integration"
+                dhw_recommendation = "DHW sensor not found - check NIBE integration"
                 dhw_planning_summary = "DHW sensor not found"
                 dhw_planning_details = {}
             else:
@@ -1664,10 +1671,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         "switch",
                         "turn_off",
                         {"entity_id": self.temp_lux_entity},
-                        blocking=False,
+                        blocking=True,
                     )
                     self._last_dhw_control_time = now_time
-                except (AttributeError, OSError, ValueError) as err:
+                except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                     _LOGGER.error("Failed to abort DHW heating: %s", err)
                 return  # Exit early - abort handled
 
@@ -1696,10 +1703,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "switch",
                     "turn_on",
                     {"entity_id": self.temp_lux_entity},
-                    blocking=False,
+                    blocking=True,
                 )
                 self._last_dhw_control_time = now_time
-            except (AttributeError, OSError, ValueError) as err:
+            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn on temporary lux: %s", err)
 
         elif not decision.should_heat and is_lux_on:
@@ -1715,10 +1722,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "switch",
                     "turn_off",
                     {"entity_id": self.temp_lux_entity},
-                    blocking=False,
+                    blocking=True,
                 )
                 self._last_dhw_control_time = now_time
-            except (AttributeError, OSError, ValueError) as err:
+            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn off temporary lux: %s", err)
         else:
             # No change needed
@@ -1841,7 +1848,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # In this case, use calculated/estimated heat pump power for peak tracking
             if has_external_power_sensor and current_power < 0.5:
                 # Check if heat pump is actually working hard
-                compressor_hz = getattr(nibe_data, "compressor_frequency", 0)
+                compressor_hz = getattr(nibe_data, "compressor_hz", 0) or 0
                 is_heating = getattr(nibe_data, "is_heating", False)
 
                 if is_heating and compressor_hz > 20:
@@ -1939,7 +1946,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.last_offset_timestamp = dt_util.utcnow()
             self._learned_data_changed = True  # Trigger save on shutdown
             _LOGGER.info("Applied offset: %.2f°C", offset)
-        except (AttributeError, OSError, ValueError) as err:
+        except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset: %s", err)
             raise
 
@@ -1958,7 +1965,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Reset offset to neutral (0.0)
             try:
                 await self.async_set_offset(0.0)
-            except (AttributeError, OSError, ValueError) as err:
+            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to reset offset: %s", err)
 
     async def async_update_config(self, options: "EffektGuardConfigDict") -> None:

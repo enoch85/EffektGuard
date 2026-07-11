@@ -3,12 +3,12 @@
     "step": {
       "user": {
         "title": "Configure NIBE Integration",
-        "description": "Select your NIBE heating curve offset entity (number.* with 'offset' in name). Found {nibe_count} compatible entities.\n\n**Your entity:** `number.f750_cu_3x400v_offset`",
+        "description": "Select the number entity that controls your heating curve offset.\n\n{info}\n\nWorks with MyUplink (cloud), nibe_heatpump (local Modbus/NibeGW), or a template number wrapping modbus.write_register.",
         "data": {
           "nibe_entity": "NIBE Heating Curve Offset Entity"
         },
         "data_description": {
-          "nibe_entity": "The NIBE entity that controls the heating curve offset (typically number.*_offset)"
+          "nibe_entity": "The writable number entity for the heating curve offset (register 47011 on F-series, e.g. number.heat_offset_s1_47011, or a MyUplink number ending in heating_offset_climate_system_1)"
         }
       },
       "gespot": {
@@ -19,12 +19,61 @@
           "enable_price_optimization": "Enable price optimization"
         }
       },
+      "model": {
+        "title": "Heat Pump Model",
+        "description": "Select your heat pump model. The model sets safe degree-minute thresholds, COP curves, and flow temperature limits.",
+        "data": {
+          "heat_pump_model": "Heat pump model"
+        }
+      },
       "optional": {
         "title": "Optional Features",
         "description": "Configure optional features. Found {weather_count} weather entities.",
         "data": {
           "weather_entity": "Weather Entity",
           "enable_peak_protection": "Enable peak protection"
+        }
+      },
+      "optional_sensors": {
+        "title": "Sensors",
+        "description": "Optional sensors and manual overrides. Leave a field empty to use automatic discovery.\n\n{dm_note}\n\nThe override fields at the bottom are for setups where discovery cannot find your sensors (generic Modbus, renamed entities).",
+        "data": {
+          "degree_minutes_entity": "Degree minutes entity",
+          "power_sensor_entity": "Power meter sensor",
+          "nibe_temp_lux_entity": "Temporary lux switch (DHW)",
+          "additional_indoor_sensors": "Additional indoor temperature sensors",
+          "indoor_temp_method": "Indoor temperature calculation method",
+          "outdoor_temp_entity": "Override: outdoor temperature (BT1)",
+          "indoor_temp_entity": "Override: indoor temperature (BT50/room sensor)",
+          "supply_temp_entity": "Override: supply temperature (BT2/BT25)",
+          "return_temp_entity": "Override: return temperature (BT3)",
+          "dhw_temp_entity": "Override: hot water top temperature (BT7)",
+          "dhw_charging_temp_entity": "Override: hot water charging temperature (BT6)"
+        },
+        "data_description": {
+          "degree_minutes_entity": "Number entity on nibe_heatpump/MyUplink (register 43005/40940), sensor on generic Modbus. Estimated from the thermal model if not set.",
+          "power_sensor_entity": "Enables accurate peak tracking (estimated from heat pump data if not provided)",
+          "nibe_temp_lux_entity": "Enables intelligent DHW scheduling and thermal debt protection",
+          "additional_indoor_sensors": "Extra room sensors for whole-house averaging. Median is recommended (robust to outliers)."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure EffektGuard",
+        "description": "Change entity selections. Fields left empty are cleared (back to auto-discovery); the offset entity and heat pump model keep their previous values when left empty. The integration reloads automatically.",
+        "data": {
+          "nibe_entity": "NIBE Heating Curve Offset Entity",
+          "heat_pump_model": "Heat pump model",
+          "weather_entity": "Weather Entity",
+          "degree_minutes_entity": "Degree minutes entity",
+          "power_sensor_entity": "Power meter sensor",
+          "nibe_temp_lux_entity": "Temporary lux switch (DHW)",
+          "additional_indoor_sensors": "Additional indoor temperature sensors",
+          "outdoor_temp_entity": "Override: outdoor temperature (BT1)",
+          "indoor_temp_entity": "Override: indoor temperature (BT50/room sensor)",
+          "supply_temp_entity": "Override: supply temperature (BT2/BT25)",
+          "return_temp_entity": "Override: return temperature (BT3)",
+          "dhw_temp_entity": "Override: hot water top temperature (BT7)",
+          "dhw_charging_temp_entity": "Override: hot water charging temperature (BT6)"
         }
       }
     },
@@ -33,7 +82,8 @@
       "gespot_entity_not_found": "Spot price entity not found"
     },
     "abort": {
-      "nibe_not_found": "NIBE integration not found. Please install NIBE Myuplink integration first."
+      "nibe_not_found": "No NIBE integration found. Install and configure MyUplink (cloud) or nibe_heatpump (local Modbus/NibeGW) first.",
+      "reconfigure_successful": "Reconfiguration successful"
     }
   },
   "options": {
@@ -132,4 +182,3 @@
     }
   }
 }
-

@@ -3,12 +3,12 @@
     "step": {
       "user": {
         "title": "Määritä NIBE-integraatio",
-        "description": "Valitse NIBE lämmityskäyrän säätöyksikkö. Etsitään yksiköitä kuten 'number.*_offset'. Löytyi {nibe_count} yhteensopivaa yksikköä.",
+        "description": "Valitse number-entiteetti joka ohjaa lämpökäyrän siirtymää.\n\n{info}\n\nToimii MyUplinkin (pilvi), nibe_heatpumpin (paikallinen Modbus/NibeGW) tai modbus.write_register-palvelua käyttävän template-numberin kanssa.",
         "data": {
           "nibe_entity": "NIBE Lämmityskäyrän säätöyksikkö"
         },
         "data_description": {
-          "nibe_entity": "NIBE-yksikkö joka ohjaa lämmityskäyrän säätöä (tyypillisesti number.*_offset)"
+          "nibe_entity": "Kirjoitettava number-entiteetti lämpökäyrän siirtymälle (rekisteri 47011 F-sarjassa, esim. number.heat_offset_s1_47011)"
         }
       },
       "gespot": {
@@ -26,6 +26,55 @@
           "weather_entity": "Sääyksikkö",
           "enable_peak_protection": "Ota käyttöön tehon suojaus"
         }
+      },
+      "model": {
+        "title": "Lämpöpumpun malli",
+        "description": "Valitse lämpöpumppusi malli. Malli määrittää turvalliset asteminuuttirajat, COP-käyrät ja menoveden rajat.",
+        "data": {
+          "heat_pump_model": "Lämpöpumpun malli"
+        }
+      },
+      "optional_sensors": {
+        "title": "Anturit",
+        "description": "Valinnaiset anturit ja manuaaliset ohitukset. Jätä kenttä tyhjäksi automaattista tunnistusta varten.\n\n{dm_note}\n\nAlimmat ohituskentät ovat kokoonpanoille joissa tunnistus ei löydä antureitasi (yleinen Modbus, uudelleennimetyt entiteetit).",
+        "data": {
+          "degree_minutes_entity": "Asteminuutti-entiteetti",
+          "power_sensor_entity": "Tehomittarianturi",
+          "nibe_temp_lux_entity": "Tilapäinen luksus-kytkin (lämmin vesi)",
+          "additional_indoor_sensors": "Lisäsisälämpötila-anturit",
+          "indoor_temp_method": "Sisälämpötilan laskentatapa",
+          "outdoor_temp_entity": "Ohita: ulkolämpötila (BT1)",
+          "indoor_temp_entity": "Ohita: sisälämpötila (BT50/huoneanturi)",
+          "supply_temp_entity": "Ohita: menoveden lämpötila (BT2/BT25)",
+          "return_temp_entity": "Ohita: paluuveden lämpötila (BT3)",
+          "dhw_temp_entity": "Ohita: lämmin vesi yläosa (BT7)",
+          "dhw_charging_temp_entity": "Ohita: lämmin vesi lataus (BT6)"
+        },
+        "data_description": {
+          "degree_minutes_entity": "Number-entiteetti nibe_heatpumpissa/MyUplinkissä (rekisteri 43005/40940), sensor yleisessä Modbusissa. Arvioidaan lämpömallista jos ei asetettu.",
+          "power_sensor_entity": "Mahdollistaa tarkan huipputehon seurannan (arvioidaan lämpöpumpun tiedoista jos ei asetettu)",
+          "nibe_temp_lux_entity": "Mahdollistaa älykkään käyttöveden aikataulutuksen ja lämpövelkasuojan",
+          "additional_indoor_sensors": "Lisähuoneanturit koko talon keskiarvoa varten. Mediaani suositeltu (kestää poikkeamat)."
+        }
+      },
+      "reconfigure": {
+        "title": "Määritä EffektGuard uudelleen",
+        "description": "Muuta entiteettivalintoja. Tyhjät kentät tyhjennetään (takaisin automaattiseen tunnistukseen); siirtymäentiteetti ja lämpöpumpun malli säilyttävät aiemmat arvonsa jos ne jätetään tyhjiksi. Integraatio latautuu uudelleen automaattisesti.",
+        "data": {
+          "nibe_entity": "NIBE-lämpökäyrän siirtymäentiteetti",
+          "heat_pump_model": "Lämpöpumpun malli",
+          "weather_entity": "Sää-entiteetti",
+          "degree_minutes_entity": "Asteminuutti-entiteetti",
+          "power_sensor_entity": "Tehomittarianturi",
+          "nibe_temp_lux_entity": "Tilapäinen luksus-kytkin (lämmin vesi)",
+          "additional_indoor_sensors": "Lisäsisälämpötila-anturit",
+          "outdoor_temp_entity": "Ohita: ulkolämpötila (BT1)",
+          "indoor_temp_entity": "Ohita: sisälämpötila (BT50/huoneanturi)",
+          "supply_temp_entity": "Ohita: menoveden lämpötila (BT2/BT25)",
+          "return_temp_entity": "Ohita: paluuveden lämpötila (BT3)",
+          "dhw_temp_entity": "Ohita: lämmin vesi yläosa (BT7)",
+          "dhw_charging_temp_entity": "Ohita: lämmin vesi lataus (BT6)"
+        }
       }
     },
     "error": {
@@ -33,7 +82,8 @@
       "gespot_entity_not_found": "Spot-hinta-yksikköä ei löytynyt"
     },
     "abort": {
-      "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ensin NIBE Myuplink-integraatio."
+      "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ja määritä ensin MyUplink (pilvi) tai nibe_heatpump (paikallinen Modbus/NibeGW).",
+      "reconfigure_successful": "Uudelleenmääritys onnistui"
     }
   },
   "options": {

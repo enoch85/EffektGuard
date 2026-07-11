@@ -1,13 +1,20 @@
-"""NIBE Myuplink adapter for reading heat pump state.
+"""NIBE adapter for reading heat pump state from Home Assistant entities.
 
-This adapter reads NIBE heat pump data from existing Home Assistant entities
-created by the NIBE Myuplink integration. It does not directly communicate
-with the MyUplink API.
+This adapter reads NIBE heat pump data from existing Home Assistant entities.
+It never calls external APIs. Supported sources (issue #18):
+- myuplink (cloud): writable parameters are NUMBER entities
+- nibe_heatpump (local NibeGW/Modbus): entity ids embed register numbers,
+  writable coils are NUMBER entities
+- generic modbus YAML sensors + template numbers wrapping modbus.write_register
+
+Entities are found via manual config-flow overrides first (authoritative),
+then name-pattern discovery over the state machine and entity registry
+(NIBE_DISCOVERY_PATTERNS in const.py).
 
 Data read includes:
 - Indoor temperature (BT50 or room sensor)
 - Outdoor temperature (BT1)
-- Supply temperature (BT25 on F2040, BT63 on F750)
+- Supply temperature (BT2/BT25, BT63 on MyUplink F750)
 - Return temperature (BT3)
 - Degree minutes (GM/DM)
 - Current heating curve offset
@@ -21,6 +28,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
@@ -33,11 +41,30 @@ from ..const import (
     DEFAULT_BASE_POWER,
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
+    DOMAIN,
     MAX_OFFSET,
     MIN_OFFSET,
+    NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
     NIBE_DEFAULT_SUPPLY_TEMP,
+    NIBE_DISCOVERY_CORE_KEYS,
+    NIBE_DISCOVERY_EXCLUDE,
+    NIBE_DISCOVERY_MAX_ATTEMPTS,
+    NIBE_DISCOVERY_PATTERNS,
+    NIBE_DISCOVERY_RANK_LIVE,
+    NIBE_DISCOVERY_RANK_LIVE_UNREGISTERED,
+    NIBE_DISCOVERY_RANK_MANUAL,
+    NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
+    NIBE_DISCOVERY_SLOW_RETRY_CYCLES,
     NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD,
+    NIBE_MANUAL_OVERRIDE_KEYS,
+    NIBE_OFFSET_RESYNC_MINUTES,
     NIBE_POWER_FACTOR,
+    NIBE_PRIO_HEATING_STATES,
+    NIBE_PRIO_HOT_WATER_STATES,
+    NIBE_STATUS_ACTIVE_STATES,
+    NIBE_SWITCH_DISCOVERY_PATTERNS,
+    NIBE_TEMPERATURE_KEYS,
+    NIBE_UNKNOWN_VALUE_MARKERS,
     NIBE_VOLTAGE_PER_PHASE,
     SERVICE_RATE_LIMIT_MINUTES,
     TEMP_FACTOR_MAX,
@@ -108,14 +135,34 @@ class NibeAdapter:
             config: Configuration dictionary with entity IDs
         """
         self.hass = hass
-        self._nibe_base_entity = config.get(CONF_NIBE_ENTITY)
         self._degree_minutes_entity = config.get(CONF_DEGREE_MINUTES_ENTITY)  # Optional
         self._power_sensor_entity = config.get(CONF_POWER_SENSOR_ENTITY)  # Optional
         self._additional_indoor_sensors = config.get(CONF_ADDITIONAL_INDOOR_SENSORS, [])  # Optional
         self._indoor_temp_method = config.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD)
+        # Manual entity overrides beat pattern discovery (issue #18: Modbus/renamed
+        # entities cannot rely on name patterns). The offset entity the user picked
+        # in the first config step is authoritative for the write path.
+        self._manual_overrides: dict[str, str] = {}
+        if config.get(CONF_NIBE_ENTITY):
+            self._manual_overrides["offset"] = config[CONF_NIBE_ENTITY]
+        if self._degree_minutes_entity:
+            self._manual_overrides["degree_minutes"] = self._degree_minutes_entity
+        for cache_key, conf_key in NIBE_MANUAL_OVERRIDE_KEYS.items():
+            if config.get(conf_key):
+                self._manual_overrides[cache_key] = config[conf_key]
         self._last_write: datetime | None = None
         self._last_ventilation_write: datetime | None = None
-        self._entity_cache: dict[str, str] = {}
+        # Rank of each cached discovery result, persisted across discovery
+        # passes so a live entity found later still displaces a registry-only
+        # entry cached during startup
+        self._entity_ranks: dict[str, int] = {}
+        # Seed overrides immediately: consumers like the coordinator's offset
+        # sync read entity_cache before the first discovery pass runs
+        self._entity_cache: dict[str, str] = dict(self._manual_overrides)
+        for key in self._manual_overrides:
+            self._entity_ranks[key] = NIBE_DISCOVERY_RANK_MANUAL
+        self._discovery_attempts: int = 0
+        self._cycles_since_discovery: int = 0
         # Fractional accumulator for precise offset tracking
         # NIBE only accepts integers, so we accumulate fractional parts
         # and apply them when they sum to ±1°C
@@ -140,17 +187,33 @@ class NibeAdapter:
     async def get_current_state(self) -> NibeState:
         """Read current NIBE heat pump state from entities.
 
+        Missing entities are read as safe defaults - see the per-field
+        defaults below and the discovery warnings in _discover_nibe_entities.
+
         Returns:
             NibeState with current readings
-
-        Raises:
-            ValueError: If required entities are unavailable
         """
-        # This will be implemented in Phase 1
-        # For now, discover and read NIBE entities
-
-        # Discover NIBE entities if not cached
-        if not self._entity_cache:
+        # Discover NIBE entities if not cached. Re-discover while core sensors
+        # are missing OR only backed by registry entries without a live state
+        # yet: source integrations (modbus, nibe_heatpump, myuplink) may create
+        # their entities AFTER our first pass during HA startup, and a stale
+        # registry id must not permanently block the live entity (issue #18).
+        # Capped: a sensor still absent after NIBE_DISCOVERY_MAX_ATTEMPTS
+        # cycles does not exist in this setup (e.g. no BT50 room sensor).
+        core_unresolved = any(
+            key not in self._entity_cache
+            or self._entity_ranks.get(key, NIBE_DISCOVERY_RANK_LIVE)
+            >= NIBE_DISCOVERY_RANK_REGISTRY_ONLY
+            for key in NIBE_DISCOVERY_CORE_KEYS
+        )
+        self._cycles_since_discovery += 1
+        if not self._entity_cache or (
+            core_unresolved
+            and (
+                self._discovery_attempts < NIBE_DISCOVERY_MAX_ATTEMPTS
+                or self._cycles_since_discovery >= NIBE_DISCOVERY_SLOW_RETRY_CYCLES
+            )
+        ):
             await self._discover_nibe_entities()
 
         # Read temperature sensors
@@ -215,6 +278,16 @@ class NibeAdapter:
             self._entity_cache.get("hot_water_status"), default=False
         )
 
+        # Priority (register 43086) identifies what the compressor is serving.
+        # It overrides the broad status patterns: a DHW-priority run must not
+        # count as space heating (nibe_heatpump reports compressor "Running"
+        # during DHW production while no hot_water_status entity exists).
+        prio = self._read_prio_state()
+        if prio == "hot_water":
+            is_hot_water = True
+        elif prio == "heating":
+            is_hot_water = False
+
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_entity_float(
             self._entity_cache.get("dhw_top_temp"), default=None
@@ -250,6 +323,18 @@ class NibeAdapter:
             self._entity_cache.get("compressor_hz"), default=None
         )
 
+        # Derive heating activity from compressor frequency when the status
+        # entity is missing or unparseable (raw Modbus 43427 is a numeric enum
+        # that _read_entity_bool cannot interpret). A DHW-only run also spins
+        # the compressor, so hot-water production must not count as heating.
+        if not is_heating and not is_hot_water and compressor_hz is not None:
+            is_heating = compressor_hz > NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD
+
+        # Final priority override: whatever the status entities claimed, a
+        # hot-water-priority compressor run is not space heating
+        if prio == "hot_water":
+            is_heating = False
+
         # Log current sensors if available
         if phase1_current is not None:
             _LOGGER.debug(
@@ -280,15 +365,16 @@ class NibeAdapter:
             phase1_current=phase1_current,
             phase2_current=phase2_current,
             phase3_current=phase3_current,
-            compressor_hz=int(compressor_hz) if compressor_hz else None,
+            compressor_hz=int(compressor_hz) if compressor_hz is not None else None,
             power_kw=power_kw,
         )
 
     async def set_curve_offset(self, offset: float) -> bool:
         """Set heating curve offset via NIBE entity with fractional accumulation.
 
-        NIBE MyUplink entities have step=1 (integer only), but the optimization
-        engine calculates precise fractional offsets (e.g., 0.35°C, -1.24°C).
+        The NIBE offset register (47011 on F-series) is integer-only, but the
+        optimization engine calculates precise fractional offsets (e.g., 0.35°C,
+        -1.24°C).
 
         Solution: Accumulate fractional parts and apply when they sum to ±1°C.
         This preserves the precision of gentle optimization while respecting
@@ -307,7 +393,10 @@ class NibeAdapter:
             True if offset was written to NIBE, False if deferred/accumulated
 
         Note:
-            Requires NIBE Myuplink Premium subscription for write access.
+            The target must be a writable number entity: a MyUplink offset
+            number (cloud writes may require a valid myUplink subscription), a
+            nibe_heatpump number (e.g. number.heat_offset_s1_47011), or a
+            template number wrapping modbus.write_register.
         """
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
@@ -333,21 +422,34 @@ class NibeAdapter:
             )
             return False
 
-        # Read current NIBE offset on first call (sync with actual state)
-        if self._last_nibe_offset is None:
-            try:
-                self._last_nibe_offset = int(float(state.state))
-                # Initialize accumulator based on difference between calculated and actual
-                self._fractional_accumulator = offset - self._last_nibe_offset
-                _LOGGER.info(
-                    "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
-                    self._last_nibe_offset,
-                    offset,
-                    self._fractional_accumulator,
-                )
-            except (ValueError, TypeError):
-                self._last_nibe_offset = 0
-                self._fractional_accumulator = offset
+        # Sync with the entity's actual value on first call, and re-sync when
+        # the entity disagrees with our bookkeeping and we have not written
+        # recently: the offset can change externally (pump display, another
+        # automation) or a fire-and-forget write may have failed silently.
+        entity_offset: int | None = None
+        try:
+            entity_offset = int(float(state.state))
+        except (ValueError, TypeError):
+            pass
+
+        resync_window_passed = self._last_write is None or now - self._last_write >= timedelta(
+            minutes=NIBE_OFFSET_RESYNC_MINUTES
+        )
+        if entity_offset is not None and (
+            self._last_nibe_offset is None
+            or (entity_offset != self._last_nibe_offset and resync_window_passed)
+        ):
+            self._last_nibe_offset = entity_offset
+            self._fractional_accumulator = offset - self._last_nibe_offset
+            _LOGGER.info(
+                "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                self._last_nibe_offset,
+                offset,
+                self._fractional_accumulator,
+            )
+        elif self._last_nibe_offset is None:
+            self._last_nibe_offset = 0
+            self._fractional_accumulator = offset
 
         # Fractional accumulation logic
         # The accumulator tracks the total difference between what we've calculated
@@ -399,10 +501,37 @@ class NibeAdapter:
             )
             return False
 
+        # Respect the target entity's own limits when it exposes them
+        # (a template number left at default min 0/max 100 would otherwise
+        # reject every negative offset in a background task we never see).
+        # Defensive float() - a malformed entity must never crash the write.
+        try:
+            entity_min = float(state.attributes["min"])
+            entity_max = float(state.attributes["max"])
+        except (KeyError, TypeError, ValueError):
+            entity_min = entity_max = None
+        if entity_min is not None and entity_max is not None:
+            clamped = int(max(entity_min, min(float(offset_to_apply), entity_max)))
+            if clamped != offset_to_apply:
+                _LOGGER.warning(
+                    "Offset %d°C outside %s range [%s, %s], clamping to %d°C - "
+                    "check the number entity's min/max configuration",
+                    offset_to_apply,
+                    offset_entity,
+                    entity_min,
+                    entity_max,
+                    clamped,
+                )
+                offset_to_apply = clamped
+                if offset_to_apply == self._last_nibe_offset:
+                    return False
+
         # Store old value for logging before updating
         old_offset = self._last_nibe_offset
 
-        # Write to NIBE
+        # Write to NIBE. blocking=True so handler failures (out-of-range,
+        # unavailable target, cloud errors) surface here instead of being
+        # swallowed in a background task while we record a phantom success.
         try:
             await self.hass.services.async_call(
                 "number",
@@ -411,7 +540,7 @@ class NibeAdapter:
                     "entity_id": offset_entity,
                     "value": offset_to_apply,
                 },
-                blocking=False,
+                blocking=True,
             )
             self._last_write = now
             self._last_nibe_offset = offset_to_apply
@@ -425,7 +554,7 @@ class NibeAdapter:
             )
             return True
 
-        except (AttributeError, OSError, ValueError, TypeError) as err:
+        except (HomeAssistantError, AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             return False
 
@@ -495,7 +624,7 @@ class NibeAdapter:
                 "switch",
                 service,
                 {"entity_id": ventilation_entity},
-                blocking=False,
+                blocking=True,
             )
 
             self._last_ventilation_write = now
@@ -503,7 +632,7 @@ class NibeAdapter:
             _LOGGER.info("✓ Ventilation set to %s via %s", status, ventilation_entity)
             return True
 
-        except (AttributeError, OSError, ValueError, TypeError) as err:
+        except (HomeAssistantError, AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set enhanced ventilation: %s", err)
             return False
 
@@ -525,172 +654,106 @@ class NibeAdapter:
         return state.state == "on"
 
     async def _discover_nibe_entities(self) -> None:
-        """Discover NIBE entities from entity registry.
+        """Discover NIBE source entities.
 
-        Populates _entity_cache with entity IDs for:
-        - outdoor_temp (BT1)
-        - indoor_temp (BT50 or room sensor)
-        - supply_temp (BT25 on F2040, BT63 on F750)
-        - return_temp (BT3)
-        - degree_minutes (GM/DM)
-        - offset (S1 offset)
-        - compressor_status
-        - hot_water_status
-        - dhw_top_temp (BT7 - hot water top)
-        - dhw_charging_temp (BT6 - hot water charging/bottom)
+        Population order (first wins):
+        1. Manual config-flow overrides (authoritative - issue #18 Modbus setups)
+        2. Entities in the state machine matching NIBE_DISCOVERY_PATTERNS.
+           Scanning states (not only the registry) is REQUIRED: generic Modbus
+           YAML entities without unique_id never enter the entity registry.
+        3. Enabled registry entries without a state yet (integration still
+           starting) - lowest priority, never beats a live entity.
+
+        Ranks persist across passes (self._entity_ranks) so a live entity
+        appearing after startup still displaces a registry-only entry.
+
+        Matching rules:
+        - Keys are tried in NIBE_DISCOVERY_PATTERNS dict order; each entity can
+          satisfy at most one key (specific temperature keys are ordered before
+          broad status keys to prevent e.g. hot_water_status grabbing BT7).
+        - Temperature keys require device_class temperature or a °C/°F unit.
+        - The offset key requires a number entity (write path uses
+          number.set_value; a read-only Modbus offset sensor must never win).
+        - EffektGuard's own entities are excluded by registry platform.
         """
+        self._discovery_attempts += 1
+        self._cycles_since_discovery = 0
+        previous_cache = dict(self._entity_cache)
+
+        for key, entity_id in self._manual_overrides.items():
+            self._entity_cache[key] = entity_id
+            self._entity_ranks[key] = NIBE_DISCOVERY_RANK_MANUAL
+
+        ranks = self._entity_ranks
+        claimed: set[str] = set(self._entity_cache.values())
+
         registry = er.async_get(self.hass)
+        live_ids = set()
 
-        # Search for NIBE entities
-        # Patterns based on NIBE Myuplink integration entity naming
-        # Use specific entity names from parameter IDs when possible
-        # CRITICAL: Use word boundaries (_btX, btX_) to prevent substring matches
-        # e.g., "bt6" would match "bt63", "bt1" would match "bt10", etc.
-        # This ensures we match the exact sensor, not similar named sensors
-        patterns = {
-            "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "40004"],  # BT1 / param 40004
-            "indoor_temp": [
-                "_bt50",
-                "bt50_",
-                "room_temperature",
-                "40033",
-            ],  # BT50 / param 40033 "Temperature"
-            "supply_temp": [
-                "_bt25",
-                "bt25_",
-                "_bt63",
-                "bt63_",
-                "supply_temp",
-                "heating_medium_supply",
-                "40008",
-            ],  # BT25 (F2040) or BT63 (F750) / param 40008
-            "return_temp": ["_bt3", "bt3_", "return_temp", "40012"],  # BT3 / param 40012
-            "degree_minutes": ["degree_minutes", "40941"],  # param 40941
-            "offset": ["offset", "47011"],  # param 47011
-            "compressor_status": ["compressor", "43427"],  # param 43427
-            "hot_water_status": ["hot_water", "dhw"],
-            "dhw_top_temp": [
-                "_bt7",
-                "bt7_",
-                "hw_top",
-                "40013",
-            ],  # BT7 / param 40013 - hot water top
-            "dhw_charging_temp": [
-                "_bt6",
-                "bt6_",
-                "hw_bottom",
-                "hw_charging",
-                "40014",
-            ],  # BT6 / param 40014
-            "dhw_amount": [
-                "hot_water_amount",
-                "hw_amount",
-            ],  # Hot water amount in minutes
-            "phase1_current": [
-                "current_be1",
-                "_be1",
-                "phase_1_current",
-                "43086",
-            ],  # BE1 / param 43086
-            "phase2_current": [
-                "current_be2",
-                "_be2",
-                "phase_2_current",
-                "43122",
-            ],  # BE2 / param 43122
-            "phase3_current": [
-                "current_be3",
-                "_be3",
-                "phase_3_current",
-                "electrical_addition",
-                "43081",
-            ],  # BE3 / param 43081
-            "compressor_hz": [
-                "compressor_frequency",
-                "43136",
-            ],  # Compressor frequency param 43136
-        }
-
-        # Find sensor/number entities
-        for entity in registry.entities.values():
-            if not entity.entity_id.startswith("sensor.") and not entity.entity_id.startswith(
-                "number."
-            ):
+        for state in self.hass.states.async_all(("sensor", "number")):
+            live_ids.add(state.entity_id)
+            # Never discover our own entities (e.g. sensor.effektguard_dhw_status
+            # would match the hot_water_status patterns)
+            registry_entry = registry.async_get(state.entity_id)
+            if registry_entry and registry_entry.platform == DOMAIN:
                 continue
-
-            entity_id_lower = entity.entity_id.lower()
-
-            # Skip known non-temperature configuration parameters
-            # 47394 = "control room sensor syst" (configuration, not temperature)
-            if "47394" in entity_id_lower or "control_room_sensor" in entity_id_lower:
-                continue
-
-            # Match against patterns
-            for key, patterns_list in patterns.items():
-                if key not in self._entity_cache:
-                    for pattern in patterns_list:
-                        if pattern in entity_id_lower:
-                            # Additional validation for temperature sensors
-                            if key in [
-                                "outdoor_temp",
-                                "indoor_temp",
-                                "supply_temp",
-                                "return_temp",
-                                "dhw_top_temp",
-                                "dhw_charging_temp",
-                            ]:
-                                # Check if it's actually a temperature sensor
-                                state = self.hass.states.get(entity.entity_id)
-                                if state:
-                                    device_class = state.attributes.get("device_class")
-                                    unit = state.attributes.get("unit_of_measurement")
-
-                                    # Accept if device_class is temperature OR unit is °C/°F
-                                    # This handles cases where device_class is not set but unit is
-                                    is_temp_sensor = device_class == "temperature" or unit in [
-                                        "°C",
-                                        "°F",
-                                        "C",
-                                        "F",
-                                    ]
-
-                                    if not is_temp_sensor:
-                                        _LOGGER.debug(
-                                            "Skipping %s (not a temperature sensor, device_class=%s, unit=%s): %s",
-                                            key,
-                                            device_class,
-                                            unit,
-                                            entity.entity_id,
-                                        )
-                                        continue
-
-                            self._entity_cache[key] = entity.entity_id
-                            _LOGGER.debug("Found NIBE entity %s: %s", key, entity.entity_id)
-                            break
-
-        # Discover switch entities (separate loop for increased_ventilation)
-        switch_patterns = {
-            "increased_ventilation": [
-                "increased_ventilation",
-            ],  # NIBE F750/F730 enhanced ventilation switch
-        }
+            # Integration-backed entities outrank template/YAML lookalikes
+            # without a registry entry (generic Modbus setups still win when
+            # nothing registered matches)
+            self._consider_candidate(
+                state.entity_id,
+                state.attributes.get("device_class"),
+                state.attributes.get("unit_of_measurement"),
+                (
+                    NIBE_DISCOVERY_RANK_LIVE
+                    if registry_entry
+                    else NIBE_DISCOVERY_RANK_LIVE_UNREGISTERED
+                ),
+                ranks,
+                claimed,
+            )
 
         for entity in registry.entities.values():
-            if not entity.entity_id.startswith("switch."):
+            if entity.entity_id in live_ids or entity.disabled_by is not None:
                 continue
+            if entity.domain not in ("sensor", "number") or entity.platform == DOMAIN:
+                continue
+            self._consider_candidate(
+                entity.entity_id,
+                entity.device_class or entity.original_device_class,
+                entity.unit_of_measurement,
+                NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
+                ranks,
+                claimed,
+            )
 
-            entity_id_lower = entity.entity_id.lower()
+        # Discover switch entities (separate domain scan for increased_ventilation).
+        # Registry entries are included so a switch platform that loads after
+        # our last discovery pass is still found (its entity id is registered
+        # before its state exists).
+        switch_ids = [state.entity_id for state in self.hass.states.async_all("switch")]
+        switch_ids += [
+            entity.entity_id
+            for entity in registry.entities.values()
+            if entity.domain == "switch"
+            and entity.disabled_by is None
+            and entity.platform != DOMAIN
+            and entity.entity_id not in switch_ids
+        ]
+        for entity_id in switch_ids:
+            entity_id_lower = entity_id.lower()
+            for key, patterns_list in NIBE_SWITCH_DISCOVERY_PATTERNS.items():
+                if key not in self._entity_cache and any(
+                    pattern in entity_id_lower for pattern in patterns_list
+                ):
+                    self._entity_cache[key] = entity_id
+                    _LOGGER.debug("Found NIBE switch %s: %s", key, entity_id)
 
-            # Match against switch patterns
-            for key, patterns_list in switch_patterns.items():
-                if key not in self._entity_cache:
-                    for pattern in patterns_list:
-                        if pattern in entity_id_lower:
-                            self._entity_cache[key] = entity.entity_id
-                            _LOGGER.debug("Found NIBE switch %s: %s", key, entity.entity_id)
-                            break
+        # Log results only when they changed (rediscovery runs during startup
+        # while core sensors are missing - identical repeats are just noise)
+        if self._entity_cache == previous_cache:
+            return
 
-        # Log all discovered entities for debugging
         _LOGGER.info("NIBE Entity Discovery: Found %d entities", len(self._entity_cache))
         for key, entity_id in self._entity_cache.items():
             state = self.hass.states.get(entity_id)
@@ -709,6 +772,75 @@ class NibeAdapter:
             _LOGGER.warning("No outdoor temperature sensor (BT1) found!")
         if "degree_minutes" not in self._entity_cache:
             _LOGGER.warning("No degree minutes sensor found, will estimate from thermal model")
+
+    def _consider_candidate(
+        self,
+        entity_id: str,
+        device_class: str | None,
+        unit: str | None,
+        rank: int,
+        ranks: dict[str, int],
+        claimed: set[str],
+    ) -> None:
+        """Match one entity against the pattern table and cache it if it wins.
+
+        Args:
+            entity_id: Candidate entity id
+            device_class: Its device class (state attribute or registry)
+            unit: Its unit of measurement (state attribute or registry)
+            rank: Candidate quality (lower wins; live state beats registry-only)
+            ranks: Current rank per cached key (mutated)
+            claimed: Entity ids already assigned to a key (mutated)
+        """
+        if entity_id in claimed:
+            # Already bound to a key - refresh its rank so a registry-only
+            # binding whose state has appeared becomes a live binding
+            # (otherwise it stays displaceable and core_unresolved never
+            # settles)
+            for key, cached_id in self._entity_cache.items():
+                if cached_id == entity_id and rank < ranks.get(key, rank):
+                    ranks[key] = rank
+            return
+
+        entity_id_lower = entity_id.lower()
+        if any(excluded in entity_id_lower for excluded in NIBE_DISCOVERY_EXCLUDE):
+            return
+
+        for key, patterns_list in NIBE_DISCOVERY_PATTERNS.items():
+            if not any(pattern in entity_id_lower for pattern in patterns_list):
+                continue
+
+            if key in NIBE_TEMPERATURE_KEYS:
+                # Accept if device_class is temperature OR unit is °C/°F
+                # (handles Modbus sensors where only the unit is configured)
+                if device_class != "temperature" and unit not in ["°C", "°F", "C", "F"]:
+                    _LOGGER.debug(
+                        "Skipping %s (not a temperature sensor, device_class=%s, unit=%s): %s",
+                        key,
+                        device_class,
+                        unit,
+                        entity_id,
+                    )
+                    continue
+
+            if key == "offset" and not entity_id.startswith("number."):
+                # Write path calls number.set_value - a sensor can never work
+                _LOGGER.debug("Skipping offset candidate %s (not a number entity)", entity_id)
+                continue
+
+            # The entity belongs to this key; cache it only if it outranks the
+            # current holder, then stop either way (one key per entity).
+            if key in self._entity_cache and ranks.get(key, NIBE_DISCOVERY_RANK_LIVE) <= rank:
+                return
+
+            previous = self._entity_cache.get(key)
+            if previous:
+                claimed.discard(previous)
+            self._entity_cache[key] = entity_id
+            ranks[key] = rank
+            claimed.add(entity_id)
+            _LOGGER.debug("Found NIBE entity %s: %s", key, entity_id)
+            return
 
     async def _read_entity_float(
         self,
@@ -732,10 +864,17 @@ class NibeAdapter:
             return default
 
         try:
-            return float(state.state)
+            value = float(state.state)
         except (ValueError, TypeError):
             _LOGGER.warning("Cannot parse float from %s: %s", entity_id, state.state)
             return default
+
+        if value in NIBE_UNKNOWN_VALUE_MARKERS:
+            # s16 unknown-value marker (MyUplink / disconnected Modbus sensor)
+            _LOGGER.debug("Ignoring unknown-value marker %s from %s", value, entity_id)
+            return default
+
+        return value
 
     async def _read_entity_bool(
         self,
@@ -758,7 +897,35 @@ class NibeAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             return default
 
-        return state.state in ["on", "true", "True", "ON", "1"]
+        # Lowercase comparison covers on/off switches plus mapped coil states
+        # from nibe_heatpump/myuplink ("Running", "Starting")
+        return state.state.lower() in NIBE_STATUS_ACTIVE_STATES
+
+    def _read_prio_state(self) -> str | None:
+        """Read the pump priority (register 43086) and classify it.
+
+        Covers nibe_heatpump mapped strings ("Hot Water", "Heat"), raw Modbus
+        numbers (20, 30), and MyUplink enum text. Unknown or unavailable
+        values return None so the pattern-based status reads stay untouched
+        (MyUplink priority ids/texts are not fully documented).
+
+        Returns:
+            "hot_water", "heating", "other", or None when unavailable/unknown
+        """
+        prio_entity = self._entity_cache.get("prio")
+        if not prio_entity:
+            return None
+
+        state = self.hass.states.get(prio_entity)
+        if not state or state.state in ["unknown", "unavailable"]:
+            return None
+
+        prio_lower = state.state.lower()
+        if prio_lower in NIBE_PRIO_HOT_WATER_STATES:
+            return "hot_water"
+        if prio_lower in NIBE_PRIO_HEATING_STATES:
+            return "heating"
+        return "other"
 
     def _estimate_degree_minutes(
         self, indoor_temp: float, supply_temp: float, outdoor_temp: float
@@ -808,8 +975,7 @@ class NibeAdapter:
 
         Tries in order:
         1. Configured power sensor (most accurate)
-        2. Auto-discovered heat pump power sensor
-        3. Estimation from supply temperature (least accurate)
+        2. Estimation from supply temperature (least accurate)
 
         Returns:
             Power consumption in kW, or None if unavailable
@@ -829,19 +995,6 @@ class NibeAdapter:
                     self._power_sensor_entity,
                     power,
                 )
-                return power
-
-        # Try auto-discovered power sensor
-        power_entity = self._entity_cache.get("power")
-        if power_entity:
-            power = await self._read_entity_float(power_entity, default=None)
-            if power is not None:
-                state = self.hass.states.get(power_entity)
-                if state:
-                    unit = state.attributes.get("unit_of_measurement", "").lower()
-                    if unit == "w":
-                        power = power / 1000.0
-                _LOGGER.debug("Using auto-discovered power sensor: %.2f kW", power)
                 return power
 
         # Fall back to estimation from supply temperature

@@ -62,3 +62,9 @@ COMPLETED/
 Thumbs.db
 debug.log
 test_results.log
+
+# Playwright MCP browser artifacts (dev only)
+.playwright-mcp/
+
+# Simulation run output (regenerated; not committed)
+scripts/simulation/output/

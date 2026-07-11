@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from homeassistant.core import HomeAssistant
 
+from conftest import make_mock_async_all
 from custom_components.effektguard.config_flow import EffektGuardConfigFlow
 from custom_components.effektguard.const import (
     CONF_DEGREE_MINUTES_ENTITY,
@@ -87,14 +88,10 @@ def mock_hass():
         attributes={},
     )
 
-    def mock_async_all():
-        # Return list of state objects, not tuples
-        return list(mock_states.values())
-
     def mock_get_state(entity_id):
         return mock_states.get(entity_id)
 
-    mock_states_obj.async_all = mock_async_all
+    mock_states_obj.async_all = make_mock_async_all(mock_states)
     mock_states_obj.get = mock_get_state
 
     return hass
@@ -133,13 +130,18 @@ class TestOptionalFeaturesDiscovery:
         # Generic power should be last
         assert entities[2] == "sensor.random_sensor"
 
-    async def test_discover_no_degree_minutes(self):
+    async def test_discover_no_degree_minutes(self, monkeypatch):
         """Test when no degree minutes sensor exists."""
         hass = MagicMock(spec=HomeAssistant)
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
         # Return list of state objects, not tuples
-        mock_states_obj.async_all = lambda: [MagicMock(entity_id="sensor.temperature")]
+        mock_states_obj.async_all = lambda domain_filter=None: [
+            MagicMock(entity_id="sensor.temperature")
+        ]
+        registry = MagicMock()
+        registry.async_get = lambda entity_id: None
+        monkeypatch.setattr("homeassistant.helpers.entity_registry.async_get", lambda h: registry)
 
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = hass
@@ -160,7 +162,7 @@ class TestOptionalFeaturesDiscovery:
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
         # Return list of state objects, not tuples
-        mock_states_obj.async_all = lambda: [mock_state]
+        mock_states_obj.async_all = lambda domain_filter=None: [mock_state]
 
         config_flow = EffektGuardConfigFlow()
         config_flow.hass = hass

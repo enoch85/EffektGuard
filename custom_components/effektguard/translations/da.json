@@ -3,12 +3,12 @@
     "step": {
       "user": {
         "title": "Konfigurer NIBE-integration",
-        "description": "Vælg din NIBE varmekurvejusteringsenhed. Leder efter enheder som 'number.*_offset'. Fandt {nibe_count} kompatible enheder.",
+        "description": "Vælg number-entiteten der styrer din varmekurves forskydning.\n\n{info}\n\nVirker med MyUplink (sky), nibe_heatpump (lokal Modbus/NibeGW) eller et template-number omkring modbus.write_register.",
         "data": {
           "nibe_entity": "NIBE Varmekurvejusteringsenhed"
         },
         "data_description": {
-          "nibe_entity": "NIBE-enheden der styrer varmekurvejustering (typisk number.*_offset)"
+          "nibe_entity": "Skrivbar number-entitet til varmekurvens forskydning (register 47011 på F-serien, f.eks. number.heat_offset_s1_47011)"
         }
       },
       "gespot": {
@@ -26,6 +26,55 @@
           "weather_entity": "Vejrenhed",
           "enable_peak_protection": "Aktiver effektbeskyttelse"
         }
+      },
+      "model": {
+        "title": "Varmepumpemodel",
+        "description": "Vælg din varmepumpemodel. Modellen styrer sikre gradminut-grænser, COP-kurver og fremløbsgrænser.",
+        "data": {
+          "heat_pump_model": "Varmepumpemodel"
+        }
+      },
+      "optional_sensors": {
+        "title": "Sensorer",
+        "description": "Valgfrie sensorer og manuelle tilsidesættelser. Lad et felt stå tomt for automatisk registrering.\n\n{dm_note}\n\nTilsidesættelsesfelterne nederst er til opsætninger hvor registreringen ikke finder dine sensorer (generisk Modbus, omdøbte entiteter).",
+        "data": {
+          "degree_minutes_entity": "Gradminut-entitet",
+          "power_sensor_entity": "Effektmålersensor",
+          "nibe_temp_lux_entity": "Midlertidig luksus-kontakt (varmt vand)",
+          "additional_indoor_sensors": "Ekstra indendørs temperatursensorer",
+          "indoor_temp_method": "Beregningsmetode for indendørstemperatur",
+          "outdoor_temp_entity": "Tilsidesæt: udendørstemperatur (BT1)",
+          "indoor_temp_entity": "Tilsidesæt: indendørstemperatur (BT50/rumsensor)",
+          "supply_temp_entity": "Tilsidesæt: fremløbstemperatur (BT2/BT25)",
+          "return_temp_entity": "Tilsidesæt: returtemperatur (BT3)",
+          "dhw_temp_entity": "Tilsidesæt: varmt vand top (BT7)",
+          "dhw_charging_temp_entity": "Tilsidesæt: varmt vand opladning (BT6)"
+        },
+        "data_description": {
+          "degree_minutes_entity": "Number-entitet i nibe_heatpump/MyUplink (register 43005/40940), sensor i generisk Modbus. Estimeres fra termisk model hvis den ikke angives.",
+          "power_sensor_entity": "Giver præcis spidsbelastningsmåling (estimeres fra varmepumpedata hvis den ikke angives)",
+          "nibe_temp_lux_entity": "Muliggør intelligent varmtvandsplanlægning og beskyttelse mod termisk gæld",
+          "additional_indoor_sensors": "Ekstra rumsensorer til gennemsnit for hele huset. Median anbefales (robust mod outliers)."
+        }
+      },
+      "reconfigure": {
+        "title": "Omkonfigurer EffektGuard",
+        "description": "Ændr entitetsvalg. Tomme felter ryddes (tilbage til automatisk registrering); forskydningsentiteten og varmepumpemodellen beholder deres tidligere værdier hvis de står tomme. Integrationen genindlæses automatisk.",
+        "data": {
+          "nibe_entity": "NIBE-entitet for varmekurvens forskydning",
+          "heat_pump_model": "Varmepumpemodel",
+          "weather_entity": "Vejr-entitet",
+          "degree_minutes_entity": "Gradminut-entitet",
+          "power_sensor_entity": "Effektmålersensor",
+          "nibe_temp_lux_entity": "Midlertidig luksus-kontakt (varmt vand)",
+          "additional_indoor_sensors": "Ekstra indendørs temperatursensorer",
+          "outdoor_temp_entity": "Tilsidesæt: udendørstemperatur (BT1)",
+          "indoor_temp_entity": "Tilsidesæt: indendørstemperatur (BT50/rumsensor)",
+          "supply_temp_entity": "Tilsidesæt: fremløbstemperatur (BT2/BT25)",
+          "return_temp_entity": "Tilsidesæt: returtemperatur (BT3)",
+          "dhw_temp_entity": "Tilsidesæt: varmt vand top (BT7)",
+          "dhw_charging_temp_entity": "Tilsidesæt: varmt vand opladning (BT6)"
+        }
       }
     },
     "error": {
@@ -33,7 +82,8 @@
       "gespot_entity_not_found": "Spotpris-enhed ikke fundet"
     },
     "abort": {
-      "nibe_not_found": "NIBE-integration ikke fundet. Installer venligst NIBE Myuplink-integration først."
+      "nibe_not_found": "Ingen NIBE-integration fundet. Installer og konfigurer MyUplink (sky) eller nibe_heatpump (lokal Modbus/NibeGW) først.",
+      "reconfigure_successful": "Omkonfigurering gennemført"
     }
   },
   "options": {

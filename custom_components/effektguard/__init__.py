@@ -103,8 +103,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Clean up on failure
         hass.data[DOMAIN].pop(entry.entry_id, None)
         raise ConfigEntryNotReady(
-            f"Failed to connect to NIBE heat pump. "
-            f"Ensure MyUplink integration is loaded and entities are available."
+            "Failed to connect to NIBE heat pump. Ensure your NIBE integration "
+            "(MyUplink, nibe_heatpump, or Modbus) is loaded and its entities "
+            "are available."
         ) from err
 
     # Set up power sensor availability listener AFTER first refresh
@@ -157,6 +158,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister integration services when last config entry is removed."""
     from .const import (
+        SERVICE_BOOST_DHW,
         SERVICE_BOOST_HEATING,
         SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
         SERVICE_FORCE_OFFSET,
@@ -167,6 +169,7 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_FORCE_OFFSET,
         SERVICE_RESET_PEAK_TRACKING,
         SERVICE_BOOST_HEATING,
+        SERVICE_BOOST_DHW,
         SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
     ]
 

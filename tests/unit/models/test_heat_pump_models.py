@@ -58,17 +58,18 @@ class TestModelRegistry:
 
         assert "nibe_f730" in nibe_models
         assert "nibe_f750" in nibe_models
+        assert "nibe_f1155" in nibe_models
         assert "nibe_f2040" in nibe_models
         assert "nibe_s1155" in nibe_models
         # S1255 removed - doesn't exist
-        assert len(nibe_models) == 4
+        assert len(nibe_models) == 5
 
     def test_get_models_grouped_by_manufacturer(self):
         """Test getting models grouped by manufacturer."""
         grouped = HeatPumpModelRegistry.get_models_grouped_by_manufacturer()
 
         assert "NIBE" in grouped
-        assert len(grouped["NIBE"]) == 4  # S1255 removed
+        assert len(grouped["NIBE"]) == 5  # F1155 added for issue #18
 
         # Check structure
         f750 = next(m for m in grouped["NIBE"] if m["id"] == "nibe_f750")

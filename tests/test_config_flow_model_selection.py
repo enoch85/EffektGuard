@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
+from conftest import make_mock_async_all
 from custom_components.effektguard.config_flow import EffektGuardConfigFlow
 from custom_components.effektguard.const import (
     CONF_NIBE_ENTITY,
@@ -98,14 +99,10 @@ def mock_hass(mock_entity_registry, monkeypatch):
         ),
     }
 
-    def mock_async_all():
-        # Return list of state objects, not tuples
-        return list(mock_states.values())
-
     def mock_get_state(entity_id):
         return mock_states.get(entity_id)
 
-    mock_states_obj.async_all = mock_async_all
+    mock_states_obj.async_all = make_mock_async_all(mock_states)
     mock_states_obj.get = mock_get_state
 
     return hass
@@ -130,7 +127,7 @@ class TestConfigFlowUserStep:
         hass = MagicMock(spec=HomeAssistant)
         mock_states_obj = MagicMock()
         hass.states = mock_states_obj
-        mock_states_obj.async_all = lambda: []  # No entities
+        mock_states_obj.async_all = lambda domain_filter=None: []  # No entities
 
         # Patch entity registry
         monkeypatch.setattr(
@@ -147,7 +144,7 @@ class TestConfigFlowUserStep:
         assert result["step_id"] == "user"
         # Check for warning content, not emoji (to avoid Unicode issues)
         assert "No NIBE offset entities auto-detected" in result["description_placeholders"]["info"]
-        assert "MyUplink just loaded" in result["description_placeholders"]["info"]
+        assert "MyUplink, nibe_heatpump, Modbus" in result["description_placeholders"]["info"]
 
     async def test_user_step_valid_submission(self, mock_hass):
         """Test valid NIBE entity submission proceeds to spot price step."""
@@ -613,13 +610,14 @@ class TestModelStepIntegration:
         assert DEFAULT_HEAT_PUMP_MODEL == "nibe_f750"
 
     def test_all_model_keys_match_registry(self):
-        """Test that config flow model keys match coordinator registry."""
-        from custom_components.effektguard.coordinator import HEAT_PUMP_MODELS
+        """Test that config flow model keys resolve in the model registry."""
+        from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 
-        expected_models = ["nibe_f730", "nibe_f750", "nibe_f2040", "nibe_s1155"]
+        expected_models = ["nibe_f730", "nibe_f750", "nibe_f1155", "nibe_f2040", "nibe_s1155"]
 
+        supported = HeatPumpModelRegistry.get_supported_models()
         for model_key in expected_models:
-            assert model_key in HEAT_PUMP_MODELS
+            assert model_key in supported
 
 
 if __name__ == "__main__":
