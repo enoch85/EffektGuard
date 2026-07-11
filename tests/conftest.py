@@ -32,6 +32,28 @@ def setup_frame_helper(monkeypatch):
 
 
 # Common mock helper functions
+def make_mock_async_all(states_by_id: dict):
+    """Build a hass.states.async_all replacement honoring HA's domain filter.
+
+    Args:
+        states_by_id: Mapping of entity_id -> mock state object
+
+    Returns:
+        Callable with the same (domain_filter=None) signature as HA's
+        StateMachine.async_all
+    """
+
+    def mock_async_all(domain_filter=None):
+        states = list(states_by_id.values())
+        if domain_filter is None:
+            return states
+        if isinstance(domain_filter, str):
+            domain_filter = (domain_filter,)
+        return [s for s in states if s.entity_id.split(".")[0] in domain_filter]
+
+    return mock_async_all
+
+
 def create_mock_hass(latitude: float = 59.3):
     """Create a properly configured mock Home Assistant instance.
 

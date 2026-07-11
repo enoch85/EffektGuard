@@ -117,7 +117,8 @@ The decision engine processes data through 7 prioritized layers:
 ### 3. Decision Aggregation
 - Critical layers (weight 1.0) override all others
 - Non-critical layers use weighted averaging
-- Final offset applied via NIBE MyUplink entity
+- Final offset applied via the NIBE offset number entity
+  (MyUplink, nibe_heatpump, or a template number wrapping modbus.write_register)
 
 ### 4. State Updates
 All entities are updated with:

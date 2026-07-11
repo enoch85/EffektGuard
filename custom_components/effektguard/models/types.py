@@ -26,6 +26,13 @@ class EffektGuardConfigDict(TypedDict, total=False):
     additional_indoor_sensors: list[str]
     indoor_temp_method: str
 
+    # Manual sensor overrides (issue #18: Modbus/renamed entities)
+    outdoor_temp_entity: str
+    indoor_temp_entity: str
+    supply_temp_entity: str
+    return_temp_entity: str
+    dhw_charging_temp_entity: str
+
     # Feature flags
     enable_price_optimization: bool
     enable_peak_protection: bool
@@ -71,3 +78,11 @@ class AdapterConfigDict(TypedDict, total=False):
     power_sensor_entity: str
     additional_indoor_sensors: list[str]
     indoor_temp_method: str
+
+    # Manual sensor overrides (issue #18: Modbus/renamed entities)
+    outdoor_temp_entity: str
+    indoor_temp_entity: str
+    supply_temp_entity: str
+    return_temp_entity: str
+    dhw_temp_entity: str
+    dhw_charging_temp_entity: str

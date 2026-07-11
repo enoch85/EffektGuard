@@ -68,7 +68,7 @@ custom_components/effektguard/
 │   └── climate_zones.py     # Climate-aware thresholds
 │
 ├── adapters/                # External data interfaces
-│   ├── nibe_adapter.py      # NIBE MyUplink reader
+│   ├── nibe_adapter.py      # NIBE entity reader (MyUplink / nibe_heatpump / Modbus)
 │   ├── gespot_adapter.py    # Spot Price price reader
 │   └── weather_adapter.py   # Weather forecast reader
 │
@@ -161,8 +161,8 @@ grep "NIBE state:" logs/effektguard.log
 ## Research Documentation
 
 NIBE-specific behavior is based on research:
-- `IMPLEMENTATION_PLAN/02_Research/Forum_Summary.md` - F2040 real-world cases
-- `IMPLEMENTATION_PLAN/02_Research/Swedish_NIBE_Forum_Findings.md` - F750 optimization
+- NIBE research references live in code docstrings and const.py comments
+  (F2040 forum cases, Swedish F750 findings)
 - `docs/CLIMATE_ZONES.md` - Climate-aware safety system
 
 **Never guess NIBE behavior** - always reference research!
@@ -205,9 +205,8 @@ Before submitting PR:
 - `../../architecture/10_adaptive_climate_zones.md` - Climate adaptation
 
 ### Research Documentation
-- `../../IMPLEMENTATION_PLAN/02_Research/` - NIBE research findings
-- `../../IMPLEMENTATION_PLAN/01_Algorithm/` - Algorithm specifications
-- `../../IMPLEMENTATION_PLAN/03_API/` - MyUplink API guide
+- NIBE research references are inline in code docstrings and const.py comments
+  (the historical IMPLEMENTATION_PLAN/ folder is not part of this repository)
 
 ---
 

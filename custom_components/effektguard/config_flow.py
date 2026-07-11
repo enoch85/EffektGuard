@@ -26,9 +26,64 @@ from .const import (
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INDOOR_TEMP_METHOD,
     DOMAIN,
+    NIBE_DISCOVERY_PATTERNS,
+    NIBE_MANUAL_OVERRIDE_KEYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Entity fields users may set, clear, or leave on auto-discovery.
+# Selectors allow sensor/number/input_number because local NIBE sources
+# (nibe_heatpump, MyUplink) expose writable values as NUMBER entities and
+# generic Modbus setups wrap registers in template numbers (issue #18).
+SOURCE_ENTITY_DOMAINS = ["sensor", "number", "input_number"]
+
+# Manual override fields shown in optional_sensors and reconfigure
+# (single source of truth: the adapter's override map in const.py)
+MANUAL_SENSOR_OVERRIDE_FIELDS: tuple[str, ...] = tuple(NIBE_MANUAL_OVERRIDE_KEYS.values())
+
+# Heat pump model choices (setup step "model" and reconfigure)
+HEAT_PUMP_MODEL_OPTIONS: dict[str, str] = {
+    "nibe_f730": "NIBE F730 (6kW ASHP)",
+    "nibe_f750": "NIBE F750 (8kW ASHP - Most Common)",
+    "nibe_f1155": "NIBE F1155 (GSHP)",
+    "nibe_f2040": "NIBE F2040 (12-16kW ASHP)",
+    "nibe_s1155": "NIBE S1155 (GSHP)",
+}
+
+
+def _optional_entity_field(
+    schema_dict: dict[Any, Any],
+    conf_key: str,
+    entity_selector: selector.EntitySelector,
+    suggested: str | list[str] | None,
+) -> None:
+    """Add an optional entity selector that can be cleared by the user.
+
+    Uses suggested_value instead of default: a voluptuous default is re-applied
+    when the field is emptied, which makes stored entities impossible to clear.
+    """
+    if suggested:
+        key = vol.Optional(conf_key, description={"suggested_value": suggested})
+    else:
+        key = vol.Optional(conf_key)
+    schema_dict[key] = entity_selector
+
+
+def _manual_override_schema(schema_dict: dict[Any, Any], current: dict[str, Any]) -> None:
+    """Add the manual sensor-override fields to a schema dict.
+
+    Overrides beat name-pattern discovery in the adapter. Domain filtering is
+    deliberately loose (no device_class requirement): Modbus setups often lack
+    device_class metadata, and these fields exist precisely for such setups.
+    """
+    for conf_key in MANUAL_SENSOR_OVERRIDE_FIELDS:
+        _optional_entity_field(
+            schema_dict,
+            conf_key,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain=SOURCE_ENTITY_DOMAINS)),
+            current.get(conf_key),
+        )
 
 
 class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -69,8 +124,10 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         else:
             info_msg = (
                 "No NIBE offset entities auto-detected. "
-                "If MyUplink just loaded, wait a moment and try again. "
-                "Otherwise, manually select the number.* entity for heating curve offset control."
+                "If your NIBE integration (MyUplink, nibe_heatpump, Modbus) just "
+                "loaded, wait a moment and try again. Otherwise, manually select "
+                "the number entity that controls the heating curve offset "
+                "(register 47011 on F-series)."
             )
 
         return self.async_show_form(
@@ -174,14 +231,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_HEAT_PUMP_MODEL,
                         default=DEFAULT_HEAT_PUMP_MODEL,
-                    ): vol.In(
-                        {
-                            "nibe_f730": "NIBE F730 (6kW ASHP)",
-                            "nibe_f750": "NIBE F750 (8kW ASHP - Most Common)",
-                            "nibe_f2040": "NIBE F2040 (12-16kW ASHP)",
-                            "nibe_s1155": "NIBE S1155 (GSHP)",
-                        }
-                    ),
+                    ): vol.In(HEAT_PUMP_MODEL_OPTIONS),
                 }
             ),
             errors=errors,
@@ -239,6 +289,8 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_INDOOR_TEMP_METHOD] = user_input.get(
                 CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
             )
+            for conf_key in MANUAL_SENSOR_OVERRIDE_FIELDS:
+                self._data[conf_key] = user_input.get(conf_key)
 
             # Create entry
             return self.async_create_entry(
@@ -260,55 +312,35 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema_dict: dict[Any, Any] = {}
 
-        # Degree minutes sensor (optional)
-        if auto_detected_dm:
-            schema_dict[vol.Optional(CONF_DEGREE_MINUTES_ENTITY, default=auto_detected_dm)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor",
-                    )
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_DEGREE_MINUTES_ENTITY)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="sensor",
-                )
-            )
+        # Degree minutes (optional) - a NUMBER entity on nibe_heatpump/MyUplink
+        # (writable register), a sensor on generic Modbus setups (issue #18)
+        _optional_entity_field(
+            schema_dict,
+            CONF_DEGREE_MINUTES_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain=SOURCE_ENTITY_DOMAINS)),
+            auto_detected_dm,
+        )
 
         # Power meter sensor (optional)
-        if auto_detected_power:
-            schema_dict[vol.Optional(CONF_POWER_SENSOR_ENTITY, default=auto_detected_power)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor",
-                        device_class="power",
-                    )
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_POWER_SENSOR_ENTITY)] = selector.EntitySelector(
+        _optional_entity_field(
+            schema_dict,
+            CONF_POWER_SENSOR_ENTITY,
+            selector.EntitySelector(
                 selector.EntitySelectorConfig(
                     domain="sensor",
                     device_class="power",
                 )
-            )
+            ),
+            auto_detected_power,
+        )
 
         # Temporary lux switch (DHW control, optional)
-        if auto_detected_temp_lux:
-            schema_dict[vol.Optional(CONF_NIBE_TEMP_LUX_ENTITY, default=auto_detected_temp_lux)] = (
-                selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="switch",
-                    )
-                )
-            )
-        else:
-            schema_dict[vol.Optional(CONF_NIBE_TEMP_LUX_ENTITY)] = selector.EntitySelector(
-                selector.EntitySelectorConfig(
-                    domain="switch",
-                )
-            )
+        _optional_entity_field(
+            schema_dict,
+            CONF_NIBE_TEMP_LUX_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain="switch")),
+            auto_detected_temp_lux,
+        )
 
         # Additional indoor temperature sensors (optional, multi-select)
         schema_dict[vol.Optional(CONF_ADDITIONAL_INDOOR_SENSORS)] = selector.EntitySelector(
@@ -318,6 +350,10 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 multiple=True,
             )
         )
+
+        # Manual overrides for core NIBE sensors - required when name-pattern
+        # discovery cannot find them (generic Modbus, renamed entities)
+        _manual_override_schema(schema_dict, self._data)
 
         # Indoor temperature calculation method
         schema_dict[vol.Optional(CONF_INDOOR_TEMP_METHOD, default=DEFAULT_INDOOR_TEMP_METHOD)] = (
@@ -348,35 +384,23 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _discover_nibe_entities(self) -> list[str]:
         """Discover NIBE heating curve offset entities.
 
-        Filters for entities that can control heating curve offset:
-        - number.* entities with 'offset' in name from MyUplink integration
-        - OR number.* entities with 'offset' in name AND 'nibe' in entity_id
-        - Excludes entities with translation errors
+        Filters for writable number entities matching the shared offset
+        patterns (const.NIBE_DISCOVERY_PATTERNS). Source-neutral: MyUplink,
+        nibe_heatpump, and template numbers wrapping Modbus writes all qualify
+        (issue #18).
         """
         entities = []
-        ent_reg = er.async_get(self.hass)
+        # Count only NIBE-specific patterns: the bare "offset" pattern would
+        # count unrelated calibration numbers (TRV/Tado temperature offsets)
+        # and mislead the "Found N" message. The selector itself stays open.
+        offset_patterns = [p for p in NIBE_DISCOVERY_PATTERNS["offset"] if p != "offset"]
 
-        for state in self.hass.states.async_all():
+        for state in self.hass.states.async_all("number"):
             entity_id = state.entity_id
+            entity_lower = entity_id.lower()
 
-            # Must be a number entity (writable)
-            if not entity_id.startswith("number."):
-                continue
-
-            # Must be related to offset/curve control
-            if "offset" not in entity_id.lower():
-                continue
-
-            # Check if entity is from MyUplink integration (preferred method)
-            entity_entry = ent_reg.async_get(entity_id)
-            if entity_entry and entity_entry.platform == "myuplink":
-                # MyUplink entity with offset - this is what we want!
-                pass
-            elif "nibe" in entity_id.lower() or "myuplink" in entity_id.lower():
-                # Fallback: entity_id contains nibe/myuplink (older naming patterns)
-                pass
-            else:
-                # Not a NIBE/MyUplink entity
+            # Must be related to NIBE offset/curve control
+            if not any(pattern in entity_lower for pattern in offset_patterns):
                 continue
 
             # Exclude entities with translation errors
@@ -439,13 +463,16 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return entities
 
     def _discover_degree_minutes_entities(self) -> list[str]:
-        """Discover NIBE degree minutes sensors.
+        """Discover NIBE degree minutes entities.
+
+        Scans sensor AND number domains: nibe_heatpump and MyUplink expose
+        degree minutes as a writable NUMBER entity (register 43005/40940),
+        generic Modbus setups as a sensor (issue #18).
 
         Auto-detect common patterns:
-        - sensor.*gradminuter* (Swedish)
-        - sensor.*degree_minutes*
-        - sensor.*gm_* (abbreviation)
-        - NIBE specific entity patterns
+        - *gradminuter* (Swedish)
+        - *degree_minutes*
+        - *_gm_* / *_dm_* (abbreviations, requires NIBE-related entity id)
         """
         entities = []
         search_terms = [
@@ -456,22 +483,27 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "_dm_",
         ]
 
-        for state in self.hass.states.async_all():
-            entity_id = state.entity_id
-            if not entity_id.startswith("sensor."):
-                continue
+        ent_reg = er.async_get(self.hass)
 
+        for state in self.hass.states.async_all(("sensor", "number")):
+            entity_id = state.entity_id
             entity_lower = entity_id.lower()
 
             # Check for any search term in entity ID
             for term in search_terms:
                 if term in entity_lower:
-                    # Additional validation: check if NIBE-related
-                    if "nibe" in entity_lower or "myuplink" in entity_lower:
+                    # Explicit degree-minutes name is always accepted
+                    if "gradminuter" in entity_lower or "degree_minute" in entity_lower:
                         entities.append(entity_id)
                         break
-                    # Or if it's explicitly a degree minutes sensor
-                    elif "gradminuter" in entity_lower or "degree_minute" in entity_lower:
+                    # Abbreviations (_gm_/_dm_) need a NIBE source to avoid
+                    # false positives. MyUplink ids carry the DEVICE name, not
+                    # "myuplink", so check the registry platform, with the
+                    # name substring as fallback for renamed entities.
+                    entity_entry = ent_reg.async_get(entity_id)
+                    if (
+                        entity_entry and entity_entry.platform in ("myuplink", "nibe_heatpump")
+                    ) or ("nibe" in entity_lower):
                         entities.append(entity_id)
                         break
 
@@ -549,22 +581,33 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             is_temp_lux = (
                 ("temporary" in entity_lower and "lux" in entity_lower)
                 or ("temp" in entity_lower and "lux" in entity_lower)
-                or "50004" in entity_lower  # NIBE parameter ID
+                or "50004" in entity_lower  # MyUplink parameter ID
+                or "48132" in entity_lower  # F-series Modbus register
             )
 
             if not is_temp_lux:
                 continue
 
-            # Verify it's from MyUplink integration or NIBE-related
+            # Verify it's from a NIBE source integration or NIBE-related by name
             entity_entry = ent_reg.async_get(entity_id)
-            if entity_entry and entity_entry.platform == "myuplink":
-                # Confirmed MyUplink entity
+            if entity_entry and entity_entry.platform in ("myuplink", "nibe_heatpump"):
                 entities.append(entity_id)
             elif any(
                 term in entity_lower
-                for term in ["nibe", "myuplink", "f750", "f470", "f1145", "f1245", "f1255", "s1155"]
+                for term in [
+                    "nibe",
+                    "myuplink",
+                    "f750",
+                    "f470",
+                    "f1145",
+                    "f1155",
+                    "f1245",
+                    "f1255",
+                    "s1155",
+                    "48132",
+                ]
             ):
-                # Entity ID contains NIBE model numbers or myuplink
+                # Entity ID contains NIBE model numbers, register, or source name
                 entities.append(entity_id)
 
         return entities
@@ -574,62 +617,107 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle reconfiguration of entity selections.
 
-        Allows users to change entity selections (weather, power sensor, etc.)
-        without recreating the entire integration.
+        Allows users to change entity selections (offset control, weather,
+        power sensor, manual sensor overrides, etc.) without recreating the
+        entire integration. Fields left empty are cleared (back to
+        auto-discovery); the offset entity keeps its previous value when left
+        empty because the integration cannot work without one.
         """
         errors = {}
+        entry = self._get_reconfigure_entry()
 
         if user_input is not None:
-            # Update entry.data with new entity selections and reload
-            return self.async_update_reload_and_abort(
-                self._get_reconfigure_entry(),
-                data_updates=user_input,
-            )
+            # Explicit None for absent optional fields so clearing works;
+            # async_update_reload_and_abort merges data_updates over entry.data
+            data_updates: dict[str, Any] = {
+                CONF_WEATHER_ENTITY: user_input.get(CONF_WEATHER_ENTITY),
+                CONF_DEGREE_MINUTES_ENTITY: user_input.get(CONF_DEGREE_MINUTES_ENTITY),
+                CONF_POWER_SENSOR_ENTITY: user_input.get(CONF_POWER_SENSOR_ENTITY),
+                CONF_NIBE_TEMP_LUX_ENTITY: user_input.get(CONF_NIBE_TEMP_LUX_ENTITY),
+                CONF_ADDITIONAL_INDOOR_SENSORS: user_input.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
+            }
+            for conf_key in MANUAL_SENSOR_OVERRIDE_FIELDS:
+                data_updates[conf_key] = user_input.get(conf_key)
 
-        # Get current entity selections from entry.data
-        entry = self._get_reconfigure_entry()
+            # Model and offset entity are required - keep old values if empty
+            if user_input.get(CONF_HEAT_PUMP_MODEL):
+                data_updates[CONF_HEAT_PUMP_MODEL] = user_input[CONF_HEAT_PUMP_MODEL]
+
+            nibe_entity = user_input.get(CONF_NIBE_ENTITY)
+            if nibe_entity:
+                if not self.hass.states.get(nibe_entity):
+                    errors["base"] = "nibe_entity_not_found"
+                else:
+                    data_updates[CONF_NIBE_ENTITY] = nibe_entity
+
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates=data_updates,
+                )
+
+        schema_dict: dict[Any, Any] = {}
+
+        _optional_entity_field(
+            schema_dict,
+            CONF_NIBE_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain=["number"])),
+            entry.data.get(CONF_NIBE_ENTITY),
+        )
+        # Model uses default= (not suggested_value): it must never be cleared,
+        # an empty submit keeps the stored model
+        schema_dict[
+            vol.Optional(
+                CONF_HEAT_PUMP_MODEL,
+                default=entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL),
+            )
+        ] = vol.In(HEAT_PUMP_MODEL_OPTIONS)
+        _optional_entity_field(
+            schema_dict,
+            CONF_WEATHER_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain="weather")),
+            entry.data.get(CONF_WEATHER_ENTITY),
+        )
+        _optional_entity_field(
+            schema_dict,
+            CONF_DEGREE_MINUTES_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain=SOURCE_ENTITY_DOMAINS)),
+            entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
+        )
+        _optional_entity_field(
+            schema_dict,
+            CONF_POWER_SENSOR_ENTITY,
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="power",
+                )
+            ),
+            entry.data.get(CONF_POWER_SENSOR_ENTITY),
+        )
+        _optional_entity_field(
+            schema_dict,
+            CONF_NIBE_TEMP_LUX_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain="switch")),
+            entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY),
+        )
+        _optional_entity_field(
+            schema_dict,
+            CONF_ADDITIONAL_INDOOR_SENSORS,
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(
+                    domain="sensor",
+                    device_class="temperature",
+                    multiple=True,
+                )
+            ),
+            entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
+        )
+        _manual_override_schema(schema_dict, dict(entry.data))
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_WEATHER_ENTITY,
-                        default=entry.data.get(CONF_WEATHER_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="weather",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_DEGREE_MINUTES_ENTITY,
-                        default=entry.data.get(CONF_DEGREE_MINUTES_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_POWER_SENSOR_ENTITY,
-                        default=entry.data.get(CONF_POWER_SENSOR_ENTITY),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class="power",
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_ADDITIONAL_INDOOR_SENSORS,
-                        default=entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="sensor",
-                            device_class="temperature",
-                            multiple=True,
-                        )
-                    ),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
             errors=errors,
             description_placeholders={
                 "info": "Change entity selections. Integration will reload automatically."
