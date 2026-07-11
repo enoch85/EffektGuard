@@ -231,7 +231,7 @@ class AdaptiveThermalModel:
 
             _LOGGER.info(
                 "Updated learned parameters: thermal_mass=%.2f, "
-                "heat_loss=%.1fW/°C, efficiency=%.2f°C/offset/h, "
+                "heat_loss_index=%.1f (relative, not W/°C), efficiency=%.2f°C/offset/h, "
                 "decay=%.3f°C/h, ufh=%s, confidence=%.1f%%",
                 thermal_mass,
                 heat_loss_coef,
@@ -368,12 +368,22 @@ class AdaptiveThermalModel:
         return np.clip(thermal_mass, 0.5, 2.0)
 
     def _calculate_heat_loss_coefficient(self) -> float:
-        """Calculate heat loss coefficient (insulation quality).
+        """Estimate a RELATIVE cooling index (not a physical W/°C value).
 
-        Measured in W/°C - heat loss per degree temperature difference.
+        QUARANTINED (review 2026-07): indoor temperature decay alone cannot
+        yield a heat-loss coefficient - dimensionally that requires thermal
+        capacitance or measured heat input (H = C * (dT/dt) / deltaT), and
+        neither is available here. The 3600*50 scaling below is a heuristic
+        mapping into a plausible-looking 100-300 range, nothing more.
+
+        The value is retained ONLY as a relative "cools faster/slower"
+        indicator and for stored-data compatibility. It MUST NOT be used as
+        an absolute W/°C coefficient anywhere in the control path - the
+        decision engine takes heat_loss_coefficient from user configuration
+        (DEFAULT_HEAT_LOSS_COEFFICIENT fallback), never from this estimate.
 
         Returns:
-            Heat loss coefficient (typical range 100-300 W/°C)
+            Relative index scaled into the typical 100-300 range
         """
         if len(self.observations) < LEARNING_MIN_OBSERVATIONS:
             return 180.0  # Default typical value

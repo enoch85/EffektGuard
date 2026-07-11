@@ -861,6 +861,10 @@ UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
 QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
+# Native interval counts a day can have: 92 (spring DST), 96 (normal),
+# 100 (autumn DST). Anything else means the source delivered a data gap.
+NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control
 STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before observation cycles
 
@@ -1109,6 +1113,9 @@ DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (e
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
+# Unit conversion
+WATTS_PER_KILOWATT: Final = 1000.0
+
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
@@ -1292,6 +1299,13 @@ SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
 # Baseline peak estimation - assumes optimization reduces peak by ~15%
 # If no baseline observed, estimate unoptimized peak from current optimized peak
 BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
+
+# Price-unit handling for savings math. GE-Spot preserves whatever display
+# unit the user configured; savings must convert to the MAIN currency unit
+# accordingly instead of assuming öre/kWh. Prefix match on the normalized
+# (lowercase, spaceless) unit string; sub-units (öre, cents) divide by 100.
+PRICE_SUBUNIT_PREFIXES: Final[tuple[str, ...]] = ("öre", "ore", "cent", "snt")
+PRICE_MAINUNIT_PREFIXES: Final[tuple[str, ...]] = ("sek", "eur", "nok", "dkk", "€", "kr")
 
 # Monthly calculation constants
 DAYS_PER_MONTH: Final = 30.0  # Average days for monthly savings calculation

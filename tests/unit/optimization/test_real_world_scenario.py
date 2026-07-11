@@ -15,12 +15,18 @@ Expected result: -1.5°C offset from weighted aggregation of:
 """
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
+
+from freezegun import freeze_time
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
-from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.price_layer import (
+    PriceAnalyzer,
+    PriceData,
+    QuarterPeriod,
+)
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_PRICE,
@@ -45,45 +51,47 @@ def real_world_nibe_state():
 
 @pytest.fixture
 def expensive_price_data():
-    """Create price data with expensive morning period."""
-    price_data = MagicMock()
-    price_data.today = []
-    price_data.tomorrow = []
+    """Real PriceData with an expensive morning period (base day 2025-01-16).
+
+    Real timestamps let the production timestamp-containment lookup resolve
+    the current interval; tests pin the clock with freeze_time to match.
+    """
+    base_date = datetime(2025, 1, 16, 0, 0, 0, tzinfo=timezone.utc)
+    today = []
+    tomorrow = []
 
     # Create realistic Swedish price pattern with clear classification
     # Need prices to span a wide range for percentile-based classification
     for i in range(96):
-        quarter = MagicMock()
-        quarter.quarter_of_day = i
-        quarter.is_daytime = 24 <= i <= 87  # 06:00-22:00
 
         # Night (Q0-Q23): VERY CHEAP 0.50-0.80 SEK
         if i < 24:
-            quarter.price = 0.50 + (i * 0.0125)  # 0.50 -> 0.80
+            price = 0.50 + (i * 0.0125)  # 0.50 -> 0.80
         # Morning (Q24-Q35): EXPENSIVE 2.20-2.50 SEK
         elif i < 36:
-            quarter.price = 2.20 + ((i - 24) * 0.025)  # 2.20 -> 2.50
+            price = 2.20 + ((i - 24) * 0.025)  # 2.20 -> 2.50
         # Mid-day (Q36-Q55): CHEAP 0.90-1.20 SEK
         elif i < 56:
-            quarter.price = 0.90 + ((i - 36) * 0.015)  # 0.90 -> 1.20
+            price = 0.90 + ((i - 36) * 0.015)  # 0.90 -> 1.20
         # Afternoon (Q56-Q67): NORMAL 1.30-1.45 SEK
         elif i < 68:
-            quarter.price = 1.30 + ((i - 56) * 0.01)
+            price = 1.30 + ((i - 56) * 0.01)
         # Evening peak (Q68-Q83): PEAK 2.80-3.20 SEK
         elif i < 84:
-            quarter.price = 2.80 + ((i - 68) * 0.025)  # 2.80 -> 3.20
+            price = 2.80 + ((i - 68) * 0.025)  # 2.80 -> 3.20
         # Late (Q84-Q95): NORMAL
         else:
-            quarter.price = 1.35 + ((i - 84) * 0.01)
+            price = 1.35 + ((i - 84) * 0.01)
 
-        price_data.today.append(quarter)
+        start_time = base_date + timedelta(minutes=i * 15)
+        today.append(QuarterPeriod(start_time=start_time, price=price))
 
         # Tomorrow: similar pattern but slightly cheaper
-        quarter_tomorrow = MagicMock()
-        quarter_tomorrow.quarter_of_day = i
-        quarter_tomorrow.price = quarter.price * 0.95
-        quarter_tomorrow.is_daytime = quarter.is_daytime
-        price_data.tomorrow.append(quarter_tomorrow)
+        tomorrow.append(
+            QuarterPeriod(start_time=start_time + timedelta(days=1), price=price * 0.95)
+        )
+
+    price_data = PriceData(today=today, tomorrow=tomorrow, has_tomorrow=True)
 
     # Verify Q32 (08:00-08:15) has expensive price
     # Q32 = 8*4 = 32, in morning range Q24-Q35
@@ -107,8 +115,6 @@ def winter_weather_data():
         forecast.hour = hour
         forecast.temperature = temp
         # Use timedelta to handle day overflow
-        from datetime import timedelta
-
         forecast.datetime = datetime(2025, 1, 16, 8, 0) + timedelta(hours=hour)
         weather.forecast_hours.append(forecast)
 
@@ -154,6 +160,7 @@ class TestRealWorldScenario:
     """Test complete real-world optimization scenario."""
 
     @pytest.mark.asyncio
+    @freeze_time("2025-01-16 08:00:00")
     async def test_08_00_expensive_morning_optimization(
         self,
         decision_engine,
@@ -178,7 +185,7 @@ class TestRealWorldScenario:
         Safety > cost savings: thermal protection during cold spell
         """
         # Mock dt_util.now() to return our test timestamp (08:00)
-        test_time = datetime(2025, 1, 16, 8, 0)
+        test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)
 
         with patch(
             "custom_components.effektguard.optimization.decision_engine.dt_util.now",
@@ -354,6 +361,7 @@ class TestRealWorldScenario:
         print(f"========================================\n")
 
     @pytest.mark.asyncio
+    @freeze_time("2025-01-16 08:00:00")
     async def test_spot_price_layer_daytime_multiplier(
         self,
         decision_engine,
@@ -366,7 +374,7 @@ class TestRealWorldScenario:
         Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
         when much cheaper period detected within 4-hour horizon.
         """
-        test_time = datetime(2025, 1, 16, 8, 0)  # Q32
+        test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)  # Q32
 
         with patch(
             "custom_components.effektguard.optimization.decision_engine.dt_util.now",
@@ -405,6 +413,7 @@ class TestRealWorldScenario:
             assert "cheaper" in price_layer.reason.lower()  # Forecast message
 
     @pytest.mark.asyncio
+    @freeze_time("2025-01-16 02:30:00")
     async def test_nighttime_cheap_period_preheating(
         self,
         decision_engine,
@@ -414,7 +423,7 @@ class TestRealWorldScenario:
     ):
         """Test pre-heating during cheap nighttime period."""
         # Move to nighttime cheap period (Q10 = 02:30)
-        test_time = datetime(2025, 1, 16, 2, 30)
+        test_time = datetime(2025, 1, 16, 2, 30, tzinfo=timezone.utc)
         real_world_nibe_state.indoor_temp = 21.2  # Slightly above target
 
         with patch(
@@ -444,6 +453,7 @@ class TestRealWorldScenario:
             ), f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
 
     @pytest.mark.asyncio
+    @freeze_time("2025-01-16 18:00:00")
     async def test_evening_peak_aggressive_reduction(
         self,
         decision_engine,
@@ -453,7 +463,7 @@ class TestRealWorldScenario:
     ):
         """Test aggressive reduction during evening PEAK period."""
         # Move to evening peak (Q72 = 18:00)
-        test_time = datetime(2025, 1, 16, 18, 0)
+        test_time = datetime(2025, 1, 16, 18, 0, tzinfo=timezone.utc)
         real_world_nibe_state.indoor_temp = 20.9
 
         with patch(
@@ -487,6 +497,7 @@ class TestRealWorldScenario:
             assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
 
     @pytest.mark.asyncio
+    @freeze_time("2025-01-16 08:00:00")
     async def test_tolerance_setting_affects_aggressiveness(
         self,
         hass_mock,
@@ -502,7 +513,7 @@ class TestRealWorldScenario:
         Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
         independent of tolerance setting.
         """
-        test_time = datetime(2025, 1, 16, 8, 0)  # Q32
+        test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)  # Q32
 
         # Create two engines with different tolerance settings
         # Using actual tolerance range: 0.5-3.0

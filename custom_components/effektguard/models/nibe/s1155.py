@@ -9,7 +9,7 @@ Verified: October 2025, NIBE official website
 
 from dataclasses import dataclass
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER
+from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
 from ..base import HeatPumpProfile, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -85,7 +85,9 @@ class NibeS1155Profile(HeatPumpProfile):
         temp_diff = indoor_target - outdoor_temp
 
         flow_from_formula = (
-            KUEHNE_COEFFICIENT * (heat_loss_coefficient * temp_diff) ** KUEHNE_POWER + indoor_target
+            KUEHNE_COEFFICIENT
+            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
+            + indoor_target
         )
 
         # GSHP can run lower flow temps for better COP

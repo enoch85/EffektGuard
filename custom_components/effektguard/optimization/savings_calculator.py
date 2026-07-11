@@ -17,6 +17,8 @@ from ..const import (
     BASELINE_PEAK_MULTIPLIER,
     DAYS_PER_MONTH,
     ORE_TO_SEK_CONVERSION,
+    PRICE_MAINUNIT_PREFIXES,
+    PRICE_SUBUNIT_PREFIXES,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
 
@@ -43,8 +45,43 @@ class SavingsCalculator:
     - Observed peak reductions and price avoidance
     """
 
+    def price_to_main_unit_factor(self) -> float:
+        """Factor converting the configured price unit to the main currency.
+
+        GE-Spot preserves the user's display unit: öre/cent-style sub-units
+        divide by 100; SEK/EUR-style main units pass through. Unknown units
+        keep the historical öre/kWh assumption so existing Swedish setups
+        are unaffected, with a one-time log.
+        """
+        unit = (self.price_unit or "").lower().replace(" ", "")
+        if unit.startswith(PRICE_SUBUNIT_PREFIXES):
+            return 1.0 / ORE_TO_SEK_CONVERSION
+        if unit.startswith(PRICE_MAINUNIT_PREFIXES):
+            return 1.0
+        if not self._unknown_unit_logged:
+            self._unknown_unit_logged = True
+            _LOGGER.info(
+                "Price unit '%s' not recognized - assuming öre/kWh-style "
+                "sub-unit for savings math (ranking is unaffected)",
+                self.price_unit,
+            )
+        return 1.0 / ORE_TO_SEK_CONVERSION
+
+    @property
+    def is_sek_price_unit(self) -> bool:
+        """Return whether spot savings are denominated in SEK.
+
+        Effect-tariff savings are always SEK. A price feed in another currency
+        may still guide ranking, but its monetary spot result must never be
+        combined with a SEK tariff result without an explicit FX conversion.
+        """
+        unit = (self.price_unit or "").lower().replace(" ", "")
+        return not unit or unit.startswith(("sek", "öre", "ore"))
+
     def __init__(self):
         """Initialize savings calculator."""
+        self.price_unit: str | None = None
+        self._unknown_unit_logged: bool = False
         # Swedish effect tariff typical costs (SEK/kW/month)
         # Based on common Swedish grid operators:
         # - Ellevio: ~55 SEK/kW/month
@@ -154,10 +191,11 @@ class SavingsCalculator:
         energy_kwh = actual_power_kw * cycle_hours
 
         # Actual cost at current price
-        actual_cost = (energy_kwh * current_price) / ORE_TO_SEK_CONVERSION
+        to_main = self.price_to_main_unit_factor()
+        actual_cost = energy_kwh * current_price * to_main
 
         # What it would have cost at average price (baseline)
-        baseline_cost = (energy_kwh * average_price_today) / ORE_TO_SEK_CONVERSION
+        baseline_cost = energy_kwh * average_price_today * to_main
 
         # Savings: positive if we paid less than average
         cycle_savings = baseline_cost - actual_cost

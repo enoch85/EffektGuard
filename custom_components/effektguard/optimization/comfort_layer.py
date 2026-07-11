@@ -28,7 +28,7 @@ from ..const import (
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
 )
-from ..utils.time_utils import get_current_quarter
+from ..utils.time_utils import QUARTERS_PER_HOUR, resolve_period_index
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -319,9 +319,8 @@ class ComfortLayer:
         if not price_data or not price_data.today:
             return None
 
-        current_quarter = get_current_quarter()
-
-        if current_quarter >= len(price_data.today):
+        current_quarter = resolve_period_index(price_data)
+        if current_quarter is None:
             return None
 
         current_price = price_data.today[current_quarter].price
@@ -329,13 +328,14 @@ class ComfortLayer:
             return None
 
         # Scan forward to find expensive periods
+        today_length = len(price_data.today)
         forecast_hours = PRICE_FORECAST_BASE_HORIZON * thermal_mass
-        forecast_quarters = int(forecast_hours * 4)
-        lookahead_end = min(current_quarter + 1 + forecast_quarters, 96)
+        forecast_quarters = int(forecast_hours * QUARTERS_PER_HOUR)
+        lookahead_end = min(current_quarter + 1 + forecast_quarters, today_length)
 
         upcoming = list(price_data.today[current_quarter + 1 : lookahead_end])
-        if price_data.has_tomorrow and lookahead_end >= 96:
-            remaining = forecast_quarters - (96 - current_quarter - 1)
+        if price_data.has_tomorrow and lookahead_end >= today_length:
+            remaining = forecast_quarters - (today_length - current_quarter - 1)
             upcoming.extend(price_data.tomorrow[:remaining])
 
         if not upcoming:

@@ -68,3 +68,6 @@ test_results.log
 
 # Simulation run output (regenerated; not committed)
 scripts/simulation/output/
+
+# Stray directories created when a MagicMock leaks into a filesystem path in tests
+**/MagicMock/

@@ -54,6 +54,7 @@ from ..const import (
     DM_RECOVERY_SAFETY_BUFFER,
     DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
+    QuarterClassification,
     SPACE_HEATING_DEMAND_DROP_HOURS,
     SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
     SPACE_HEATING_DEMAND_LOW_THRESHOLD,
@@ -1829,19 +1830,24 @@ class IntelligentDHWScheduler:
         Returns:
             Earliest safe opportunity datetime
         """
-        # Calculate different constraint times
-        opportunities = []
+        # The three inputs have different semantics and must not be mixed
+        # with a plain min(): thermal-debt recovery is a HARD constraint
+        # (lower bound), the cheap window is a preference (candidate), and
+        # the cooling estimate is a deadline (upper bound). Taking the
+        # earliest could recommend heating before safety allows it.
 
-        # 1. Thermal debt recovery time
+        # 1. Hard constraint: no DHW before thermal debt has recovered
+        earliest_allowed = current_time
         if thermal_debt_dm < dm_block_threshold:
             recovery_hours = self._estimate_dm_recovery_time(
                 current_dm=thermal_debt_dm,
                 target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
                 outdoor_temp=outdoor_temp,
             )
-            opportunities.append(current_time + timedelta(hours=recovery_hours))
+            earliest_allowed = current_time + timedelta(hours=recovery_hours)
 
-        # 2. Next cheap price window
+        # 2. Preference: the next cheap price window (candidate start)
+        candidate = None
         if price_periods and self.price_analyzer:
             lookahead_hours = self._get_lookahead_hours(current_time)
             cheap_window = self.price_analyzer.find_cheapest_window(
@@ -1851,26 +1857,40 @@ class IntelligentDHWScheduler:
                 lookahead_hours=lookahead_hours,
             )
             if cheap_window:
-                opportunities.append(cheap_window.start_time)
+                candidate = cheap_window.start_time
 
-        # 3. Temperature cooling estimate (when will DHW need heating)
+        # 3. Deadline: when cooling makes heating necessary regardless of price
+        deadline = None
         temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
         if temp_margin > 0:
             hours_until_low = temp_margin / DHW_COOLING_RATE
-            opportunities.append(current_time + timedelta(hours=hours_until_low))
+            deadline = current_time + timedelta(hours=hours_until_low)
 
-        # Return earliest opportunity (or default to 2 hours if no constraints)
-        if opportunities:
-            next_opportunity = min(opportunities)
-            _LOGGER.debug(
-                "Next DHW opportunity for %s: %s (from %d constraints)",
-                blocking_reason,
-                next_opportunity.strftime("%Y-%m-%d %H:%M"),
-                len(opportunities),
-            )
-            return next_opportunity
-        else:
+        if candidate is None and deadline is None and earliest_allowed == current_time:
             return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
+
+        # Without a price window, the meaningful recommendation is the
+        # moment heating becomes necessary (the deadline)
+        if candidate is None:
+            candidate = deadline
+
+        # Wait for the cheap window, but never start before the hard
+        # constraint allows...
+        next_opportunity = max(earliest_allowed, candidate or earliest_allowed)
+        # ...and never later than the deadline (which itself cannot beat
+        # the hard constraint)
+        if deadline is not None:
+            next_opportunity = min(next_opportunity, max(earliest_allowed, deadline))
+
+        _LOGGER.debug(
+            "Next DHW opportunity for %s: %s (allowed from %s, window %s, deadline %s)",
+            blocking_reason,
+            next_opportunity.strftime("%Y-%m-%d %H:%M"),
+            earliest_allowed.strftime("%H:%M"),
+            candidate.strftime("%H:%M") if candidate else "-",
+            deadline.strftime("%H:%M") if deadline else "-",
+        )
+        return next_opportunity
 
     def _find_next_non_peak_window(
         self,
@@ -1892,21 +1912,12 @@ class IntelligentDHWScheduler:
             # No price data - try again in 1 hour (conservative fallback)
             return current_time + timedelta(hours=1)
 
-        from ..const import QuarterClassification
-
         # Search through upcoming periods for the first non-peak
         for period in price_periods:
             if period.start_time <= current_time:
                 continue
 
-            # Get classification for this quarter
-            quarter = period.quarter_of_day
-            is_tomorrow = period.start_time.date() > current_time.date()
-
-            if is_tomorrow:
-                classification = self.price_analyzer.get_tomorrow_classification(quarter)
-            else:
-                classification = self.price_analyzer.get_current_classification(quarter)
+            classification = self.price_analyzer.get_classification_for_period(period)
 
             if classification != QuarterClassification.PEAK:
                 _LOGGER.debug(
@@ -2018,8 +2029,6 @@ class IntelligentDHWScheduler:
         if not price_periods or not self.price_analyzer:
             return False, ""
 
-        from ..const import QuarterClassification
-
         # Find upcoming PEAK periods in next 24 hours
         peak_periods = []
         for period in price_periods:
@@ -2028,14 +2037,7 @@ class IntelligentDHWScheduler:
             if period.start_time > current_time + timedelta(hours=24):
                 break
 
-            # Get classification for this quarter
-            quarter = period.quarter_of_day
-            is_tomorrow = period.start_time.date() > current_time.date()
-
-            if is_tomorrow:
-                classification = self.price_analyzer.get_tomorrow_classification(quarter)
-            else:
-                classification = self.price_analyzer.get_current_classification(quarter)
+            classification = self.price_analyzer.get_classification_for_period(period)
 
             if classification == QuarterClassification.PEAK:
                 peak_periods.append(period)

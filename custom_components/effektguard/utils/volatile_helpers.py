@@ -31,7 +31,7 @@ from ..const import (
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_TIMING_TOLERANCE_SECONDS,
 )
-from .time_utils import get_current_quarter
+from .time_utils import resolve_period_index
 
 # Time conversion constant (for offset tracker)
 SECONDS_PER_MINUTE: int = 60
@@ -66,7 +66,8 @@ def get_volatile_info(
     Args:
         price_analyzer: PriceAnalyzer instance with classification methods
         price_data: Current price data (may be None)
-        current_quarter: Quarter to check (0-95). If None, uses current time.
+        current_quarter: Position in price_data.today to check. If None,
+            resolves the interval containing the current time.
 
     Returns:
         VolatileInfo with is_volatile flag, run length, cluster info, and reason
@@ -83,9 +84,9 @@ def get_volatile_info(
         )
 
     if current_quarter is None:
-        current_quarter = get_current_quarter()
+        current_quarter = resolve_period_index(price_data)
 
-    if current_quarter >= len(price_data.today):
+    if current_quarter is None or current_quarter >= len(price_data.today):
         return VolatileInfo(
             is_volatile=False,
             run_length=0,
@@ -104,8 +105,11 @@ def get_volatile_info(
     run_length = 1
     remaining_quarters = 1  # Track forward quarters separately
 
+    today_length = len(price_data.today)
+    tomorrow_length = len(price_data.tomorrow)
+
     # Scan backwards
-    for offset in range(1, 96):
+    for offset in range(1, today_length):
         check_quarter = current_quarter - offset
         if check_quarter < 0:
             break
@@ -115,13 +119,13 @@ def get_volatile_info(
             break
 
     # Scan forwards (count both run_length and remaining_quarters)
-    for offset in range(1, 96):
+    for offset in range(1, today_length + tomorrow_length):
         check_quarter = current_quarter + offset
-        if check_quarter < 96:
+        if check_quarter < today_length:
             check_class = price_analyzer.get_current_classification(check_quarter)
         elif price_data.has_tomorrow:
-            tomorrow_quarter = check_quarter - 96
-            if tomorrow_quarter < 96:
+            tomorrow_quarter = check_quarter - today_length
+            if tomorrow_quarter < tomorrow_length:
                 check_class = price_analyzer.get_tomorrow_classification(tomorrow_quarter)
             else:
                 break
@@ -173,11 +177,11 @@ def get_volatile_info(
         if has_peak_before:
             for fwd_offset in range(1, VOLATILE_MIN_DURATION_QUARTERS + 1):
                 check_quarter = current_quarter + fwd_offset
-                if check_quarter < 96:
+                if check_quarter < today_length:
                     check_class = price_analyzer.get_current_classification(check_quarter)
                 elif price_data.has_tomorrow:
-                    tomorrow_quarter = check_quarter - 96
-                    if tomorrow_quarter < 96:
+                    tomorrow_quarter = check_quarter - today_length
+                    if tomorrow_quarter < tomorrow_length:
                         check_class = price_analyzer.get_tomorrow_classification(tomorrow_quarter)
                     else:
                         break

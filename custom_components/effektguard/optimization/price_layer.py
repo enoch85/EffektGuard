@@ -39,13 +39,14 @@ from ..const import (
     PRICE_TOLERANCE_FACTOR_MIN,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
+    QUARTERS_PER_DAY,
     QuarterClassification,
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
-from ..utils.time_utils import get_current_quarter
+from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,7 +77,10 @@ class CheapestWindowResult:
 
     start_time: datetime
     end_time: datetime
-    quarters: list[int]  # List of quarter IDs in window
+    # DISPLAY-ONLY wall-clock quarter labels for logs/reason strings: not
+    # unique during autumn DST's repeated hour. Identify the window by
+    # start_time/end_time, never by these numbers.
+    quarters: list[int]
     avg_price: float  # Average price in window (öre/kWh)
     hours_until: float  # Hours from current_time until window starts
     savings_vs_current: float | None = None  # % cheaper than current price (optional)
@@ -244,13 +248,13 @@ class PriceAnalyzer:
                 "Uniform prices detected (%.3f), classifying all periods as NORMAL (no optimization)",
                 p25,
             )
-            return {period.quarter_of_day: QuarterClassification.NORMAL for period in periods}
+            return {index: QuarterClassification.NORMAL for index, _ in enumerate(periods)}
 
         # Classify each period
         # Order: VERY_CHEAP (bottom 10%) -> CHEAP (10-25%) -> NORMAL (25-75%) ->
         #        EXPENSIVE (75-90%) -> PEAK (top 10%)
         classifications = {}
-        for period in periods:
+        for index, period in enumerate(periods):
             if period.price <= p10:
                 classification = QuarterClassification.VERY_CHEAP
             elif period.price <= p25:
@@ -262,7 +266,7 @@ class PriceAnalyzer:
             else:
                 classification = QuarterClassification.PEAK
 
-            classifications[period.quarter_of_day] = classification
+            classifications[index] = classification
 
         return classifications
 
@@ -341,6 +345,28 @@ class PriceAnalyzer:
         """
         return self._classifications_tomorrow.get(quarter, QuarterClassification.NORMAL)
 
+    def get_classification_for_period(self, period: QuarterPeriod) -> QuarterClassification:
+        """Get the classification of a specific native interval.
+
+        Classifications are position-keyed, so a period from a combined
+        today+tomorrow list must be located in its own day's list first -
+        wall-clock quarter numbers would misresolve on DST days.
+
+        Args:
+            period: A QuarterPeriod from the analyzer's current price data
+
+        Returns:
+            Classification for the interval, or NORMAL if it is unknown
+        """
+        for periods, classifications in (
+            (self._quarterly_periods_today, self._classifications_today),
+            (self._quarterly_periods_tomorrow, self._classifications_tomorrow),
+        ):
+            for index, candidate in enumerate(periods):
+                if candidate is period or candidate.start_time == period.start_time:
+                    return classifications.get(index, QuarterClassification.NORMAL)
+        return QuarterClassification.NORMAL
+
     def has_tomorrow_prices(self) -> bool:
         """Check if tomorrow's prices are available."""
         return len(self._classifications_tomorrow) > 0
@@ -357,14 +383,14 @@ class PriceAnalyzer:
             Quarter number of next cheap/very cheap period, or None if none found
         """
         # Search today's periods
-        for quarter in range(current_quarter + 1, 96):
+        for quarter in range(current_quarter + 1, len(self._quarterly_periods_today)):
             if self._classifications_today.get(quarter) in BENEFICIAL_CLASSIFICATIONS:
                 return quarter
 
         # Search tomorrow's periods if available
-        for quarter in range(96):
+        for quarter in range(len(self._quarterly_periods_tomorrow)):
             if self._classifications_tomorrow.get(quarter) in BENEFICIAL_CLASSIFICATIONS:
-                return 96 + quarter  # Offset by 96 for tomorrow
+                return len(self._quarterly_periods_today) + quarter
 
         return None
 
@@ -380,7 +406,7 @@ class PriceAnalyzer:
             Quarter number of next expensive/peak period, or None if none found
         """
         # Search today's periods
-        for quarter in range(current_quarter + 1, 96):
+        for quarter in range(current_quarter + 1, len(self._quarterly_periods_today)):
             classification = self._classifications_today.get(quarter)
             if classification in [
                 QuarterClassification.EXPENSIVE,
@@ -389,13 +415,13 @@ class PriceAnalyzer:
                 return quarter
 
         # Search tomorrow's periods if available
-        for quarter in range(96):
+        for quarter in range(len(self._quarterly_periods_tomorrow)):
             classification = self._classifications_tomorrow.get(quarter)
             if classification in [
                 QuarterClassification.EXPENSIVE,
                 QuarterClassification.PEAK,
             ]:
-                return 96 + quarter  # Offset by 96 for tomorrow
+                return len(self._quarterly_periods_today) + quarter
 
         return None
 
@@ -452,9 +478,11 @@ class PriceAnalyzer:
 
             # Check if within lookahead window
             if period_time >= current_time and period_time < end_time:
-                # Calculate quarter ID based on actual datetime to distinguish duplicates
+                # Display-only label (day-offset + wall-clock quarter): repeats
+                # during autumn DST's second 02:xx hour. Selection and
+                # continuity below use timestamps, never this number.
                 days_ahead = (period_time.date() - current_time.date()).days
-                quarter_id = period.quarter_of_day + (days_ahead * 96)
+                quarter_id = period.quarter_of_day + (days_ahead * QUARTERS_PER_DAY)
 
                 available_quarters.append(
                     {
@@ -638,7 +666,6 @@ class PriceAnalyzer:
 
         current_period = price_data.today[current_quarter]
         current_price = current_period.price
-        current_classification = self.get_current_classification(current_quarter)
 
         # Initialize forecast result values
         cheap_quarters_away = None
@@ -650,12 +677,13 @@ class PriceAnalyzer:
 
         # Build list of upcoming periods
         forecast_quarters = int(lookahead_hours * 4)
-        lookahead_end = min(current_quarter + forecast_quarters, 96)
+        today_length = len(price_data.today)
+        lookahead_end = min(current_quarter + forecast_quarters, today_length)
         upcoming_periods = price_data.today[current_quarter + 1 : lookahead_end]
 
         # Include tomorrow's periods if near end of day
-        if price_data.has_tomorrow and lookahead_end >= 96:
-            remaining_quarters = forecast_quarters - (96 - current_quarter - 1)
+        if price_data.has_tomorrow and lookahead_end >= today_length:
+            remaining_quarters = forecast_quarters - (today_length - current_quarter - 1)
             upcoming_periods.extend(price_data.tomorrow[:remaining_quarters])
 
         # Analyze upcoming periods if we have data
@@ -780,16 +808,15 @@ class PriceAnalyzer:
             )
 
         now = dt_util.now()
-        current_quarter = get_current_quarter(now)
-
-        # Bound check quarter index (safety)
-        if current_quarter >= len(price_data.today):
+        current_quarter = resolve_period_index(price_data, now)
+        if current_quarter is None:
             _LOGGER.warning(
-                "Current quarter %d exceeds available periods (%d)",
-                current_quarter,
+                "No price interval covers the current time (%d periods today)",
                 len(price_data.today),
             )
-            current_quarter = min(current_quarter, len(price_data.today) - 1)
+            return PriceLayerDecision(
+                name="Spot Price", offset=0.0, weight=0.0, reason="No price data"
+            )
 
         # Get current period classification and price
         classification = self.get_current_classification(current_quarter)
@@ -1008,7 +1035,7 @@ class PriceAnalyzer:
         # Start reducing 1 quarter BEFORE peak to allow pump slowdown time
         pre_peak_reason = ""
         next_quarter = current_quarter + 1
-        if next_quarter < 96:
+        if next_quarter < len(price_data.today):
             next_classification = self.get_current_classification(next_quarter)
             if (
                 next_classification == QuarterClassification.PEAK

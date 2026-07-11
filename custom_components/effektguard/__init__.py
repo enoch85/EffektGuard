@@ -524,7 +524,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
             nibe_data = coordinator.data.get("nibe")
             price_data = coordinator.data.get("price")
-            weather_data = coordinator.data.get("weather")
 
             if not all([nibe_data, price_data]):
                 return {"error": "Missing required data (NIBE or price)"}
@@ -535,20 +534,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
             for hour_offset in range(24):
                 forecast_time = current_time + timedelta(hours=hour_offset)
-                hour = forecast_time.hour
-                quarter = (hour * 4) + (forecast_time.minute // 15)  # 0-95
 
-                # Get price classification for this quarter
-                if quarter < len(price_data.today):
-                    period = price_data.today[quarter]
-                    classification = coordinator.engine.price.get_current_classification(quarter)
+                # Locate the native interval by timestamp: positions and
+                # classifications stay aligned even on 92/100-quarter DST days
+                index = price_data.get_period_index(forecast_time)
+                if index is not None:
+                    period = price_data.today[index]
+                    classification = coordinator.engine.price.get_current_classification(index)
                 else:
-                    # Use tomorrow's data if available
-                    tomorrow_quarter = quarter - 96
-                    if price_data.tomorrow and tomorrow_quarter < len(price_data.tomorrow):
-                        period = price_data.tomorrow[tomorrow_quarter]
-                        classification = coordinator.engine.price.get_current_classification(
-                            tomorrow_quarter
+                    tomorrow_index = price_data.get_tomorrow_period_index(forecast_time)
+                    if tomorrow_index is not None:
+                        period = price_data.tomorrow[tomorrow_index]
+                        classification = coordinator.engine.price.get_tomorrow_classification(
+                            tomorrow_index
                         )
                     else:
                         period = None
@@ -558,7 +556,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 # Simplified preview - doesn't include all layers
                 if period:
                     base_offset = coordinator.engine.price.get_base_offset(
-                        quarter % 96, classification, period.is_daytime
+                        period.quarter_of_day, classification, period.is_daytime
                     )
                     estimated_offset = base_offset
                 else:
@@ -567,8 +565,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 schedule.append(
                     {
                         "time": forecast_time.strftime("%Y-%m-%d %H:%M"),
-                        "hour": hour,
-                        "quarter": quarter % 96,
+                        "hour": forecast_time.hour,
+                        "quarter": period.quarter_of_day if period else None,
                         "classification": classification,
                         "estimated_offset": round(estimated_offset, 2),
                         "price": round(period.price, 3) if period else None,
