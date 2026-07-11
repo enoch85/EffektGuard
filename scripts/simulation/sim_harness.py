@@ -48,7 +48,12 @@ from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
     WeatherForecastHour,
 )
-from custom_components.effektguard.models.nibe import NibeF750Profile, NibeF1155Profile
+
+try:
+    from custom_components.effektguard.models.nibe import NibeF750Profile, NibeF1155Profile
+except ImportError:  # F1155 profile ships with the multi-source PR (#19)
+    from custom_components.effektguard.models.nibe import NibeF750Profile
+    from custom_components.effektguard.models.nibe import NibeS1155Profile as NibeF1155Profile
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
@@ -67,6 +72,17 @@ DM_STOP = 0.0
 DM_AUX = -1500.0
 AUX_STEP_KW = 3.0  # one aux step
 TOMORROW_VISIBLE_HOUR = 13  # Nordpool day-ahead published ~12:45 CET
+
+# Comfort accounting matches the engine's configured tolerance (not a looser
+# ad-hoc band): minutes below target-tolerance count as under-heating.
+TARGET_INDOOR = 22.0
+COMFORT_TOLERANCE = 0.5
+OVERSHOOT_TOLERANCE = 1.5  # overshoot band stays wider; heat is banked, not lost
+
+# Illustrative Swedish effect tariff (SEK per kW of the mean of the top-3
+# daily quarter-hour-mean peaks, per month). Rate is fictional-but-typical;
+# the point is comparing runs, not billing accuracy.
+EFFECT_TARIFF_SEK_PER_KW = 81.25
 
 
 @dataclass
@@ -206,8 +222,8 @@ def build_engine(house: HouseConfig, mode: str = "balanced"):
     effect = EffectManager(hass)
     thermal = ThermalModel(house.thermal_mass, house.insulation_quality)
     config = {
-        "target_indoor_temp": 22.0,
-        "tolerance": 0.5,
+        "target_indoor_temp": TARGET_INDOOR,
+        "tolerance": COMFORT_TOLERANCE,
         "optimization_mode": mode,
         "enable_weather_compensation": True,
         "enable_peak_protection": True,
@@ -228,7 +244,15 @@ def build_engine(house: HouseConfig, mode: str = "balanced"):
     return engine, effect
 
 
-def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "balanced"):
+def simulate(
+    house: HouseConfig,
+    times,
+    temps,
+    prices,
+    days: int,
+    mode: str = "balanced",
+    baseline: bool = False,
+):
     engine, effect = build_engine(house, mode)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
@@ -261,6 +285,9 @@ def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "b
         "sign_flips": 0,
     }
     last_offsets = []
+    quarter_samples: list[float] = []
+    quarter_id = None
+    daily_peaks: dict = {}  # date -> max quarter-mean kW
 
     for step in range(steps):
         now = start + timedelta(minutes=STEP_MIN * step)
@@ -336,26 +363,29 @@ def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "b
             power_kw=round(power_kw, 2),
         )
 
-        # --- the real decision engine ---
-        try:
-            decision = engine.calculate_decision(
-                nibe_state=nibe,
-                price_data=price_data,
-                weather_data=weather,
-                current_peak=6.0,
-                current_power=power_kw,
-            )
-            calc_offset = decision.offset
-        except Exception as err:  # noqa: BLE001 - we are hunting bugs
-            stats["exceptions"] += 1
-            violations.append(
-                {
-                    "t": now.isoformat(),
-                    "type": "exception",
-                    "detail": f"{type(err).__name__}: {err}",
-                }
-            )
+        # --- the real decision engine (or neutral baseline) ---
+        if baseline:
             calc_offset = 0.0
+        else:
+            try:
+                decision = engine.calculate_decision(
+                    nibe_state=nibe,
+                    price_data=price_data,
+                    weather_data=weather,
+                    current_peak=6.0,
+                    current_power=power_kw,
+                )
+                calc_offset = decision.offset
+            except Exception as err:  # noqa: BLE001 - we are hunting bugs
+                stats["exceptions"] += 1
+                violations.append(
+                    {
+                        "t": now.isoformat(),
+                        "type": "exception",
+                        "detail": f"{type(err).__name__}: {err}",
+                    }
+                )
+                calc_offset = 0.0
 
         # Adapter-faithful integer write (fractional accumulator, threshold 1.0)
         if abs(calc_offset - accumulator_ref) >= 1.0:
@@ -402,9 +432,21 @@ def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "b
         stats["energy_kwh"] += energy
         stats["aux_kwh"] += aux_kw * STEP_MIN / 60.0
         stats["cost_sek"] += energy * cur_price_ore / 100.0
-        if indoor < 22.0 - 1.0:
+
+        # Effect tariff basis: quarter-hour MEAN power (Swedish effektavgift),
+        # never the instantaneous sample.
+        this_quarter = (now.date(), cur_q)
+        if quarter_id is not None and this_quarter != quarter_id:
+            q_mean = sum(quarter_samples) / len(quarter_samples)
+            day = quarter_id[0]
+            daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
+            quarter_samples = []
+        quarter_id = this_quarter
+        quarter_samples.append(power_kw)
+
+        if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
             stats["comfort_minutes_below"] += STEP_MIN
-        elif indoor > 22.0 + 1.5:
+        elif indoor > TARGET_INDOOR + OVERSHOOT_TOLERANCE:
             stats["comfort_minutes_above"] += STEP_MIN
 
         if step % 6 == 0:  # 30-min trace resolution
@@ -423,6 +465,17 @@ def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "b
                 }
             )
 
+    if quarter_samples and quarter_id is not None:
+        q_mean = sum(quarter_samples) / len(quarter_samples)
+        day = quarter_id[0]
+        daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
+    top3 = sorted(daily_peaks.values(), reverse=True)[:3]
+    tariff_kw = sum(top3) / len(top3) if top3 else 0.0
+    stats["peak_kw_quarter_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
+    stats["tariff_top3_kw"] = round(tariff_kw, 2)
+    stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
+    stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)
+
     stats["indoor_mean"] = round(stats["indoor_sum"] / steps, 2)
     del stats["indoor_sum"]
     stats["violations"] = len(violations)
@@ -432,6 +485,7 @@ def simulate(house: HouseConfig, times, temps, prices, days: int, mode: str = "b
 def main():
     selftest = "--selftest" in sys.argv
     coldsnap = "--coldsnap" in sys.argv
+    baseline = "--baseline" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
@@ -442,12 +496,14 @@ def main():
     OUT_DIR.mkdir(exist_ok=True)
 
     for house in HOUSES:
-        stats, violations, trace = simulate(house, times, temps, prices, days, mode)
+        stats, violations, trace = simulate(house, times, temps, prices, days, mode, baseline)
         tag = f"{house.name}{'-selftest' if selftest else ''}"
         if mode != "balanced":
             tag += f"-{mode}"
         if coldsnap:
             tag += "-coldsnap"
+        if baseline:
+            tag += "-baseline"
         json.dump(
             {"house": house.name, "days": days, "stats": stats, "violations": violations[:200]},
             open(OUT_DIR / f"summary-{tag}.json", "w"),

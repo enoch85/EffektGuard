@@ -1,0 +1,27 @@
+{
+ "house": "wooden_f750",
+ "days": 2,
+ "stats": {
+  "indoor_min": 21.9106248983374,
+  "indoor_max": 22.032779490000692,
+  "dm_min": -153.33333333333331,
+  "cost_sek": 22.070691830280357,
+  "energy_kwh": 37.267650365195564,
+  "aux_kwh": 0.0,
+  "writes": 0,
+  "offset_min": 0,
+  "offset_max": 0,
+  "exceptions": 0,
+  "comfort_minutes_below": 0,
+  "comfort_minutes_above": 0,
+  "compressor_starts": 23,
+  "sign_flips": 0,
+  "peak_kw_quarter_mean": 1.31,
+  "tariff_top3_kw": 1.31,
+  "tariff_cost_sek": 107.0,
+  "total_cost_sek": 129.0,
+  "indoor_mean": 22.0,
+  "violations": 0
+ },
+ "violations": []
+}

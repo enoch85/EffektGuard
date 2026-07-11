@@ -289,6 +289,31 @@ concrete UFH (F1155 profile, τ≈80 h). Engine wall-clock monkeypatched to sim 
   only, current_peak pinned at 6 kW); mild January (min −7.8 °C); engine had
   no weather-forecast-driven pre-heat disabled/enabled changes tested.
 
+### Physical assumptions NOT validated (treat quantitative claims accordingly)
+
+The simulation validates control-flow behavior (no crashes, sane offsets, DM
+handling, price correlation). The following remain **assumptions**, so
+absolute energy/cost numbers are indicative, not verified:
+
+- **Degree-minute estimate**: when no DM entity is available the engine
+  estimates GM from flow/return deltas; the estimator has never been checked
+  against a real pump's internal GM counter.
+- **Climate-zone thresholds**: latitude-derived cold/mild boundaries and the
+  pre-heat trigger temperatures are engineering guesses, not fitted to
+  measured Swedish/Nordic building data.
+- **Phase-current basis**: 3×16 A / 400 V assumptions in power estimation are
+  a common Swedish service size, not read from the installation.
+- **Heating-curve sensitivity**: the ±1 curve-offset → flow-temp → indoor
+  response chain uses the Kuehne formula plus an RC house model; real
+  emitter/zone dynamics differ per house and are not calibrated.
+- **Exhaust-air COP (F730/F750)**: COP curves are keyed on outdoor
+  temperature; an exhaust-air machine's COP depends on exhaust-air and flow
+  temperatures, so F750 simulation results are control-flow evidence only.
+- **Learned heat-loss "coefficient"**: derived from indoor cooling rate
+  without a thermal-capacitance/energy term — dimensionally a relative decay
+  index, NOT W/°C. Quarantined in code (2026-07): logged as relative index,
+  must not feed absolute calculations.
+
 ## Adversarial code review of the change (8 angles, 6 agents + fixes)
 
 All confirmed findings were fixed in-tree with regression tests; suite grew
@@ -526,3 +551,39 @@ Independent review of PR #19 confirmed the implementation and found:
   work lost).
 - Register-map traceability: references now cite the exact upstream path
   (yozik04/nibe, nibe/data/f1155_f1255.json).
+
+## External review #2 outcome (repo-wide, 2026-07-11)
+
+A second, repo-wide review reported 8 findings; each was verified in code
+before fixing. Fixes live on `fix/measurement-and-unit-defects` (stacked on
+the multi-source branch), one commit + regression test per finding:
+
+- **R1 (critical, fixed): kW meters double-divided.** The coordinator divided
+  the external meter reading by 1000 unconditionally; a kW-unit meter went
+  through W→kW twice (6.0 kW became 0.006). Now converted once, by unit
+  attribute.
+- **R2 (high, fixed): effect-tariff quarters recorded instantaneous samples.**
+  The Swedish effektavgift bills the 15-minute MEAN; the coordinator now
+  accumulates samples within the quarter and records the mean at the boundary.
+- **R3 (high, fixed): pump profiles fed W/K into a kW-basis formula.** The
+  Kuehne flow-temp term computed ~2200 °C and was permanently masked by the
+  efficiency clamp; profiles now convert to kW like weather_layer does.
+- **R4 (documented): exhaust-air COP limitation** — see the physical
+  assumptions section above and the profile docstrings.
+- **R5 (quarantined): learned heat-loss coefficient is not W/°C** — relabeled
+  a relative index; verified no consumer feeds it into the control path.
+- **R6 (medium, fixed): savings math assumed öre/kWh.** Cost conversion now
+  honors the GE-Spot unit attribute (öre/cent subunits ÷100, SEK/EUR main
+  units as-is, unknown units keep legacy behavior with a one-time log).
+- **R7 (medium, fixed): DST days.** 92/100-quarter days are normalized
+  honestly: duplicates dedupe first-occurrence-wins, gaps forward-fill from
+  the nearest real price instead of a fabricated day-average, and empty days
+  stay empty. The dense-96 shape is kept because the coordinator indexes
+  today[current_quarter] positionally.
+- **R8 (medium, fixed): DHW next-opportunity constraint algebra** — mandatory
+  lower bounds now use max(), cheap-window candidates are clamped inside
+  them, and the cooling deadline caps the result.
+- Also: dead demo/simulation scripts removed (compileall-breaking
+  triple-quote, hardcoded workspace paths); harness comfort accounting
+  tightened to the configured tolerance with a `--baseline` matched-neutral
+  mode and quarter-mean tariff stats (this PR).
