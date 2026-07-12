@@ -57,8 +57,9 @@ def get_volatile_info(
 ) -> VolatileInfo:
     """Get detailed volatility info for current period.
 
-    Counts total run length (backwards + forwards) with the same classification.
-    If < 3 quarters (45 min) total, period is volatile (unless in PEAK cluster).
+    Counts total run length (backwards + forwards) with the same classification. A run shorter
+    than VOLATILE_MIN_DURATION_QUARTERS (45 min: the compressor's ramp-up plus cool-down) is
+    volatile - the pump cannot act on it, whatever the price is doing.
 
     PEAK cluster: Short EXPENSIVE/NORMAL periods between PEAK periods are
     not volatile - they should be treated as part of the expensive cluster.
@@ -139,9 +140,18 @@ def get_volatile_info(
             # Classification changed, count complete
             break
 
-    # Initial volatility check (short run, not PEAK)
+    # A run shorter than VOLATILE_MIN_DURATION_QUARTERS is one the compressor physically cannot
+    # act on: the threshold IS the compressor's ramp-up plus its cool-down. That is a fact about
+    # the machine, and it does not care what the price is doing - so it holds for a PEAK exactly as
+    # it holds for a cheap period.
+    #
+    # Excluding PEAK meant an isolated fifteen-minute spike could never be volatile, so it always
+    # took critical weight and commanded a full shutdown (PRICE_OFFSET_PEAK, -10 °C) for an event
+    # the house cannot feel and the pump cannot reach. A concrete slab needs hours to shift; a
+    # radiator system still needs longer than one quarter. All it bought was a flip-flopping
+    # offset - the exact behaviour this guard exists to prevent.
     is_brief_run = run_length < VOLATILE_MIN_DURATION_QUARTERS
-    is_volatile = is_brief_run and current_classification != QuarterClassification.PEAK
+    is_volatile = is_brief_run
 
     # Check if CHEAP period is ending soon (v0.4.9 logic)
     # Only CHEAP periods should trigger "ending soon" to allow gradual cooldown before expensive.

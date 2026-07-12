@@ -14,6 +14,7 @@ from custom_components.effektguard.adapters.gespot_adapter import PriceData, Qua
 
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
+    PRICE_OFFSET_PEAK,
     LAYER_WEIGHT_PRICE,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     PRICE_FORECAST_PREHEAT_OFFSET,
@@ -577,10 +578,14 @@ class TestVolatileWeightReduction:
         period.is_daytime = False
         price_periods.append(period)
 
-        # Q2-Q7: EXPENSIVE
+        # Q2-Q7: EXPENSIVE, but NOT peak - so Q1 is an ISOLATED one-quarter spike, which is
+        # what "volatile" means (a run shorter than VOLATILE_MIN_DURATION_QUARTERS). At 60 öre
+        # these quarters were themselves PEAK, making Q1 part of a seven-quarter run: sustained,
+        # not volatile, and correctly coasted through at full strength. The volatility path was
+        # never reached.
         for _ in range(6):
             period = MagicMock()
-            period.price = 60.0
+            period.price = 45.0
             period.is_daytime = False
             price_periods.append(period)
 
@@ -621,8 +626,10 @@ class TestVolatileWeightReduction:
         # Should also work fine
         assert decision_q7 is not None, "Decision should work with full 8-quarter window"
 
-        # Q0-Q7 has mix (CHEAP, PEAK, EXPENSIVE) so should detect volatility
-        # Can't directly check internal flag, but system should be conservative
+        # Q1 is an isolated one-quarter spike. A heating system cannot respond to fifteen
+        # minutes - a concrete slab needs hours - so an isolated peak must be DAMPED rather than
+        # coasted through at PRICE_OFFSET_PEAK. Anything else just makes the offset flip-flop,
+        # which is what the volatility guard exists to prevent.
         assert (
             abs(decision_q7.offset) <= 2.0
         ), f"Should be somewhat conservative with early morning volatility, offset: {decision_q7.offset}"
@@ -648,16 +655,20 @@ class TestVolatileWeightReduction:
         # Build price data with day transition volatility
         price_periods_today = []
 
-        # Q0-Q90: NORMAL ~50 öre (stable all day)
-        for q in range(91):
+        # Q0-Q93: NORMAL ~50 öre (stable all day)
+        for q in range(94):
             period = MagicMock()
             period.price = 50.0
             period.is_daytime = 6 * 4 <= q < 22 * 4  # 06:00-22:00
             period.quarter_of_day = q
             price_periods_today.append(period)
 
-        # Q91-Q95: Volatile spike - PEAK ~80 öre
-        for q in range(91, 96):
+        # Q94-Q95: a TWO-quarter spike, straddling midnight. Shorter than
+        # VOLATILE_MIN_DURATION_QUARTERS (3, from the compressor's 30 min ramp-up plus 15 min
+        # cool-down), so it is volatile by definition: the pump cannot act on it. A five-quarter
+        # run here would be SUSTAINED, and coasting through it at full strength would be correct -
+        # which is not what this class exists to test.
+        for q in range(94, 96):
             period = MagicMock()
             period.price = 85.0  # PEAK
             period.is_daytime = False
@@ -704,12 +715,17 @@ class TestVolatileWeightReduction:
             current_power=2.0,
         )
 
-        # With tomorrow: Q91-Q95 (PEAK) + Q96-Q99 (CHEAP) = 9 quarters
-        # Mix of PEAK + CHEAP = volatility detected → weight 0.4
+        # Q94-Q95 is a two-quarter PEAK straddling midnight - 30 minutes, against a compressor
+        # that needs 45 to ramp up and settle. It must be DAMPED, not coasted through at
+        # PRICE_OFFSET_PEAK: the pump cannot reach the event, and a full shutdown for it only
+        # leaves the offset flip-flopping across the day boundary.
         assert decision_with_tomorrow is not None, "Should handle day transition with tomorrow"
-        assert (
-            abs(decision_with_tomorrow.offset) <= 1.0
-        ), f"Should be conservative during day transition volatility, offset: {decision_with_tomorrow.offset}"
+        assert decision_with_tomorrow.offset < 0.0, "a peak is still a peak: reduce heat"
+        assert abs(decision_with_tomorrow.offset) < abs(PRICE_OFFSET_PEAK) / 2, (
+            f"A 30-minute spike must be damped well below the full coast-through response "
+            f"({PRICE_OFFSET_PEAK}°C), not treated as a sustained peak. "
+            f"Got {decision_with_tomorrow.offset:.2f}°C."
+        )
 
         # Test WITHOUT tomorrow prices (partial scan)
         price_data_no_tomorrow = realize_price_data(price_periods_today)
