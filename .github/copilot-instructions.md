@@ -77,10 +77,15 @@ climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm example
 outdoor_temp = -10.0
 dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
 
-# Thresholds automatically adapt to location and conditions:
-# Stockholm at -10°C: normal_min=-450, normal_max=-700, warning=-700, critical=-1500
-# Kiruna at -30°C: normal_min=-800, normal_max=-1200, warning=-1200, critical=-1500
-# Paris at 5°C: normal_min=-200, normal_max=-350, warning=-350, critical=-1500
+# Thresholds automatically adapt to location and conditions.
+# VERIFIED against ClimateZoneDetector.get_expected_dm_range(), 2026-07-12:
+# Stockholm (59.33) at -10°C: normal_min=-490,  normal_max=-740,  warning=-740,  critical=-1500
+# Kiruna    (67.86) at -30°C: normal_min=-1000, normal_max=-1400, warning=-1400, critical=-1500
+# Paris     (48.86) at  +5°C: normal_min=-100,  normal_max=-250,  warning=-250,  critical=-1500
+#
+# NOTE: normal_max == warning in every zone (DM_CRITICAL_T1_MARGIN is 0), so the WARNING band
+# has ZERO WIDTH and is unreachable. That is a known open finding, not a typo - do not "fix"
+# the table to hide it.
 
 if degree_minutes < dm_range["critical"]:  # Always -1500 (absolute maximum)
     # Emergency recovery mode
@@ -91,32 +96,42 @@ elif degree_minutes < dm_range["warning"]:  # Zone-specific warning threshold
 if degree_minutes < -500:  # DANGEROUS - ignores climate context!
 ```
 
-**Key Safety Constants:**
+**Key Safety Constants:** (these two are the only DM thresholds that are constants)
 ```python
 from .const import (
-    DM_THRESHOLD_START,              # -60 (normal compressor start)
-    DM_THRESHOLD_EXTENDED,           # -240 (extended runs, acceptable)
-    DM_THRESHOLD_AUX_LIMIT,          # -1500 (auxiliary heat limit, avoid exceeding)
+    DM_THRESHOLD_START,              # -60   (normal compressor start, NIBE menu 4.9.3)
+    DM_THRESHOLD_AUX_LIMIT,          # -1500 (auxiliary heat limit)
 )
-
-# Climate zone system provides context-aware thresholds:
-# - DM_THRESHOLD_WARNING: Climate/temp specific (e.g., -700 for Stockholm at -10°C)
-# - DM_THRESHOLD_AUX_LIMIT: Always -1500 (validated in Swedish forums)
 ```
+
+There is **no `DM_THRESHOLD_WARNING` and no `DM_THRESHOLD_EXTENDED`.** The warning threshold is
+**computed per climate zone and outdoor temperature**, not stored:
+
+```python
+dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
+dm_range["warning"]   # Stockholm at -10°C: -740  (NOT -700)
+dm_range["critical"]  # always -1500
+```
+
+⚠️ On the owner's F750 the pump's own **"start addition"** (menu 4.9.3) fires at **-700** by
+default - *before* EffektGuard's Stockholm warning threshold of -740 is ever reached. The
+auxiliary heater engages first and works DM back up. Do not reason about DM -1500 as if the
+elpatron were not there; see F-112/F-129 in the audit.
 
 ### Four-Layer Structure
 
 1. **Integration Layer** (`custom_components/effektguard/`): Home Assistant-specific
    - Config flow for user setup (`config_flow.py`)
-   - Entity creation (`climate.py`, `sensor.py`, `number.py`, etc.)
+   - Entity creation (`climate.py`, `sensor.py`, `switch.py` - those three platforms
+     only; Number and Select were deliberately removed, see PLATFORMS in `__init__.py`)
    - Coordinator for data updates (`coordinator.py`)
    - Service registration (`services.yaml`)
 
 2. **Optimization Engine** (`optimization/`): Pure Python logic
-   - Energy budget management (`effect_manager.py`)
-   - Thermal modeling (`thermal_model.py`)
+   - Energy budget management (`effect_layer.py`)
+   - Thermal modeling (`thermal_layer.py`)
    - Multi-layer decision engine (`decision_engine.py`)
-   - Price analysis (`price_analyzer.py`)
+   - Price analysis (`price_layer.py`)
    - All return domain objects, no HA dependencies
 
 3. **Data Adapters** (`adapters/`): External integration interfaces
@@ -125,11 +140,14 @@ from .const import (
    - Weather forecast reader (`weather_adapter.py`)
    - All read from existing HA entities, no direct API calls
 
-4. **Validation Layer** (`utils/validators.py`): Configuration safety
-   - Pump configuration detection (open-loop requires Auto mode)
-   - System type identification (open-loop vs buffered vs mixed)
-   - UFH type detection (concrete slab vs timber vs radiator)
-   - Critical warnings that block activation
+4. **Utilities** (`utils/`): `compressor_monitor.py` (frequency/wear risk), `emitter.py`
+   (EN 442 / EN 1264 emitter law), `time_utils.py`, `volatile_helpers.py`
+
+   There is **no validation layer**. Config-time validation lives in `config_flow.py`;
+   run-time safety lives in `DecisionEngine._safety_layer()` (the comfort floor/ceiling, a
+   method - not a file) and in `EmergencyLayer` in `optimization/thermal_layer.py` (degree-minute
+   thermal debt, tiered recovery). Do not go looking for `utils/validators.py` - it has never
+   existed.
 
 **Data Flow:**
 ```
@@ -138,7 +156,9 @@ Optimization Engine → Decision → Climate Entity → NIBE Offset Control
 ```
 
 **Cross-Cutting:**
-- **Safety** (`utils/safety.py`): Thermal debt tracking, emergency recovery
+- **Safety**: `DecisionEngine._safety_layer()` (comfort floor/ceiling) and `EmergencyLayer` in
+  `optimization/thermal_layer.py` (degree-minute thermal debt, tiered recovery).
+  There is no `utils/safety.py` and no `optimization/safety_layer.py`.
 - **Configuration** (`config_flow.py`): Validation, warnings, guided setup
 - **Constants** (`const.py`): All thresholds, defaults, entity IDs patterns
 
@@ -155,18 +175,24 @@ Before editing, use `read_file` for entire file. Understand heat pump context, i
 ```python
 # ✅ Do this
 from .const import (
-    DM_THRESHOLD_CRITICAL,
+    DM_THRESHOLD_AUX_LIMIT,
+    DEFAULT_CURVE_SENSITIVITY,
     UFH_CONCRETE_PREDICTION_HORIZON,
-    OPTIMAL_FLOW_DELTA_SPF_4,
 )
 
 if ufh_type == "concrete_slab":
-    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 12.0 hours
+    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 24.0 hours
 
 # ❌ Never this
 if ufh_type == "concrete_slab":
-    horizon = 12.0  # Hardcoded!
+    horizon = 24.0  # Hardcoded!
 ```
+
+Every name above is real; import them and see. This example used to name
+`DM_THRESHOLD_CRITICAL` and `OPTIMAL_FLOW_DELTA_SPF_4`, **neither of which exists**, and
+annotated the horizon as 12.0 when the constant is 24.0 - so the "correct" branch produced
+the same wrong number as the "hardcoded" one it was warning against. Check names against
+`const.py` before repeating them here.
 
 ### Safety Thresholds Are Non-Negotiable
 
@@ -268,7 +294,7 @@ def check_deviation(deviation: float) -> str:
 ```
 
 **Constant Reuse Across Files:**
-- Production code (`decision_engine.py`, `thermal_model.py`, etc.) imports from `const.py`
+- Production code (`decision_engine.py`, `thermal_layer.py`, etc.) imports from `const.py`
 - Test code (`tests/`, `scripts/test_decision_scenarios.py`) imports SAME constants
 - NO duplicate definitions - single source of truth
 - If constant exists, use it everywhere applicable
@@ -307,7 +333,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 # Local (relative imports)
-from .const import DOMAIN, DM_THRESHOLD_CRITICAL
+from .const import DOMAIN, DM_THRESHOLD_AUX_LIMIT
 from .optimization.decision_engine import DecisionEngine
 ```
 
@@ -623,11 +649,15 @@ plt.savefig("docs/dev/debug_issue_description.png", dpi=150)
 - `const.py` - ALL constants and thresholds
 - `climate.py` - Main climate entity
 
-**Optimization:**
-- `optimization/decision_engine.py` - Multi-layer decision logic
-- `optimization/thermal_model.py` - Thermal calculations
-- `optimization/effect_manager.py` - Peak tracking (15-minute windows)
-- `optimization/price_analyzer.py` - Spot price classification
+**Optimization:** (every module here is `*_layer.py`, not `*_model/_manager/_analyzer.py`)
+- `optimization/decision_engine.py` - Multi-layer decision logic; also holds `_safety_layer()`
+- `optimization/thermal_layer.py` - `ThermalModel`, `EmergencyLayer` (DM debt), `ProactiveLayer`
+- `optimization/effect_layer.py` - Peak tracking (15-minute windows)
+- `optimization/price_layer.py` - Spot price classification
+- `optimization/comfort_layer.py`, `weather_layer.py`, `prediction_layer.py`
+- `optimization/adaptive_learning.py` - Observing only; does not drive control (see F-132)
+- `optimization/dhw_optimizer.py`, `airflow_optimizer.py`, `climate_zones.py`,
+  `savings_calculator.py`, `weather_learning.py`
 
 **Adapters:**
 - `adapters/nibe_adapter.py` - Read NIBE MyUplink entities
@@ -635,8 +665,13 @@ plt.savefig("docs/dev/debug_issue_description.png", dpi=150)
 - `adapters/weather_adapter.py` - Read weather forecast
 
 **Safety:**
-- `utils/validators.py` - Configuration validation
-- `utils/safety.py` - Thermal debt tracking
+- `DecisionEngine._safety_layer()` in `optimization/decision_engine.py` - comfort floor/ceiling
+- `EmergencyLayer` in `optimization/thermal_layer.py` - degree-minute thermal debt, tiered recovery
+- `utils/compressor_monitor.py` - compressor frequency and wear risk
+
+**Utilities:**
+- `utils/emitter.py` - EN 442 / EN 1264 emitter law
+- `utils/time_utils.py`, `utils/volatile_helpers.py`
 
 ---
 
@@ -711,36 +746,37 @@ DM_CRITICAL = -500  # Line 18
 DM_CRITICAL = -400  # Line 26 (different value!)
 
 # ✅ One definition in const.py
-DM_THRESHOLD_CRITICAL = -500  # stevedvo case study
+DM_THRESHOLD_AUX_LIMIT = -1500  # auxiliary heat limit
 ```
 
 ### Document NIBE-Specific Calculations
 
 ```python
-# ✅ Show NIBE research basis
-# Open-loop UFH prediction horizon (glyn.hudson case study)
-# Concrete slab: 6+ hours thermal lag observed
-# Requires 12-hour prediction for proper pre-heating
-UFH_CONCRETE_PREDICTION_HORIZON = 12.0  # hours
+# ✅ Show the research basis
+# Concrete slab: 6+ hours of conduction lag from pipe to floor surface, but the slab reaches
+# only ~63% of its response in ~14 h. Six hours is the LAG; twenty-four is the horizon you
+# have to plan over. Confirmed against the owner's slab (2-node transient, 100 mm + 60 mm).
+UFH_CONCRETE_PREDICTION_HORIZON = 24.0  # hours
 
 # ❌ No context
-HORIZON = 12.0
+HORIZON = 24.0
 ```
+
+(This example used to say `12.0`, which is simply not the value - a doc that teaches you to
+document your reasoning while getting its own number wrong. Check `const.py`.)
 
 ### Reference Research Documents
 
 ```python
 # ✅ Good - traceable to research
-# Thermal debt threshold based on stevedvo's F2040 real-world failure
-# DM -500 caused: 15kW spikes, 10°K overshoot, catastrophic inefficiency
-# Swedish term: Gradminuter (GM), NIBE Menu 4.9.3
-# Swedish auxiliary optimization: -1000 to -1500 (prevents excessive aux heat)
-# Source: Forum_Summary.md, Swedish_NIBE_Forum_Findings.md
-DM_THRESHOLD_CRITICAL = -500
-DM_THRESHOLD_AUX_SWEDISH = -1500
+# Degree minutes: DM = integral(BT25 - S1) dt. Swedish: Gradminuter (GM), NIBE menu 4.9.3.
+# "start addition" (the immersion heater) defaults to -700 on the F750, range -2000..-30;
+# it engages there deliberately, to spare the compressor, and works DM back UP.
+# Source: NIBE F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3
+DM_THRESHOLD_AUX_LIMIT = -1500  # absolute floor, never to be reached in normal operation
 
 # ❌ Bad - no justification
-DM_THRESHOLD_CRITICAL = -500  # Don't go below this
+DM_THRESHOLD_AUX_LIMIT = -1500  # Don't go below this
 ```
 
 ### Black Formatting in Docstrings
