@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Protocol
 
 from ..const import (
+    COMFORT_TOO_COLD_ESCALATION_RANGE,
+    THERMAL_BATTERY_BAND,
     COMFORT_CORRECTION_MILD,
     COMFORT_CORRECTION_MULT,
     HEAT_LOSS_DIVISOR,
@@ -83,6 +85,7 @@ class ComfortLayer:
         mode_config: Optional[OptimizationModeConfig] = None,
         tolerance_range: float = 0.5,
         target_temp: float = 21.0,
+        storage_band: float = THERMAL_BATTERY_BAND,
     ):
         """Initialize comfort layer.
 
@@ -92,6 +95,8 @@ class ComfortLayer:
             mode_config: Mode configuration (dead_zone, comfort_weight_multiplier)
             tolerance_range: Temperature tolerance range (°C)
             target_temp: Target indoor temperature (°C)
+            storage_band: How far indoor may swing from target while the fabric is being used as
+                thermal storage. Comfort is a weak spring inside it and takes charge outside it.
         """
         self._get_thermal_trend = get_thermal_trend or (
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
@@ -100,6 +105,7 @@ class ComfortLayer:
         self.mode_config = mode_config or MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED]
         self.tolerance_range = tolerance_range
         self.target_temp = target_temp
+        self.storage_band = storage_band
 
     def evaluate_layer(
         self,
@@ -127,9 +133,15 @@ class ComfortLayer:
             ComfortLayerDecision with comfort correction
         """
         temp_deviation = nibe_state.indoor_temp - self.target_temp
-        tolerance = self.tolerance_range
         dead_zone = self.mode_config.dead_zone
         weight_mult = self.mode_config.comfort_weight_multiplier
+
+        # Comfort escalates at the STORAGE BAND, not at the tolerance. Inside the band the house
+        # is allowed to be moved - that movement is how the fabric stores cheap energy, and it is
+        # the only advantage this integration has over the pump's own curve, which cannot see the
+        # price. Escalating at the tolerance instead answered a deliberate +0.8 C charge with
+        # weight 0.77 and an offset of -7.67, slamming the heating off before any heat was banked.
+        band = self.storage_band
 
         if abs(temp_deviation) < dead_zone:
             return ComfortLayerDecision(
@@ -140,15 +152,16 @@ class ComfortLayer:
                 temp_deviation=temp_deviation,
             )
 
-        elif abs(temp_deviation) < tolerance:
-            # Within comfort zone but drifting from target
+        elif abs(temp_deviation) < band:
+            # Inside the storage band: a WEAK SPRING, not a veto. It returns the house to target
+            # when nothing else has a reason to move it, and yields to a price layer that does.
             correction = -temp_deviation * COMFORT_CORRECTION_MULT
             base_weight = LAYER_WEIGHT_COMFORT_MIN
 
             if temp_deviation > 0:
-                reason = f"Slightly warm (+{temp_deviation:.1f}°C), gentle reduce"
+                reason = f"Storing heat (+{temp_deviation:.1f}°C in band), gentle pull-back"
             else:
-                reason = f"Slightly cool ({temp_deviation:.1f}°C), gentle boost"
+                reason = f"Coasting ({temp_deviation:.1f}°C in band), gentle pull-back"
 
             return ComfortLayerDecision(
                 name="Comfort",
@@ -158,9 +171,10 @@ class ComfortLayer:
                 temp_deviation=temp_deviation,
             )
 
-        elif temp_deviation > tolerance:
-            # Overshoot - above target + tolerance
-            overshoot = temp_deviation
+        elif temp_deviation >= band:
+            # Above the band - no longer storage, just too warm. Measured FROM THE BAND EDGE, as
+            # the cold side is, so the response ramps from zero at the edge instead of jumping.
+            overshoot = temp_deviation - band
 
             if overshoot >= OVERSHOOT_PROTECTION_START:
                 # Thermal-aware overshoot protection
@@ -189,13 +203,25 @@ class ComfortLayer:
                 )
 
         else:
-            # Too cold, increase heating strongly
-            correction = -(temp_deviation + tolerance) * COMFORT_TOO_COLD_CORRECTION_MULT
+            # Below the band. This is the direction that matters: a house too warm is wasteful,
+            # a house too cold is the failure the whole integration must never cause. It escalates
+            # at least as hard as overshoot does, and on the same scale.
+            under = -(temp_deviation + band)
+            correction = under * COMFORT_TOO_COLD_CORRECTION_MULT
+
+            fraction = min(under / COMFORT_TOO_COLD_ESCALATION_RANGE, 1.0)
+            weight = LAYER_WEIGHT_COMFORT_HIGH + fraction * (
+                LAYER_WEIGHT_COMFORT_CRITICAL - LAYER_WEIGHT_COMFORT_HIGH
+            )
+
             return ComfortLayerDecision(
                 name="Comfort",
                 offset=correction,
-                weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too cold: {-temp_deviation:.1f}°C under",
+                weight=weight,
+                reason=(
+                    f"Too cold: {-temp_deviation:.1f}°C under target "
+                    f"({correction:+.1f}°C @ {weight:.2f})"
+                ),
                 temp_deviation=temp_deviation,
             )
 

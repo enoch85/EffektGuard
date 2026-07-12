@@ -6,7 +6,9 @@ Validates that:
 1. Comfort layer uses graduated coast offsets (-7 to -10°C) for overshoot
 2. System prevents prolonged overshoots using strong negative offsets
 3. Upper limit is dynamic (based on user target, not fixed 24°C)
-4. Overshoot protection uses OVERSHOOT_PROTECTION_START (0.6°C) and FULL (1.5°C)
+4. Overshoot protection uses OVERSHOOT_PROTECTION_START (0.6°C) and FULL (1.5°C),
+   both measured from the edge of THERMAL_BATTERY_BAND rather than from target: inside the
+   band the house is being used as thermal storage and comfort must let it move.
 
 Dec 2, 2025: Simplified overshoot protection - moved from proactive to comfort layer.
 Uses coast offsets (-7 to -10°C) instead of multiplier-based corrections.
@@ -97,7 +99,7 @@ def test_comfort_layer_at_overshoot_start_threshold():
     # Indoor: 21.0 + 0.6 = 21.6°C
     # temp_deviation = 0.6°C > tolerance (0.2°C)
     # overshoot = 0.6°C >= OVERSHOOT_PROTECTION_START (0.6°C) → coast mode
-    nibe_state = create_mock_nibe_state(indoor_temp=21.6)
+    nibe_state = create_mock_nibe_state(indoor_temp=22.6)
 
     decision = layer.evaluate_layer(nibe_state)
 
@@ -125,7 +127,7 @@ def test_comfort_layer_at_overshoot_full_threshold():
     # Indoor: 21.0 + 1.5 = 22.5°C
     # temp_deviation = 1.5°C
     # overshoot = 1.5°C >= OVERSHOOT_PROTECTION_FULL (1.5°C)
-    nibe_state = create_mock_nibe_state(indoor_temp=22.5)
+    nibe_state = create_mock_nibe_state(indoor_temp=23.5)
 
     decision = layer.evaluate_layer(nibe_state)
 
@@ -152,7 +154,7 @@ def test_comfort_layer_above_full_threshold():
     # Indoor: 23.7°C, Target: 21.0°C
     # temp_deviation = 2.7°C > tolerance (0.2)
     # overshoot = 2.7 > OVERSHOOT_PROTECTION_FULL (1.5)
-    nibe_state = create_mock_nibe_state(indoor_temp=23.7)
+    nibe_state = create_mock_nibe_state(indoor_temp=24.7)
 
     decision = layer.evaluate_layer(nibe_state)
 
@@ -175,7 +177,7 @@ def test_comfort_layer_mild_overshoot_before_coast():
     # Indoor: 21.55°C
     # temp_deviation = 0.55°C > tolerance (0.2°C)
     # overshoot = 0.55°C < OVERSHOOT_PROTECTION_START (0.6°C)
-    nibe_state = create_mock_nibe_state(indoor_temp=21.55)
+    nibe_state = create_mock_nibe_state(indoor_temp=22.55)
 
     decision = layer.evaluate_layer(nibe_state)
 
@@ -197,7 +199,7 @@ def test_graduated_offsets_scale_with_overshoot():
     # Range is 0.9°C. Halfway is 0.6 + 0.45 = 1.05°C overshoot
     # Indoor = Target + Overshoot
     # Indoor = 21.0 + 1.05 = 22.05°C
-    nibe_state = create_mock_nibe_state(indoor_temp=22.05)
+    nibe_state = create_mock_nibe_state(indoor_temp=23.05)
 
     decision = layer.evaluate_layer(nibe_state)
 
@@ -216,17 +218,17 @@ def test_graduated_weights_increase_with_overshoot():
 
     # Case 1: Just entered coast mode (START threshold)
     # Indoor = 21.0 + 0.6 = 21.6
-    state1 = create_mock_nibe_state(indoor_temp=21.6)
+    state1 = create_mock_nibe_state(indoor_temp=22.6)
     decision1 = layer.evaluate_layer(state1)
 
     # Case 2: Halfway through coast zone
     # Indoor = 21.0 + 1.05 = 22.05
-    state2 = create_mock_nibe_state(indoor_temp=22.05)
+    state2 = create_mock_nibe_state(indoor_temp=23.05)
     decision2 = layer.evaluate_layer(state2)
 
     # Case 3: Full coast mode (FULL threshold)
     # Indoor = 21.0 + 1.5 = 22.5
-    state3 = create_mock_nibe_state(indoor_temp=22.5)
+    state3 = create_mock_nibe_state(indoor_temp=23.5)
     decision3 = layer.evaluate_layer(state3)
 
     # Weights should increase: START < Halfway < FULL
@@ -253,7 +255,7 @@ def test_comfort_layer_preserves_gentle_correction_within_tolerance():
     expected_offset = -0.25 * COMFORT_CORRECTION_MULT
     assert decision.offset == pytest.approx(expected_offset)
     assert decision.weight == LAYER_WEIGHT_COMFORT_MIN
-    assert "gentle reduce" in decision.reason
+    assert "gentle pull-back" in decision.reason
 
 
 def test_comfort_layer_dead_zone():

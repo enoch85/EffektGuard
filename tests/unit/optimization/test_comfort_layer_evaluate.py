@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.effektguard.const import (
+    LAYER_WEIGHT_COMFORT_HIGH,
     COMFORT_CORRECTION_MILD,
     COMFORT_CORRECTION_MULT,
     LAYER_WEIGHT_COMFORT_HIGH,
@@ -138,7 +139,7 @@ class TestComfortLayerWithinTolerance:
         assert result.offset < 0.0  # Should reduce heating
         expected_offset = -0.3 * COMFORT_CORRECTION_MULT
         assert result.offset == pytest.approx(expected_offset, rel=0.01)
-        assert "Slightly warm" in result.reason
+        assert "Storing heat" in result.reason
 
     def test_slightly_cool_gentle_boost(self):
         """Test gentle boost when slightly cool."""
@@ -154,37 +155,38 @@ class TestComfortLayerWithinTolerance:
         assert result.offset > 0.0  # Should boost heating
         expected_offset = 0.3 * COMFORT_CORRECTION_MULT
         assert result.offset == pytest.approx(expected_offset, rel=0.01)
-        assert "Slightly cool" in result.reason
+        assert "Coasting" in result.reason
 
 
 class TestComfortLayerOvershoot:
     """Tests for comfort layer overshoot protection."""
 
     def test_mild_overshoot_gentle_correction(self):
-        """Test gentle correction for mild overshoot (below start threshold).
+        """Gentle correction just outside the storage band.
 
-        OVERSHOOT_PROTECTION_START is 0.6°C above target+tolerance.
-        With tolerance 0.5, we need indoor < target + tolerance + 0.6 = 22.1
-        to be in mild overshoot range.
+        Comfort escalates at THERMAL_BATTERY_BAND, not at the tolerance: inside the band the
+        house is being used as thermal storage and must be free to move. Overshoot is measured
+        from the band edge, so a mild overshoot is band <= deviation < band + 0.6.
         """
         layer = ComfortLayer(target_temp=21.0, tolerance_range=0.5)
-        # temp_deviation = 21.55 - 21.0 = 0.55
-        # This is > tolerance (0.5) but < OVERSHOOT_PROTECTION_START (0.6)
-        nibe_state = MockNibeState(indoor_temp=21.55)
+        # deviation = 1.05 C: just past the 1.0 C band, below OVERSHOOT_PROTECTION_START (0.6
+        # measured from the band edge).
+        nibe_state = MockNibeState(indoor_temp=22.05)
 
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
         assert result.offset < 0.0
-        expected_offset = -0.55 * COMFORT_CORRECTION_MILD
+        expected_offset = -1.05 * COMFORT_CORRECTION_MILD
         assert result.offset == pytest.approx(expected_offset, rel=0.1)
         assert result.weight == LAYER_WEIGHT_COMFORT_HIGH
         assert "Warm" in result.reason
 
     def test_significant_overshoot_coast(self):
-        """Test coasting for significant overshoot."""
+        """Coast when the house is well past the storage band, not merely past the tolerance."""
         layer = ComfortLayer(target_temp=21.0, tolerance_range=0.5)
-        # 1.0°C above tolerance = 1.5°C above target
-        nibe_state = MockNibeState(indoor_temp=22.5)
+        # 2.0 C above target: 1.0 C past the storage band, so well past
+        # OVERSHOOT_PROTECTION_START (0.6, measured from the band edge).
+        nibe_state = MockNibeState(indoor_temp=23.0)
 
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
@@ -199,15 +201,21 @@ class TestComfortLayerTooCold:
     """Tests for comfort layer when too cold."""
 
     def test_too_cold_increase_heating(self):
-        """Test strong heating increase when too cold."""
+        """A house below the storage band must be answered at least as firmly as one above it.
+
+        The cold branch used LAYER_WEIGHT_COMFORT_MAX (0.5) - a constant const.py itself marks as
+        legacy - while overshoot escalated from LAYER_WEIGHT_COMFORT_HIGH (0.7). The heating
+        system responded more strongly to being too warm than to being too cold, which is the
+        wrong way round: too warm is wasteful, too cold is the failure this must never cause.
+        """
         layer = ComfortLayer(target_temp=21.0, tolerance_range=0.5)
-        # 1.0°C below tolerance = 1.5°C below target
+        # 1.5 C below target: 0.5 C below the 1.0 C storage band.
         nibe_state = MockNibeState(indoor_temp=19.5)
 
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
         assert result.offset > 0.0  # Should increase heating
-        assert result.weight == LAYER_WEIGHT_COMFORT_MAX
+        assert result.weight >= LAYER_WEIGHT_COMFORT_HIGH
         assert "Too cold" in result.reason
 
 
@@ -299,7 +307,9 @@ class TestComfortLayerThermalAwareOvershoot:
         )
 
         # 1.3°C overshoot (above 0.6 threshold)
-        nibe_state = MockNibeState(indoor_temp=22.3, outdoor_temp=0.0)
+        # 1.8 C above target: past the 1.0 C storage band by more than
+        # OVERSHOOT_PROTECTION_START, so coast protection engages.
+        nibe_state = MockNibeState(indoor_temp=22.8, outdoor_temp=0.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,

@@ -46,6 +46,19 @@ CONF_WEATHER_COMPENSATION_WEIGHT: Final = "weather_compensation_weight"  # 0.0-1
 
 # Defaults
 DEFAULT_TOLERANCE: Final = 0.5
+
+# How far indoor temperature may swing from target while the building fabric is used as thermal
+# storage - charged when power is cheap, coasted when it is dear.
+#
+# This is the ONLY battery the integration has, and it is what lets it beat the heat pump's own
+# curve: the pump cannot see the price. Inside this band the comfort layer is a weak spring, so a
+# price signal with a reason to move the house can overrule it; outside it, comfort takes charge
+# again. The hard safety floor (MIN_TEMP_LIMIT) is unaffected.
+#
+# The fabric stores roughly heat_loss_coefficient * tau per degree - about 4.5 kWh/K for a timber
+# house - so the band sets the size of the battery and therefore the ceiling on what price
+# optimisation can ever earn.
+THERMAL_BATTERY_BAND: Final = 1.0  # °C swing around target usable as storage
 DEFAULT_TARGET_TEMP: Final = 21.0
 DEFAULT_INDOOR_TEMP: Final = 21.0  # Fallback when sensor unavailable
 DEFAULT_THERMAL_MASS: Final = 1.0
@@ -108,21 +121,21 @@ MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
         comfort_weight_multiplier=1.3,  # Comfort layer wins more often
         price_tolerance_multiplier=0.7,  # Reduce price layer effect
         peak_bypass_tolerance=False,  # Respect tolerance even during PEAK
-        preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
+        preheat_overshoot_allowed=0.5,  # Half the storage band
     ),
     OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
         dead_zone=0.2,  # Standard dead zone
         comfort_weight_multiplier=1.0,  # Normal comfort influence
         price_tolerance_multiplier=1.0,  # Normal price effect
         peak_bypass_tolerance=False,  # Respect tolerance setting
-        preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
+        preheat_overshoot_allowed=THERMAL_BATTERY_BAND,  # Fill the storage band
     ),
     OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
         dead_zone=0.3,  # Wider: ignore small deviations
         comfort_weight_multiplier=0.7,  # Price wins more often
         price_tolerance_multiplier=1.3,  # Amplify price effect
         peak_bypass_tolerance=True,  # PEAK always full reduction
-        preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
+        preheat_overshoot_allowed=THERMAL_BATTERY_BAND,  # Fill the storage band
     ),
 }
 
@@ -789,6 +802,9 @@ COMFORT_DM_COOLING_THRESHOLD: Final = (
 # Now dynamically calculated from reference constants (defined in prediction layer section below)
 COMFORT_HEAT_LOSS_FLOOR: Final = 0.02  # Minimum effective heat loss rate (°C/h)
 COMFORT_TOO_COLD_CORRECTION_MULT: Final = 0.5  # Multiplier for "too cold" correction
+# How far below the storage band the response reaches full weight. Mirrors the overshoot ramp, so
+# a house that is too COLD is never answered less firmly than one that is merely too warm.
+COMFORT_TOO_COLD_ESCALATION_RANGE: Final = 0.9  # °C below the band for full-weight response
 
 # Effect layer peak protection margins and offsets (Dec 8, 2025)
 # Power margin thresholds for peak protection decisions (kW)
