@@ -27,6 +27,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    PRICE_UNIT_FALLBACK,
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
@@ -138,9 +139,13 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="current_price",
         name="Current Electricity Price",
         icon="mdi:currency-eur",
-        device_class=SensorDeviceClass.MONETARY,
-        # Unit dynamically set from spot price entity in native_unit_of_measurement property
-        # Note: monetary device_class doesn't support state_class
+        # NOT device_class=MONETARY: the unit is read from the spot-price entity and is typically
+        # "öre/kWh", which is a RATE, not an amount of money. MONETARY also permits only TOTAL,
+        # which would have the recorder sum a price. MEASUREMENT is what a price is - the recorder
+        # keeps min/max/mean - and it is what gives this sensor long-term statistics at all. The
+        # comment here used to claim "monetary device_class doesn't support state_class", which is
+        # untrue (it supports TOTAL), and believing it left the sensor with no statistics (F-070).
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
             if coordinator.data
@@ -288,9 +293,21 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="savings_estimate",
         name="Estimated Monthly Savings",
         icon="mdi:cash-multiple",
-        device_class=SensorDeviceClass.MONETARY,
+        # NOT device_class=MONETARY. Home Assistant permits exactly one state class with MONETARY -
+        # TOTAL - and TOTAL tells the recorder to keep a running SUM. This value is a forward-looking
+        # monthly PROJECTION that rises and falls with the forecast, so summing it produces a number
+        # that means nothing, in the Energy dashboard of all places (audit F-070).
+        #
+        # The unit is SEK, and hardcoding it is CORRECT rather than a Swedish-centric oversight: the
+        # effect-tariff component is SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH, a Swedish grid tariff,
+        # and SavingsCalculator DROPS the spot component outright when the price unit is not
+        # SEK-compatible rather than guessing an exchange rate. The number really is kronor.
+        # (Do NOT "fix" this by deriving the unit from the spot-price entity: that entity reports
+        # öre/kWh, and labelling a SEK value "öre" is a 100x error.)
+        #
+        # What IS wrong is showing a Norwegian a SEK figure computed from a Swedish tariff at all.
+        # That is the tariff model, not the label - audit F-107, open with the owner.
         native_unit_of_measurement="SEK",
-        state_class=SensorStateClass.TOTAL,
         value_fn=lambda coordinator: (
             coordinator.data["savings"].monthly_estimate
             if coordinator.data
@@ -507,23 +524,26 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 return self._restored_value
         return self._restored_value
 
+    def _spot_price_unit(self) -> str | None:
+        """The unit the user's own spot-price integration reports, e.g. "öre/kWh" or "SEK/kWh"."""
+        try:
+            gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
+            if gespot_entity_id:
+                gespot_state = self.coordinator.hass.states.get(gespot_entity_id)
+                if gespot_state:
+                    unit = gespot_state.attributes.get("unit_of_measurement")
+                    if isinstance(unit, str) and unit:
+                        return unit
+        except (AttributeError, KeyError):
+            pass
+        return None
+
     @property
     def native_unit_of_measurement(self) -> str | None:
-        """Return the unit of measurement dynamically for price sensor."""
-        # For current_price sensor, get unit from spot price entity
+        """Return the unit, following the user's own price data where money is involved."""
         if self.entity_description.key == "current_price":
-            try:
-                gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
-                if gespot_entity_id:
-                    gespot_state = self.coordinator.hass.states.get(gespot_entity_id)
-                    if gespot_state:
-                        return gespot_state.attributes.get("unit_of_measurement", "öre/kWh")
-            except (AttributeError, KeyError):
-                pass
-            # Fallback to öre/kWh if spot price entity not available
-            return "öre/kWh"
+            return self._spot_price_unit() or PRICE_UNIT_FALLBACK
 
-        # For all other sensors, use description's unit
         return self.entity_description.native_unit_of_measurement
 
     def _add_weather_forecast_to_attrs(self, attrs: dict[str, Any], hours: int = 12) -> None:

@@ -683,6 +683,11 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 #   - Let SAFETY, COMFORT, EFFECT layers moderate naturally via weighted aggregation
 #
 # Real-world validation: Prevents 20:00→04:00 emergency cycles and 16:00 overshoot
+# The unit shown on the price sensor when the spot-price integration has not (yet) reported one.
+# The sensor prefers the user's own integration's unit; this is only the gap-filler during startup
+# or a brief outage. It is öre because that is what GE-Spot reports for SE4 (audit F-070).
+PRICE_UNIT_FALLBACK: Final = "öre/kWh"
+
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 # Pre-heat applied when the forecast shows a cold snap coming.

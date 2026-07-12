@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
@@ -1619,9 +1620,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if self.engine.climate_detector:
             climate_zone_name = self.engine.climate_detector.zone_info.name
         else:
-            # Show HA notification for missing climate detector
-            # HA dynamic component access (not in type stubs)
-            self.hass.components.persistent_notification.async_create(  # type: ignore[attr-defined]
+            # `hass.components` was removed from Home Assistant; the type: ignore that used to sit
+            # here claimed a stubs gap and was hiding a real AttributeError (audit F-068).
+            async_create(
+                self.hass,
                 "EffektGuard could not detect your climate zone. "
                 "Using balanced thermal debt thresholds. "
                 "Configure latitude in integration settings for optimal climate-aware operation.",
