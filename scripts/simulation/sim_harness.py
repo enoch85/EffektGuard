@@ -477,6 +477,40 @@ class PriceSource:
         return price_data
 
 
+# Reference thermal-battery controller. Not a proposal for production - a YARDSTICK. It knows
+# nothing about degree minutes, weather, peaks or the pump; it only charges the house when power
+# is cheap and coasts when it is dear, inside a hard comfort band. If EffektGuard cannot beat
+# this, the sophistication is not paying for itself.
+BATTERY_BAND = 1.0  # °C swing around target the house is allowed to use as storage
+BATTERY_CHARGE_OFFSET = 4.0  # curve offset while charging on cheap power
+BATTERY_COAST_OFFSET = -4.0  # curve offset while coasting on dear power
+BATTERY_CHEAP_PERCENTILE = 30  # below this percentile of the day, charge
+BATTERY_DEAR_PERCENTILE = 70  # above this percentile of the day, coast
+
+
+def battery_reference_offset(price_data: PriceData, now: datetime, indoor: float) -> float:
+    """Charge the fabric when power is cheap, coast when dear, never leave the comfort band."""
+    if indoor > TARGET_INDOOR + BATTERY_BAND:
+        return BATTERY_COAST_OFFSET  # full - stop charging
+    if indoor < TARGET_INDOOR - BATTERY_BAND:
+        return BATTERY_CHARGE_OFFSET  # flat - must heat regardless of price
+
+    prices = [q.price for q in price_data.today]
+    period = price_data.get_period(now)
+    if not prices or period is None:
+        return 0.0
+
+    ordered = sorted(prices)
+    cheap = ordered[int(len(ordered) * BATTERY_CHEAP_PERCENTILE / 100)]
+    dear = ordered[int(len(ordered) * BATTERY_DEAR_PERCENTILE / 100)]
+
+    if period.price <= cheap:
+        return BATTERY_CHARGE_OFFSET
+    if period.price >= dear:
+        return BATTERY_COAST_OFFSET
+    return 0.0
+
+
 def build_engine(house: HouseConfig, mode: str = "balanced"):
     hass = MagicMock()
     effect = EffectManager(hass)
@@ -513,6 +547,7 @@ def simulate(
     mode: str = "balanced",
     baseline: bool = False,
     fixed_offset: float | None = None,
+    battery: bool = False,
 ):
     engine, effect = build_engine(house, mode)
 
@@ -646,7 +681,9 @@ def simulate(
         )
 
         # --- the real decision engine (or neutral baseline) ---
-        if fixed_offset is not None:
+        if battery:
+            calc_offset = battery_reference_offset(price_data, now, indoor)
+        elif fixed_offset is not None:
             calc_offset = fixed_offset
         elif baseline:
             calc_offset = 0.0
@@ -844,6 +881,7 @@ def main() -> int:
     selftest = "--selftest" in sys.argv
     coldsnap = "--coldsnap" in sys.argv
     baseline = "--baseline" in sys.argv
+    battery = "--battery" in sys.argv
     live_se4 = "--live-se4" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
@@ -859,7 +897,7 @@ def main() -> int:
 
     for house in HOUSES:
         stats, violations, trace = simulate(
-            house, times, temps, price_source, days, mode, baseline
+            house, times, temps, price_source, days, mode, baseline, battery=battery
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -869,13 +907,15 @@ def main() -> int:
             tag += "-coldsnap"
         if live_se4:
             tag += "-live-se4"
+        if battery:
+            tag += "-battery"
         if baseline:
             tag += "-baseline"
 
         # The baseline run is a do-nothing controller used as a yardstick. It is
         # expected to breach comfort - that is the point of it - so it reports but
         # does not gate.
-        failures = [] if baseline else check_invariants(tag, stats, violations)
+        failures = [] if (baseline or battery) else check_invariants(tag, stats, violations)
 
         json.dump(
             {
