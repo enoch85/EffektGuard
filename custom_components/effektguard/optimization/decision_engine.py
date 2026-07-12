@@ -291,6 +291,7 @@ class DecisionEngine:
         self.proactive_layer = ProactiveLayer(
             climate_detector=self.climate_detector,
             get_thermal_trend=self._get_thermal_trend,
+            heating_type=heating_type,  # Must match EmergencyLayer: one ladder, not two
         )
 
         # Comfort layer for reactive temperature adjustments

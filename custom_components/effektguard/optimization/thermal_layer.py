@@ -303,6 +303,45 @@ class ThermalModel:
         return 12.0  # Default medium horizon
 
 
+def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
+    """Move the degree-minute thresholds to suit how slowly this house responds.
+
+    The slower the emitter, the SOONER it must start recovering: heat put into a concrete slab
+    reaches the room hours later, so by the time the debt is deep enough to trouble a radiator
+    system, the slab has already committed hours of deficit it cannot take back.
+
+    Degree minutes are NEGATIVE, so the buffer DIVIDES. Multiplying deepens the threshold and
+    delays the response - -540 * 1.3 = -702 made the six-hour slab wait 162 DM longer than a
+    radiator system that recovers in under an hour.
+
+    Shared by EmergencyLayer and ProactiveLayer on purpose. They used to compute their thresholds
+    separately, and only one of them applied the buffer, so between the proactive layer handing
+    over and the emergency layer picking up there was a band of degree minutes in which NEITHER
+    responded. A threshold is a property of the house, not of the layer that happens to read it.
+
+    Args:
+        base_thresholds: Climate-aware thresholds from ClimateZoneDetector
+        heating_type: "radiator", "concrete_ufh", "concrete_slab", "timber", "timber_ufh"
+
+    Returns:
+        The same thresholds, moved to suit the emitter's thermal lag.
+    """
+    if heating_type in ("concrete_ufh", "concrete_slab"):
+        multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE
+    elif heating_type in ("timber", "timber_ufh"):
+        multiplier = DM_THERMAL_MASS_BUFFER_TIMBER
+    else:
+        multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR
+
+    return {
+        "normal_min": base_thresholds["normal_min"] / multiplier,
+        "normal_max": base_thresholds["normal_max"] / multiplier,
+        "warning": base_thresholds["warning"] / multiplier,
+        # The auxiliary-heat limit is hardware. It is the same for every emitter.
+        "critical": base_thresholds["critical"],
+    }
+
+
 class EmergencyLayer:
     """Emergency layer: Smart context-aware thermal debt response.
 
@@ -1071,38 +1110,12 @@ class EmergencyLayer:
         return False
 
     def _get_thermal_mass_adjusted_thresholds(self, base_thresholds: dict) -> dict:
-        """Adjust DM thresholds based on thermal mass.
-
-        High thermal mass systems need tighter thresholds because:
-        - Long thermal lag (6+ hours for concrete slab)
-        - Current DM doesn't immediately affect indoor temperature
-        - Solar gain can mask underlying thermal debt accumulation
-
-        Args:
-            base_thresholds: Climate-aware thresholds from ClimateZoneDetector
-
-        Returns:
-            Adjusted thresholds with thermal mass buffer applied
-        """
-        if self.heating_type in ("concrete_ufh", "concrete_slab"):
-            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE
-        elif self.heating_type in ("timber", "timber_ufh"):
-            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER
-        else:
-            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR
-
-        adjusted = {
-            "normal_min": base_thresholds["normal_min"] * multiplier,
-            "normal_max": base_thresholds["normal_max"] * multiplier,
-            "warning": base_thresholds["warning"] * multiplier,
-            "critical": base_thresholds["critical"],  # Never adjust absolute maximum
-        }
+        """Thresholds moved to suit this house's thermal lag. See apply_thermal_mass_buffer."""
+        adjusted = apply_thermal_mass_buffer(base_thresholds, self.heating_type)
 
         _LOGGER.debug(
-            "Thermal mass adjusted thresholds: heating type '%s' (multiplier %.2f) "
-            "→ warning %.0f (base: %.0f)",
+            "Thermal mass adjusted thresholds: heating type '%s' → warning %.0f (base: %.0f)",
             self.heating_type,
-            multiplier,
             adjusted["warning"],
             base_thresholds["warning"],
         )
@@ -1304,14 +1317,19 @@ class ProactiveLayer:
         self,
         climate_detector: ClimateZoneDetector,
         get_thermal_trend: Optional[Callable[[], dict]] = None,
+        heating_type: str = "radiator",
     ):
         """Initialize proactive layer.
 
         Args:
             climate_detector: ClimateZoneDetector for context-aware thresholds
             get_thermal_trend: Callable returning thermal trend dict
+            heating_type: Heating system type. The proactive layer must read the SAME thresholds
+                as the emergency layer, or a band of degree minutes falls between them in which
+                neither responds.
         """
         self.climate_detector = climate_detector
+        self.heating_type = heating_type
         self._get_thermal_trend = get_thermal_trend or (
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
@@ -1642,7 +1660,9 @@ class ProactiveLayer:
         Returns:
             Dictionary with normal and warning thresholds
         """
-        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+        dm_range = apply_thermal_mass_buffer(
+            self.climate_detector.get_expected_dm_range(outdoor_temp), self.heating_type
+        )
 
         return {
             "normal": dm_range["normal_max"],

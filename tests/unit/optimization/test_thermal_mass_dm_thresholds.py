@@ -32,7 +32,10 @@ class TestThermalMassMultipliers:
     """Test thermal mass buffer multipliers are applied correctly."""
 
     def test_concrete_slab_30_percent_tighter(self, climate_detector):
-        """Concrete slab should get 1.3× tighter thresholds (30% more conservative)."""
+        """Concrete slab warns 30% SOONER (a shallower, less negative threshold).
+
+        "Tighter" means reached earlier. Degree minutes are negative, so the buffer divides.
+        """
         layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
 
         # Stockholm at 10°C: base warning ~-276
@@ -42,17 +45,17 @@ class TestThermalMassMultipliers:
         # Apply thermal mass adjustment
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Should be 30% tighter (more negative)
-        expected_warning = base_warning * DM_THERMAL_MASS_BUFFER_CONCRETE
+        # 30% tighter = reached 30% sooner = shallower
+        expected_warning = base_warning / DM_THERMAL_MASS_BUFFER_CONCRETE
         assert adjusted["warning"] == pytest.approx(expected_warning, abs=1)
-        assert adjusted["warning"] < base_warning  # More negative = tighter
+        assert adjusted["warning"] > base_warning  # Shallower = reached sooner
 
-        # Verify ~30% tighter
-        tightening_factor = adjusted["warning"] / base_warning
-        assert tightening_factor == pytest.approx(1.3, abs=0.01)
+        # 30% tighter: the threshold sits at 1/1.3 of the base depth, i.e. reached 30% sooner
+        tightening_factor = base_warning / adjusted["warning"]
+        assert tightening_factor == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
     def test_timber_15_percent_tighter(self, climate_detector):
-        """Timber UFH should get 1.15× tighter thresholds (15% more conservative)."""
+        """Timber UFH warns 15% sooner: a 2-4 hour lag, between concrete and radiators."""
         layer = EmergencyLayer(climate_detector, heating_type="timber")
 
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
@@ -61,12 +64,12 @@ class TestThermalMassMultipliers:
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         # Should be 15% tighter
-        expected_warning = base_warning * DM_THERMAL_MASS_BUFFER_TIMBER
+        expected_warning = base_warning / DM_THERMAL_MASS_BUFFER_TIMBER
         assert adjusted["warning"] == pytest.approx(expected_warning, abs=1)
 
-        # Verify ~15% tighter
-        tightening_factor = adjusted["warning"] / base_warning
-        assert tightening_factor == pytest.approx(1.15, abs=0.01)
+        # 15% tighter: reached 15% sooner
+        tightening_factor = base_warning / adjusted["warning"]
+        assert tightening_factor == pytest.approx(DM_THERMAL_MASS_BUFFER_TIMBER, abs=0.01)
 
     def test_radiator_standard_thresholds(self, climate_detector):
         """Radiators should keep standard thresholds (1.0× = no adjustment)."""
@@ -108,8 +111,8 @@ class TestCriticalThresholdPreservation:
 
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Warning should be adjusted
-        assert adjusted["warning"] < base_thresholds["warning"]
+        # Warning is adjusted SHALLOWER (reached sooner); degree minutes are negative
+        assert adjusted["warning"] > base_thresholds["warning"]
 
         # Critical MUST remain -1500
         assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
@@ -153,15 +156,17 @@ class TestRealWorldScenarioPrevention:
         assert current_dm < adjusted["warning"]  # -700 < -442 (True)
 
     def test_concrete_activates_t1_earlier_than_radiator(self, climate_detector):
-        """Concrete slab should have deeper (more negative) warning thresholds.
+        """Concrete slab must warn EARLIER (shallower DM) than a radiator system.
 
-        With multiplier 1.3, concrete DM thresholds become MORE NEGATIVE.
-        This means recovery triggers at a DEEPER thermal debt level, which
-        makes sense because concrete's high thermal mass can absorb more
-        energy without immediate indoor temperature impact.
+        The name of this test was right and its body was not. It used to assert that concrete
+        gets a DEEPER threshold, and justified it by saying the slab "can absorb more energy
+        without immediate indoor temperature impact" - which is the argument for acting SOONER,
+        not later. Precisely because the debt does not show up indoors for six hours, a slab that
+        waits until a radiator system's threshold has already committed hours of deficit it cannot
+        take back. Heat put into concrete arrives in the room hours later; there is no catching up.
 
-        For concrete: base_warning * 1.3 = deeper threshold
-        Example: -300 * 1.3 = -390 (allows deeper DM before warning)
+        Degree minutes are negative, so a buffer above 1.0 must DIVIDE:
+        -540 / 1.3 = -415, which is reached sooner than -540.
         """
         concrete_layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
         radiator_layer = EmergencyLayer(climate_detector, heating_type="radiator")
@@ -171,13 +176,12 @@ class TestRealWorldScenarioPrevention:
         concrete_thresholds = concrete_layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
         radiator_thresholds = radiator_layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Concrete warning should be MORE NEGATIVE than radiator (deeper threshold)
-        # because concrete's 1.3× multiplier makes threshold more negative
-        assert concrete_thresholds["warning"] < radiator_thresholds["warning"]
+        # Concrete warns SOONER: a shallower (less negative) threshold than a radiator system
+        assert concrete_thresholds["warning"] > radiator_thresholds["warning"]
 
-        # Verify concrete is 30% more negative
+        # Concrete's threshold is reached 30% sooner than the radiator baseline
         expected_ratio = DM_THERMAL_MASS_BUFFER_CONCRETE / DM_THERMAL_MASS_BUFFER_RADIATOR
-        actual_ratio = concrete_thresholds["warning"] / radiator_thresholds["warning"]
+        actual_ratio = radiator_thresholds["warning"] / concrete_thresholds["warning"]
         assert actual_ratio == pytest.approx(expected_ratio, abs=0.01)
 
 
@@ -205,8 +209,8 @@ class TestClimateZoneIntegration:
         arctic_ratio = arctic_adjusted["warning"] / arctic_base["warning"]
         mild_ratio = mild_adjusted["warning"] / mild_base["warning"]
 
-        assert arctic_ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
-        assert mild_ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
+        assert arctic_ratio == pytest.approx(1 / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
+        assert mild_ratio == pytest.approx(1 / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
     def test_all_climates_preserve_multiplier_ratio(self):
         """Multiplier ratio should be consistent regardless of base threshold magnitude."""
@@ -219,7 +223,7 @@ class TestClimateZoneIntegration:
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
             ratio = adjusted["warning"] / base_thresholds["warning"]
-            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
+            assert ratio == pytest.approx(1 / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
 
 class TestEdgeCases:
@@ -233,7 +237,7 @@ class TestEdgeCases:
             layer = EmergencyLayer(climate_detector, heating_type=name)
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
             ratio = adjusted["warning"] / base_thresholds["warning"]
-            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
+            assert ratio == pytest.approx(1 / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=0.01)
 
     def test_alternative_timber_naming(self, climate_detector):
         """Test alternative names for timber."""
@@ -243,7 +247,7 @@ class TestEdgeCases:
             layer = EmergencyLayer(climate_detector, heating_type=name)
             adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
             ratio = adjusted["warning"] / base_thresholds["warning"]
-            assert ratio == pytest.approx(DM_THERMAL_MASS_BUFFER_TIMBER, abs=0.01)
+            assert ratio == pytest.approx(1 / DM_THERMAL_MASS_BUFFER_TIMBER, abs=0.01)
 
     def test_empty_string_defaults_to_radiator(self, climate_detector):
         """Empty string should default to radiator."""
@@ -263,10 +267,10 @@ class TestEdgeCases:
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
         assert adjusted["normal_min"] == pytest.approx(
-            base_thresholds["normal_min"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
+            base_thresholds["normal_min"] / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
         )
         assert adjusted["normal_max"] == pytest.approx(
-            base_thresholds["normal_max"] * DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
+            base_thresholds["normal_max"] / DM_THERMAL_MASS_BUFFER_CONCRETE, abs=1
         )
 
 
