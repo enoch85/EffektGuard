@@ -973,9 +973,21 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 
 # Adaptive learning parameters
 # Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
+# NOTE: these two counts are sized for 15-minute observations, but the coordinator records one per
+# aligned refresh - UPDATE_INTERVAL_MINUTES, i.e. every 5. The deque therefore spans 56 h, not the
+# week its comment claims. See F-132: that mismatch is real, and fixing it is an OWNER decision,
+# because widening the window is what would let learning engage on a live heat pump.
 LEARNING_OBSERVATION_WINDOW: Final = 672  # 1 week of 15-minute observations
 LEARNING_MIN_OBSERVATIONS: Final = 96  # 24 hours minimum for basic learning
 LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
+
+# What it takes for the heating observations to carry any information at all.
+# The indoor sensor (NIBE BT1) reports to 0.1 C. A house that moved less than one sensor tick per
+# hour WHILE ACTIVELY HEATING has told us nothing measurable about itself: the signal is below the
+# instrument's resolution. Such a run must score ZERO confidence, not perfect confidence - which is
+# what a std/mean ratio does when every reading is identical and std collapses to 0 (F-132).
+LEARNING_MIN_HEATING_RATE: Final = 0.1  # °C/h - one sensor tick per hour; below this, no signal
+LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before consistency means much
 
 # Swedish climate regions - SMHI historical data (1961-1990)
 # Source: Swedish_Climate_Adaptations.md

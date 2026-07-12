@@ -20,6 +20,8 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     LEARNING_CONFIDENCE_THRESHOLD,
+    LEARNING_MIN_HEATING_RATE,
+    LEARNING_MIN_HEATING_SAMPLES,
     LEARNING_MIN_OBSERVATIONS,
     LEARNING_OBSERVATION_WINDOW,
     UFH_CONCRETE_PREDICTION_HORIZON,
@@ -483,10 +485,22 @@ class AdaptiveThermalModel:
                 rate = obs.temp_change / obs.time_delta_hours
                 heating_rates.append(rate)
 
-        if len(heating_rates) > 10:
-            consistency = 1.0 - min(np.std(heating_rates) / max(np.mean(heating_rates), 0.1), 1.0)
+        # A ratio of std to mean says how CONSISTENT a signal is. It says nothing at all when there
+        # is no signal - and it lies. With every reading identical, std collapses to 0 and the ratio
+        # reports perfect consistency: a flatlined sensor scored 1.0, above a house that was
+        # genuinely, measurably heating (F-132). The old `max(mean, 0.1)` was guarding the division
+        # and, in doing so, turned an absence of evidence into the strongest evidence there was.
+        #
+        # So the weak cases are answered before the ratio is ever taken. Both give ZERO, which is
+        # the honest answer to "how well do we know this building": not at all.
+        mean_rate = float(np.mean(heating_rates)) if heating_rates else 0.0
+
+        if len(heating_rates) <= LEARNING_MIN_HEATING_SAMPLES:
+            consistency = 0.0  # too little evidence is not half the evidence
+        elif mean_rate < LEARNING_MIN_HEATING_RATE:
+            consistency = 0.0  # the house moved less than one sensor tick per hour while heating
         else:
-            consistency = 0.5
+            consistency = 1.0 - min(float(np.std(heating_rates)) / mean_rate, 1.0)
 
         # Time span (prefer observations over longer period)
         if len(self.observations) > 1:

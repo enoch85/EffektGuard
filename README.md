@@ -55,15 +55,22 @@ Automatic latitude-based zone detection (Arctic to Mediterranean):
 
 **No configuration needed** - uses Home Assistant latitude. DM -1500 absolute maximum enforced globally.
 
-### 🧠 Self-Learning Capability
-Learns your building over 7-14 days:
+### 🧠 Self-Learning Capability (observing only — not yet driving your pump)
+EffektGuard continuously observes your building and estimates:
 - **UFH type detection** - concrete slab (6h lag) vs timber (2-3h lag) vs radiators (<1h lag)
 - **Thermal mass** - building heat storage capacity (kWh/°C)
 - **Heat loss coefficient** - envelope performance (W/°C)
 - **Heating efficiency** - system response to offset changes (°C/°C)
 - **Weather patterns** - seasonal adaptation with unusual weather detection
 
-Predictive pre-heating uses learned parameters for intelligent load shifting.
+**These estimates do not currently influence control.** Learned parameters are used for
+pre-heating only once the model's confidence exceeds 70%, and confidence cannot presently
+reach that: the indoor temperature is read to 0.1 °C every 5 minutes, and a building's
+response over 5 minutes is smaller than the sensor's own resolution. Nothing reliable can be
+learned from that, so nothing is claimed from it.
+
+Control today is physics-based and deterministic — the heating curve, the EN 442 emitter law,
+weather compensation and the degree-minute safety net — none of which depends on learning.
 
 ### ⚡ Effect Tariff Optimization
 Native 15-minute (quarterly) integration:
@@ -281,13 +288,20 @@ TFlow = ((Pin / Pout)^(1/1.3) × (DTout / DTin)) × (Tset - Tout) + Tset
 ```
 Combined with climate-aware safety margins (0.0-2.5°C by zone).
 
-### Self-Learning Timeline
-- **Day 1-3**: Low confidence (0.0-0.3), conservative defaults
-- **Day 4-7**: Medium confidence (0.3-0.7), starts using learned params
-- **Day 8-14**: High confidence (0.7-1.0), fully optimized
-- **Ongoing**: Continuous refinement, seasonal adaptation
+### Self-Learning Status
 
-672 observations (1 week @ 15-min) minimum for reliable learning.
+Observations are recorded every 5 minutes into a rolling 672-entry window — **56 hours**, not
+the week the window was sized for. Confidence is scored from observation count, data
+consistency and time span, and learned parameters are used for pre-heating only above 70%.
+
+At the present observation cadence that threshold is not reachable, and the integration says so
+rather than pretending otherwise: a 0.1 °C indoor sensor sampled every 5 minutes quantises the
+building's response into steps of 1.2 °C/h, which is larger than any real heating rate. The
+consistency term is therefore honestly zero and confidence settles around 0.47.
+
+**Learning does not drive your heat pump today.** Making it do so means sampling slowly enough
+for the signal to exceed the sensor's resolution — a deliberate change, not a tuning tweak,
+because it would put a learned model in the control path of real heating equipment.
 
 ## Documentation
 
