@@ -100,7 +100,7 @@ class TestCoordinatorPowerContract:
         """
         from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
-        update_src = inspect.getsource(EffektGuardCoordinator._async_update_data)
+        update_src = inspect.getsource(EffektGuardCoordinator._read_and_decide)
 
         assert "current_power_for_decision = self.peak_today" not in update_src, (
             "The decision engine is being fed peak_today (a daily MAXIMUM) as current power. "

@@ -362,8 +362,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Set override in decision engine
         coordinator.engine.set_manual_override(offset, duration)
 
-        # Request immediate update
-        await coordinator.async_request_refresh()
+        # This service exists to DRIVE the pump, so it says so. A plain refresh reads and decides
+        # but writes nothing - the read path is not a control path.
+        await coordinator.async_refresh_and_apply()
 
         # Update last called timestamp
         _update_service_timestamp("force_offset")
@@ -423,8 +424,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         boost_offset = MAX_OFFSET  # +10°C
         coordinator.engine.set_manual_override(boost_offset, duration)
 
-        # Request immediate update
-        await coordinator.async_request_refresh()
+        # Drive the pump now. A plain refresh reads and decides but writes nothing, so the boost
+        # would sit in the engine doing nothing until the next aligned tick.
+        await coordinator.async_refresh_and_apply()
 
         # Update last called timestamp
         _update_service_timestamp("boost_heating")
@@ -496,7 +498,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "method": "temporary_lux",
         }
 
-        # Request immediate update to track status
+        # The lux switch is already on - NIBE owns the boost from here. This refresh only lets the
+        # entities catch up; applying would let the DHW layer decide against the boost just made.
         await coordinator.async_request_refresh()
 
         # Update last called timestamp

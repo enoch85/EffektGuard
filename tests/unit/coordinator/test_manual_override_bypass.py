@@ -114,7 +114,7 @@ async def test_manual_reduction_applies_immediately_after_raise():
     )
     coordinator = _make_coordinator(manual)
 
-    await coordinator._async_update_data()
+    await coordinator._drive_the_pump()
 
     assert coordinator.current_offset == 0.0
     coordinator.nibe.set_curve_offset.assert_awaited_with(0.0)
@@ -133,7 +133,7 @@ async def test_automatic_reversal_still_blocked():
     )
     coordinator = _make_coordinator(automatic)
 
-    await coordinator._async_update_data()
+    await coordinator._drive_the_pump()
 
     # Blocked: previous +4°C retained
     assert coordinator.current_offset == 4.0

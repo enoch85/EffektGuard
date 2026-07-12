@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -338,6 +339,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup grace: timeout after which observation cycles begin
         self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
 
+        # One writer at a time. See _drive_the_pump: the aligned control loop and a service that
+        # commands the pump are both long coroutines, and asyncio interleaves them freely.
+        self._control_lock = asyncio.Lock()
+
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
@@ -485,7 +490,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         unsuccessful lets HA show the entities as unavailable, which is the honest signal.
         """
         try:
-            self.data = await self._async_update_data()
+            # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
+            # lock, so a service commanding the pump at the same moment waits its turn.
+            self.data = await self._drive_the_pump()
             self.last_update_success = True
             self.async_set_updated_data(self.data)
         except UpdateFailed as err:
@@ -754,7 +761,57 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Don't raise - allow shutdown to complete
 
     async def _async_update_data(self) -> dict[str, object]:
+        """Home Assistant's READ hook. Reads the world and decides. It NEVER writes.
+
+        This is public, debounced, and called by anything that wants the coordinator refreshed: a
+        Home Assistant reload, an options change, and services that have no business touching
+        hardware. The heat-pump writes used to live in here, so `reset_peak_tracking` - a service
+        whose entire job is to clear a stored counter - drove the pump.
+
+        Writes belong to the control loop, and the control loop is `_do_aligned_refresh`: one
+        owner, on the clock. Services that genuinely mean to command the pump call
+        `async_refresh_and_apply`, and still take effect at once.
+        """
+        return await self._read_and_decide(apply=False)
+
+    async def async_refresh_and_apply(self) -> None:
+        """Read, decide, and DRIVE THE PUMP. For services that genuinely command it.
+
+        force_offset and boost_heating mean what they say and must land immediately, not at the
+        next aligned tick. Bookkeeping services must NOT use this - they call
+        `async_request_refresh()`, which reads and decides but writes nothing.
+        """
+        self.data = await self._drive_the_pump()
+        self.async_set_updated_data(self.data)
+
+    async def _drive_the_pump(self) -> dict[str, object]:
+        """The write path. Its sole owner, and the only place `apply=True` is passed.
+
+        Two callers reach the pump - the aligned control loop every five minutes, and a service
+        that explicitly commands it - and both are long coroutines that await at every step, so
+        asyncio interleaves them freely. Without this lock:
+
+            12:05:10  the aligned refresh reads the world and starts deciding
+            12:05:11  force_offset(+3) sets the override, decides, and writes +3
+            12:05:12  the aligned refresh - which snapshotted the engine BEFORE the override
+                      existed - finishes and writes +0.5
+
+        The forced offset is gone, overwritten by a decision that predates it. The same
+        interleaving corrupts _apply_offset's rate limiting, which reads last_offset_timestamp
+        and then writes it.
+
+        Reads are deliberately NOT serialised: they touch no hardware, and blocking Home
+        Assistant's refresh hook behind a write in progress would stall the entities for nothing.
+        """
+        async with self._control_lock:
+            return await self._read_and_decide(apply=True)
+
+    async def _read_and_decide(self, apply: bool) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
+
+        Args:
+            apply: Whether to drive the heat pump with the resulting decision. Only the control
+                loop and the services that explicitly command the pump may pass True.
 
         This method:
         1. Gathers data from all sources (with graceful degradation)
@@ -1130,7 +1187,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Accumulation logic: We track fractional offsets but only write to NIBE when
         # the integer part changes. This prevents oscillation when calculated offsets
         # hover around boundaries (e.g., 0.48 ↔ 0.52 both stay at 0°C in NIBE).
-        if is_grace_period:
+        if not apply:
+            # A read, not a control cycle. Decide, publish, write nothing.
+            _LOGGER.debug("Read-only refresh: decided %.2f°C, not applying", decision.offset)
+        elif is_grace_period:
             _LOGGER.info("Skipping offset application during startup grace period")
         elif self.last_applied_offset is not None and int(decision.offset) == int(
             self.last_applied_offset
@@ -1394,7 +1454,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 and dhw_result is not None
                 and dhw_result.decision is not None
             ):
-                if is_grace_period:
+                if not apply:
+                    _LOGGER.debug("Read-only refresh: not applying DHW control")
+                elif is_grace_period:
                     _LOGGER.info("Skipping DHW control during startup grace period")
                 else:
                     await self._apply_dhw_control(
@@ -1457,7 +1519,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Apply control only if airflow optimization is enabled (like DHW)
                 airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
                 if airflow_enabled:
-                    if is_grace_period:
+                    if not apply:
+                        _LOGGER.debug("Read-only refresh: not applying airflow control")
+                    elif is_grace_period:
                         _LOGGER.info("Skipping airflow control during startup grace period")
                     else:
                         await self._apply_airflow_decision(airflow_decision)
@@ -2230,8 +2294,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         if enabled:
             _LOGGER.info("Optimization enabled")
-            # Resume normal optimization
-            await self.async_request_refresh()
+            # Resume normal optimization - and mean it. Turning optimization back on is a command
+            # to control the pump, so it applies now rather than waiting for the next aligned tick.
+            await self.async_refresh_and_apply()
         else:
             _LOGGER.info("Optimization disabled - resetting offset to neutral")
             # Reset offset to neutral (0.0)

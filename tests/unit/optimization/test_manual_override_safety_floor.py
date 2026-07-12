@@ -158,7 +158,7 @@ class TestVolatilityBlockerBypassesEmergency:
 
         from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
-        src = inspect.getsource(EffektGuardCoordinator._async_update_data)
+        src = inspect.getsource(EffektGuardCoordinator._read_and_decide)
 
         assert "elif decision.is_emergency:" in src, (
             "The offset-volatility blocker does not bypass emergency decisions. It would "

@@ -38,14 +38,21 @@ WEATHER_ENTITY = "weather.daily_only_provider"
 
 
 def make_coordinator(update_error: Exception | None):
-    """Duck-typed stand-in exposing only what _do_aligned_refresh touches."""
+    """Duck-typed stand-in exposing only what _do_aligned_refresh touches.
+
+    It drives the pump through `_drive_the_pump` - the sole owner of the write path - not through
+    Home Assistant's read hook. Stubbing the wrong one is not a harmless mismatch: the real
+    `_drive_the_pump` would be reached on a MagicMock, fail to await, and be swallowed by the very
+    `except Exception` under test. The error cases would then pass on a TypeError instead of on the
+    error they name.
+    """
     coordinator = MagicMock()
     coordinator.last_update_success = True
 
     if update_error is None:
-        coordinator._async_update_data = AsyncMock(return_value={"ok": True})
+        coordinator._drive_the_pump = AsyncMock(return_value={"ok": True})
     else:
-        coordinator._async_update_data = AsyncMock(side_effect=update_error)
+        coordinator._drive_the_pump = AsyncMock(side_effect=update_error)
 
     coordinator._schedule_aligned_refresh = MagicMock()
     coordinator.async_set_updated_data = MagicMock()

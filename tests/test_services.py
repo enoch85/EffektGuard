@@ -56,8 +56,10 @@ def mock_coordinator(mock_hass):
     coordinator.effect.reset_monthly_peaks = MagicMock()
     coordinator.effect.async_save = AsyncMock()
 
-    # Mock coordinator methods
+    # Mock coordinator methods. The two refresh paths are DIFFERENT: async_request_refresh reads
+    # and decides but writes nothing; async_refresh_and_apply drives the heat pump.
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh_and_apply = AsyncMock()
 
     # Mock data for calculate_optimal_schedule
     coordinator.data = {
@@ -122,7 +124,11 @@ async def test_force_offset_sets_override(mock_hass, mock_coordinator):
 
     # Verify override was set
     mock_coordinator.engine.set_manual_override.assert_called_once_with(2.5, 60)
-    mock_coordinator.async_request_refresh.assert_called_once()
+
+    # And that it reaches the pump NOW. A plain refresh reads and decides but writes nothing, so
+    # the override would sit in the engine until the next aligned tick - up to five minutes of a
+    # user-commanded offset doing nothing at all.
+    mock_coordinator.async_refresh_and_apply.assert_called_once()
 
 
 async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
@@ -208,7 +214,11 @@ async def test_reset_peak_tracking_clears_peaks(mock_hass, mock_coordinator):
     # Verify peaks were reset
     mock_coordinator.effect.reset_monthly_peaks.assert_called_once()
     mock_coordinator.effect.async_save.assert_called_once()
+
+    # It refreshes so the entities catch up - and it must go no further. Clearing a stored counter
+    # is bookkeeping; it is not a reason to write a curve offset to a heat pump (audit F-063).
     mock_coordinator.async_request_refresh.assert_called_once()
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 # ============================================================================
@@ -242,9 +252,9 @@ async def test_boost_heating_sets_max_offset(mock_hass, mock_coordinator):
 
     await handler(call)
 
-    # Should set MAX_OFFSET (+10°C)
+    # Should set MAX_OFFSET (+10°C) and drive the pump with it immediately.
     mock_coordinator.engine.set_manual_override.assert_called_once_with(MAX_OFFSET, 120)
-    mock_coordinator.async_request_refresh.assert_called_once()
+    mock_coordinator.async_refresh_and_apply.assert_called_once()
 
 
 async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
