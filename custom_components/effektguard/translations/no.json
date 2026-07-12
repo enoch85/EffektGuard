@@ -169,6 +169,80 @@
       "airflow_optimization": {
         "name": "Luftstrømoptimalisering"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Gjeldende forskyvning"
+      },
+      "degree_minutes": {
+        "name": "Gradminutter"
+      },
+      "supply_temperature": {
+        "name": "Turtemperatur"
+      },
+      "outdoor_temperature": {
+        "name": "Utetemperatur"
+      },
+      "indoor_temperature": {
+        "name": "Innetemperatur"
+      },
+      "current_price": {
+        "name": "Gjeldende strømpris"
+      },
+      "peak_today": {
+        "name": "Effekttopp i dag"
+      },
+      "peak_this_month": {
+        "name": "Effekttopp denne måneden"
+      },
+      "nibe_power": {
+        "name": "NIBE effekt"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorfrekvens"
+      },
+      "compressor_health": {
+        "name": "Kompressorens helsestatus"
+      },
+      "optimization_reasoning": {
+        "name": "Optimeringsbegrunnelse"
+      },
+      "quarter_of_day": {
+        "name": "Kvarter i døgnet"
+      },
+      "price_period_classification": {
+        "name": "Prisperiodens klassifisering"
+      },
+      "temperature_trend": {
+        "name": "Trend for innetemperatur"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Trend for utetemperatur"
+      },
+      "savings_estimate": {
+        "name": "Estimert månedlig besparelse"
+      },
+      "optional_features_status": {
+        "name": "Status for valgfrie funksjoner"
+      },
+      "heat_pump_model": {
+        "name": "Varmepumpemodell"
+      },
+      "dhw_status": {
+        "name": "Varmtvannsstatus"
+      },
+      "dhw_recommendation": {
+        "name": "Varmtvannsanbefaling"
+      },
+      "dhw_next_boost_time": {
+        "name": "Planlagt varmtvannsstart"
+      },
+      "airflow_enhancement": {
+        "name": "Økt luftstrøm"
+      },
+      "airflow_thermal_gain": {
+        "name": "Varmegevinst fra luftstrøm"
+      }
     }
   },
   "services": {

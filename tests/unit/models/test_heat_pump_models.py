@@ -164,8 +164,6 @@ class TestNibeF750Profile:
         electrical = f750.estimate_electrical_consumption(heat_demand_kw=30.0, outdoor_temp=-20.0)
         assert electrical <= f750.typical_electrical_range_kw[1]
 
-
-
     # NOTE: tests for `calculate_optimal_flow_temp` were removed with the method itself. A heat
     # pump profile cannot know what emitters the house has, so it cannot know the flow temperature
     # the house needs; that lives in optimization/weather_layer.py via the EN 442 emitter law. See

@@ -310,7 +310,9 @@ class TestAntiWindupIntegration:
             # Jan 2026 enhancement: At -1200/h, reduction = 1200/100 = 12°C
             # So offset goes from +2 to -10 (capped at MIN_OFFSET)
             # Offset should be <= current_offset (kept or reduced, never raised)
-            assert decision.offset <= 2.0, f"Anti-windup should prevent raise, got {decision.offset}"
+            assert (
+                decision.offset <= 2.0
+            ), f"Anti-windup should prevent raise, got {decision.offset}"
             # New format options:
             # - Mild: "DM dropping -XX/h while offset +X°C - not raising"
             # - Severe: "DM dropping -XX/h - reducing offset by X°C..."
@@ -452,9 +454,7 @@ class TestCausationWindow:
         assert layer._last_offset_raise_time is None
         assert layer._raised_offset_recently(now) is False
 
-    def test_anti_windup_triggers_for_recent_raise(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_anti_windup_triggers_for_recent_raise(self, emergency_layer, nibe_state_factory):
         """Anti-windup triggers when offset was raised recently and DM dropping."""
         layer = emergency_layer
         now = datetime.now()
@@ -487,9 +487,7 @@ class TestCausationWindow:
         assert decision.anti_windup_active is True
         assert decision.tier == "ANTI_WINDUP"
 
-    def test_anti_windup_skipped_for_old_offset(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_anti_windup_skipped_for_old_offset(self, emergency_layer, nibe_state_factory):
         """Anti-windup skipped when offset was raised long ago (environmental drop)."""
         layer = emergency_layer
         now = datetime.now()

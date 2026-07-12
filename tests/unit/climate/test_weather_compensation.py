@@ -190,14 +190,16 @@ class TestUnderfloorHeating:
         The floor won across the whole Swedish winter, so weather compensation was completely
         INERT for a concrete-slab house - it targeted 25 C from +10 C down to -20 C.
         """
-        calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0, heating_type="concrete_ufh")
+        calc = WeatherCompensationCalculator(
+            heat_loss_coefficient=180.0, heating_type="concrete_ufh"
+        )
 
         mild = calc.calculate_optimal_flow_temp(21.0, 10.0).flow_temp
         cold = calc.calculate_optimal_flow_temp(21.0, -20.0).flow_temp
 
-        assert cold > mild + 5.0, (
-            f"Underfloor curve is flat: {mild:.1f} C at +10 C vs {cold:.1f} C at -20 C."
-        )
+        assert (
+            cold > mild + 5.0
+        ), f"Underfloor curve is flat: {mild:.1f} C at +10 C vs {cold:.1f} C at -20 C."
 
     def test_underfloor_reaches_its_own_design_point(self):
         calc = WeatherCompensationCalculator(heating_type="timber_ufh")

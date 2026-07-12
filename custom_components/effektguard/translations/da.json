@@ -169,6 +169,80 @@
       "airflow_optimization": {
         "name": "Luftstrømsoptimering"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Aktuel forskydning"
+      },
+      "degree_minutes": {
+        "name": "Gradminutter"
+      },
+      "supply_temperature": {
+        "name": "Fremløbstemperatur"
+      },
+      "outdoor_temperature": {
+        "name": "Udetemperatur"
+      },
+      "indoor_temperature": {
+        "name": "Indetemperatur"
+      },
+      "current_price": {
+        "name": "Aktuel elpris"
+      },
+      "peak_today": {
+        "name": "Effekttop i dag"
+      },
+      "peak_this_month": {
+        "name": "Effekttop denne måned"
+      },
+      "nibe_power": {
+        "name": "NIBE effekt"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorfrekvens"
+      },
+      "compressor_health": {
+        "name": "Kompressorens helbredsstatus"
+      },
+      "optimization_reasoning": {
+        "name": "Optimeringsbegrundelse"
+      },
+      "quarter_of_day": {
+        "name": "Kvarter i døgnet"
+      },
+      "price_period_classification": {
+        "name": "Prisperiodens klassificering"
+      },
+      "temperature_trend": {
+        "name": "Tendens for indetemperatur"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Tendens for udetemperatur"
+      },
+      "savings_estimate": {
+        "name": "Anslået månedlig besparelse"
+      },
+      "optional_features_status": {
+        "name": "Status for valgfrie funktioner"
+      },
+      "heat_pump_model": {
+        "name": "Varmepumpemodel"
+      },
+      "dhw_status": {
+        "name": "Status for varmt brugsvand"
+      },
+      "dhw_recommendation": {
+        "name": "Anbefaling for varmt brugsvand"
+      },
+      "dhw_next_boost_time": {
+        "name": "Planlagt start for varmt brugsvand"
+      },
+      "airflow_enhancement": {
+        "name": "Forøget luftstrøm"
+      },
+      "airflow_thermal_gain": {
+        "name": "Varmegevinst fra luftstrøm"
+      }
     }
   },
   "services": {

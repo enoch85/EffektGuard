@@ -65,8 +65,7 @@ def test_locale_has_no_missing_keys(locale, reference):
 
     assert not missing, (
         f"{locale}.json is missing {len(missing)} key(s) declared in strings.json. "
-        f"Users in this language see raw keys instead of labels.\n  "
-        + "\n  ".join(missing)
+        f"Users in this language see raw keys instead of labels.\n  " + "\n  ".join(missing)
     )
 
 

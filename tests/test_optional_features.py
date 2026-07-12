@@ -258,7 +258,9 @@ class TestOptionalFeaturesStatusSensor:
 
         sensor = next(s for s in SENSORS if s.key == "optional_features_status")
 
-        assert sensor.name == "Optional Features Status"
+        # The name is resolved by Home Assistant from the translation, not hardcoded in English:
+        # this integration's primary audience is Swedish (audit F-074).
+        assert sensor.translation_key == "optional_features_status"
         assert sensor.icon == "mdi:feature-search-outline"
         assert sensor.value_fn is not None
 

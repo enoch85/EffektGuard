@@ -169,6 +169,80 @@
       "airflow_optimization": {
         "name": "Airflow Optimization"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Current Offset"
+      },
+      "degree_minutes": {
+        "name": "Degree Minutes"
+      },
+      "supply_temperature": {
+        "name": "Supply Temperature"
+      },
+      "outdoor_temperature": {
+        "name": "Outdoor Temperature"
+      },
+      "indoor_temperature": {
+        "name": "Indoor Temperature"
+      },
+      "current_price": {
+        "name": "Current Electricity Price"
+      },
+      "peak_today": {
+        "name": "Peak Today"
+      },
+      "peak_this_month": {
+        "name": "Peak This Month"
+      },
+      "nibe_power": {
+        "name": "NIBE Power"
+      },
+      "compressor_frequency": {
+        "name": "Compressor Frequency"
+      },
+      "compressor_health": {
+        "name": "Compressor Health Status"
+      },
+      "optimization_reasoning": {
+        "name": "Optimization Reasoning"
+      },
+      "quarter_of_day": {
+        "name": "Quarter of Day"
+      },
+      "price_period_classification": {
+        "name": "Price Period Classification"
+      },
+      "temperature_trend": {
+        "name": "Indoor Temperature Trend"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Outdoor Temperature Trend"
+      },
+      "savings_estimate": {
+        "name": "Estimated Monthly Savings"
+      },
+      "optional_features_status": {
+        "name": "Optional Features Status"
+      },
+      "heat_pump_model": {
+        "name": "Heat Pump Model"
+      },
+      "dhw_status": {
+        "name": "DHW Status"
+      },
+      "dhw_recommendation": {
+        "name": "DHW Recommendation"
+      },
+      "dhw_next_boost_time": {
+        "name": "DHW Scheduled Start"
+      },
+      "airflow_enhancement": {
+        "name": "Airflow Enhancement"
+      },
+      "airflow_thermal_gain": {
+        "name": "Airflow Thermal Gain"
+      }
     }
   },
   "services": {

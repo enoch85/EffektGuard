@@ -169,6 +169,80 @@
       "airflow_optimization": {
         "name": "Luftflödesoptimering"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Aktuell förskjutning"
+      },
+      "degree_minutes": {
+        "name": "Gradminuter"
+      },
+      "supply_temperature": {
+        "name": "Framledningstemperatur"
+      },
+      "outdoor_temperature": {
+        "name": "Utomhustemperatur"
+      },
+      "indoor_temperature": {
+        "name": "Inomhustemperatur"
+      },
+      "current_price": {
+        "name": "Aktuellt elpris"
+      },
+      "peak_today": {
+        "name": "Effekttopp idag"
+      },
+      "peak_this_month": {
+        "name": "Effekttopp denna månad"
+      },
+      "nibe_power": {
+        "name": "NIBE effekt"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorfrekvens"
+      },
+      "compressor_health": {
+        "name": "Kompressorns hälsostatus"
+      },
+      "optimization_reasoning": {
+        "name": "Optimeringsmotivering"
+      },
+      "quarter_of_day": {
+        "name": "Kvart på dygnet"
+      },
+      "price_period_classification": {
+        "name": "Prisperiodens klassificering"
+      },
+      "temperature_trend": {
+        "name": "Trend för inomhustemperatur"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Trend för utomhustemperatur"
+      },
+      "savings_estimate": {
+        "name": "Uppskattad besparing per månad"
+      },
+      "optional_features_status": {
+        "name": "Status för valfria funktioner"
+      },
+      "heat_pump_model": {
+        "name": "Värmepumpsmodell"
+      },
+      "dhw_status": {
+        "name": "Varmvattenstatus"
+      },
+      "dhw_recommendation": {
+        "name": "Varmvattenrekommendation"
+      },
+      "dhw_next_boost_time": {
+        "name": "Schemalagd varmvattenstart"
+      },
+      "airflow_enhancement": {
+        "name": "Förhöjt luftflöde"
+      },
+      "airflow_thermal_gain": {
+        "name": "Värmevinst från luftflöde"
+      }
     }
   },
   "services": {

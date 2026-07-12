@@ -66,7 +66,7 @@ class EffektGuardSensorEntityDescription(SensorEntityDescription):
 SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     EffektGuardSensorEntityDescription(
         key="current_offset",
-        name="Current Offset",
+        translation_key="current_offset",
         icon="mdi:thermometer-lines",
         # A heating-curve offset is an INTERVAL, not an absolute temperature. With
         # device_class TEMPERATURE, Home Assistant applies absolute conversion, so an
@@ -83,7 +83,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="degree_minutes",
-        name="Degree Minutes",
+        translation_key="degree_minutes",
         icon="mdi:timer-outline",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -95,7 +95,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="supply_temperature",
-        name="Supply Temperature",
+        translation_key="supply_temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -109,7 +109,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="outdoor_temperature",
-        name="Outdoor Temperature",
+        translation_key="outdoor_temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -123,7 +123,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="indoor_temperature",
-        name="Indoor Temperature",
+        translation_key="indoor_temperature",
         icon="mdi:home-thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -137,7 +137,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="current_price",
-        name="Current Electricity Price",
+        translation_key="current_price",
         icon="mdi:currency-eur",
         # NOT device_class=MONETARY: the unit is read from the spot-price entity and is typically
         # "öre/kWh", which is a RATE, not an amount of money. MONETARY also permits only TOTAL,
@@ -156,7 +156,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="peak_today",
-        name="Peak Today",
+        translation_key="peak_today",
         icon="mdi:transmission-tower",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -165,7 +165,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="peak_this_month",
-        name="Peak This Month",
+        translation_key="peak_this_month",
         icon="mdi:transmission-tower-export",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -174,7 +174,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="nibe_power",
-        name="NIBE Power",
+        translation_key="nibe_power",
         icon="mdi:heat-pump",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -194,7 +194,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="compressor_frequency",
-        name="Compressor Frequency",
+        translation_key="compressor_frequency",
         icon="mdi:engine",
         native_unit_of_measurement="Hz",
         state_class=SensorStateClass.MEASUREMENT,
@@ -209,7 +209,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="compressor_health",
-        name="Compressor Health Status",
+        translation_key="compressor_health",
         icon="mdi:engine-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -220,7 +220,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="optimization_reasoning",
-        name="Optimization Reasoning",
+        translation_key="optimization_reasoning",
         icon="mdi:brain",
         value_fn=lambda coordinator: (
             # Truncate to 255 chars for Home Assistant state limit
@@ -238,7 +238,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="quarter_of_day",
-        name="Quarter of Day",
+        translation_key="quarter_of_day",
         icon="mdi:clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -247,7 +247,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="price_period_classification",
-        name="Price Period Classification",
+        translation_key="price_period_classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
             coordinator.data.get("current_classification") if coordinator.data else "unknown"
@@ -255,7 +255,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="temperature_trend",
-        name="Indoor Temperature Trend",
+        translation_key="temperature_trend",
         icon="mdi:trending-up",
         # No device_class - this is a rate of change, not a temperature
         native_unit_of_measurement="°C/h",
@@ -273,7 +273,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="outdoor_temperature_trend",
-        name="Outdoor Temperature Trend",
+        translation_key="outdoor_temperature_trend",
         icon="mdi:weather-partly-cloudy",
         # No device_class - this is a rate of change, not a temperature
         native_unit_of_measurement="°C/h",
@@ -291,7 +291,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="savings_estimate",
-        name="Estimated Monthly Savings",
+        translation_key="savings_estimate",
         icon="mdi:cash-multiple",
         # NOT device_class=MONETARY. Home Assistant permits exactly one state class with MONETARY -
         # TOTAL - and TOTAL tells the recorder to keep a running SUM. This value is a forward-looking
@@ -318,14 +318,14 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="optional_features_status",
-        name="Optional Features Status",
+        translation_key="optional_features_status",
         icon="mdi:feature-search-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: ("active" if coordinator.data else "initializing"),
     ),
     EffektGuardSensorEntityDescription(
         key="heat_pump_model",
-        name="Heat Pump Model",
+        translation_key="heat_pump_model",
         icon="mdi:heat-pump",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -337,7 +337,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     # DHW (Domestic Hot Water) sensors
     EffektGuardSensorEntityDescription(
         key="dhw_status",
-        name="DHW Status",
+        translation_key="dhw_status",
         icon="mdi:water-boiler",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -346,7 +346,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="dhw_recommendation",
-        name="DHW Recommendation",
+        translation_key="dhw_recommendation",
         icon="mdi:water-boiler-auto",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -357,7 +357,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="dhw_next_boost_time",
-        name="DHW Scheduled Start",
+        translation_key="dhw_next_boost_time",
         icon="mdi:clock-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -368,7 +368,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     # Airflow Optimization sensors (Exhaust Air Heat Pump)
     EffektGuardSensorEntityDescription(
         key="airflow_enhancement",
-        name="Airflow Enhancement",
+        translation_key="airflow_enhancement",
         icon="mdi:fan",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -379,7 +379,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="airflow_thermal_gain",
-        name="Airflow Thermal Gain",
+        translation_key="airflow_thermal_gain",
         icon="mdi:heat-wave",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,

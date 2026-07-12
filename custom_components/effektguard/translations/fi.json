@@ -169,6 +169,80 @@
       "airflow_optimization": {
         "name": "Ilmavirran optimointi"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Nykyinen siirtymä"
+      },
+      "degree_minutes": {
+        "name": "Asteminuutit"
+      },
+      "supply_temperature": {
+        "name": "Menoveden lämpötila"
+      },
+      "outdoor_temperature": {
+        "name": "Ulkolämpötila"
+      },
+      "indoor_temperature": {
+        "name": "Sisälämpötila"
+      },
+      "current_price": {
+        "name": "Nykyinen sähkön hinta"
+      },
+      "peak_today": {
+        "name": "Huipputeho tänään"
+      },
+      "peak_this_month": {
+        "name": "Huipputeho tässä kuussa"
+      },
+      "nibe_power": {
+        "name": "NIBE teho"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorin taajuus"
+      },
+      "compressor_health": {
+        "name": "Kompressorin kunto"
+      },
+      "optimization_reasoning": {
+        "name": "Optimoinnin perustelu"
+      },
+      "quarter_of_day": {
+        "name": "Vuorokauden neljännes"
+      },
+      "price_period_classification": {
+        "name": "Hintajakson luokitus"
+      },
+      "temperature_trend": {
+        "name": "Sisälämpötilan suuntaus"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Ulkolämpötilan suuntaus"
+      },
+      "savings_estimate": {
+        "name": "Arvioitu kuukausisäästö"
+      },
+      "optional_features_status": {
+        "name": "Valinnaisten toimintojen tila"
+      },
+      "heat_pump_model": {
+        "name": "Lämpöpumpun malli"
+      },
+      "dhw_status": {
+        "name": "Lämpimän käyttöveden tila"
+      },
+      "dhw_recommendation": {
+        "name": "Lämpimän käyttöveden suositus"
+      },
+      "dhw_next_boost_time": {
+        "name": "Lämpimän käyttöveden ajastettu käynnistys"
+      },
+      "airflow_enhancement": {
+        "name": "Tehostettu ilmavirta"
+      },
+      "airflow_thermal_gain": {
+        "name": "Ilmavirran lämpöhyöty"
+      }
     }
   },
   "services": {

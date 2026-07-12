@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 import pytest
 
-
 # Root directory of the custom component
 COMPONENT_ROOT = Path(__file__).parent.parent / "custom_components" / "effektguard"
 
