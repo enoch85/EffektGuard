@@ -864,10 +864,30 @@ than 4 °C of drop in any twelve hours and never triggers the pre-heat at all, w
 that *does* trigger it is the case the pump's own curve already handles.
 See `docs/research/03_concrete_slab_response.md` and audit F-130.
 
-**Flow Temperature Targets (OEM Research):**
-- SPF 4.0+ systems: Flow = Outdoor + 27°C ±3°C
-- SPF 3.5+ systems: Flow = Outdoor + 30°C ±4°C
-- Most systems run 5-15°C below optimal (huge opportunity)
+**Flow Temperature — the EN 442 emitter law (`utils/emitter.py`):**
+
+The flow temperature is **not** a linear offset from outdoor temperature. It follows the emitter's
+own characteristic curve:
+
+```
+φ      = (T_room − T_out) / (T_room − T_out_design)      dimensionless relative load
+T_flow = T_room + ΔT_design · φ^(1/n) + spread_design · φ / 2      n = 1.3 radiators, 1.1 UFH
+```
+
+Against **NIBE's own published curve 9** (which reads **41.0 °C** at 0 °C outdoor):
+
+| model | flow temp | error |
+|---|---|---|
+| **EN 442 emitter law** | 40.80 °C | **0.20 °C** |
+| a straight line between the endpoints | 38.63 °C | 2.37 °C |
+
+**More than ten times worse.** That curvature is the `φ^(1/n)` term, and it is the whole reason the
+exponent exists and cannot be folded into a slope. See `docs/research/02_emitter_law.md`.
+
+⚠️ **This section used to offer "SPF 4.0+ systems: Flow = Outdoor + 27 °C ±3 °C" as OEM research.**
+That is a LINEAR rule — the very thing the emitter law was chosen over — sitting in the document
+that tells contributors how to implement. There are no `OPTIMAL_FLOW_DELTA_SPF_*` constants: it
+described a model this codebase does not have.
 
 **MyUplink API:**
 - Update interval: ~60 seconds
@@ -1025,10 +1045,15 @@ When creating release notes via `gh release create`, use this exact format:
 - Comfort over cost (moderate optimization, not aggressive)
 - Real homes depend on this (heat pump health matters)
 
-**Research-Based:**
-- All thresholds from real NIBE failures and Swedish forum validation
-- Climate zone system: Adapts DM thresholds from Arctic (-30°C) to Mediterranean (5°C)
-- Mathematical formulas from OEM research (André Kühne, Timbones)
+**Research-Based** — and see `docs/research/`, which states plainly what is *not* sourced:
+- Flow temperature: the **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264), validated
+  against NIBE's own published curve. **Not** a fitted or linear formula.
+- Degree minutes and the auxiliary heater: the **NIBE F750 Installer Manual, IHB GB 1301-1**,
+  menu 4.9.3.
+- Climate zone system: adapts DM thresholds from Arctic (−30 °C) to Mediterranean (5 °C).
+- ⚠️ **Not everything is sourced.** The DM −1500 figure, the "20 % airflow COP" and the
+  `stevedvo` / `glyn.hudson` case studies rest on forum anecdote and on documents that are **not in
+  this repository**. They are marked as such where they appear. Do not launder them into fact.
 
 **Swedish-Specific:**
 - 15-minute effect tariff windows (quarterly measurement)
@@ -1036,7 +1061,10 @@ When creating release notes via `gh release create`, use this exact format:
 - F750/F2040 focus with S-series support
 
 **Known Critical Issues:**
-- Climate-aware thermal debt thresholds (DM -1500 auxiliary limit, validated in Swedish forums)
+- Climate-aware thermal debt thresholds. ⚠️ **DM −1500 is the absolute floor, not the number that
+  governs a real F750** — the pump's own "start addition" fires at **−700** and works DM back up.
+  The −1500 figure is attributed to "Swedish forums" and is **not sourced in this repository**;
+  see `docs/research/01_degree_minutes.md`.
 - Open-loop pump Intermittent = 8-hour off periods
 - BT50 indoor sensor + UFH = instability (not recommended)
 - DHW during heating demand = thermal debt accumulation

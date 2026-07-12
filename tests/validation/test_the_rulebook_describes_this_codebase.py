@@ -54,43 +54,86 @@ DENIALS = (
     "neither of which exists",
     "There is **no",
     "does not exist",
-    "used to show",
-    "used to name",
+    "does not have",
+    "not sourced",
+    # "used to X" - any past-tense correction. Enumerating the verbs ("used to show", "used to
+    # name") means the next correction says "used to offer" and trips its own test, which is
+    # precisely what happened, twice.
+    "used to ",
     "Do not reintroduce",
     "no longer",
 )
 
 
 def _claims() -> str:
-    kept = [line for line in DOC.splitlines() if not any(d in line for d in DENIALS)]
-    # "(NOT -700)" is a correction, not a claim that the number is -700.
-    return re.sub(r"\(NOT\s*-?\d+\)", "", "\n".join(kept))
+    """What the rulebook ASSERTS, with the paragraphs that warn you against something removed.
+
+    PARAGRAPH-wise, not line-wise. A warning spans several lines - "This example used to show X …
+    Do not reintroduce it." - and only one of them carries the marker, so a line filter keeps the
+    rest and the test trips on the very correction it is meant to protect.
+
+    That is not a hypothetical. Faced with exactly that, an earlier pass narrowed the Kühne check
+    to fenced code blocks so it would pass - and the narrowing let a live claim through: the
+    Project Context section went on crediting "Mathematical formulas from OEM research (André
+    Kühne…)" for another commit. The filter was the thing that was wrong, not the assertion.
+    """
+    kept = [p for p in DOC.split("\n\n") if not any(d in p for d in DENIALS)]
+    return _strip_corrections("\n\n".join(kept))
 
 
+def _strip_corrections(text: str) -> str:
+    """ "(NOT -700)" is a correction, not a claim that the number is -700."""
+    return re.sub(r"\(NOT\s*-?\d+\)", "", text)
+
+
+# For "this thing was REMOVED, do not bring it back" checks. A warning must be allowed to name the
+# thing it forbids, so the paragraphs that carry a denial are dropped.
 CLAIMS = _claims()
 
-# Only the fenced python blocks - the part a contributor COPIES.
-CODE_BLOCKS = "\n".join(re.findall(r"```python\n(.*?)```", DOC, re.S))
+# For NUMBERS. Nothing is dropped, because a number is never legitimately wrong - not even inside a
+# warning. Filtering these too was a real regression: the paragraph holding the SECOND copy of the
+# degree-minute table happened to contain the phrase "not sourced" (about DM -1500), so the whole
+# table vanished from the climate check - and a drifting second copy of that table is precisely
+# what F-133 was about. The filter that protects one test can blind another.
+EVERY_WORD = _strip_corrections(DOC)
 
 
 def test_the_rulebook_does_not_teach_a_formula_that_was_removed():
     """Kühne drove the flow temperature of a real heat pump, and was taken out for being wrong.
 
-    Checked against the fenced code blocks - the part a contributor copies. Naming the formula in a
-    warning ("do not reintroduce this") is exactly what the file SHOULD do; putting it in an example
-    labelled "✅ Do this" is what it must not.
+    Checked against everything the document ASSERTS - prose as much as code. Naming the formula in
+    a warning ("do not reintroduce this") is exactly what the file should do; crediting it under
+    "Research-Based", or copying it into a "✅ Do this" example, is what it must not.
     """
-    assert "Kühne" not in CODE_BLOCKS and "Kuhne" not in CODE_BLOCKS, (
-        "The rulebook still teaches André Kühne's flow-temperature formula - as its worked example "
-        "of a GOOD docstring. It appears zero times in the codebase: it was removed (F-119/F-121) "
-        "and replaced by the EN 442 emitter law, because it was fed a heat-loss coefficient where "
-        "the derivation needs a dimensionless relative load. A contributor following the rulebook "
-        "reintroduces it. See docs/research/02_emitter_law.md."
+    assert "Kühne" not in CLAIMS and "Kuhne" not in CLAIMS, (
+        "The rulebook still credits André Kühne's flow-temperature formula. It appears ZERO times "
+        "in the codebase: it was removed (F-119/F-121) and replaced by the EN 442 emitter law, "
+        "because it was fed a heat-loss coefficient where the derivation needs a dimensionless "
+        "relative load. A contributor following the rulebook reintroduces it. "
+        "See docs/research/02_emitter_law.md."
     )
-    assert "2.55" not in CODE_BLOCKS, (
-        "The Kühne coefficient 2.55 is still inside a code example in the rulebook. The flow "
+    assert "2.55" not in CLAIMS, (
+        "The Kühne coefficient 2.55 is still asserted somewhere in the rulebook. The flow "
         "temperature comes from the EN 442 emitter law now - see utils/emitter.py and "
         "docs/research/02_emitter_law.md."
+    )
+
+
+def test_the_rulebook_does_not_offer_a_second_flow_temperature_model():
+    """A straight line is the thing EN 442 was chosen over. It must not sit beside it as advice.
+
+    "Flow = Outdoor + 27 °C" is a LINEAR rule. The whole point of the emitter law is that the real
+    curve is not linear: against NIBE's own published curve 9, EN 442 lands 0.20 °C away and a
+    straight line is out by 2.37 °C - more than ten times worse. Offering the linear rule as "OEM
+    Research", in the document that tells contributors how to implement, invites someone to build
+    the model this project deliberately replaced. Its constants do not exist either.
+    """
+    assert "Flow = Outdoor +" not in CLAIMS, (
+        "The rulebook offers a linear flow-temperature rule (Flow = Outdoor + 27 °C) as OEM "
+        "research. The flow temperature comes from the EN 442 emitter law - a CURVE - and a "
+        "straight line is out by 2.37 °C against NIBE's own curve 9 where the emitter law is out "
+        "by 0.20 °C. There are no OPTIMAL_FLOW_DELTA_SPF_* constants; this describes a model the "
+        "code does not have."
     )
 
 
@@ -109,7 +152,7 @@ def test_every_climate_number_in_the_rulebook_is_the_number_the_code_computes(
     # the file that line appears. All of them must be numbers the code actually produces.
     quoted = {
         int(n)
-        for line in CLAIMS.splitlines()
+        for line in EVERY_WORD.splitlines()
         if city in line
         for n in re.findall(r"(-\d{3,4})\b", line)
     }
@@ -137,7 +180,7 @@ def test_the_prediction_horizons_match_the_constants(emitter, constant):
     """A slab plans over 24 hours, not 12. Six hours is its LAG, not its horizon."""
     real = int(getattr(const, constant))
 
-    line = next((ln for ln in CLAIMS.splitlines() if f"**{emitter}**" in ln), None)
+    line = next((ln for ln in EVERY_WORD.splitlines() if f"**{emitter}**" in ln), None)
     assert line, f"the rulebook no longer describes {emitter}"
 
     quoted = re.findall(r"\*{0,2}(\d+)h\*{0,2} prediction horizon", line)
