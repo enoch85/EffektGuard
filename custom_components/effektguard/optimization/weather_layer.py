@@ -707,7 +707,7 @@ class WeatherPredictionLayer:
 
             return WeatherLayerDecision(
                 name="Weather Pre-heat",
-                offset=WEATHER_PREHEAT_OFFSET,  # Constant +0.5°C (simple, predictable)
+                offset=WEATHER_PREHEAT_OFFSET,
                 weight=weather_weight,
                 reason=trigger,
             )
