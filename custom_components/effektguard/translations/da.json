@@ -147,6 +147,9 @@
           }
         }
       }
+    },
+    "error": {
+      "invalid_dhw_config": "Ugyldig indstilling for varmt brugsvand: {reason}"
     }
   },
   "entity": {
