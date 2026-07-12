@@ -90,40 +90,17 @@
     "step": {
       "init": {
         "title": "EffektGuard-asetukset",
-        "description": "Määritä optimointikäyttäytyminen ja rakennuksen ominaisuudet.\n\n**Muutokset tulevat voimaan välittömästi** ilman uudelleenkäynnistystä. Käytä **Määritä uudelleen** muuttaaksesi sensoreita.",
-        "data": {
-          "optimization_mode": "Optimointitila"
-        },
-        "data_description": {
-          "optimization_mode": "**Mukavuus**: Tiukka lämpötilan hallinta, minimaalinen hintojen optimointi, priorisoi vakaan lämmityksen. **Tasapainotettu**: Kohtalainen optimointi sallien pieniä lämpötilavaihteluita kustannussäästöjä varten. **Säästöt**: Maksimaalinen hintojen optimointi suuremmilla lämpötilavaihteluilla halpojen/kalliiden jaksojen aikana"
-        },
         "sections": {
-          "comfort_settings": {
-            "name": "Mukavuusasetukset",
-            "description": "Hienosäädä lämpötilan mukavuustoleranssia",
+          "optimization_settings": {
+            "name": "Optimointiasetukset",
+            "description": "Valitse optimointitila ja lämpötilan toleranssi",
             "data": {
+              "optimization_mode": "Optimointitila",
               "tolerance": "Lämpötilatoleranssi"
             },
             "data_description": {
+              "optimization_mode": "**Mukavuus**: Tiukka lämpötilan hallinta, minimaalinen hintojen optimointi, priorisoi vakaan lämmityksen. **Tasapainotettu**: Kohtalainen optimointi sallien pieniä lämpötilavaihteluita kustannussäästöjä varten. **Säästöt**: Maksimaalinen hintojen optimointi suuremmilla lämpötilavaihteluilla halpojen/kalliiden jaksojen aikana",
               "tolerance": "Ohjaa sallittua lämpötilapoikkeamaa tavoitteesta (±0,2°C katvealue ylläpidetään aina). Korkeammat arvot sallivat aggressiivisemman kustannusoptimoinnin mutta suuremmat lämpötilavaihtelut"
-            }
-          },
-          "dhw_settings": {
-            "name": "Lämpimän veden asetukset",
-            "description": "Aikatauluta milloin lämmin vesi lämmitetään",
-            "data": {
-              "dhw_target_temp": "Lämpimän veden tavoitelämpötila",
-              "dhw_morning_enabled": "Aamun lämmin vesi",
-              "dhw_morning_hour": "Aamun aloitusaika",
-              "dhw_evening_enabled": "Illan lämmin vesi",
-              "dhw_evening_hour": "Illan aloitusaika"
-            },
-            "data_description": {
-              "dhw_target_temp": "Tavoitelämpötila lämpimälle vedelle (45-60°C)",
-              "dhw_morning_enabled": "Ota käyttöön aamun lämpimän veden lämmitys",
-              "dhw_morning_hour": "Aamun kysyntäjakson aloitusaika",
-              "dhw_evening_enabled": "Ota käyttöön illan lämpimän veden lämmitys",
-              "dhw_evening_hour": "Illan kysyntäjakson aloitusaika"
             }
           },
           "building_characteristics": {
@@ -136,6 +113,36 @@
             "data_description": {
               "thermal_mass": "Kuinka nopeasti rakennus reagoi muutoksiin (0,5=kevyt/puu, 1,0=normaali, 2,0=raskas/betoni)",
               "insulation_quality": "Yleinen eristystaso (0,5=huono, 1,0=normaali, 2,0=erinomainen)"
+            }
+          },
+          "domestic_hot_water": {
+            "name": "Lämmin käyttövesi (DHW)",
+            "description": "Ajoita milloin lämpimän veden tulee olla valmiina ja kuinka paljon sitä tarvitset",
+            "data": {
+              "dhw_target_temp": "Lämpimän veden tavoitelämpötila",
+              "dhw_min_amount": "Vähimmäismäärä lämmintä vettä ajoitettuna ajankohtana",
+              "dhw_schedules": "Ota käyttöön / poista käytöstä",
+              "dhw_morning_hour": "Aamun aloitusaika",
+              "dhw_evening_hour": "Illan aloitusaika"
+            },
+            "data_description": {
+              "dhw_target_temp": "Tavoitelämpötila lämpimälle vedelle (45-60°C)",
+              "dhw_min_amount": "Lämpimän veden minuuttimäärä, jonka tulee olla käytettävissä ajoitettuna ajankohtana.\n\nEffektGuard lämmittää halvimpien tuntien aikana varmistaakseen, että määrä on valmiina kun tarvitset sitä.",
+              "dhw_schedules": "Valitse mitkä lämmitysjaksot ovat käytössä. Poista valinta kytkeäksesi lämmityksen pois kyseiseltä jaksolta.",
+              "dhw_morning_hour": "Aamun kysyntäjakson aloitusaika",
+              "dhw_evening_hour": "Illan kysyntäjakson aloitusaika"
+            }
+          },
+          "airflow_optimization": {
+            "name": "Ilmavirran optimointi (poistoilma)",
+            "description": "Määritä ilmavirrat poistoilmalämpöpumpuille. Ota käyttöön / poista käytöstä Ilmavirran optimointi -kytkimellä Ohjaimet-osiossa.",
+            "data": {
+              "airflow_standard_rate": "Normaali ilmavirta",
+              "airflow_enhanced_rate": "Tehostettu ilmavirta"
+            },
+            "data_description": {
+              "airflow_standard_rate": "Normaali ilmanvaihdon teho tavallisessa käytössä.\nAseta se haluamallesi mukavuustasolle päivittäiseen käyttöön.\n\nNIBE F750 oletus: 150 m³/h (nopeus 2).",
+              "airflow_enhanced_rate": "Tehostettu ilmanvaihto, jota käytetään suotuisissa olosuhteissa poistoilman lämmön talteenoton ja COP:n parantamiseksi.\n\nNIBE F750 oletus: 252 m³/h (nopeus 4)."
             }
           }
         }

@@ -2,6 +2,14 @@
 name = "effektguard"
 requires-python = ">=3.13"
 
+[tool.black]
+# Both .github/copilot-instructions.md and docs/dev/CODE_STANDARDS.md have always claimed
+# this section existed. It did not, so a bare `black .` silently used the default line
+# length of 88 while CI passed --line-length 100 - two different formatters depending on how
+# you invoked it.
+line-length = 100
+target-version = ["py313"]
+
 [tool.pytest.ini_options]
 # Pytest configuration for EffektGuard
 

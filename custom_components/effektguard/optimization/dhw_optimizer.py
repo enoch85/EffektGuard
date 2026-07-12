@@ -30,8 +30,11 @@ from ..const import (
     DHW_COOLING_RATE,
     DHW_DEFAULT_HEATING_RATE,
     DHW_EXTENDED_RUNTIME_MINUTES,
+    DHW_HEATING_RATE_MAX,
+    DHW_HEATING_RATE_MIN,
     DHW_LEGIONELLA_DETECT,
     DHW_LEGIONELLA_MAX_DAYS,
+    DHW_LEGIONELLA_OVERDUE_DAYS,
     DHW_LEGIONELLA_PREVENT_TEMP,
     DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
@@ -54,6 +57,7 @@ from ..const import (
     DM_RECOVERY_SAFETY_BUFFER,
     DM_THRESHOLD_START,
     MIN_DHW_TARGET_TEMP,
+    MINUTES_PER_QUARTER,
     QuarterClassification,
     SPACE_HEATING_DEMAND_DROP_HOURS,
     SPACE_HEATING_DEMAND_HIGH_THRESHOLD,
@@ -363,8 +367,9 @@ class IntelligentDHWScheduler:
 
             if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
                 calculated_rate = temp_change / duration_hours
-                # Sanity check: rate should be between 5-25°C/hour for heat pumps
-                if 5.0 <= calculated_rate <= 25.0:
+                # Same plausibility band that gates the restore path - a rate that cannot be
+                # learned must not be loadable from storage either.
+                if DHW_HEATING_RATE_MIN <= calculated_rate <= DHW_HEATING_RATE_MAX:
                     # Update learned rate with weighted average
                     self._update_learned_rate(calculated_rate)
                     _LOGGER.debug(
@@ -432,20 +437,57 @@ class IntelligentDHWScheduler:
         Args:
             state: Dict with persisted state from get_dhw_state_for_persistence()
         """
+        # Stored state is UNTRUSTED input. A power loss mid-write, or a hand-edited .storage
+        # file, must degrade to defaults - not crash setup, and not poison the scheduler. An
+        # unguarded ValueError here aborts all of async_initialize_learning, including the
+        # BT7-history recovery that follows.
         if "last_legionella_boost" in state:
-            self.last_legionella_boost = datetime.fromisoformat(state["last_legionella_boost"])
-            _LOGGER.info(
-                "Restored last Legionella boost: %s",
-                self.last_legionella_boost,
-            )
+            try:
+                self.last_legionella_boost = datetime.fromisoformat(state["last_legionella_boost"])
+                _LOGGER.info(
+                    "Restored last Legionella boost: %s",
+                    self.last_legionella_boost,
+                )
+            except (ValueError, TypeError) as err:
+                _LOGGER.warning(
+                    "Ignoring unreadable stored Legionella timestamp %r: %s",
+                    state.get("last_legionella_boost"),
+                    err,
+                )
+
         if "learned_heating_rate" in state:
-            self.learned_heating_rate = state["learned_heating_rate"]
-            self.heating_rate_observations = state.get("heating_rate_observations", 1)
-            _LOGGER.info(
-                "Restored DHW heating rate: %.1f°C/hour (%d observations)",
-                self.learned_heating_rate,
-                self.heating_rate_observations,
-            )
+            restored = self._validated_heating_rate(state["learned_heating_rate"])
+            if restored is None:
+                _LOGGER.warning(
+                    "Ignoring implausible stored DHW heating rate %r - keeping %.1f°C/hour "
+                    "(expected %.0f-%.0f°C/hour).",
+                    state.get("learned_heating_rate"),
+                    self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
+                    DHW_HEATING_RATE_MIN,
+                    DHW_HEATING_RATE_MAX,
+                )
+            else:
+                self.learned_heating_rate = restored
+                self.heating_rate_observations = state.get("heating_rate_observations", 1)
+                _LOGGER.info(
+                    "Restored DHW heating rate: %.1f°C/hour (%d observations)",
+                    self.learned_heating_rate,
+                    self.heating_rate_observations,
+                )
+
+    @staticmethod
+    def _validated_heating_rate(value: object) -> float | None:
+        """Return `value` if it is a plausible DHW heating rate (°C/h), else None.
+
+        The same band gates a rate LEARNED from BT7 history, so a value that could never
+        have been learned must not be loadable from storage either.
+        """
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        rate = float(value)
+        if DHW_HEATING_RATE_MIN <= rate <= DHW_HEATING_RATE_MAX:
+            return rate
+        return None
 
     def estimate_heating_time(
         self, current_temp: float, target_temp: float, heating_rate: float | None = None
@@ -467,6 +509,20 @@ class IntelligentDHWScheduler:
         temp_deficit = target_temp - current_temp
         if temp_deficit <= 0:
             return 0.0
+
+        # Defence in depth: this is a divisor. Even with the restore path now validated,
+        # never divide by zero or by an implausible rate - a near-zero rate would produce a
+        # heat-up estimate of hundreds of hours and make the scheduler heat immediately at
+        # any price, forever.
+        if heating_rate < DHW_HEATING_RATE_MIN:
+            _LOGGER.warning(
+                "DHW heating rate %.2f°C/h is below the plausible minimum %.0f°C/h - "
+                "using the default %.0f°C/h for this estimate.",
+                heating_rate,
+                DHW_HEATING_RATE_MIN,
+                DHW_DEFAULT_HEATING_RATE,
+            )
+            heating_rate = DHW_DEFAULT_HEATING_RATE
 
         hours_needed = temp_deficit / heating_rate
         _LOGGER.debug(
@@ -848,22 +904,33 @@ class IntelligentDHWScheduler:
                         if optimal_window:
                             # Check if waiting is worth it (significant savings AND reachable in time)
                             # Get current price for comparison
-                            # QuarterPeriod spans 15 minutes from start_time
                             current_quarter_price = next(
                                 (
                                     p.price
                                     for p in price_periods
                                     if p.start_time
                                     <= current_time
-                                    < p.start_time + timedelta(minutes=15)
+                                    < p.start_time + timedelta(minutes=MINUTES_PER_QUARTER)
                                 ),
                                 None,
                             )
 
-                            if current_quarter_price:
+                            # `is not None`, NOT truthiness: a price of exactly 0.00 is a real
+                            # Nordic price (~100 hours a year per SE bidding zone).
+                            #
+                            # The window must also be genuinely CHEAPER, and the ratio taken
+                            # against the MAGNITUDE. `(current - optimal) / current` inverts on
+                            # negative prices: current -50 ore against a WORSE window at -10 ore
+                            # yields +0.8, i.e. "80% savings" for deferring to a dearer quarter.
+                            if (
+                                current_quarter_price is not None
+                                and optimal_window.avg_price < current_quarter_price
+                            ):
+                                price_delta = current_quarter_price - optimal_window.avg_price
+                                reference = abs(current_quarter_price)
                                 price_savings_pct = (
-                                    current_quarter_price - optimal_window.avg_price
-                                ) / current_quarter_price
+                                    price_delta / reference if reference > 0 else 1.0
+                                )
 
                                 # Can wait if:
                                 # 1. Savings significant (≥15%)
@@ -1203,29 +1270,47 @@ class IntelligentDHWScheduler:
                 recommended_start_time=next_non_peak,
             )
 
-        # === RULE 2.3: HYGIENE BOOST (HIGH-TEMP CYCLE FOR LEGIONELLA PREVENTION) ===
-        # If DHW hasn't been above 56°C in past 14 days, heat to 56°C during cheapest period
-        # This prevents Legionella bacteria growth in the low-temp range (20-45°C)
-        # with the new lower safety thresholds (10°C/20°C).
+        # === RULE 2.3: OPPORTUNISTIC HIGH-TEMPERATURE DHW CYCLE ===
         #
-        # REQUIRES DHW IMMERSION HEATER (Swedish: elpatron):
-        # - Heat pump compressor can only reach ~50-55°C max (COP limitation)
-        # - NIBE automatically engages DHW tank immersion heater for high-temp cycles
-        # - Real-world observation: Max 56°C achieved with compressor + immersion heater
-        # - This is normal operation for Legionella prevention in all NIBE systems
-        # - Scheduling during cheap periods minimizes immersion heater cost
+        # ⚠️ THIS RULE DOES NOT, AND CANNOT, PERFORM A LEGIONELLA CYCLE. Read this before
+        # changing it.
         #
-        # NOTE: This is the DHW tank's built-in immersion heater (elpatron), NOT the
-        # space heating auxiliary heater. They are separate electrical heating systems.
+        # Hygiene is NOT EffektGuard's responsibility. NIBE performs it itself, via the
+        # built-in "periodic increase" function:
+        #   - Menu 2.9.1 (F-series) / 2.4 (S-series). NOT 4.9.5 - that is schedule blocking.
+        #   - Factory setting: ACTIVATED, every 14 days, stop temperature 55 C (range 55-70).
+        #   - It explicitly uses "the compressor AND the immersion heater".
+        #   - EffektGuard cannot block it: our only DHW actuator is the temporary-lux
+        #     switch, which does not touch NIBE's own schedule.
+        # (Source: NIBE F750 / F730 / F1155 installer manuals, menus 2.9.1 and 5.1.1;
+        #  register map 47046/47050/47051.)
         #
-        # References:
-        # - Boverket.se: Water heaters should maintain ≥60°C (ideal), bacteria killed at high temps
-        # - User observation: System reaches max 56°C with electrical boost (real-world constraint)
-        # - Swedish forum: "Vp klarar inte 60°C, därför elpatron för legionella"
-        #   (Heat pump can't reach 60°C, therefore immersion heater for Legionella)
-        # - NIBE Menu 4.9.5: Built-in Legionella function uses immersion heater weekly/bi-weekly
+        # Why our boost cannot reach Legionella temperature: temporary lux is not a
+        # setpoint. It switches the hot-water comfort mode to LUXURY for 3/6/12 h, so the
+        # tank is driven to the configured LUXURY STOP temperature. Factory values:
+        #   F750 54 C | F730 53 C | F1155 52 C   - all measured on BT6 (control sensor),
+        # and all BELOW DHW_LEGIONELLA_DETECT (55 C). NIBE deliberately made 55 C the floor
+        # of the anti-Legionella setpoint and the ceiling of the normal lux setpoint.
+        # The setpoints are installer-adjustable, so they are UNKNOWN to us at runtime.
         #
-        # PRIORITY: Higher than emergency completion (bacteria prevention critical)
+        # Two further reasons the BT7 >= 55 C detector is unsound, both from the manuals:
+        #   - BT7 is "Temperature sensor, hot water, DISPLAY". BT6 is "...hot water,
+        #     CONTROL". Every setpoint above acts on BT6, not BT7.
+        #   - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
+        # In practice, therefore, a BT7 >= DHW_LEGIONELLA_DETECT observation is most likely
+        # to be NIBE's OWN periodic increase (which does target >= 55 C) happening to be
+        # visible - not evidence that anything EffektGuard did worked.
+        #
+        # What this rule actually is: an OPPORTUNISTIC top-up scheduled into a cheap window.
+        # It is a COST optimisation. It is NOT a hygiene guarantee, and no forced deadline
+        # exists here on purpose: forcing a boost that can never reach the detection
+        # threshold would re-trigger the immersion heater indefinitely.
+        #
+        # We also cannot observe or defer NIBE's own cycle: Home Assistant's myuplink
+        # integration excludes parameters 47050 (periodic-HW enable) and 47051 (interval)
+        # via PARAMETER_ID_TO_EXCLUDE_F730. If a high-temperature cycle has not been seen
+        # for far longer than NIBE's own interval, the most likely explanation is that the
+        # periodic-increase function was switched off on the pump. Warn - do not substitute.
         days_since_legionella = None
         if self.last_legionella_boost:
             try:
@@ -1282,6 +1367,28 @@ class IntelligentDHWScheduler:
                     days_since_legionella if days_since_legionella else 0,
                     price_classification,
                     is_volatile,
+                )
+
+            # Diagnostic: NIBE's own periodic increase (menu 2.9.1) runs every
+            # DHW_LEGIONELLA_MAX_DAYS from the factory and targets >= 55 C. If we have not
+            # observed ANY high-temperature cycle well past that, the function has most
+            # likely been switched off on the pump - and EffektGuard cannot substitute for
+            # it (temporary lux stops at 53-54 C). Tell the user; do not act.
+            if (
+                days_since_legionella is not None
+                and days_since_legionella >= DHW_LEGIONELLA_OVERDUE_DAYS
+            ):
+                _LOGGER.warning(
+                    "No hot-water temperature above %.0f C observed for %.0f days. NIBE's "
+                    "periodic increase (menu 2.9.1 on F-series, 2.4 on S-series) normally "
+                    "runs every %.0f days and is enabled from the factory - check that it is "
+                    "still activated on the pump. EffektGuard cannot perform this cycle "
+                    "itself: the temporary-lux boost only reaches the pump's luxury stop "
+                    "temperature (53-54 C on factory settings), below the %.0f C threshold.",
+                    DHW_LEGIONELLA_DETECT,
+                    days_since_legionella,
+                    DHW_LEGIONELLA_MAX_DAYS,
+                    DHW_LEGIONELLA_DETECT,
                 )
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===

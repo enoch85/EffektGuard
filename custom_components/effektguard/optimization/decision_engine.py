@@ -17,7 +17,7 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Optional, TypedDict
+from typing import TYPE_CHECKING, Final, Optional, TypedDict
 
 from homeassistant.util import dt as dt_util
 
@@ -27,14 +27,15 @@ from ..const import (
     DEFAULT_THERMAL_MASS,
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
-    DM_CRITICAL_T1_PEAK_AWARE_OFFSET,
-    DM_CRITICAL_T2_OFFSET,
-    DM_CRITICAL_T2_PEAK_AWARE_OFFSET,
-    DM_CRITICAL_T3_OFFSET,
-    DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
+    DM_CRITICAL_PEAK_AWARE_OFFSETS,
+    DM_RECOVERY_TIERS,
+    DM_THRESHOLD_AUX_LIMIT,
+    DM_TIER_EMERGENCY,
     THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     THERMAL_MASS_TIMBER_UFH_THRESHOLD,
     LAYER_WEIGHT_SAFETY,
+    MAX_OFFSET,
+    MIN_OFFSET,
     MIN_TEMP_LIMIT,
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
@@ -50,6 +51,7 @@ from .climate_zones import ClimateZoneDetector
 from .comfort_layer import ComfortLayer
 from .thermal_layer import (
     EmergencyLayer,
+    EmergencyLayerDecision,
     ProactiveLayer,
     is_cooling_rapidly,
     is_warming_rapidly,
@@ -83,6 +85,11 @@ class PowerValidationDict(TypedDict, total=False):
     severity: str
 
 
+# Display name of the safety layer. _aggregate_layers looks the layer up by name rather
+# than by list position, so reordering the layers cannot silently re-target safety logic.
+SAFETY_LAYER_NAME: Final = "Safety"
+
+
 @dataclass
 class LayerDecision:
     """Decision from a single optimization layer.
@@ -94,6 +101,10 @@ class LayerDecision:
     offset: float  # Proposed heating curve offset (°C)
     weight: float  # Layer weight/priority (0.0-1.0)
     reason: str  # Human-readable explanation
+    # True for layers that optimize for COST (spot price, effect tariff) rather than for
+    # comfort, safety, or physics. Cost layers are barred from reducing heat while the
+    # thermal-debt layer is recovering - see DecisionEngine._aggregate_layers.
+    is_cost_layer: bool = False
 
 
 @dataclass
@@ -108,6 +119,12 @@ class OptimizationDecision:
     reasoning: str = ""
     anti_windup_active: bool = False  # True when anti-windup is driving the decision
     is_manual_override: bool = False  # True for user-commanded offsets (force_offset/boost)
+    # True when an ABSOLUTE safety path produced this offset: indoor below MIN_TEMP_LIMIT,
+    # or degree minutes past DM_THRESHOLD_AUX_LIMIT. The coordinator's offset-volatility
+    # blocker must never defer such a decision - it exists to damp price-driven
+    # flip-flopping, and deferring an aux-limit recovery for 45 minutes lets DM plunge
+    # further while the immersion heater runs.
+    is_emergency: bool = False
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -351,6 +368,35 @@ class DecisionEngine:
 
         return self._manual_override_offset
 
+    @staticmethod
+    def _absolute_safety_floor(nibe_state) -> float | None:
+        """Lowest offset the system may apply regardless of user intent or cost.
+
+        These are the two conditions the project treats as non-negotiable:
+          - indoor below MIN_TEMP_LIMIT: the house is getting dangerously cold.
+          - degree minutes at or past DM_THRESHOLD_AUX_LIMIT: NIBE engages the auxiliary
+            immersion heater here. Declining to recover does not avoid that - it
+            guarantees it, while the debt keeps deepening.
+
+        Applied as a FLOOR, not a replacement: a user asking for MORE heat than safety
+        requires still gets what they asked for. Only a command that would leave the
+        system below the safety floor is raised to it.
+
+        The indoor check is skipped when the reading is not a measurement (no room
+        sensor): DEFAULT_INDOOR_TEMP sits above MIN_TEMP_LIMIT, so trusting it would
+        mean the floor could never engage on such a system. DM still protects it.
+
+        Returns:
+            The minimum permitted offset (°C), or None when neither condition applies.
+        """
+        if getattr(nibe_state, "indoor_temp_valid", True) and (
+            nibe_state.indoor_temp < MIN_TEMP_LIMIT
+        ):
+            return SAFETY_EMERGENCY_OFFSET
+        if nibe_state.degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+            return SAFETY_EMERGENCY_OFFSET
+        return None
+
     def _get_thermal_trend(self) -> dict:
         """Get current indoor temperature trend data.
 
@@ -414,12 +460,51 @@ class DecisionEngine:
         """
         _LOGGER.debug("Calculating optimization decision")
 
-        # Check for manual override first (Phase 5 service support)
+        # Check for manual override first (Phase 5 service support).
+        #
+        # A user command is authoritative, but it is NOT permitted to hold the system
+        # below the absolute safety floor. force_offset(-10) held for hours while the
+        # house drops below MIN_TEMP_LIMIT, or while DM sits past the aux limit, is not a
+        # preference - it is a fault. The floor only ever raises the offset, so a user
+        # asking for MORE heat (e.g. boost_heating) is passed through untouched.
         manual_override = self._check_manual_override()
         if manual_override is not None:
+            safety_floor = self._absolute_safety_floor(nibe_state)
+
+            if safety_floor is not None and manual_override < safety_floor:
+                _LOGGER.warning(
+                    "Manual override %.1f°C raised to %.1f°C: absolute safety floor active "
+                    "(indoor %.1f°C, DM %.0f)",
+                    manual_override,
+                    safety_floor,
+                    nibe_state.indoor_temp,
+                    nibe_state.degree_minutes,
+                )
+                return OptimizationDecision(
+                    offset=self._clamp_offset(safety_floor),
+                    layers=[
+                        LayerDecision(
+                            name=SAFETY_LAYER_NAME,
+                            offset=safety_floor,
+                            weight=LAYER_WEIGHT_SAFETY,
+                            reason=(
+                                f"Safety floor overrides manual {manual_override:.1f}°C "
+                                f"(indoor {nibe_state.indoor_temp:.1f}°C, "
+                                f"DM {nibe_state.degree_minutes:.0f})"
+                            ),
+                        )
+                    ],
+                    reasoning=(
+                        f"Manual override {manual_override:.1f}°C raised to "
+                        f"{safety_floor:.1f}°C by absolute safety floor"
+                    ),
+                    is_manual_override=True,
+                    is_emergency=True,
+                )
+
             _LOGGER.info("Using manual override: %.2f°C", manual_override)
             return OptimizationDecision(
-                offset=manual_override,
+                offset=self._clamp_offset(manual_override),
                 layers=[
                     LayerDecision(
                         name="Manual Override",
@@ -491,6 +576,7 @@ class DecisionEngine:
             offset=effect_result.offset,
             weight=effect_result.weight,
             reason=effect_result.reason,
+            is_cost_layer=True,  # Effect tariff optimizes cost, not comfort or safety
         )
 
         # 5. Prediction Layer
@@ -558,6 +644,7 @@ class DecisionEngine:
             offset=price_result.offset,
             weight=price_result.weight,
             reason=price_result.reason,
+            is_cost_layer=True,  # Spot price optimizes cost, not comfort or safety
         )
 
         # 9. Comfort Layer
@@ -639,11 +726,23 @@ class DecisionEngine:
         # The volatile blocker must not block this safety-critical reduction.
         anti_windup = getattr(emergency_decision, "anti_windup_active", False)
 
+        # Flag decisions produced by an ABSOLUTE safety path so the coordinator's
+        # offset-volatility blocker does not defer them. That blocker damps price-driven
+        # flip-flopping; deferring an aux-limit recovery for 45 minutes lets DM keep
+        # falling while the immersion heater runs.
+        # `tier` is read defensively: the emergency layer always returns an
+        # EmergencyLayerDecision in production, but tests substitute a plain LayerDecision.
+        is_emergency = (
+            safety_decision.weight >= LAYER_WEIGHT_SAFETY
+            or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
+        )
+
         return OptimizationDecision(
             offset=final_offset,
             layers=layers,
             reasoning=reasoning,
             anti_windup_active=anti_windup,
+            is_emergency=is_emergency,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
@@ -666,11 +765,23 @@ class DecisionEngine:
         """
         indoor_temp = nibe_state.indoor_temp
 
+        # Abstain when the indoor reading is a placeholder rather than a measurement.
+        # DEFAULT_INDOOR_TEMP (21.0) is above MIN_TEMP_LIMIT (18.0), so a system with no
+        # room sensor would otherwise report "OK" forever and this layer could never fire.
+        # Such systems are protected by the degree-minute path instead.
+        if not getattr(nibe_state, "indoor_temp_valid", True):
+            return LayerDecision(
+                name=SAFETY_LAYER_NAME,
+                offset=0.0,
+                weight=0.0,
+                reason="No indoor sensor - abstaining (degree minutes protect this system)",
+            )
+
         if indoor_temp < MIN_TEMP_LIMIT:
             # Too cold - emergency heating
             offset = SAFETY_EMERGENCY_OFFSET
             return LayerDecision(
-                name="Safety",
+                name=SAFETY_LAYER_NAME,
                 offset=offset,
                 weight=LAYER_WEIGHT_SAFETY,
                 reason=f"Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
@@ -678,109 +789,130 @@ class DecisionEngine:
         else:
             # Within safe limits (no fixed upper limit - comfort layer handles dynamically)
             return LayerDecision(
-                name="Safety",
+                name=SAFETY_LAYER_NAME,
                 offset=0.0,
                 weight=0.0,
                 reason="OK",
             )
 
+    @staticmethod
+    def _clamp_offset(offset: float) -> float:
+        """Clamp an offset to the pump's valid range.
+
+        This is the engine's single, unconditional bound. The adapter clamps again at
+        write time as defence in depth, but it only does so inside its fractional
+        accumulator branch - so before this existed, the unclamped float still reached
+        the coordinator, the sensors, and the learning recorder.
+        """
+        return max(MIN_OFFSET, min(offset, MAX_OFFSET))
+
     def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
-        """Aggregate layer decisions into final offset.
+        """Aggregate layer decisions into the final offset.
 
-        Uses weighted average with special handling for high-priority layers.
-        Layer priority order (highest to lowest):
-        1. Safety layer (absolute limits)
-        2. Emergency layer (thermal debt) - ALWAYS overrides peak protection
-        3. Effect layer (peak protection)
-        4. Other layers
+        SAFETY CONTRACT - the invariant this method exists to enforce:
 
-        Oct 19, 2025: Enhanced peak-aware emergency mode
-        When emergency layer is critical AND effect/peak layers are strongly negative,
-        apply minimal offset to prevent DM worsening without creating new peaks.
+            A cost layer (spot price, effect tariff) must NEVER reduce heating while
+            the thermal-debt layer is actively recovering.
 
-        Nov 29, 2025: Updated for weighted mixing (T3=0.95)
-        Allows Emergency T3 to mix with Price/Weather in normal conditions,
-        but protects it from being overridden by Critical Peak (1.0).
+        Priority order:
+            1. Safety layer            - indoor below MIN_TEMP_LIMIT. Absolute.
+            2. EMERGENCY tier          - DM past DM_THRESHOLD_AUX_LIMIT. Absolute.
+            3. Recovery tiers T1/T2/T3 - cost layers may MODERATE the response down to
+                                         the tier's peak-aware offset, never reverse it.
+            4. Remaining critical      - weight >= LAYER_WEIGHT_SAFETY, safety-biased tie-break.
+            5. Weighted average        - everything else.
+
+        Tiers are read from `EmergencyLayerDecision.tier`, never inferred from weights or
+        offset magnitudes: damping mutates the offset, and a weight is a tuning knob, so
+        inferring from either lets a retuned or damped tier fall through into the cost-layer
+        override path.
 
         Args:
-            layers: List of layer decisions
+            layers: Layer decisions, as built by calculate_decision
 
         Returns:
-            Final offset value
+            Final offset (°C), always within [MIN_OFFSET, MAX_OFFSET]
         """
-        # 1. Safety Layer (Absolute Priority)
-        # Always enforced if critical (weight >= 1.0)
-        if len(layers) > 0 and layers[0].weight >= 1.0:
-            return layers[0].offset
+        safety_layer = next((layer for layer in layers if layer.name == SAFETY_LAYER_NAME), None)
+        emergency_layer = next(
+            (layer for layer in layers if isinstance(layer, EmergencyLayerDecision)), None
+        )
 
-        # 2. Emergency vs Peak Conflict Resolution
-        # If Emergency is strong (T2=0.85, T3=0.95) AND Peak is Critical (1.0),
-        # we need a compromise. We don't want Peak to crush Emergency (unsafe),
-        # nor Emergency to ignore Peak (expensive).
-        emergency_layer = layers[1] if len(layers) > 1 else None
-        effect_layer = layers[3] if len(layers) > 3 else None
+        # 1. Safety layer: indoor temperature below the absolute floor.
+        if safety_layer is not None and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
+            return self._clamp_offset(safety_layer.offset)
 
-        if (
-            emergency_layer
-            and emergency_layer.weight >= 0.85  # T2 or T3 active
-            and effect_layer
-            and effect_layer.weight >= 1.0  # Peak Critical active
-        ):
-            emergency_offset = emergency_layer.offset
-
-            # Apply Peak-Aware Compromise Logic
-            # Scale minimal offset based on emergency severity
-            if emergency_offset >= DM_CRITICAL_T3_OFFSET:  # T3
-                minimal_offset = DM_CRITICAL_T3_PEAK_AWARE_OFFSET
-            elif emergency_offset >= DM_CRITICAL_T2_OFFSET:  # T2
-                minimal_offset = DM_CRITICAL_T2_PEAK_AWARE_OFFSET
-            else:  # T1
-                minimal_offset = DM_CRITICAL_T1_PEAK_AWARE_OFFSET
-
-            _LOGGER.info(
-                "Peak-aware emergency mode: reducing offset from %.2f to %.2f (Critical Peak protection active)",
-                emergency_offset,
-                minimal_offset,
+        # 2. EMERGENCY tier: DM past the auxiliary-heat limit.
+        # Nothing may throttle this. Past DM_THRESHOLD_AUX_LIMIT the immersion heater
+        # engages; suppressing recovery to protect the effect tariff does not avoid the
+        # peak, it guarantees a bigger one from the aux heater while the debt deepens.
+        if emergency_layer is not None and emergency_layer.tier == DM_TIER_EMERGENCY:
+            _LOGGER.warning(
+                "Aux-limit emergency: DM %.0f - applying %.1f°C, overriding all cost layers",
+                emergency_layer.degree_minutes,
+                emergency_layer.offset,
             )
-            return minimal_offset
+            return self._clamp_offset(emergency_layer.offset)
 
-        # 3. Critical Overrides (Standard)
-        # Any remaining layer with weight >= 1.0 overrides weighted average
-        # (e.g., Critical Peak when Emergency is not strong)
-        critical_layers = [layer for layer in layers if layer.weight >= 1.0]
+        # 3. Recovery tiers (T1/T2/T3): thermal debt beyond the climate-aware warning
+        # threshold. The emergency layer only reaches a recovery tier when the house is
+        # NOT above tolerance (its "too warm" case returns tier OK first), so removing
+        # heat here always deepens the debt.
+        if emergency_layer is not None and emergency_layer.tier in DM_RECOVERY_TIERS:
+            peak_aware_floor = DM_CRITICAL_PEAK_AWARE_OFFSETS[emergency_layer.tier]
 
+            if self._has_critical_cost_layer(layers):
+                # Peak-aware compromise: enough to stop DM worsening, small enough not to
+                # grow the monthly peak. Selected by TIER, so a damped T3 still gets T3's
+                # compromise rather than T1's.
+                _LOGGER.info(
+                    "Peak-aware %s recovery: %.2f°C (critical cost layer active, DM %.0f)",
+                    emergency_layer.tier,
+                    peak_aware_floor,
+                    emergency_layer.degree_minutes,
+                )
+                return self._clamp_offset(peak_aware_floor)
+
+            # No critical cost layer: let the tier mix with the other layers, but never
+            # below the tier's minimum recovery offset.
+            weighted = self._weighted_average(layers)
+            return self._clamp_offset(max(weighted, peak_aware_floor))
+
+        # 4. Remaining critical layers (no thermal-debt recovery in progress).
+        critical_layers = [layer for layer in layers if layer.weight >= LAYER_WEIGHT_SAFETY]
         if critical_layers:
-            # For critical layers, take the strongest vote
             max_offset = max(layer.offset for layer in critical_layers)
             min_offset = min(layer.offset for layer in critical_layers)
+            # Safety-biased tie-break: on equal magnitude prefer the HEATING vote.
+            # (`>` here returned the negative vote on an exact tie, and
+            # SAFETY_EMERGENCY_OFFSET/+10 vs PRICE_OFFSET_PEAK/-10 tie by construction.)
+            chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
+            return self._clamp_offset(chosen)
 
-            # If conflicting critical votes, take the more conservative (lower magnitude? No, safer)
-            # Actually, if we have multiple criticals (e.g. Peak vs Comfort Critical),
-            # we should probably prioritize Safety/Peak.
-            # But Safety is handled in step 1.
-            # So this is likely Peak vs Comfort Critical.
-            # Peak (-3.0) vs Comfort Critical (-3.0). Same.
-            # Peak (-3.0) vs Comfort Critical (+3.0 - too cold).
-            # If too cold (Comfort Critical) and Peak Critical (-3.0).
-            # Comfort Critical is 1.0. Peak is 1.0.
-            # We should probably respect Peak to avoid fees, unless Safety triggers.
-            # Current logic: abs(max) > abs(min).
-            # If max=+3, min=-3. Returns +3.
-            # If max=+1, min=-3. Returns -3.
-            # This logic favors the "stronger" intervention.
-            if abs(max_offset) > abs(min_offset):
-                return max_offset
-            else:
-                return min_offset
+        # 5. Weighted average of everything else.
+        return self._clamp_offset(self._weighted_average(layers))
 
-        # 4. Weighted Average
-        # Mixes all layers (including T3=0.95, Price=0.8, Weather=0.85)
+    @staticmethod
+    def _has_critical_cost_layer(layers: list[LayerDecision]) -> bool:
+        """True if a cost layer (spot price or effect tariff) is voting at critical weight.
+
+        Both the price layer (PEAK quarters) and the effect layer (at the monthly peak)
+        promote themselves to LAYER_WEIGHT_SAFETY. Non-cost layers never set the flag, so
+        `getattr` defaults them to False - the emergency and proactive layers use their own
+        decision dataclasses and do not carry this field.
+        """
+        return any(
+            getattr(layer, "is_cost_layer", False) and layer.weight >= LAYER_WEIGHT_SAFETY
+            for layer in layers
+        )
+
+    @staticmethod
+    def _weighted_average(layers: list[LayerDecision]) -> float:
+        """Weighted average of all layer votes (0.0 when no layer is voting)."""
         total_weight = sum(layer.weight for layer in layers)
         if total_weight == 0:
             return 0.0
-
-        weighted_sum = sum(layer.offset * layer.weight for layer in layers)
-        return weighted_sum / total_weight
+        return sum(layer.offset * layer.weight for layer in layers) / total_weight
 
     def _generate_reasoning(
         self,

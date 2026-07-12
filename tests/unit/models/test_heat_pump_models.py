@@ -164,35 +164,12 @@ class TestNibeF750Profile:
         electrical = f750.estimate_electrical_consumption(heat_demand_kw=30.0, outdoor_temp=-20.0)
         assert electrical <= f750.typical_electrical_range_kw[1]
 
-    def test_optimal_flow_temp_calculation(self, f750):
-        """Test optimal flow temperature calculation."""
-        # Mild conditions (-5°C outdoor)
-        flow_temp = f750.calculate_optimal_flow_temp(
-            outdoor_temp=-5.0, indoor_target=21.0, heat_demand_kw=6.0
-        )
 
-        # Should be reasonable for F750
-        assert 25.0 <= flow_temp <= 55.0
 
-        # Efficiency target: outdoor + 27°C ± 3°C
-        # -5 + 27 = 22°C (lower bound ~19, upper bound ~30 with adjustments)
-        # With heat demand formula it may be higher
-        assert flow_temp >= 20.0  # Above minimum
-        assert flow_temp <= 60.0  # Below maximum
-
-    def test_flow_temp_clamped_to_limits(self, f750):
-        """Test flow temperature is clamped to F750 limits."""
-        # Extreme cold should not exceed max flow temp
-        flow_temp = f750.calculate_optimal_flow_temp(
-            outdoor_temp=-30.0, indoor_target=21.0, heat_demand_kw=15.0
-        )
-        assert flow_temp <= f750.max_flow_temp
-
-        # Should never go below minimum
-        flow_temp = f750.calculate_optimal_flow_temp(
-            outdoor_temp=10.0, indoor_target=21.0, heat_demand_kw=2.0
-        )
-        assert flow_temp >= f750.min_flow_temp
+    # NOTE: tests for `calculate_optimal_flow_temp` were removed with the method itself. A heat
+    # pump profile cannot know what emitters the house has, so it cannot know the flow temperature
+    # the house needs; that lives in optimization/weather_layer.py via the EN 442 emitter law. See
+    # tests/unit/climate/test_weather_compensation.py, and audit F-119 / F-121.
 
     def test_power_validation_normal(self, f750):
         """Test power validation for normal consumption."""

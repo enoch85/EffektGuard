@@ -25,6 +25,8 @@ from .const import (
     DHW_BOOST_COOLDOWN_MINUTES,
     SERVICE_RATE_LIMIT_MINUTES,
     CONF_NIBE_TEMP_LUX_ENTITY,
+    DEFAULT_DHW_TARGET_TEMP,
+    DHW_MAX_TEMP_VALIDATION,
     DHW_MIN_TEMP,
     DHW_MAX_TEMP,
 )
@@ -458,10 +460,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             duration,
         )
 
-        # Validate target temperature
-        if not DHW_MIN_TEMP <= target_temp <= 70.0:
+        # Ceiling is DHW_MAX_TEMP_VALIDATION, the declared absolute maximum. Above it is a
+        # scald risk and forces sustained immersion-heater (elpatron) operation.
+        if not DHW_MIN_TEMP <= target_temp <= DHW_MAX_TEMP_VALIDATION:
             raise ServiceValidationError(
-                f"Target temperature {target_temp} outside safe range [{DHW_MIN_TEMP}, 70.0]°C"
+                f"Target temperature {target_temp}°C outside the safe range "
+                f"[{DHW_MIN_TEMP}, {DHW_MAX_TEMP_VALIDATION}]°C"
             )
 
         # Get temporary lux entity from config
@@ -605,8 +609,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     boost_dhw_schema = vol.Schema(
         {
-            vol.Optional(ATTR_TARGET_TEMP, default=55.0): vol.All(
-                vol.Coerce(float), vol.Range(min=40.0, max=70.0)
+            vol.Optional(ATTR_TARGET_TEMP, default=DEFAULT_DHW_TARGET_TEMP): vol.All(
+                vol.Coerce(float),
+                vol.Range(min=DHW_MIN_TEMP, max=DHW_MAX_TEMP_VALIDATION),
             ),
             vol.Optional(ATTR_DURATION, default=90): vol.All(
                 vol.Coerce(int), vol.Range(min=30, max=180)

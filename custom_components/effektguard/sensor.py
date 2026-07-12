@@ -67,7 +67,11 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="current_offset",
         name="Current Offset",
         icon="mdi:thermometer-lines",
-        device_class=SensorDeviceClass.TEMPERATURE,
+        # A heating-curve offset is an INTERVAL, not an absolute temperature. With
+        # device_class TEMPERATURE, Home Assistant applies absolute conversion, so an
+        # imperial user saw an offset of 0.0 C rendered as 32.0 F (and -2 C as 28.4 F) -
+        # and long-term statistics stored the converted value.
+        device_class=SensorDeviceClass.TEMPERATURE_DELTA,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (

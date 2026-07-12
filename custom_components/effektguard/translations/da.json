@@ -90,40 +90,17 @@
     "step": {
       "init": {
         "title": "EffektGuard-indstillinger",
-        "description": "Konfigurer optimeringsadfærd og bygningsegenskaber.\n\n**Ændringer træder i kraft øjeblikkeligt** uden genstart. Brug **Omkonfigurer** for at ændre sensorvalg.",
-        "data": {
-          "optimization_mode": "Optimeringstilstand"
-        },
-        "data_description": {
-          "optimization_mode": "**Komfort**: Stram temperaturkontrol, minimal prisoptimering, prioriterer stabil opvarmning. **Balanceret**: Moderat optimering der tillader små temperaturvariationer for omkostningsbesparelser. **Besparelser**: Maksimal prisoptimering med større temperaturudsving i billige/dyre perioder"
-        },
         "sections": {
-          "comfort_settings": {
-            "name": "Komfortindstillinger",
-            "description": "Finjuster temperaturkomforttolerance",
+          "optimization_settings": {
+            "name": "Optimeringsindstillinger",
+            "description": "Vælg optimeringstilstand og temperaturtolerance",
             "data": {
+              "optimization_mode": "Optimeringstilstand",
               "tolerance": "Temperaturtolerance"
             },
             "data_description": {
+              "optimization_mode": "**Komfort**: Stram temperaturkontrol, minimal prisoptimering, prioriterer stabil opvarmning. **Balanceret**: Moderat optimering der tillader små temperaturvariationer for omkostningsbesparelser. **Besparelser**: Maksimal prisoptimering med større temperaturudsving i billige/dyre perioder",
               "tolerance": "Styrer tilladt temperaturafvigelse fra mål (±0,2°C dødzone opretholdes altid). Højere værdier tillader mere aggressiv omkostningsoptimering men større temperaturudsving"
-            }
-          },
-          "dhw_settings": {
-            "name": "Varmtvandsindstillinger",
-            "description": "Planlæg hvornår varmtvand skal opvarmes",
-            "data": {
-              "dhw_target_temp": "Varmtvand måltemperatur",
-              "dhw_morning_enabled": "Morgen varmtvand",
-              "dhw_morning_hour": "Morgen starttid",
-              "dhw_evening_enabled": "Aften varmtvand",
-              "dhw_evening_hour": "Aften starttid"
-            },
-            "data_description": {
-              "dhw_target_temp": "Måltemperatur for varmtvand (45-60°C)",
-              "dhw_morning_enabled": "Aktiver morgen varmtvandsopvarmning",
-              "dhw_morning_hour": "Morgenbehovsperiode starttid",
-              "dhw_evening_enabled": "Aktiver aften varmtvandsopvarmning",
-              "dhw_evening_hour": "Aftenbehovsperiode starttid"
             }
           },
           "building_characteristics": {
@@ -136,6 +113,36 @@
             "data_description": {
               "thermal_mass": "Hvor hurtigt bygningen reagerer på ændringer (0,5=let/træ, 1,0=normal, 2,0=tung/beton)",
               "insulation_quality": "Samlet isoleringsniveau (0,5=dårlig, 1,0=normal, 2,0=fremragende)"
+            }
+          },
+          "domestic_hot_water": {
+            "name": "Varmt brugsvand (DHW)",
+            "description": "Planlæg hvornår det varme vand skal være klar, og hvor meget du har brug for",
+            "data": {
+              "dhw_target_temp": "Varmtvand måltemperatur",
+              "dhw_min_amount": "Mindste mængde varmt vand på det planlagte tidspunkt",
+              "dhw_schedules": "Aktivér/deaktivér",
+              "dhw_morning_hour": "Morgen starttid",
+              "dhw_evening_hour": "Aften starttid"
+            },
+            "data_description": {
+              "dhw_target_temp": "Måltemperatur for varmtvand (45-60°C)",
+              "dhw_min_amount": "Antal minutters varmt vand, der skal være tilgængeligt på det planlagte tidspunkt.\n\nEffektGuard opvarmer i de billigste timer for at sikre, at mængden er klar, når du har brug for den.",
+              "dhw_schedules": "Vælg hvilke opvarmningsperioder der skal være aktive. Fjern markeringen for at slå opvarmning fra i perioden.",
+              "dhw_morning_hour": "Morgenbehovsperiode starttid",
+              "dhw_evening_hour": "Aftenbehovsperiode starttid"
+            }
+          },
+          "airflow_optimization": {
+            "name": "Luftstrømsoptimering (udsugningsluft)",
+            "description": "Konfigurer luftmængder for udsugningsvarmepumper. Aktivér/deaktivér via kontakten Luftstrømsoptimering under Betjening.",
+            "data": {
+              "airflow_standard_rate": "Normal luftmængde",
+              "airflow_enhanced_rate": "Forøget luftmængde"
+            },
+            "data_description": {
+              "airflow_standard_rate": "Normal ventilationsmængde ved almindelig drift.\nIndstil den til dit foretrukne komfortniveau til daglig brug.\n\nNIBE F750 standard: 150 m³/h (hastighed 2).",
+              "airflow_enhanced_rate": "Forøget ventilationsmængde, der bruges under gunstige forhold for at udvinde mere varme fra udsugningsluften og forbedre COP.\n\nNIBE F750 standard: 252 m³/h (hastighed 4)."
             }
           }
         }

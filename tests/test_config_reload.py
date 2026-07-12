@@ -483,6 +483,12 @@ class TestLearningDataPersistence:
         coordinator.effect.async_save = AsyncMock()
         coordinator._power_sensor_listener = None
 
+        # State the BASE DataUpdateCoordinator.async_shutdown touches. async_shutdown now
+        # calls super() - it must, so that `_shutdown_requested` gets set and an in-flight
+        # refresh cannot re-arm a timer on a coordinator that has already been unloaded.
+        coordinator._shutdown_requested = False
+        coordinator._debounced_refresh = Mock()
+
         # Bind real shutdown method
         coordinator.async_shutdown = EffektGuardCoordinator.async_shutdown.__get__(
             coordinator, EffektGuardCoordinator

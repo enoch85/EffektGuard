@@ -265,8 +265,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.current_offset: float = 0.0
         self.last_applied_offset: float | None = None  # Last offset written to NIBE
         self.last_offset_timestamp: datetime | None = None  # When offset was last applied
+        # Daily high-water mark (display + diagnostics). Monotonically non-decreasing
+        # until the midnight reset. NEVER pass this to the decision engine as
+        # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
         self.peak_this_month: float = 0.0
+        # Instantaneous whole-house power (kW), refreshed every cycle by
+        # _update_peak_tracking. None until the first successful measurement, in which
+        # case peak protection stays disabled rather than acting on a guess.
+        self.current_power_kw: float | None = None
         # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
         # instantaneous sample: accumulate real measurements within the
         # quarter and record the mean when the quarter completes. The quarter
@@ -415,6 +422,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         This gives sensors time to update before we read them, and aligns
         with 15-minute spot price intervals.
         """
+        # Never re-arm a coordinator that has been shut down.
+        #
+        # _do_aligned_refresh calls this from a `finally`, so an update already in flight
+        # when the entry unloads would otherwise schedule a fresh timer on a dead object -
+        # and the reload's new coordinator would arm its own. Two coordinators, one heat
+        # pump, conflicting curve offsets, forever.
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator shut down - not re-arming the aligned refresh")
+            return
+
         # Cancel any existing schedule
         if self._unsub_aligned_refresh:
             self._unsub_aligned_refresh()
@@ -438,19 +455,43 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
 
     async def _do_aligned_refresh(self) -> None:
-        """Perform refresh and schedule next aligned update.
+        """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        Note: _async_update_data() now handles scheduling at the end of every update,
-        so we don't need to schedule here. This method is called by the timer callback.
+        This is the outermost frame of the coordinator's own scheduling loop, and it is the
+        sole owner of the retry timer: the base class's scheduler is disabled
+        (update_interval=None), so nothing else will ever re-arm it.
+
+        That makes the broad `except Exception` correct here rather than sloppy. The
+        previous except tuple was narrower than what the update path can actually raise -
+        HomeAssistantError from a weather service call, IndexError from a price lookup on a
+        DST 92/100-quarter day, ZeroDivisionError from the savings maths, numpy errors from
+        the learning modules. Any one of those escaped, the task died, and
+        _schedule_aligned_refresh() was never called again.
+
+        The failure was silent and permanent: `last_update_success` stayed True, so every
+        entity kept serving its last value and looked healthy, while the heat pump sat on
+        the last offset written - until Home Assistant was restarted.
+
+        The `finally` guarantees the loop survives any single bad cycle. Marking the update
+        unsuccessful lets HA show the entities as unavailable, which is the honest signal.
         """
         try:
             self.data = await self._async_update_data()
             self.last_update_success = True
             self.async_set_updated_data(self.data)
-        except (UpdateFailed, OSError, ValueError, TypeError, KeyError, AttributeError) as err:
+        except UpdateFailed as err:
+            # Expected degradation (e.g. required NIBE sensors unreadable).
             self.last_update_success = False
             _LOGGER.error("Update failed: %s", err)
-            # Still need to schedule next update even on failure
+        except Exception:  # noqa: BLE001 - supervisory loop; see docstring
+            self.last_update_success = False
+            _LOGGER.exception(
+                "Unexpected error during EffektGuard update. The update loop will continue; "
+                "entities are marked unavailable for this cycle and no offset was written."
+            )
+        finally:
+            # ALWAYS re-arm. Without this the coordinator dies permanently on any
+            # unhandled exception, because update_interval is None.
             self._schedule_aligned_refresh()
 
     async def async_initialize_learning(self) -> None:
@@ -644,8 +685,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         - Effect tracking state (monthly peaks)
 
         Called during integration unload or reload.
+
+        IDEMPOTENT BY DESIGN. This runs TWICE per unload: the base DataUpdateCoordinator
+        registers `config_entry.async_on_unload(self.async_shutdown)` in its __init__, and
+        async_unload_entry also calls it explicitly. Without the guard below, every unload
+        saved the learning data and the effect peaks twice.
         """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator already shut down - ignoring repeat call")
+            return
+
         _LOGGER.debug("Shutting down EffektGuard coordinator")
+
+        # Base shutdown FIRST, and it is not optional. It sets `_shutdown_requested`,
+        # cancels the base refresh handle, and shuts down the request debouncer.
+        #
+        # `_shutdown_requested` is what stops an in-flight refresh from RESURRECTING this
+        # coordinator. `_do_aligned_refresh` runs on a task created with
+        # hass.async_create_task (NOT entry.async_create_task), so HA cannot cancel it on
+        # unload. Its `finally` block calls _schedule_aligned_refresh() - which, without
+        # this flag, would re-arm a timer on a DEAD coordinator while the entry reload
+        # creates a second, live one. BOTH would then write curve offsets to the same heat
+        # pump, each with its own rate limiter and its own last_applied_offset, fighting
+        # each other. Every reload would add another writer, permanently.
+        #
+        # The debouncer matters for the same reason: a trailing 10 s debounced refresh
+        # queued by a service call can otherwise fire after unload and write an offset.
+        await super().async_shutdown()
 
         try:
             # Unsubscribe aligned refresh timer (if active)
@@ -818,7 +884,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             else:
                 _LOGGER.debug("Weather forecast not available (optional feature disabled)")
-        except (AttributeError, KeyError, ValueError, TypeError) as err:
+        except (HomeAssistantError, AttributeError, KeyError, ValueError, TypeError) as err:
+            # Weather is OPTIONAL - never let it take the whole update down.
+            # HomeAssistantError was missing here: weather.get_forecasts raises it for any
+            # entity without an hourly forecast, and it is not a subclass of the others.
             _LOGGER.info("Weather forecast unavailable: %s", err)
             weather_data = None
 
@@ -835,19 +904,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
         else:
             try:
-                # Validate peak tracking data
-                if self.peak_today is None or self.peak_today < 0:
-                    _LOGGER.error(
-                        "Peak tracking error: peak_today is %s "
-                        "(should have actual power measurement). "
-                        "This indicates power sensor is not "
-                        "configured or unavailable. Peak protection "
-                        "will be disabled until sensors are available.",
-                        self.peak_today,
+                # The effect layer needs INSTANTANEOUS power to judge how close the current
+                # quarter is to the monthly peak. Passing peak_today here (a daily maximum
+                # that only ratchets upward until midnight) made a single morning spike pin
+                # the effect layer to CRITICAL - weight 1.0, offset -3.0 - for the rest of
+                # the day, even with the compressor idle.
+                if self.current_power_kw is None or self.current_power_kw < 0:
+                    _LOGGER.warning(
+                        "No valid power measurement (%s) - disabling peak protection this "
+                        "cycle rather than acting on a guess. Configure a power sensor or "
+                        "NIBE phase currents for effect-tariff protection.",
+                        self.current_power_kw,
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
                 else:
-                    current_power_for_decision = self.peak_today
+                    current_power_for_decision = self.current_power_kw
 
                 # Check if DHW is active (EITHER is_hot_water sensor OR temp_lux switch)
                 # When NIBE heats DHW, flow temp reads charging temp (45-60°C), not space heating
@@ -963,6 +1034,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.info(
                 "Manual override: bypassing volatile check (offset → %.1f°C)",
                 decision.offset,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
+        elif decision.is_emergency:
+            # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
+            # The volatile blocker damps price-driven flip-flopping; it must never defer a safety
+            # recovery. Blocking here would hold the previous (often negative) offset for up to
+            # 45 minutes while DM keeps falling and the immersion heater runs.
+            _LOGGER.warning(
+                "Emergency decision: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
+                (
+                    self._offset_volatility_tracker.last_offset
+                    if self._offset_volatility_tracker.last_offset is not None
+                    else 0.0
+                ),
+                decision.offset,
+                decision.reasoning,
             )
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.anti_windup_active:
@@ -1088,6 +1175,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     self._daily_spot_savings,
                 )
             self._daily_spot_savings = 0.0  # Reset for new day
+
+            # A new day may also be a new MONTH. The effect tariff bills a monthly peak, so
+            # last month's peaks must not carry over into this one - an instance that stays up
+            # across a month boundary would otherwise bill against a stale threshold.
+            month_changed = (now.year, now.month) != (
+                self._last_update_date.year,
+                self._last_update_date.month,
+            )
+            if month_changed:
+                self.effect.prune_peaks_for_current_month()
+                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
+                _LOGGER.info(
+                    "Month change detected: pruned previous month's peaks, "
+                    "monthly peak reset to %.2f kW",
+                    self.peak_this_month,
+                )
 
             # Reset daily peak for new day
             self.peak_today = 0.0
@@ -1626,6 +1729,31 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     decision.reason,
                 )
 
+    def _is_dhw_start_rate_limited(self, now_time: datetime) -> bool:
+        """True if a DHW boost was started or stopped too recently to start another.
+
+        Guards STARTS only. A stop must never be deferred - see _apply_dhw_control.
+
+        Args:
+            now_time: Current datetime
+
+        Returns:
+            True when a new DHW boost must not be started yet
+        """
+        if self._last_dhw_control_time is None:
+            return False
+
+        minutes_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
+        if minutes_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
+            _LOGGER.debug(
+                "DHW start rate limited: %.1f min since last change (min %d min)",
+                minutes_since_last,
+                DHW_CONTROL_MIN_INTERVAL_MINUTES,
+            )
+            return True
+
+        return False
+
     async def _apply_dhw_control(
         self, decision, current_dhw_temp: float, now_time: datetime
     ) -> None:
@@ -1702,19 +1830,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     _LOGGER.error("Failed to abort DHW heating: %s", err)
                 return  # Exit early - abort handled
 
-        # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
-        if self._last_dhw_control_time is not None:
-            time_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
-            if time_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
-                _LOGGER.debug(
-                    "DHW control rate limited: %.1f min since last change (min %d min)",
-                    time_since_last,
-                    DHW_CONTROL_MIN_INTERVAL_MINUTES,
-                )
+        # Apply control decision.
+        #
+        # RATE LIMITING APPLIES TO STARTS ONLY - never to stops.
+        #
+        # Rate-limiting a stop would strand an in-progress DHW cycle: every `should_heat=False`
+        # path in should_start_dhw() returns an EMPTY abort_conditions list, so the abort branch
+        # above is skipped, and the limiter's clock is started by the turn-ON - meaning the
+        # interval runs from the beginning of the very cycle being stopped. DHW would hold the
+        # compressor away from space heating
+        # while thermal debt deepened.
+        #
+        # Stopping the lux boost cannot harm the pump - it only stops an EffektGuard-
+        # initiated boost. Throttling it has no safety benefit and a real safety cost.
+        # Oscillation stays bounded because the next START is still rate limited.
+        if decision.should_heat and not is_lux_on:
+            if self._is_dhw_start_rate_limited(now_time):
                 return
 
-        # Apply control decision
-        if decision.should_heat and not is_lux_on:
             # Turn ON temporary lux to boost DHW
             _LOGGER.info(
                 "DHW control: Activating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
@@ -1901,6 +2034,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         )
                         current_power = estimated_power
 
+            # Publish the instantaneous reading for the effect layer.
+            #
+            # The decision engine needs CURRENT power to judge how close this quarter is
+            # to the monthly peak. It must never be given `peak_today`: that value is a
+            # monotonically non-decreasing daily MAXIMUM (see below) which is reset only at
+            # midnight, so a single morning spike would pin the effect layer to CRITICAL
+            # for the rest of the day even with the compressor idle.
+            #
+            # This method runs after the decision within a cycle, so the engine reads the
+            # previous cycle's value - at most UPDATE_INTERVAL_MINUTES old, and a genuine
+            # measurement rather than a daily high-water mark.
+            self.current_power_kw = current_power
+
             # Determine measurement source for metadata
             measurement_source = "unknown"
             if has_external_power_sensor and current_power is not None:
@@ -2012,7 +2158,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._quarter_power_samples.append((now, current_power))
 
             if peak_event:
-                self.peak_this_month = peak_event.effective_power
+                # The HIGHEST of the tracked peaks, never peak_event.effective_power:
+                # record_quarter_measurement returns an event for ANY new entry while the top-3
+                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW quarter would
+                # drop the monthly peak to 2.0 and weaken the threshold for the rest of the month.
+                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:

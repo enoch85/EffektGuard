@@ -45,27 +45,38 @@ class SavingsCalculator:
     - Observed peak reductions and price avoidance
     """
 
-    def price_to_main_unit_factor(self) -> float:
-        """Factor converting the configured price unit to the main currency.
+    def price_to_main_unit_factor(self) -> float | None:
+        """Factor converting the configured price unit to the main currency, or None.
 
-        GE-Spot preserves the user's display unit: öre/cent-style sub-units
-        divide by 100; SEK/EUR-style main units pass through. Unknown units
-        keep the historical öre/kWh assumption so existing Swedish setups
-        are unaffected, with a one-time log.
+        Sub-units (öre/cent) divide by 100; main units (SEK/EUR/NOK/DKK) pass through.
+
+        An unrecognised or absent unit returns None - we do NOT guess. The old fallback
+        assumed öre/kWh, but EVERY price integration publishes `<currency>/kWh` by default:
+
+            Nord Pool (HA core)         -> SEK/kWh   (no cents option exists at all)
+            custom-components/nordpool  -> SEK/kWh   (öre only if price_in_cents: true)
+            GE-Spot                     -> SEK/kWh   (öre only if display format = subunit)
+
+        So the öre assumption was 100x WRONG against all three. It fired whenever
+        `price_unit` was None - which it is until the first successful price read. Reporting
+        a savings figure that is 100x too large is worse than reporting none: skip the
+        accumulation instead.
         """
         unit = (self.price_unit or "").lower().replace(" ", "")
         if unit.startswith(PRICE_SUBUNIT_PREFIXES):
             return 1.0 / ORE_TO_SEK_CONVERSION
         if unit.startswith(PRICE_MAINUNIT_PREFIXES):
             return 1.0
+
         if not self._unknown_unit_logged:
             self._unknown_unit_logged = True
-            _LOGGER.info(
-                "Price unit '%s' not recognized - assuming öre/kWh-style "
-                "sub-unit for savings math (ranking is unaffected)",
+            _LOGGER.warning(
+                "Price unit %r not recognised - skipping monetary savings for this cycle "
+                "rather than guessing. Price-based OPTIMIZATION is unaffected (it ranks "
+                "prices and does not need the unit).",
                 self.price_unit,
             )
-        return 1.0 / ORE_TO_SEK_CONVERSION
+        return None
 
     @property
     def is_sek_price_unit(self) -> bool:
@@ -190,8 +201,12 @@ class SavingsCalculator:
         cycle_hours = cycle_minutes / 60.0
         energy_kwh = actual_power_kw * cycle_hours
 
-        # Actual cost at current price
+        # Actual cost at current price. An unrecognised unit yields None - report no
+        # savings rather than a figure that could be 100x out.
         to_main = self.price_to_main_unit_factor()
+        if to_main is None:
+            return 0.0
+
         actual_cost = energy_kwh * current_price * to_main
 
         # What it would have cost at average price (baseline)

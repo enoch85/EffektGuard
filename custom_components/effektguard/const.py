@@ -288,6 +288,30 @@ DM_CRITICAL_T3_PEAK_AWARE_OFFSET: Final = 1.0  # T3 minimal: Aggressive recovery
 PEAK_AWARE_EFFECT_THRESHOLD: Final = -1.0  # Effect offset threshold for peak detection
 PEAK_AWARE_EFFECT_WEIGHT_MIN: Final = 0.5  # Minimum effect weight for peak detection
 
+# Emergency tier identifiers (see thermal_layer.EmergencyLayerDecision.tier)
+#
+# SAFETY DISPATCH MUST KEY ON THESE NAMES - never on a layer's weight or on the
+# magnitude of its offset. Both are unreliable discriminators:
+#   - The offset returned by a tier has already passed through thermal-recovery
+#     damping, the anti-windup cap, and the volatile-boost skip, so a damped T3 can
+#     emerge smaller than an undamped T1.
+#   - A weight is a tuning parameter. Retuning DM_CRITICAL_T2_WEIGHT (0.85 -> 0.81)
+#     silently moved T2 below a hardcoded `weight >= 0.85` gate, which dropped T2
+#     recovery into the cost-layer override path and produced a -3.0 C heat REDUCTION
+#     at deep thermal debt.
+DM_TIER_EMERGENCY: Final = "EMERGENCY"  # DM <= DM_THRESHOLD_AUX_LIMIT (absolute priority)
+DM_RECOVERY_TIERS: Final[frozenset[str]] = frozenset({"T1", "T2", "T3"})
+
+# Minimal offsets applied when a recovery tier coincides with a CRITICAL cost layer
+# (effect tariff at the monthly peak, or a PEAK spot-price quarter). Large enough to
+# stop DM worsening, small enough not to grow the monthly peak. Keyed by tier name so
+# that damping cannot change which tier's compromise is selected.
+DM_CRITICAL_PEAK_AWARE_OFFSETS: Final[dict[str, float]] = {
+    "T1": DM_CRITICAL_T1_PEAK_AWARE_OFFSET,
+    "T2": DM_CRITICAL_T2_PEAK_AWARE_OFFSET,
+    "T3": DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
+}
+
 # Thermal Recovery Damping - General (Oct 20, 2025)
 # Prevent concrete slab thermal overshoot when solar gain naturally warms house during recovery
 # Applies to ALL recovery tiers (T1, T2, T3, WARNING) when warming detected
@@ -827,17 +851,29 @@ UFH_RADIATOR_PREDICTION_HORIZON: Final = 6.0  # hours - <1 hour lag (increased f
 
 DEFAULT_CURVE_SENSITIVITY: Final = 1.5  # NIBE curve sensitivity (~1.5°C flow change per 1°C offset)
 
-# Weather compensation mathematical constants
-KUEHNE_COEFFICIENT: Final = 2.55  # Universal coefficient for flow temperature calculation
-KUEHNE_POWER: Final = 0.78  # Power coefficient for heat transfer physics
-RADIATOR_POWER_COEFFICIENT: Final = 1.3  # BS EN442 standard radiator output
-RADIATOR_RATED_DT: Final = 50.0  # Standard test DT (75°C flow, 65°C return, 20°C room)
+# Weather compensation - EN 442 emitter law (see utils/emitter.py)
+#
+#   EN 442-1:2014 3.31   emitter output: Phi / Phi_N = (dT / dT_N) ** n
+#   EN 442-1:2014 3.23   rated point 75/65/20 => dT_N = 50 K, ARITHMETIC mean.
+#                        Never pair this reference with a log-mean dT.
+#   EN 1264              underfloor: q = 8.92 * dT ** 1.1 => n ~ 1.1
+RADIATOR_POWER_COEFFICIENT: Final = 1.3  # EN 442 exponent n, panel/sectional radiators
+RADIATOR_RATED_DT: Final = 50.0  # EN 442 rated excess temperature (75/65/20)
+UFH_POWER_COEFFICIENT: Final = 1.1  # EN 1264 exponent n, underfloor (NOT 1.3)
 
-# UFH flow temperature adjustments
-UFH_FLOW_REDUCTION_CONCRETE: Final = 8.0  # °C reduction for concrete slab UFH
-UFH_FLOW_REDUCTION_TIMBER: Final = 5.0  # °C reduction for timber/lightweight UFH
-UFH_MIN_FLOW_TEMP_CONCRETE: Final = 25.0  # Minimum effective concrete slab temp
-UFH_MIN_FLOW_TEMP_TIMBER: Final = 22.0  # Minimum effective timber UFH temp
+# Design point: the outdoor temperature the emitters were sized for, and the supply they need at
+# it. Defaults describe a standard Swedish low-temperature radiator system, erring WARM: a
+# too-warm design point over-supplies slightly, a too-cold one silently under-heats, and degree
+# minutes cannot detect under-heating that a negative offset causes (they improve as it worsens).
+DEFAULT_DESIGN_OUTDOOR_TEMP: Final = -15.0  # °C, dimensioning outdoor temperature (DUT/DVUT)
+DEFAULT_DESIGN_FLOW_TEMP_RADIATOR: Final = 50.0  # °C supply at DUT for radiators
+DEFAULT_DESIGN_FLOW_TEMP_UFH: Final = 35.0  # °C supply at DUT for UFH (NIBE: normally 35-45)
+DEFAULT_DESIGN_SPREAD: Final = 5.0  # °C flow-return spread at design load
+
+# Weather compensation TRIMS the pump's own curve, it does not replace it: a correctly tuned curve
+# needs a near-zero correction. This bound stops a mis-configured design point from ever
+# commanding a large swing in either direction.
+WEATHER_COMP_MAX_OFFSET: Final = 3.0  # °C, absolute cap on the compensation offset
 
 # Heat loss coefficient defaults (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
@@ -950,27 +986,49 @@ DHW_READY_THRESHOLD: Final = (
     52.0  # °C - DHW at normal target (50°C + 2°C buffer for "ready" status)
 )
 
-# Legionella Prevention (requires DHW tank immersion heater, Swedish: elpatron)
-# Boverket.se official guidelines:
-# - Legionella bacteria grow at 20-45°C (our new low-temp optimization range!)
-# - Legionella dormant below 20°C
-# - Killed at high temperatures (≥60°C)
-# - Water heaters should maintain ≥60°C to prevent bacterial growth
+# Legionella / hygiene.
 #
-# Heat pump limitation:
-# - Compressor can only reach ~50-55°C max (COP/efficiency limits)
-# - NIBE automatically engages DHW tank immersion heater to reach 60°C
-# - This is standard operation for all NIBE Legionella protection
-# - Our hygiene boost schedules this during cheapest electricity periods
+# ⚠️ EFFEKTGUARD DOES NOT PROVIDE LEGIONELLA PROTECTION. NIBE DOES.
 #
-# NOTE: DHW immersion heater (elpatron) is separate from space heating auxiliary heater.
-# They are different electrical heating systems with different purposes.
-DHW_LEGIONELLA_DETECT: Final = (
-    55.0  # °C - BT7 temp indicating Legionella boost complete (observed 55.3°C in production)
-)
-DHW_LEGIONELLA_PREVENT_TEMP: Final = (
-    56.0  # °C - Target temp for hygiene boost (kills bacteria, requires immersion heater)
-)
+# NIBE's built-in "periodic increase" function (menu 2.9.1 on F-series, 2.4 on S-series -
+# NOT 4.9.5, which is schedule blocking) is ACTIVATED FROM THE FACTORY, runs every 14 days
+# (7 on S-series), targets a stop temperature of 55 C (settable 55-70, never lower), and
+# explicitly uses "the compressor AND the immersion heater". EffektGuard cannot block it,
+# and cannot even observe it: Home Assistant's myuplink integration excludes parameters
+# 47050 (enable) and 47051 (interval) from the entities it creates.
+# Source: NIBE F750 / F730 / F1155 installer manuals, menus 2.9.1 and 5.1.1.
+#
+# Why EffektGuard's own boost CANNOT perform a Legionella cycle:
+# Temporary lux is not a setpoint - it switches the hot-water comfort mode to LUXURY for
+# 3/6/12 h, so the tank is driven to the pump's configured LUXURY STOP temperature. Factory
+# values, measured on BT6 (the CONTROL sensor): F750 54 C, F730 53 C, F1155 53 C - all BELOW
+# the 55 C floor NIBE enforces for its Legionella function. Those setpoints are
+# installer-adjustable, so their true value is UNKNOWN to us at runtime. Never hard-code it.
+#
+# NOTE: the DHW immersion heater (elpatron) is separate from the space-heating auxiliary
+# heater. Different electrical systems, different purposes.
+DHW_LEGIONELLA_DETECT: Final = 55.0
+"""°C on BT7 taken as evidence that a high-temperature cycle occurred.
+
+Unsound as proof that OUR boost completed; kept only as a best-effort observation of NIBE's
+own periodic increase:
+  - BT7 is "hot water, DISPLAY"; BT6 is "hot water, CONTROL". Every setpoint acts on BT6.
+  - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
+  - Temporary lux stops at 53-54 C on BT6, so it will not reach this threshold.
+"""
+
+DHW_LEGIONELLA_PREVENT_TEMP: Final = 56.0
+"""°C - target requested for the opportunistic high-temperature top-up.
+
+NEVER ACTUALLY WRITTEN TO NIBE: the only DHW actuator is the temporary-lux switch, and the
+pump heats to ITS OWN configured lux stop temperature, not to this value.
+"""
+
+# Days without any observed high-temperature cycle after which EffektGuard warns the user.
+# NIBE's periodic increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory, so
+# going well beyond that suggests it has been switched off on the pump. DIAGNOSTIC ONLY -
+# we warn, we do not attempt to substitute for the function (we cannot: see above).
+DHW_LEGIONELLA_OVERDUE_DAYS: Final = 21.0
 DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
@@ -990,6 +1048,14 @@ CONF_DHW_MIN_AMOUNT: Final = "dhw_min_amount"  # Config key for min hot water mi
 # Used as fallback when insufficient history for dynamic calculation
 # The dhw_optimizer uses calculate_heating_rate() for dynamic estimation from BT7 history
 DHW_DEFAULT_HEATING_RATE: Final = 14.0  # °C/hour (measured from debug log)
+
+# Plausible band for the DHW tank heating rate (°C/hour). Applied BOTH when a rate is learned
+# from BT7 history AND when one is restored from storage: an unchecked restore can load 0.0
+# (ZeroDivisionError in estimate_heating_time) or 0.1 (a 200-hour heat-up estimate, which makes
+# the scheduler panic-heat immediately at any price, forever).
+DHW_HEATING_RATE_MIN: Final = 5.0
+DHW_HEATING_RATE_MAX: Final = 25.0
+
 DHW_AMOUNT_HEATING_BUFFER: Final = 0.5  # Hours buffer for scheduling (arrive early, not late)
 
 # DHW optimal window price optimization (Phase 1 fix - Jan 2026)
@@ -1118,6 +1184,13 @@ WATTS_PER_KILOWATT: Final = 1000.0
 
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
+
+# Plausibility band for user-supplied ADDITIONAL indoor room sensors (°C).
+# These are arbitrary entities the user points us at, so a mis-scaled Modbus register or a
+# sensor that is actually measuring something else must not be averaged into the indoor
+# temperature. Applied AFTER unit conversion to °C.
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
     1.0  # °C - Write to NIBE when accumulator crosses ±1.0
 )

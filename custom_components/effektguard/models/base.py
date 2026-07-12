@@ -28,6 +28,11 @@ class HeatPumpProfile(ABC):
     - Efficiency curves (COP vs outdoor/flow temp)
     - Optimization parameters (DM thresholds, cycling protection)
     - Validation logic (verify power consumption is normal)
+
+    A profile deliberately does NOT calculate the flow temperature the house needs: that is a
+    property of the HOUSE's emitters (type, sizing, design point), which a profile describing the
+    PUMP cannot know. Flow temperature belongs to optimization/weather_layer.py, via the EN 442
+    emitter law in utils/emitter.py.
     """
 
     # Identity
@@ -69,25 +74,6 @@ class HeatPumpProfile(ABC):
     supports_exhaust_airflow: bool = False
     standard_airflow_m3h: float = 0.0  # Normal ventilation rate
     enhanced_airflow_m3h: float = 0.0  # Maximum ventilation rate
-
-    @abstractmethod
-    def calculate_optimal_flow_temp(
-        self,
-        outdoor_temp: float,
-        indoor_target: float,
-        heat_demand_kw: float,
-    ) -> float:
-        """Calculate optimal flow temperature for conditions.
-
-        Args:
-            outdoor_temp: Current outdoor temperature (°C)
-            indoor_target: Target indoor temperature (°C)
-            heat_demand_kw: Required heat output (kW)
-
-        Returns:
-            Optimal flow temperature (°C) for maximum efficiency
-        """
-        raise NotImplementedError
 
     @abstractmethod
     def validate_power_consumption(

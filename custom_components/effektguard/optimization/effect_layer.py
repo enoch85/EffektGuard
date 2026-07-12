@@ -376,6 +376,18 @@ class EffectManager:
             # No additional offset needed
             return 0.0
 
+    def prune_peaks_for_current_month(self) -> None:
+        """Drop peaks that belong to a previous month.
+
+        The effect tariff bills a MONTHLY peak, so last month's peaks must not survive into
+        this one. Must be reachable outside async_load(): an instance that stays up across a
+        month boundary would otherwise carry the old month's top-3 forward, leaving the
+        threshold, the peak_this_month sensor and the savings figure all stale.
+
+        Called on the month-change branch of the coordinator's daily rollover.
+        """
+        self._clean_old_peaks()
+
     def _clean_old_peaks(self) -> None:
         """Remove peaks from previous months."""
         now = dt_util.now()
@@ -589,9 +601,20 @@ class EffectManager:
                 weight=EFFECT_WEIGHT_CRITICAL,
                 reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
             )
-        elif predicted_margin < EFFECT_MARGIN_PREDICTIVE and predicted_power_increase > 0:
+        elif (
+            current_peak > 0
+            and predicted_margin < EFFECT_MARGIN_PREDICTIVE
+            and predicted_power_increase > 0
+        ):
             # PREDICTIVE: Will approach peak in next 15 min - act NOW
             # This is the key innovation: prevent spike before it happens
+            #
+            # Requires a peak to actually protect. On a fresh install there is no peak
+            # history, so current_peak is 0.0 and `predicted_margin = 0.0 - predicted_power`
+            # is ALWAYS negative - this branch fired on every cooling house from day one,
+            # voting -1.5 C at weight 0.85, which outranks BOTH T1 (0.65) and T2 (0.81)
+            # thermal-debt recovery. Missing input must produce abstention, never a
+            # heat-reducing vote.
             return EffectLayerDecision(
                 name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,

@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
 from ..base import HeatPumpProfile, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -67,23 +66,6 @@ class NibeF730Profile(HeatPumpProfile):
             -25: 2.0,
             -30: 1.8,
         }
-
-    def calculate_optimal_flow_temp(
-        self, outdoor_temp: float, indoor_target: float, heat_demand_kw: float
-    ) -> float:
-        """Calculate optimal flow temp for F730."""
-        heat_loss_coefficient = 150.0  # W/°C smaller house
-        temp_diff = indoor_target - outdoor_temp
-
-        flow_from_formula = (
-            KUEHNE_COEFFICIENT
-            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
-            + indoor_target
-        )
-        flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
-
-        optimal = min(flow_from_formula, flow_from_efficiency + 3.0)
-        return max(self.min_flow_temp, min(optimal, self.max_flow_temp))
 
     def validate_power_consumption(
         self, current_power_kw: float, outdoor_temp: float, flow_temp: float

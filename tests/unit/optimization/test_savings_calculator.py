@@ -190,6 +190,10 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_during_cheap_period(self):
         """Test savings when using power during cheap period."""
         calc = SavingsCalculator()
+        # These assertions are ÖRE math. The unit used to be implicit (an unknown
+        # unit silently fell back to öre); it must now be stated, because every price
+        # integration actually publishes SEK/kWh by default.
+        calc.price_unit = "öre/kWh"
 
         # 4 kW power for 5 minutes during cheap period (50 öre vs 100 öre average)
         # Energy: 4 kW × (5/60) h = 0.333 kWh
@@ -213,6 +217,10 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_during_expensive_period(self):
         """Test negative savings when using power during expensive period."""
         calc = SavingsCalculator()
+        # These assertions are ÖRE math. The unit used to be implicit (an unknown
+        # unit silently fell back to öre); it must now be stated, because every price
+        # integration actually publishes SEK/kWh by default.
+        calc.price_unit = "öre/kWh"
 
         # 4 kW power for 5 minutes during expensive period (150 öre vs 100 öre)
         # Energy: 4 kW × (5/60) h = 0.333 kWh
@@ -237,6 +245,10 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_very_cheap_period(self):
         """Test larger savings during very cheap period."""
         calc = SavingsCalculator()
+        # These assertions are ÖRE math. The unit used to be implicit (an unknown
+        # unit silently fell back to öre); it must now be stated, because every price
+        # integration actually publishes SEK/kWh by default.
+        calc.price_unit = "öre/kWh"
 
         # Very cheap: 20 öre vs 100 öre average
         savings = calc.calculate_spot_savings_per_cycle(
@@ -399,6 +411,10 @@ class TestConstantsUsage:
     def test_ore_to_sek_conversion_in_cycle_savings(self):
         """Test öre to SEK conversion uses constant."""
         calc = SavingsCalculator()
+        # These assertions are ÖRE math. The unit used to be implicit (an unknown
+        # unit silently fell back to öre); it must now be stated, because every price
+        # integration actually publishes SEK/kWh by default.
+        calc.price_unit = "öre/kWh"
         # 4 kW for 60 minutes = 4 kWh, price diff of 50 öre
         savings = calc.calculate_spot_savings_per_cycle(
             actual_power_kw=4.0,

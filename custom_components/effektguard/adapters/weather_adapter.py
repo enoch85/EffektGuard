@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
 from ..const import CONF_WEATHER_ENTITY
@@ -192,15 +193,31 @@ class WeatherAdapter:
                     )
                     # Schedule next random attempt
                     self._schedule_next_random_attempt()
-            except (AttributeError, KeyError, ValueError, TypeError, OSError) as err:
+            except (
+                HomeAssistantError,
+                AttributeError,
+                KeyError,
+                ValueError,
+                TypeError,
+                OSError,
+            ) as err:
+                # HomeAssistantError is the important one, and it was missing.
+                # weather.get_forecasts raises it (via raise_unsupported_forecast) for any
+                # entity that does not implement the requested forecast type - a daily-only
+                # weather entity, for instance. ServiceNotFound and ServiceValidationError
+                # are subclasses, so they are covered too.
+                #
+                # Current HA weather entities do not publish a `forecast` state attribute, so
+                # this service-call path runs on EVERY update: an uncaught error here escapes
+                # the coordinator and kills its refresh task, stalling EffektGuard permanently.
                 _LOGGER.warning(
                     "Failed to get forecast via service call from %s: %s. "
-                    "Weather-based optimization disabled. "
-                    "This is normal for OpenWeatherMap free tier (no OneCall 3.0 access). "
-                    "Consider switching to Met.no for free forecast access.",
+                    "Weather-based optimization disabled; the rest of the optimization "
+                    "continues. Common causes: the entity provides no hourly forecast, or "
+                    "OpenWeatherMap free tier (no OneCall 3.0 access). Met.no provides a "
+                    "free hourly forecast.",
                     self._weather_entity,
                     err,
-                    exc_info=True,
                 )
                 # Schedule next random attempt after error
                 self._schedule_next_random_attempt()

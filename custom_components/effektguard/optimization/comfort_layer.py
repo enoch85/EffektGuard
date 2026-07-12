@@ -247,11 +247,19 @@ class ComfortLayer:
                 future_temp_diff = indoor_temp - forecast_min_outdoor
                 forecast_heat_loss = future_temp_diff / (insulation * HEAT_LOSS_DIVISOR)
 
-        # Use the WORSE of current trend or forecast-based loss
-        effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)
+        # Use the WORSE of the observed cooling rate and the forecast-based loss.
+        #
+        # Only COOLING is heat loss. `indoor_rate` is a SIGNED °C/h trend, and taking its
+        # absolute value here treated a WARMING house as if it were losing heat fastest:
+        # on a sunny morning, solar gain of +0.6 °C/h became an apparent 0.6 °C/h loss,
+        # beating the modelled loss (~0.2), which shrank buffer_hours and made the layer
+        # conclude "buffer insufficient - pre-heat!" at the exact moment the house was
+        # overheating. The thermal buffer is GROWING then, not draining.
+        observed_cooling = max(-indoor_rate, 0.0)
+        effective_heat_loss = max(observed_cooling, forecast_heat_loss)
 
-        # Safety: minimum loss rate
-        if effective_heat_loss <= 0.01:
+        # Safety: never divide by a vanishing loss rate (buffer_hours would explode).
+        if effective_heat_loss <= COMFORT_HEAT_LOSS_FLOOR:
             effective_heat_loss = COMFORT_HEAT_LOSS_FLOOR
 
         # Calculate buffer duration

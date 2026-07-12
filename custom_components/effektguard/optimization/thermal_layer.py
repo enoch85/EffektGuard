@@ -39,6 +39,7 @@ from ..const import (
     DM_THRESHOLD_AUX_LIMIT,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PROACTIVE_MIN,
+    MIN_OFFSET,
     MULTIPLIER_BOOST_30_PERCENT,
     MULTIPLIER_REDUCTION_20_PERCENT,
     PROACTIVE_ZONE1_OFFSET,
@@ -234,7 +235,10 @@ class EmergencyLayerDecision:
     weight: float
     reason: str
     # Additional diagnostic fields
-    tier: str = ""  # "T1", "T2", "T3", "WARNING", "CAUTION", "OK"
+    # Authoritative discriminator for safety dispatch in the decision engine.
+    # "EMERGENCY" (DM past the aux limit), "T3", "T2", "T1", "WARNING", "CAUTION",
+    # "COOLDOWN", "ANTI_WINDUP", "OK". See const.DM_TIER_EMERGENCY / DM_RECOVERY_TIERS.
+    tier: str = ""
     degree_minutes: float = 0.0
     threshold_used: float = 0.0
     damping_applied: bool = False
@@ -319,6 +323,33 @@ class EmergencyLayer:
 
     Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
     This is the hard safety limit validated by Swedish NIBE forums.
+
+    VOLATILE-PRICE SUPPRESSION - a deliberate smoothness/recovery trade-off. Documented
+    here because its interaction with thermal debt is easy to miss:
+
+        When the current spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS
+        (45 min ~ the compressor's ramp-up plus cool-down), the recovery tiers T1/T2/T3
+        have their offset ZEROED by should_skip_volatile_boost() and their weight cut to
+        VOLATILE_WEIGHT_REDUCTION (30%).
+
+        This is INTENTIONAL. Chasing brief price windows produced jumpy offsets and
+        compressor cycling; declining a boost that cannot complete inside the window is
+        how the curve is kept smooth.
+
+        The safety cost is real, and bounded. Measured (Stockholm, -15C outdoor, DM -1400):
+            is_volatile=False -> tier T3, offset +8.5, weight 0.91
+            is_volatile=True  -> tier T3, offset +0.0, weight 0.27
+        So during a volatile run, degree minutes may keep falling rather than recovering.
+
+        What bounds it: the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of
+        evaluate_layer returns BEFORE any volatile handling, so the EMERGENCY tier is
+        never suppressed - it always emits SAFETY_EMERGENCY_OFFSET at weight 1.0, and the
+        decision engine grants that tier absolute priority over every cost layer.
+
+        Consequence to keep in mind: on a volatile day the pump may coast down to the aux
+        limit (engaging the immersion heater) instead of recovering earlier at T2/T3. If
+        field data ever shows a DM spiral that coincides with short price runs, THIS is
+        the mechanism to look at first.
     """
 
     def __init__(
@@ -620,6 +651,29 @@ class EmergencyLayer:
         temp_deviation = indoor_temp - target_temp
 
         # ========================================
+        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
+        # ========================================
+        # This check MUST come before every other branch in this method. The anti-windup
+        # cooldown, the anti-windup spiral response and the "too warm" case all return early,
+        # and any of them placed ahead of this one makes the hard limit unenforceable in
+        # precisely the situations it exists for - "too warm" trips at only tolerance_range
+        # over target, so a solar-gain morning during a debt spiral would silence it entirely.
+        #
+        # Past this threshold NIBE engages the auxiliary immersion heater. Declining to respond
+        # does not prevent that - it guarantees it.
+        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+            return EmergencyLayerDecision(
+                name="Thermal Debt",
+                offset=SAFETY_EMERGENCY_OFFSET,
+                weight=1.0,
+                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit {DM_THRESHOLD_AUX_LIMIT}",
+                tier="EMERGENCY",
+                degree_minutes=degree_minutes,
+                threshold_used=DM_THRESHOLD_AUX_LIMIT,
+                dm_rate=dm_rate,
+            )
+
+        # ========================================
         # ANTI-WINDUP: Prevent offset raises that make DM worse (Jan 2026 fix)
         # ========================================
         # Physics: Raising offset increases S1 (target), but BT25 (actual) can't catch up
@@ -667,7 +721,7 @@ class EmergencyLayer:
                     reduction = (
                         abs(dm_rate) / ANTI_WINDUP_REDUCTION_RATE_DIVISOR
                     ) * ANTI_WINDUP_REDUCTION_MULTIPLIER
-                    new_offset = max(-10.0, current_offset - reduction)  # Floor at MIN_OFFSET
+                    new_offset = max(MIN_OFFSET, current_offset - reduction)
                     reason = (
                         f"DM dropping {dm_rate:.0f}/h - reducing offset by {reduction:.1f}°C "
                         f"(from +{current_offset:.0f}°C to {new_offset:.1f}°C)"
@@ -700,8 +754,17 @@ class EmergencyLayer:
                     dm_rate=dm_rate,
                 )
 
+        # Cases 1 and 2 both reason about indoor comfort, so both require a REAL indoor
+        # reading. On a system with no room sensor the adapter reports DEFAULT_INDOOR_TEMP,
+        # which equals the usual target and therefore yields temp_deviation == 0.0 exactly.
+        # Case 2's `temp_deviation >= 0` gate would then be permanently true and the whole
+        # thermal-debt layer would return weight 0.0 - i.e. no DM protection at all, on
+        # precisely the systems that depend on DM most. Skip both and go straight to the
+        # degree-minute tiers, which is how NIBE itself runs without a room sensor.
+        indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
+
         # Case 1: Too warm (above tolerance)
-        if temp_deviation > tolerance_range:
+        if indoor_is_measured and temp_deviation > tolerance_range:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
                 offset=0.0,
@@ -713,7 +776,7 @@ class EmergencyLayer:
 
         # Case 2: At target + Not cheap (and not at absolute limit)
         # Use _is_price_cheap to check current price classification
-        if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
+        if indoor_is_measured and temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
             if not self._is_price_cheap(price_data, get_current_datetime):
                 return EmergencyLayerDecision(
                     name="Thermal Debt",
@@ -723,18 +786,6 @@ class EmergencyLayer:
                     tier="OK",
                     degree_minutes=degree_minutes,
                 )
-
-        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
-            return EmergencyLayerDecision(
-                name="Thermal Debt",
-                offset=SAFETY_EMERGENCY_OFFSET,
-                weight=1.0,
-                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit -1500",
-                tier="EMERGENCY",
-                degree_minutes=degree_minutes,
-                threshold_used=DM_THRESHOLD_AUX_LIMIT,
-            )
 
         # Calculate context-aware thresholds based on outdoor temperature
         expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)

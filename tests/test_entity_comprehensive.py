@@ -238,9 +238,8 @@ class TestSensorEntityDefinitions:
         assert len(keys) == len(set(keys)), "Duplicate sensor keys found"
 
     def test_temperature_sensors_have_correct_config(self):
-        """Verify temperature sensors have proper device class and units."""
+        """Verify ABSOLUTE temperature sensors have proper device class and units."""
         temp_sensors = [
-            "current_offset",
             "supply_temperature",
             "outdoor_temperature",
             "indoor_temperature",
@@ -251,6 +250,23 @@ class TestSensorEntityDefinitions:
                 assert sensor.device_class == SensorDeviceClass.TEMPERATURE
                 assert sensor.native_unit_of_measurement == UnitOfTemperature.CELSIUS
                 assert sensor.state_class == SensorStateClass.MEASUREMENT
+
+    def test_curve_offset_is_a_temperature_delta_not_a_temperature(self):
+        """The heating-curve offset is an INTERVAL, and must not be absolutely converted.
+
+        With device_class TEMPERATURE, Home Assistant applies absolute conversion: an
+        imperial user saw an offset of 0.0 C rendered as 32.0 F, and -2 C as 28.4 F - and
+        long-term statistics stored the converted value. TEMPERATURE_DELTA is the class HA
+        provides for exactly this, and it permits MEASUREMENT.
+        """
+        offset = next(s for s in SENSORS if s.key == "current_offset")
+
+        assert offset.device_class == SensorDeviceClass.TEMPERATURE_DELTA, (
+            "current_offset is a temperature DELTA. Declaring it TEMPERATURE makes HA "
+            "convert it absolutely - 0 C becomes 32 F for any non-metric user."
+        )
+        assert offset.native_unit_of_measurement == UnitOfTemperature.CELSIUS
+        assert offset.state_class == SensorStateClass.MEASUREMENT
 
     def test_power_sensors_have_correct_config(self):
         """Verify power sensors have proper device class and units."""

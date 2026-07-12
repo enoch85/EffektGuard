@@ -64,7 +64,7 @@ boost_dhw:
       selector:
         number:
           min: 40.0
-          max: 70.0
+          max: 65.0
           step: 1.0
           unit_of_measurement: "°C"
     duration:

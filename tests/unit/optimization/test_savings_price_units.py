@@ -18,13 +18,48 @@ from custom_components.effektguard.optimization.savings_calculator import Saving
         ("cent/kWh", 0.01),
         ("SEK/kWh", 1.0),
         ("EUR/kWh", 1.0),
-        (None, 0.01),  # unknown: legacy öre assumption, logged once
     ],
 )
 def test_price_unit_factor(unit, factor):
     calc = SavingsCalculator()
     calc.price_unit = unit
     assert calc.price_to_main_unit_factor() == pytest.approx(factor)
+
+
+@pytest.mark.parametrize("unit", [None, "", "widgets/kWh"])
+def test_unknown_unit_refuses_to_guess(unit):
+    """An unrecognised unit must yield None, not the legacy öre assumption.
+
+    Every price integration publishes `<currency>/kWh` by DEFAULT - Nord Pool (HA core) has
+    no cents option at all, and both custom-components/nordpool and GE-Spot emit SEK/kWh
+    unless the user opts into a subunit display. So the old öre fallback was 100x wrong
+    against all three, and it fired whenever `price_unit` was None - which it is until the
+    first successful price read.
+    """
+    calc = SavingsCalculator()
+    calc.price_unit = unit
+
+    assert calc.price_to_main_unit_factor() is None, (
+        "An unknown price unit was guessed as öre/kWh. Against a SEK/kWh feed that "
+        "overstates savings by 100x. Skip the figure instead of fabricating one."
+    )
+
+
+def test_unknown_unit_reports_no_savings_rather_than_a_wrong_number():
+    calc = SavingsCalculator()
+    calc.price_unit = None
+
+    savings = calc.calculate_spot_savings_per_cycle(
+        actual_power_kw=12.0,  # 12 kW for 5 min = 1 kWh
+        cycle_minutes=5.0,
+        current_price=1.0,
+        average_price_today=2.0,
+    )
+
+    assert savings == 0.0, (
+        "With an unknown unit this used to return 0.01 SEK (the öre assumption) for what "
+        "is really a 1.00 SEK saving - or 100x too much the other way. Report nothing."
+    )
 
 
 def test_sek_per_kwh_not_divided_by_100():

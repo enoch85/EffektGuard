@@ -6,7 +6,6 @@ Based on NIBE official specifications and Swedish forum validation.
 
 from dataclasses import dataclass
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
 from ..base import HeatPumpProfile, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -94,45 +93,6 @@ class NibeF750Profile(HeatPumpProfile):
             -25: 2.0,  # Extreme cold (Kiruna)
             -30: 1.8,  # Survival mode (rare extreme)
         }
-
-    def calculate_optimal_flow_temp(
-        self,
-        outdoor_temp: float,
-        indoor_target: float,
-        heat_demand_kw: float,
-    ) -> float:
-        """Calculate optimal flow temperature for F750.
-
-        Uses André Kühne's universal formula validated across manufacturers
-        combined with F750-specific efficiency targets.
-
-        Args:
-            outdoor_temp: Current outdoor temperature (°C)
-            indoor_target: Target indoor temperature (°C)
-            heat_demand_kw: Required heat output (kW)
-
-        Returns:
-            Optimal flow temperature (°C) for maximum efficiency
-        """
-        # André Kühne formula (validated universal formula)
-        # Source: Mathematical_Enhancement_Summary.md
-        heat_loss_coefficient = 180.0  # W/°C typical Swedish house
-        temp_diff = indoor_target - outdoor_temp
-
-        flow_from_formula = (
-            KUEHNE_COEFFICIENT
-            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
-            + indoor_target
-        )
-
-        # F750 efficiency target: outdoor + 27°C for SPF 4.0+
-        flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
-
-        # Return lower value (more efficient while meeting demand)
-        optimal = min(flow_from_formula, flow_from_efficiency + 3.0)
-
-        # Clamp to F750 limits
-        return max(self.min_flow_temp, min(optimal, self.max_flow_temp))
 
     def validate_power_consumption(
         self,
