@@ -184,18 +184,25 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update.
+    """Handle a config-entry update by hot-reloading the runtime settings.
 
-    Called when entry.options changes (from options flow UI).
-    Entity selections are in entry.data and don't trigger this listener.
+    Hot-reloading (rather than tearing the entry down) is what preserves:
+    - the startup grace period, whose reset would block offset application
+    - the entities, which would otherwise be recreated and flicker
+    - accumulated state: compressor stats, trends, the thermal predictor
 
-    Since our options flow only contains runtime settings (target temp, tolerance,
-    thermal mass, DHW schedules, etc.), we can always hot-reload without restart.
+    This listener fires on ANY change to the entry, not only on `entry.options`.
+    Home Assistant's `async_update_entry` notifies listeners whenever the entry
+    changed at all - it does not discriminate between `data` and `options` - and
+    `switch.py` writes feature flags straight into `entry.data`. (This docstring
+    used to assert the opposite, and reason from it; audit F-075.)
 
-    This prevents:
-    - Startup grace period reset (which blocks offset application)
-    - Screen flickering from entity recreation
-    - Lost state (compressor stats, trends, thermal predictor)
+    Handling only the runtime settings here is nonetheless correct:
+    - the switch flags are read from `entry.data` at the point of use, so they
+      take effect without anything being done here;
+    - entity selections change through the reconfigure flow, which calls
+      `async_update_reload_and_abort` and schedules a FULL reload - so the
+      adapters, which are built from `entry.data` at setup, are rebuilt.
     """
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if not coordinator:
@@ -232,11 +239,10 @@ async def _create_coordinator(
     nibe_adapter = NibeAdapter(hass, entry.data)
     gespot_adapter = GESpotAdapter(hass, entry.data)
 
-    # Weather adapter: check options first, fall back to data
-    weather_config = dict(entry.data)
-    if "weather_entity" in entry.options:
-        weather_config["weather_entity"] = entry.options["weather_entity"]
-    weather_adapter = WeatherAdapter(hass, weather_config)
+    # Weather adapter. `weather_entity` is only ever written to entry.data - by the config flow and
+    # by the reconfigure flow - never to entry.options, so the "check options first" branch that
+    # used to be here was dead code (audit F-075).
+    weather_adapter = WeatherAdapter(hass, dict(entry.data))
 
     # Create optimization components
     price_analyzer = PriceAnalyzer()
