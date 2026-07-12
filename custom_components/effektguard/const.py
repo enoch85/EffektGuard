@@ -1155,14 +1155,11 @@ AIRFLOW_EVAPORATOR_TEMP_DROP: Final = 12.0  # °C typical temperature drop throu
 AIRFLOW_DEFAULT_STANDARD: Final = 150.0  # m³/h - Normal ventilation
 AIRFLOW_DEFAULT_ENHANCED: Final = 252.0  # m³/h - Maximum ventilation
 
-# COP improvement from enhanced airflow
-# More air → warmer evaporator → better COP
-# Empirically ~20% improvement at enhanced flow
-AIRFLOW_COP_IMPROVEMENT_FACTOR: Final = 1.20  # 20% COP improvement
-AIRFLOW_BASE_COP: Final = 3.3  # Typical NIBE F750 COP
-
-# Compressor input power for benefit calculations
-AIRFLOW_COMPRESSOR_INPUT_KW: Final = 2.0  # kW typical compressor electrical input
+# The airflow COP-improvement constants that lived here are gone with the term that used them.
+# Extracting more heat from more air and "improving the COP" are the same joules: at constant
+# electrical input the first law gives d(Q_cond) = d(Q_evap) = P_el * d(COP). Adding both counted
+# the heat twice, and made a net thermal LOSS look like a gain across the whole heating season.
+# See optimization/airflow_optimizer.py.
 
 # Temperature thresholds
 AIRFLOW_OUTDOOR_TEMP_MIN: Final = -15.0  # °C - Never enhance below this (penalty exceeds gains)

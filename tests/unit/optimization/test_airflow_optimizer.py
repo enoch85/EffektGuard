@@ -111,17 +111,20 @@ class TestCompressorThresholds:
 class TestNetThermalGain:
     """Test net thermal gain calculations."""
 
-    def test_positive_gain_at_moderate_temp(self):
-        """Should have positive gain at 0°C outdoor."""
+    def test_net_loss_at_moderate_temp(self):
+        """A net LOSS at 0 C outdoor. The old expectation of ~+0.9 kW was a double-count.
+
+        The evaporator recovers AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air; the building has
+        to reheat that air the whole way from 0 C to 21 C. See test_airflow_energy_balance.py.
+        """
         gain = calculate_net_thermal_gain(
             flow_standard=AIRFLOW_DEFAULT_STANDARD,
             flow_enhanced=AIRFLOW_DEFAULT_ENHANCED,
             temp_indoor=21.0,
             temp_outdoor=0.0,
         )
-        # Per documentation: ~0.9 kW at 0°C
-        assert gain > 0
-        assert 0.5 < gain < 1.5
+        assert gain < 0
+        assert -0.5 < gain < -0.1
 
     def test_higher_gain_at_warm_temp(self):
         """Should have higher gain at +10°C outdoor."""
@@ -134,22 +137,27 @@ class TestNetThermalGain:
         # Warmer = less ventilation penalty = more gain
         assert gain_warm > gain_cold
 
-    def test_reduced_gain_at_cold_temp(self):
-        """Should have reduced gain at -10°C outdoor."""
+    def test_deeper_loss_at_cold_temp(self):
+        """The loss DEEPENS as it gets colder - colder air is more expensive to reheat."""
         gain = calculate_net_thermal_gain(
             AIRFLOW_DEFAULT_STANDARD, AIRFLOW_DEFAULT_ENHANCED, 21.0, -10.0
         )
-        # Per documentation: ~0.4 kW at -10°C
-        assert 0.2 < gain < 0.8
+        assert -1.0 < gain < -0.4
 
 
 class TestEvaluateAirflow:
     """Test airflow decision evaluation."""
 
-    def test_enhance_at_optimal_conditions(self):
-        """Should recommend enhancement at ideal conditions."""
+    def test_enhance_above_break_even(self):
+        """Enhancement pays only ABOVE break-even (indoor - evaporator drop, about +9 C).
+
+        0 C outdoor used to satisfy this test because the net gain double-counted the evaporator
+        heat as a COP improvement. Below break-even the building must reheat every extra cubic
+        metre from outdoor to indoor while the evaporator recovers only its own temperature drop
+        from it, so enhancing is a net thermal LOSS.
+        """
         state = ThermalState(
-            temp_outdoor=0.0,
+            temp_outdoor=12.0,  # above break-even
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
@@ -161,6 +169,21 @@ class TestEvaluateAirflow:
         assert decision.duration_minutes > 0
         assert decision.expected_gain_kw > 0
         assert "beneficial" in decision.reason.lower()
+
+    def test_refuse_to_enhance_during_the_heating_season(self):
+        """At 0 C the extra air costs more to reheat than the evaporator recovers from it."""
+        state = ThermalState(
+            temp_outdoor=0.0,
+            temp_indoor=20.5,
+            temp_target=21.0,
+            compressor_pct=80.0,
+            trend_indoor=-0.1,
+        )
+        decision = evaluate_airflow(state)
+
+        assert decision.mode == FlowMode.STANDARD
+        assert decision.expected_gain_kw < 0
+        assert decision.duration_minutes == 0
 
     def test_no_enhance_outdoor_too_cold(self):
         """Should not enhance when outdoor temp too low."""
@@ -252,10 +275,10 @@ class TestShouldEnhanceAirflow:
         assert isinstance(result[0], bool)
         assert isinstance(result[1], int)
 
-    def test_enhance_true_at_optimal_conditions(self):
-        """Should return True at ideal conditions."""
+    def test_enhance_true_above_break_even(self):
+        """Enhancement pays only above break-even (about +9 C), not at 0 C."""
         should_enhance, duration = should_enhance_airflow(
-            temp_outdoor=0.0,
+            temp_outdoor=12.0,
             temp_indoor=20.5,
             temp_target=21.0,
             compressor_pct=80.0,
@@ -331,9 +354,9 @@ class TestAirflowOptimizer:
 
         # Make several evaluations
         for _ in range(5):
-            optimizer.evaluate(0.0, 20.5, 21.0, 80.0, -0.1)  # Should enhance (valid trend)
+            optimizer.evaluate(12.0, 20.5, 21.0, 80.0, -0.1)  # Enhances: above break-even
         for _ in range(5):
-            optimizer.evaluate(-20.0, 20.0, 21.0, 80.0, 0.0)  # Should not enhance (too cold)
+            optimizer.evaluate(-20.0, 20.0, 21.0, 80.0, 0.0)  # Does not: too cold
 
         stats = optimizer.get_enhancement_stats()
 
@@ -458,9 +481,9 @@ class TestEdgeCases:
         assert decision.mode == FlowMode.STANDARD
 
     def test_100_compressor_pct(self):
-        """Test with 100% compressor percentage."""
+        """Test with 100% compressor percentage, above break-even."""
         state = ThermalState(
-            temp_outdoor=0.0,
+            temp_outdoor=12.0,
             temp_indoor=20.0,
             temp_target=21.0,
             compressor_pct=100.0,  # Full power

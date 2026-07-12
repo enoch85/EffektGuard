@@ -5,18 +5,27 @@ Original work based on thermodynamic first principles.
 Calculates optimal airflow rates for exhaust air heat pump systems.
 
 Physics basis:
-- Heat extraction: Q = ṁ × cp × ΔT
-- COP relationship: COP ∝ T_evap / (T_cond - T_evap)
-- Energy balance: Net gain = Heat gain - Ventilation penalty
+- Heat extraction:  Q = ṁ × cp × ΔT
+- Ventilation cost: the building must reheat every extra cubic metre from outdoor to indoor
+- Energy balance:   Q_cond = P_el + Q_evap, so d(Q_cond) = d(Q_evap) = P_el × d(COP) at constant
+                    electrical input. The extra extraction and the "COP improvement" are the same
+                    joules; only one of them may be counted.
 
-When Enhanced Airflow Helps:
-| Outdoor °C | Min Compressor % | Expected Gain |
-|------------|-----------------|---------------|
-| +10        | 50%             | +1.3 kW       |
-| 0          | 50%             | +0.9 kW       |
-| -5         | 62%             | +0.7 kW       |
-| -10        | 75%             | +0.4 kW       |
-| < -15      | Don't enhance   | Negative      |
+Net gain = (extra heat extracted) - (extra air to reheat), and it turns negative below an outdoor
+temperature of (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP):
+
+| Outdoor °C | Net gain |
+|------------|----------|
+| +15        | +0.22 kW |
+| +12        | +0.12 kW |
+| +9         |   0.00   |  <- break-even
+| +5         | -0.14 kW |
+| 0          | -0.29 kW |
+| -10        | -0.65 kW |
+
+Enhancement therefore pays only in mild weather, and is a net thermal LOSS across the Swedish
+heating season. The evaporator recovers only AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air while
+the building has to warm all of it the whole way.
 
 Author: Original work
 License: MIT
@@ -31,11 +40,8 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from ..const import (
     AIRFLOW_AIR_DENSITY,
-    AIRFLOW_BASE_COP,
     AIRFLOW_COMPRESSOR_BASE_THRESHOLD,
-    AIRFLOW_COMPRESSOR_INPUT_KW,
     AIRFLOW_COMPRESSOR_SLOPE,
-    AIRFLOW_COP_IMPROVEMENT_FACTOR,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
     AIRFLOW_DEFICIT_LARGE_THRESHOLD,
@@ -155,60 +161,56 @@ def evaporator_heat_extraction(
     return m_dot * AIRFLOW_SPECIFIC_HEAT * temp_drop
 
 
-def estimate_cop_improvement(base_cop: float = AIRFLOW_BASE_COP) -> float:
-    """Estimate COP with enhanced airflow.
-
-    More air → warmer evaporator → better COP.
-    Empirically ~20% improvement at enhanced flow.
-
-    Args:
-        base_cop: Base COP without enhancement
-
-    Returns:
-        Enhanced COP
-    """
-    return base_cop * AIRFLOW_COP_IMPROVEMENT_FACTOR
-
-
 def calculate_net_thermal_gain(
     flow_standard: float,
     flow_enhanced: float,
     temp_indoor: float,
     temp_outdoor: float,
-    compressor_input_kw: float = AIRFLOW_COMPRESSOR_INPUT_KW,
 ) -> float:
     """Calculate net thermal gain from enhanced airflow (kW).
 
-    Net Benefit = (Extra heat extracted) + (COP improvement) - (Ventilation penalty)
+    Net gain = (extra heat extracted at the evaporator) - (extra air the building must reheat)
+
+    There is no third term. Extracting more heat from more air and "improving the COP" are not two
+    benefits; they are the same joules described twice. The first law, in steady state, gives
+
+        Q_cond = P_el + Q_evap
+
+    and differentiating at constant electrical input gives
+
+        d(Q_cond) = d(Q_evap) = P_el * d(COP)
+
+    - an identity. Adding `P_el * d(COP)` to `d(Q_evap)` counts the same heat a second time.
+
+    NIBE's S735 manual publishes four points at identical conditions (A20(12)W35, minimum
+    compressor frequency) with exhaust airflow as the only variable. Over the 90 -> 252 m³/h step
+    the measured heat-output rise is +0.410 kW, P_el*dCOP is +0.387 kW, and dQ_evap is +0.404 kW.
+    One number, three ways.
+
+    Consequence: enhancement pays only above an outdoor temperature of
+    (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP), around +9 °C. The evaporator recovers only
+    AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air, while the building must reheat every cubic
+    metre of it all the way from outdoor to indoor. Below break-even - which is the whole Swedish
+    heating season - enhancing is a net thermal LOSS, and this returns negative accordingly.
 
     Args:
         flow_standard: Standard airflow rate in m³/h
         flow_enhanced: Enhanced airflow rate in m³/h
         temp_indoor: Indoor temperature in °C
         temp_outdoor: Outdoor temperature in °C
-        compressor_input_kw: Compressor electrical input in kW
 
     Returns:
         Net thermal gain in kW (positive = beneficial to enhance)
     """
-    # Additional heat extraction
     q_extract_std = evaporator_heat_extraction(flow_standard)
     q_extract_enh = evaporator_heat_extraction(flow_enhanced)
     delta_extraction = q_extract_enh - q_extract_std
 
-    # COP improvement benefit
-    cop_std = AIRFLOW_BASE_COP
-    cop_enh = estimate_cop_improvement(cop_std)
-    heat_output_std = compressor_input_kw * cop_std
-    heat_output_enh = compressor_input_kw * cop_enh
-    delta_cop_benefit = heat_output_enh - heat_output_std
-
-    # Ventilation penalty
     loss_std = ventilation_heat_loss(flow_standard, temp_indoor, temp_outdoor)
     loss_enh = ventilation_heat_loss(flow_enhanced, temp_indoor, temp_outdoor)
     delta_penalty = loss_enh - loss_std
 
-    return delta_extraction + delta_cop_benefit - delta_penalty
+    return delta_extraction - delta_penalty
 
 
 def minimum_compressor_threshold(temp_outdoor: float) -> float:
