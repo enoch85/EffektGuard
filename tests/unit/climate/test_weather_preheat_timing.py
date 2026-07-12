@@ -13,7 +13,7 @@ from custom_components.effektguard.optimization.weather_layer import (
 from custom_components.effektguard.const import (
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
-    WEATHER_GENTLE_OFFSET,
+    WEATHER_PREHEAT_OFFSET,
     LAYER_WEIGHT_WEATHER_PREDICTION,
     WEATHER_WEIGHT_CAP,
     WEATHER_FORECAST_HORIZON,
@@ -75,7 +75,7 @@ class TestWeatherPredictionLayer:
 
         decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
-        assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
+        assert decision.offset == pytest.approx(WEATHER_PREHEAT_OFFSET)
         assert decision.weight > 0.0
         assert "forecast" in decision.reason.lower()
         assert "drop" in decision.reason.lower()
@@ -93,7 +93,7 @@ class TestWeatherPredictionLayer:
 
         decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
-        assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
+        assert decision.offset == pytest.approx(WEATHER_PREHEAT_OFFSET)
         assert decision.weight > 0.0
         assert "indoor cooling" in decision.reason.lower()
 
@@ -113,7 +113,7 @@ class TestWeatherPredictionLayer:
 
         decision = weather_layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
 
-        assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
+        assert decision.offset == pytest.approx(WEATHER_PREHEAT_OFFSET)
         assert decision.weight > 0.0
         assert "confirmed" in decision.reason.lower()
 

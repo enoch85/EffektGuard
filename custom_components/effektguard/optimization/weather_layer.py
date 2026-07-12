@@ -46,7 +46,7 @@ from ..const import (
     WEATHER_COMP_MAX_OFFSET,
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_FORECAST_HORIZON,
-    WEATHER_GENTLE_OFFSET,
+    WEATHER_PREHEAT_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
     WEATHER_WEIGHT_CAP,
 )
@@ -707,7 +707,7 @@ class WeatherPredictionLayer:
 
             return WeatherLayerDecision(
                 name="Weather Pre-heat",
-                offset=WEATHER_GENTLE_OFFSET,  # Constant +0.5°C (simple, predictable)
+                offset=WEATHER_PREHEAT_OFFSET,  # Constant +0.5°C (simple, predictable)
                 weight=weather_weight,
                 reason=trigger,
             )

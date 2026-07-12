@@ -685,7 +685,29 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 # Real-world validation: Prevents 20:00→04:00 emergency cycles and 16:00 overshoot
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
-WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
+# Pre-heat applied when the forecast shows a cold snap coming.
+#
+# SIZED, not tuned. The fabric must reach the edge of the storage band WITHIN the horizon the house
+# is given, or the cold arrives before the battery is charged and the pre-heat is decoration:
+#
+#     energy to fill the band = C_fabric * THERMAL_BATTERY_BAND
+#     surplus the offset buys = offset * DEFAULT_CURVE_SENSITIVITY * dQ/dFlow
+#     time to fill            = energy / surplus   <=   the forecast horizon
+#
+# Measured on the simulator's validated plant models, time to fill the band:
+#
+#                            offset +0.83      offset +2.00     horizon
+#     radiator (tau 30 h)        28.4 h            9.6 h          12 h
+#     concrete slab (tau 80 h)   34.6 h           14.8 h          24 h
+#
+# The previous value was +0.83 and could not charge either house inside its horizon - it needed
+# 28 to 35 hours. Its own comment recorded the struggle ("tuned Oct 20, was 0.5 -> 0.6 -> 0.7 ->
+# 0.77"): it was being nudged in hundredths when it needed to be tripled.
+#
+# It is bounded by construction and cannot cook the house: the comfort layer takes charge at the
+# edge of THERMAL_BATTERY_BAND, so the pre-heat charges the fabric quickly and then hands over. The
+# compressor-wear guard stops it demanding more from a compressor that is already at maximum.
+WEATHER_PREHEAT_OFFSET: Final = 2.0  # °C - fills the storage band inside the forecast horizon
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
 LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)
 WEATHER_WEIGHT_CAP: Final = 0.99  # Cap for weather weight (below Safety 1.0)

@@ -145,7 +145,7 @@ from const import (
     MIN_TEMP_LIMIT,
     WEATHER_FORECAST_DROP_THRESHOLD,
     WEATHER_FORECAST_HORIZON,
-    WEATHER_GENTLE_OFFSET,
+    WEATHER_PREHEAT_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
     PEAK_AWARE_EFFECT_THRESHOLD,
     PEAK_AWARE_EFFECT_WEIGHT_MIN,
@@ -705,7 +705,7 @@ class ScenarioTester:
         """Calculate simplified weather prediction layer (Oct 20, 2025).
 
         Simple proactive pre-heating using constants from const.py:
-        - Forecast ≥WEATHER_FORECAST_DROP_THRESHOLD → +WEATHER_GENTLE_OFFSET
+        - Forecast ≥WEATHER_FORECAST_DROP_THRESHOLD → +WEATHER_PREHEAT_OFFSET
         - Weight scaled by thermal mass (concrete: 1.275x, timber: 0.85x, radiator: 0.425x)
 
         Args:
@@ -723,8 +723,8 @@ class ScenarioTester:
 
         # Trigger threshold from const.py: WEATHER_FORECAST_DROP_THRESHOLD
         if temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD:
-            # Use constant from const.py: WEATHER_GENTLE_OFFSET
-            offset = WEATHER_GENTLE_OFFSET
+            # Use constant from const.py: WEATHER_PREHEAT_OFFSET
+            offset = WEATHER_PREHEAT_OFFSET
 
             # Weight scaled by thermal mass configuration
             weather_weight = min(
