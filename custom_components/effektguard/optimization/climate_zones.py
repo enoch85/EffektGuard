@@ -211,14 +211,19 @@ class ClimateZoneDetector:
         Base DM expectations come from climate zone, then adjust based on how much
         colder/warmer current temperature is compared to zone's winter average.
 
-        EXAMPLES:
-        - Kiruna (Extreme Cold, winter avg -30°C):
-          * At -30°C: DM -800 to -1200 is normal
-          * At -20°C: DM -600 to -1000 is normal (10°C warmer = shallower)
+        EXAMPLES (computed, not remembered - check them against the code if you change it):
+        - Kiruna (Extreme Cold, winter avg -20°C):
+          * At -30°C: DM -1000 to -1400 is normal
+          * At -20°C: DM  -800 to -1200 is normal (at the zone average, so the base range)
 
-        - Stockholm (Cold, winter avg -10°C):
-          * At -10°C: DM -450 to -700 is normal
-          * At 0°C: DM -250 to -450 is normal (10°C warmer = shallower)
+        - Stockholm (Cold, winter avg -8°C):
+          * At -10°C: DM -490 to -740 is normal
+          * At   0°C: DM -290 to -540 is normal (8°C warmer than average = shallower)
+
+        This docstring previously cited -800/-1200 for Kiruna at -30°C and -450/-700 for
+        Stockholm at -10°C - the BASE ranges, i.e. the values before the temperature
+        adjustment this very method applies. docs/CLIMATE_ZONES.md repeated them, and every
+        one of its seventeen rows was wrong as a result.
 
         Args:
             outdoor_temp: Current outdoor temperature (°C)
