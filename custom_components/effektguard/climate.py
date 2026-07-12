@@ -40,6 +40,13 @@ from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+# This entity DRIVES THE HEAT PUMP: async_set_hvac_mode reaches set_optimization_enabled(), which
+# calls async_refresh_and_apply() -> _drive_the_pump(). Home Assistant defaults a coordinator-based
+# integration to 0 (unlimited concurrent service calls); 1 makes HA serialise them. The control lock
+# in _drive_the_pump already serialises the write itself, so this is belt-and-braces - and it says
+# out loud that this entity touches hardware.
+PARALLEL_UPDATES = 1
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

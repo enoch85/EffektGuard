@@ -33,6 +33,10 @@ from .models import HeatPumpModelRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
+# The switches write feature flags into entry.data. They do not reach the pump - the coordinator
+# reads those flags at the point of use, on its own clock.
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class EffektGuardSwitchEntityDescription(SwitchEntityDescription):

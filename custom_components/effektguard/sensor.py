@@ -34,6 +34,9 @@ from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+# Read-only: every sensor serves the coordinator's last decision. Nothing here reaches the pump.
+PARALLEL_UPDATES = 0
+
 
 @dataclass(frozen=True, kw_only=True)
 class EffektGuardSensorEntityDescription(SensorEntityDescription):

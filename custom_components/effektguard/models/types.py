@@ -86,3 +86,43 @@ class AdapterConfigDict(TypedDict, total=False):
     return_temp_entity: str
     dhw_temp_entity: str
     dhw_charging_temp_entity: str
+
+
+class DiagnosticsLayerDict(TypedDict):
+    """One layer's vote in the decision that was made."""
+
+    name: str | None
+    offset: float | None
+    weight: float | None
+    reason: str | None
+
+
+class DiagnosticsDecisionDict(TypedDict, total=False):
+    """The offset commanded, and the votes behind it."""
+
+    offset: float | None
+    reasoning: str | None
+    is_emergency: bool | None
+    is_manual_override: bool | None
+    anti_windup_active: bool | None
+    layers: list[DiagnosticsLayerDict]
+
+
+class DiagnosticsDict(TypedDict, total=False):
+    """What a bug report about this heat pump needs to contain.
+
+    The decision, the state it was made from, the degree-minute band actually in force, and whether
+    the price and weather sources were even live. NOT the home's coordinates: the decision engine
+    holds the latitude (it is how the climate zone is detected) and this file gets pasted into
+    public issue trackers. The climate ZONE goes in instead - it is what the thresholds derive
+    from, and it identifies nobody.
+    """
+
+    error: str
+    config: dict[str, object]
+    sources: dict[str, str]
+    nibe: dict[str, object]
+    decision: DiagnosticsDecisionDict
+    dm_thresholds: dict[str, object]
+    compressor_risk: str | None
+    peaks: dict[str, object]
