@@ -148,6 +148,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Compressor health monitoring (Oct 19, 2025)
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
+        # The monitor's verdict, fed to the decision engine. Its own risk ladder was computed and
+        # written to a debug log; nothing consumed it, and the engine stayed free to demand +10
+        # from a compressor already at maximum.
+        self.compressor_risk: str | None = None
         self.compressor_stats = None  # Latest CompressorStats from monitor
 
         # DHW temporary lux entity (stored once, reused everywhere)
@@ -800,11 +804,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.compressor_stats = self.compressor_monitor.update(
                     nibe_data.compressor_hz, nibe_data.timestamp, heating_mode
                 )
-                # Log compressor diagnostics at debug level
                 if self.compressor_stats:
+                    # This is a CONTROL INPUT, not a log line. A compressor that has been at
+                    # maximum frequency for a quarter of an hour has nothing left to give, and
+                    # asking it for more heat buys only wear and a deeper DM deficit.
                     risk_level, risk_reason = self.compressor_monitor.assess_risk(
                         self.compressor_stats
                     )
+                    self.compressor_risk = risk_level
                     _LOGGER.debug(
                         "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f, mode: %s) - %s: %s",
                         self.compressor_stats.current_hz,
@@ -989,6 +996,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power_for_decision,  # Current whole-house power consumption
                     dhw_is_active,  # DHW heating active - skip weather comp
                     self.dhw_heating_end,  # When DHW last stopped - for cooldown
+                    self.compressor_risk,  # Do not ask a saturated compressor for more heat
                 )
 
                 # Startup grace period: lockout + observation cycles

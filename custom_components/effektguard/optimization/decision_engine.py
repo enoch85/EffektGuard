@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPRESSOR_RISK_HIGH,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_THERMAL_MASS,
@@ -437,6 +438,7 @@ class DecisionEngine:
         current_power: float,
         temp_lux_active: bool = False,
         dhw_heating_end: datetime | None = None,
+        compressor_risk: str | None = None,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -715,8 +717,20 @@ class DecisionEngine:
 
         final_offset = raw_offset * damping_factor
 
+        # An ABSOLUTE safety path outranks the wear guard: a house below MIN_TEMP_LIMIT, or degree
+        # minutes past the pump's aux-start, gets everything the machine has. Wear is a cost;
+        # a cold house is a failure.
+        is_emergency = (
+            safety_decision.weight >= LAYER_WEIGHT_SAFETY
+            or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
+        )
+
+        final_offset, wear_note = self._limit_for_compressor_wear(
+            final_offset, nibe_state, compressor_risk, is_emergency
+        )
+
         # Generate human-readable reasoning
-        reasoning = self._generate_reasoning(layers) + reason_suffix
+        reasoning = self._generate_reasoning(layers) + reason_suffix + wear_note
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
 
@@ -727,16 +741,10 @@ class DecisionEngine:
         # The volatile blocker must not block this safety-critical reduction.
         anti_windup = getattr(emergency_decision, "anti_windup_active", False)
 
-        # Flag decisions produced by an ABSOLUTE safety path so the coordinator's
-        # offset-volatility blocker does not defer them. That blocker damps price-driven
-        # flip-flopping; deferring an aux-limit recovery for 45 minutes lets DM keep
-        # falling while the immersion heater runs.
-        # `tier` is read defensively: the emergency layer always returns an
-        # EmergencyLayerDecision in production, but tests substitute a plain LayerDecision.
-        is_emergency = (
-            safety_decision.weight >= LAYER_WEIGHT_SAFETY
-            or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
-        )
+        # `is_emergency` was computed above, before the wear guard, so that the guard could stand
+        # aside for it. It also tells the coordinator's offset-volatility blocker not to defer this
+        # decision: that blocker damps price-driven flip-flopping, and deferring an aux-limit
+        # recovery for 45 minutes lets DM keep falling while the immersion heater runs.
 
         return OptimizationDecision(
             offset=final_offset,
@@ -795,6 +803,49 @@ class DecisionEngine:
                 weight=0.0,
                 reason="OK",
             )
+
+    @staticmethod
+    def _limit_for_compressor_wear(
+        offset: float,
+        nibe_state,
+        compressor_risk: str | None,
+        is_emergency: bool,
+    ) -> tuple[float, str]:
+        """Decline to ask a saturated compressor for more heat. Never ask it for less.
+
+        The offset works by raising the pump's calculated supply setpoint, S1. That only produces
+        heat while the compressor has frequency left to give. Above 100 Hz for a quarter of an hour
+        it has none: the setpoint goes up, the compressor cannot follow, and all that is bought is
+
+          * wear, from holding the machine at full frequency longer than it needs to be, and
+          * a DEEPER degree-minute deficit, because DM = integral(BT25 - S1) and S1 just rose while
+            BT25 could not (audit F-124).
+
+        The auxiliary heater exists for precisely this moment - NIBE sets "start addition" where it
+        does (menu 4.9.3) so the compressor need not grind at maximum for hours. Refusing its help
+        by demanding more from a saturated compressor trades cheap kWh for expensive compressor.
+
+        This costs no comfort, and that is forced rather than argued: the extra offset was not
+        producing heat, so declining to ask for it cannot take any away. It HOLDS the offset at what
+        the pump is already being asked for; it never reduces it, and the absolute safety paths
+        (indoor below MIN_TEMP_LIMIT, the aux-limit emergency) return before this is ever reached.
+        """
+        if is_emergency or compressor_risk != COMPRESSOR_RISK_HIGH:
+            return offset, ""
+
+        held = min(offset, nibe_state.current_offset)
+        if held >= offset:
+            return offset, ""
+
+        _LOGGER.info(
+            "Compressor saturated (%s): holding offset at %.2f°C instead of %.2f°C. A higher "
+            "setpoint buys no heat from a compressor already at maximum - only wear and a deeper "
+            "DM deficit. The auxiliary heater is what adds heat here.",
+            compressor_risk,
+            held,
+            offset,
+        )
+        return held, f" | Compressor at maximum: holding {held:+.1f}°C (asked {offset:+.1f}°C)"
 
     @staticmethod
     def _clamp_offset(offset: float) -> float:

@@ -1449,6 +1449,23 @@ POWER_MULTIPLIER_MILD: Final = 1.0  # >0°C
 # - 50 Hz (mid): ~3.5-4.5 kW
 # - 80 Hz (normal max): ~6.0-7.0 kW
 # - 100-120 Hz (emergency/max): Higher output, reduced efficiency
+# Compressor stress levels, as reported by CompressorHealthMonitor.assess_risk().
+#
+# HIGH means the compressor has been above 100 Hz for more than fifteen minutes: it is at maximum
+# capacity and has nothing left to give. Asking it for more heat by raising the curve offset
+# produces NONE - the offset raises the calculated supply setpoint S1, and the compressor cannot
+# follow it. What it does produce is wear, and a DEEPER degree-minute deficit, because
+# DM = integral(BT25 - S1) and S1 just went up while BT25 could not.
+#
+# The auxiliary heater exists for exactly this moment: NIBE places "start addition" where it does
+# (menu 4.9.3) so the compressor need not grind at full frequency for hours. Declining its help by
+# demanding more from a saturated compressor trades cheap kWh for expensive compressor life.
+COMPRESSOR_RISK_HIGH: Final = "HIGH"  # >100 Hz for >15 min - at maximum, nothing left to give
+COMPRESSOR_RISK_ELEVATED: Final = "ELEVATED"  # >80 Hz for >2 h
+COMPRESSOR_RISK_NOTABLE: Final = "NOTABLE"
+COMPRESSOR_RISK_WATCH: Final = "WATCH"
+COMPRESSOR_RISK_OK: Final = "OK"
+
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)
 COMPRESSOR_HZ_RANGE: Final = 100  # 120-20 = operating range
