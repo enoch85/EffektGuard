@@ -30,7 +30,7 @@ from .const import (
     DEFAULT_INDOOR_TEMP,
     DOMAIN,
     MAX_INDOOR_TEMP,
-    MIN_INDOOR_TEMP,
+    MIN_TARGET_TEMP,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
@@ -75,7 +75,17 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntit
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    _attr_min_temp = MIN_INDOOR_TEMP
+    # The lowest temperature this system permits IS the safety floor. It used to be a separate
+    # MIN_INDOOR_TEMP = 15.0, three degrees below MIN_TEMP_LIMIT - so the thermostat offered a
+    # setpoint the safety layer answers with an EMERGENCY and MAX_OFFSET. A user who dialled in
+    # 15 °C got a hard limit cycle: comfort cuts to -10 above 18 °C (a 3 °C "overshoot" against
+    # their target), safety boosts to +10 below it, and round again, on a real compressor - with
+    # is_emergency=True bypassing the volatility blocker that exists to stop precisely that.
+    # A setpoint the integration will fight is not a setpoint (audit F-085).
+    #
+    # If 18 °C is the wrong floor - for an away mode, a holiday - MIN_TEMP_LIMIT is the thing to
+    # change, deliberately, as a safety decision. Not a slider that quietly disagrees with it.
+    _attr_min_temp = MIN_TARGET_TEMP
     _attr_max_temp = MAX_INDOOR_TEMP
     _attr_target_temperature_step = TEMP_STEP
 

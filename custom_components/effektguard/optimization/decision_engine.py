@@ -38,6 +38,7 @@ from ..const import (
     LAYER_WEIGHT_SAFETY,
     MAX_OFFSET,
     MIN_OFFSET,
+    MIN_TARGET_TEMP,
     MIN_TEMP_LIMIT,
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
@@ -430,6 +431,43 @@ class DecisionEngine:
                 "confidence": outdoor_trend.get("confidence", 0.0),
             }
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
+
+    @property
+    def target_temp(self) -> float:
+        """The indoor temperature being aimed for."""
+        return self._target_temp
+
+    @target_temp.setter
+    def target_temp(self, target: float) -> None:
+        """Refuse a target the safety layer would answer with an emergency.
+
+        Below MIN_TEMP_LIMIT the safety layer commands MAX_OFFSET. The comfort layer drives TOWARD
+        the target - so a target below the floor means comfort pulls the house down into the
+        emergency zone and safety hauls it back out, MIN_OFFSET to MAX_OFFSET, on a real compressor,
+        for as long as the setpoint stands. And the safety boost carries is_emergency=True, so it
+        bypasses the volatility blocker that exists to stop precisely that thrashing. Measured, with
+        a target of 15 °C: -10.00 at 19.0 °C, +10.00 at 17.9 °C. (Audit F-085.)
+
+        Even AT the floor it is wrong: the house would sit at its target with the emergency trigger
+        0.0 °C below it, and ordinary control noise would fire a full boost. So the lowest target
+        this system can hold is MIN_TARGET_TEMP, one default tolerance clear of the floor.
+
+        Enforced in the setter, not in the callers. The climate entity no longer OFFERS a lower
+        target - and that does nothing for the owner who set one before this landed, because Home
+        Assistant keeps the stored value across the upgrade. Stored options, a hot reload, a
+        migration, a hand-edited entry: they all assign this attribute, and they are all refused.
+        """
+        if target < MIN_TARGET_TEMP:
+            _LOGGER.warning(
+                "Target %.1f°C cannot be held - the safety layer treats anything below %.1f°C as an "
+                "emergency, so this target could only be met by fighting it. Holding %.1f°C.",
+                target,
+                MIN_TEMP_LIMIT,
+                MIN_TARGET_TEMP,
+            )
+            target = MIN_TARGET_TEMP
+
+        self._target_temp = target
 
     def calculate_decision(
         self,

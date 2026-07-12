@@ -71,8 +71,9 @@ DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 DEFAULT_DHW_MORNING_HOUR: Final = 7  # Default morning DHW availability hour (07:00)
 DEFAULT_DHW_EVENING_HOUR: Final = 18  # Default evening DHW availability hour (18:00)
 
-# Climate entity temperature limits (displayed in UI)
-MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature
+# Climate entity temperature limits (displayed in UI).
+# The MINIMUM is MIN_TEMP_LIMIT - the safety floor - not a separate number: a setpoint the
+# safety layer answers with an emergency is not a setpoint (audit F-085).
 MAX_INDOOR_TEMP: Final = 25.0  # °C - maximum settable temperature
 TEMP_STEP: Final = 0.5  # °C - temperature adjustment step
 
@@ -147,6 +148,17 @@ CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
 MIN_OFFSET: Final = -10.0
 MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
+
+# The lowest target the system can actually HOLD, as opposed to the lowest it will not treat as an
+# emergency. The safety layer fires below MIN_TEMP_LIMIT, and the comfort band is target ± tolerance
+# - so a target sitting AT the floor puts the lower half of its own comfort band inside the
+# emergency zone, and ordinary control noise trips a full MAX_OFFSET boost that carries
+# is_emergency=True and bypasses the volatility blocker. A target must sit at least one tolerance
+# above the floor (audit F-085).
+#
+# This is the slider's minimum, computed at the DEFAULT tolerance. The engine enforces the real
+# bound - MIN_TEMP_LIMIT + the tolerance actually configured - and says so if it has to.
+MIN_TARGET_TEMP: Final = MIN_TEMP_LIMIT + DEFAULT_TOLERANCE  # 18.5 °C at the default ±0.5
 
 # Service call rate limiting (boost, DHW, general)
 HEATING_BOOST_COOLDOWN_MINUTES: Final = 45  # Space heating boost cooldown
