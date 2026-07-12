@@ -47,6 +47,7 @@ from .const import (
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     STARTUP_GRACE_MIN_INTERVAL,
+    STARTUP_MAX_GRACE_ATTEMPTS,
     STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
     WATTS_PER_KILOWATT,
@@ -320,6 +321,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
+        # Consecutive cycles spent waiting for the heat pump to appear. Bounded: see
+        # STARTUP_MAX_GRACE_ATTEMPTS. Distinct from _startup_update_count below, which counts
+        # observation cycles AFTER the pump is already answering.
+        self._startup_grace_attempts = 0
         self._startup_update_count = 0  # Count updates before ending grace period
         self._startup_grace_updates = (
             STARTUP_GRACE_UPDATES  # Require N updates before active control
@@ -778,6 +783,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Mark first successful update
             if not self._first_successful_update:
                 self._first_successful_update = True
+                self._startup_grace_attempts = 0
                 _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
 
             # Update compressor health monitoring (Oct 19, 2025)
@@ -815,10 +821,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
+                self._startup_grace_attempts += 1
+
+                if self._startup_grace_attempts > STARTUP_MAX_GRACE_ATTEMPTS:
+                    # The grace period is over. A heat pump that has not appeared by now is not
+                    # slow, it is missing - a wrong entity, or none configured at all - and saying
+                    # "still starting up" forever leaves the entry green while nothing is read and
+                    # nothing is controlled.
+                    _LOGGER.error(
+                        "NIBE entities never became available after %d attempts (~%d minutes). "
+                        "Check that the configured entities exist and their integration is "
+                        "loaded. Last error: %s",
+                        self._startup_grace_attempts - 1,
+                        (self._startup_grace_attempts - 1) * UPDATE_INTERVAL_MINUTES,
+                        err,
+                    )
+                    raise UpdateFailed(
+                        f"NIBE entities unavailable after "
+                        f"{self._startup_grace_attempts - 1} attempts: {err}"
+                    ) from err
+
                 _LOGGER.info(
                     "Waiting for NIBE entities to become available: %s "
-                    "(this is normal during HA startup, will retry in %d minutes)",
+                    "(this is normal during HA startup, attempt %d of %d, "
+                    "will retry in %d minutes)",
                     err,
+                    self._startup_grace_attempts,
+                    STARTUP_MAX_GRACE_ATTEMPTS,
                     UPDATE_INTERVAL_MINUTES,
                 )
                 # Important: even though we return early, we must keep clock-aligned scheduling

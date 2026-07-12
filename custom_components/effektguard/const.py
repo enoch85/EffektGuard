@@ -934,6 +934,15 @@ QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
 # Native interval counts a day can have: 92 (spring DST), 96 (normal),
 # 100 (autumn DST). Anything else means the source delivered a data gap.
 NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
+# How many consecutive update cycles the coordinator will wait for the heat pump to appear before
+# it reports failure. MyUplink can take 45-50 seconds to publish its entities, so waiting is right;
+# waiting FOREVER is a silent failure. Unbounded, a user who picked the wrong entity - or who has
+# no NIBE at all - keeps a config entry that stays loaded and green indefinitely while the
+# integration reads nothing and controls nothing.
+#
+# At UPDATE_INTERVAL_MINUTES this is a generous margin over any plausible MyUplink start-up.
+STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
+
 STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control
 STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before observation cycles
 
