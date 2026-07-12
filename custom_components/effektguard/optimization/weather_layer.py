@@ -578,13 +578,22 @@ class WeatherPredictionLayer:
     3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
     """
 
-    def __init__(self, thermal_mass: float = 1.0):
+    def __init__(
+        self, thermal_mass: float = 1.0, forecast_horizon: float = WEATHER_FORECAST_HORIZON
+    ):
         """Initialize weather prediction layer.
 
         Args:
             thermal_mass: Building thermal mass (0.5=light, 1.0=medium, 1.5=heavy)
+            forecast_horizon: How far ahead to scan, in hours. From the thermal model, because it
+                depends on what the house is built of. This layer took thermal_mass already and
+                used it ONLY to scale its weight - it scanned a fixed twelve hours whatever the
+                house was. A concrete slab reaches 63% of its response in about fourteen hours, and
+                a 15 C fall spread over two days shows less than 4 C inside any twelve-hour window,
+                so the drop never crossed the trigger and the pre-heat never fired at all.
         """
         self.thermal_mass = thermal_mass
+        self.forecast_horizon = forecast_horizon
 
     def evaluate_layer(
         self,
@@ -633,7 +642,7 @@ class WeatherPredictionLayer:
 
         # Check forecast for significant temperature drop
         current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
+        forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
 
         if not forecast_hours:
             return WeatherLayerDecision(
@@ -690,7 +699,9 @@ class WeatherPredictionLayer:
             if forecast_triggered and indoor_cooling:
                 trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
             elif forecast_triggered:
-                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
+                trigger = (
+                    f"Forecast {temp_drop:.1f}°C drop in {self.forecast_horizon:.0f}h (proactive)"
+                )
             else:
                 trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
 

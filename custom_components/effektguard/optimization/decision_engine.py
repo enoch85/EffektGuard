@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    WEATHER_FORECAST_HORIZON,
     COMPRESSOR_RISK_HIGH,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
@@ -268,7 +269,8 @@ class DecisionEngine:
 
         # Weather prediction layer for proactive pre-heating
         self.weather_prediction = WeatherPredictionLayer(
-            thermal_mass=thermal_model.thermal_mass if thermal_model else 1.0
+            thermal_mass=thermal_model.thermal_mass if thermal_model else 1.0,
+            forecast_horizon=self._forecast_horizon_for(thermal_model),
         )
 
         # Weather compensation layer for mathematical flow temp optimization
@@ -846,6 +848,30 @@ class DecisionEngine:
             offset,
         )
         return held, f" | Compressor at maximum: holding {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    @staticmethod
+    def _forecast_horizon_for(thermal_model) -> float:
+        """How far ahead the pre-heat layer must scan for this house.
+
+        WEATHER_FORECAST_HORIZON is the FLOOR that every house gets. A thermal model may only
+        EXTEND it, never shrink it: seeing further ahead costs a little early pre-heat, while
+        seeing less far can cost the cold snap entirely.
+
+        The layer scanned that fixed floor whatever the house was built of, and a concrete slab
+        cannot see a slow slide inside it. A 15 C fall spread over two days shows only 3.8 C in any
+        twelve hours - under WEATHER_FORECAST_DROP_THRESHOLD - so the pre-heat never fired, while
+        the sudden plunge that DID trigger it is the case the pump's own curve already handles.
+        UFH_CONCRETE_PREDICTION_HORIZON has said 24 hours all along; nothing could reach it.
+
+        A model that cannot state a horizon gets the floor.
+        """
+        if thermal_model is None:
+            return WEATHER_FORECAST_HORIZON
+        try:
+            horizon = float(thermal_model.get_prediction_horizon())
+        except (AttributeError, TypeError, ValueError):
+            return WEATHER_FORECAST_HORIZON
+        return max(WEATHER_FORECAST_HORIZON, horizon)
 
     @staticmethod
     def _clamp_offset(offset: float) -> float:
