@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -667,7 +667,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
             calculate_optimal_schedule_handler,
             schema=calculate_optimal_schedule_schema,
-            supports_response=True,
+            # SupportsResponse.OPTIONAL, not a bare True: HA compares this by IDENTITY, so `True`
+            # satisfies `is not SupportsResponse.NONE` but fails `is SupportsResponse.OPTIONAL`,
+            # and the service ends up advertised as response-REQUIRED (audit F-072). The handler
+            # returns a dict when it has data and nothing when it does not - that is OPTIONAL.
+            supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered service: %s", SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
 

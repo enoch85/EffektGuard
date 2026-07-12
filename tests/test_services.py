@@ -11,7 +11,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.effektguard.const import (
@@ -294,13 +294,13 @@ async def test_calculate_optimal_schedule_service_registration(mock_hass):
 
     await _async_register_services(mock_hass)
 
-    # Should be registered with supports_response=True
+    # Should be registered with a SupportsResponse enum - NOT a bare True, which HA compares by
+    # identity and which therefore reads as response-REQUIRED rather than optional (audit F-072).
     calls = mock_hass.services.async_register.call_args_list
     schedule_call = next(call for call in calls if call[0][1] == SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
 
-    # Verify supports_response is True
     assert "supports_response" in schedule_call[1]
-    assert schedule_call[1]["supports_response"] is True
+    assert schedule_call[1]["supports_response"] is SupportsResponse.OPTIONAL
 
 
 async def test_calculate_optimal_schedule_returns_24h_schedule(mock_hass, mock_coordinator):

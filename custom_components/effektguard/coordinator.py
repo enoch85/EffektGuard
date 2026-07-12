@@ -108,6 +108,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            # Hand HA the entry. Without it HA falls back to a deprecated ContextVar
+            # (breaks_in_ha_version 2026.8), which is only set inside async_setup_entry - so
+            # `self.config_entry` is None for a coordinator built anywhere else (audit F-073).
+            config_entry=entry,
             name=DOMAIN,
             # Disable base class automatic scheduling - we use clock-aligned scheduling instead
             # This prevents drift from startup time and ensures updates at :00:10, :05:10, etc.
