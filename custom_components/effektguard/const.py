@@ -268,6 +268,13 @@ CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
 DM_THRESHOLD_AUX_LIMIT: Final = -1500  # Auxiliary heat threshold (prevent expensive elpatron)
 
+# How far the EXPECTED degree-minute band must stay clear of the absolute floor above.
+# A house whose "normal" range reached the emergency trigger would be normal and in danger at the
+# same time. These used to be bare `+ 100` / `+ 50` literals inside climate_zones.get_expected_dm_range
+# - magic numbers clamping the safety floor itself (audit F-076).
+DM_NORMAL_MIN_BUFFER: Final = 100  # DM - the shallow end of "normal" stays this clear of the floor
+DM_WARNING_BUFFER: Final = 50  # DM - normal_max and warning stay this clear of it
+
 # Multi-tier CRITICAL thermal debt intervention (Oct 19, 2025 - Climate-Aware)
 # Philosophy: Progressive escalation based on climate-aware WARNING threshold
 # Tiers calculated dynamically as: WARNING + margin (adapts to climate zone)
@@ -1002,11 +1009,6 @@ LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before co
 
 # Swedish climate regions - SMHI historical data (1961-1990)
 # Source: Swedish_Climate_Adaptations.md
-CLIMATE_SOUTHERN_SWEDEN: Final = "southern_sweden"  # Malmö/Gothenburg (0°C Jan avg)
-CLIMATE_CENTRAL_SWEDEN: Final = "central_sweden"  # Stockholm (-4°C Jan avg)
-CLIMATE_MID_NORTHERN_SWEDEN: Final = "mid_northern_sweden"  # Umeå/Östersund (-8°C Jan avg)
-CLIMATE_NORTHERN_SWEDEN: Final = "northern_sweden"  # Luleå (-11°C Jan avg)
-CLIMATE_NORTHERN_LAPLAND: Final = "northern_lapland"  # Kiruna (-13°C Jan avg)
 
 # Climate zones - Import from dedicated module
 # Source: optimization/climate_zones.py

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from ..base import HeatPumpProfile, ValidationResult
 from ..registry import HeatPumpModelRegistry
+from ...const import DM_THRESHOLD_AUX_LIMIT
 
 
 @HeatPumpModelRegistry.register("nibe_f750")
@@ -62,7 +63,9 @@ class NibeF750Profile(HeatPumpProfile):
     dm_threshold_extended: float = -240  # Extended runs (custom stevedvo setting)
     dm_threshold_warning: float = -400  # Approaching thermal debt danger
     dm_threshold_critical: float = -500  # Emergency recovery needed
-    dm_threshold_aux_swedish: float = -1500  # Swedish aux delay optimization
+    # The simulator reads this so the plant model tracks what the integration believes.
+    # It cannot do that while the profile restates the number, so it references it (F-076).
+    dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
 
     # Cycling protection (prevents compressor wear)
     min_runtime_minutes: int = 30  # NIBE recommendation

@@ -26,11 +26,6 @@ from .const import (
     PRICE_SOURCE_ISSUE_ID,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
-    CLIMATE_CENTRAL_SWEDEN,
-    CLIMATE_MID_NORTHERN_SWEDEN,
-    CLIMATE_NORTHERN_LAPLAND,
-    CLIMATE_NORTHERN_SWEDEN,
-    CLIMATE_SOUTHERN_SWEDEN,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_DHW_MIN_AMOUNT,
@@ -155,7 +150,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Pass climate zone info for seasonal-aware defaults
         climate_zone_info = decision_engine.climate_detector.zone_info
         self.weather_learner = WeatherPatternLearner(climate_zone_info=climate_zone_info)
-        self.climate_region = self._detect_climate_region(hass)
 
         # Compressor health monitoring (Oct 19, 2025)
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
@@ -361,61 +355,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
         self._power_sensor_listener = None
-
-    def _detect_climate_region(self, hass: HomeAssistant) -> str:
-        """Detect Swedish climate region based on Home Assistant location.
-
-        Uses latitude to determine climate region for adaptive learning thresholds.
-
-        Swedish climate regions (based on SMHI climate data):
-        - Southern Sweden (55-58°N): Malmö, Gothenburg - Jan avg 0.1°C
-        - Central Sweden (58-62°N): Stockholm, Gävle - Jan avg -3.7°C
-        - Mid-Northern Sweden (62-65°N): Östersund, Umeå - Jan avg -7.9°C
-        - Northern Sweden (65-67°N): Luleå, Boden - Jan avg -11.0°C
-        - Northern Lapland (67-70°N): Kiruna, Gällivare - Jan avg -12.5°C
-
-        Args:
-            hass: HomeAssistant instance
-
-        Returns:
-            Climate region constant (southern_sweden, central_sweden, etc.)
-        """
-        try:
-            # Get Home Assistant latitude
-            latitude = hass.config.latitude
-
-            if latitude is None:
-                _LOGGER.warning("Latitude not configured, defaulting to central Sweden")
-                return CLIMATE_CENTRAL_SWEDEN
-
-            # Detect region based on latitude bands
-            if latitude < 58.0:
-                region = CLIMATE_SOUTHERN_SWEDEN
-                region_name = "Southern Sweden (Malmö/Gothenburg)"
-            elif latitude < 62.0:
-                region = CLIMATE_CENTRAL_SWEDEN
-                region_name = "Central Sweden (Stockholm/Gävle)"
-            elif latitude < 65.0:
-                region = CLIMATE_MID_NORTHERN_SWEDEN
-                region_name = "Mid-Northern Sweden (Östersund/Umeå)"
-            elif latitude < 67.0:
-                region = CLIMATE_NORTHERN_SWEDEN
-                region_name = "Northern Sweden (Luleå/Boden)"
-            else:
-                region = CLIMATE_NORTHERN_LAPLAND
-                region_name = "Northern Lapland (Kiruna)"
-
-            _LOGGER.info(
-                "Detected climate region: %s (latitude: %.2f°N)",
-                region_name,
-                latitude,
-            )
-
-            return region
-
-        except (AttributeError, KeyError, ValueError) as err:
-            _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
-            return CLIMATE_CENTRAL_SWEDEN
 
     def _calculate_next_aligned_time(self) -> datetime:
         """Calculate next 5-minute boundary + 10 seconds.

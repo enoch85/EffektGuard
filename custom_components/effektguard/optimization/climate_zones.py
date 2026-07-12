@@ -25,6 +25,9 @@ from dataclasses import dataclass
 from typing import Final
 
 from ..const import (
+    DM_NORMAL_MIN_BUFFER,
+    DM_THRESHOLD_AUX_LIMIT,
+    DM_WARNING_BUFFER,
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
     CLIMATE_ZONE_COLD_WINTER_AVG,
@@ -92,9 +95,15 @@ HEATING_CLIMATE_ZONES: Final = {
 # Zone order for detection (coldest to mildest)
 ZONE_ORDER: Final = ["extreme_cold", "very_cold", "cold", "moderate_cold", "standard"]
 
-# Absolute safety limit - NEVER EXCEED regardless of climate
-# Source: Swedish NIBE forums - validated in real-world Nordic conditions
-DM_ABSOLUTE_MAXIMUM: Final = -1500
+# The absolute safety limit lives in const.py as DM_THRESHOLD_AUX_LIMIT, and is imported above.
+# It used to be RESTATED here as DM_ABSOLUTE_MAXIMUM = -1500 - a second definition of the single
+# most safety-critical number in the project, in a second module. They were equal by coincidence,
+# not by construction. F-112 is open with the owner precisely because this number may be wrong; if
+# it changes, the EMERGENCY tier and the `critical` threshold published from here must move
+# together, or they disagree about when the house is in danger. (Audit F-076.)
+#
+# The buffers below keep the expected band clear of that floor, so a house sitting at the edge of
+# "normal" is not also sitting at the emergency trigger.
 
 
 @dataclass
@@ -247,9 +256,9 @@ class ClimateZoneDetector:
 
         # Ensure we never expect DM beyond absolute maximum
         # Leave 100 DM buffer before critical limit
-        normal_min = max(normal_min, DM_ABSOLUTE_MAXIMUM + 100)
-        normal_max = max(normal_max, DM_ABSOLUTE_MAXIMUM + 50)
-        warning = max(warning, DM_ABSOLUTE_MAXIMUM + 50)
+        normal_min = max(normal_min, DM_THRESHOLD_AUX_LIMIT + DM_NORMAL_MIN_BUFFER)
+        normal_max = max(normal_max, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
+        warning = max(warning, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
 
         # Debug logging removed to reduce spam - this is called multiple times per update
 
@@ -257,7 +266,7 @@ class ClimateZoneDetector:
             "normal_min": normal_min,
             "normal_max": normal_max,
             "warning": warning,
-            "critical": DM_ABSOLUTE_MAXIMUM,  # Always -1500
+            "critical": DM_THRESHOLD_AUX_LIMIT,
         }
 
     def get_safety_margin(self) -> float:

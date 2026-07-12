@@ -7,6 +7,7 @@ performance and validation.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from ..const import DM_THRESHOLD_AUX_LIMIT
 
 
 @dataclass
@@ -63,7 +64,9 @@ class HeatPumpProfile(ABC):
     dm_threshold_extended: float = -240  # Extended runs acceptable
     dm_threshold_warning: float = -400  # Approaching danger
     dm_threshold_critical: float = -500  # Emergency recovery
-    dm_threshold_aux_swedish: float = -1500  # Swedish aux optimization
+    # The simulator reads this so the plant model tracks what the integration believes.
+    # It cannot do that while the profile restates the number, so it references it (F-076).
+    dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
 
     # Cycling protection
     min_runtime_minutes: int = 30
