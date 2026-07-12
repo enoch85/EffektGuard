@@ -1,7 +1,7 @@
 # Flow temperature: the EN 442 emitter law
 
-This is the derivation behind `utils/emitter.py`. It replaced a fitted expression ("Kühne") that was
-being fed the wrong quantity — see the end of this page.
+This is the derivation behind `utils/emitter.py`. The fitted expression it replaced ("Kühne") **was
+removed** — it was being fed the wrong quantity, and the end of this page shows exactly which.
 
 ## The model
 

@@ -263,7 +263,7 @@ Not currently needed - the automatic detection is very accurate. If you have a m
 ### Does this replace weather compensation?
 
 No! Climate zones work **with** weather compensation:
-- **Weather compensation** (André Kühne formula): Calculates optimal flow temperature
+- **Weather compensation** (the EN 442 emitter law): Calculates optimal flow temperature
 - **Climate zones**: Add safety margins and set DM expectations
 - **Together**: Maximum efficiency with appropriate safety buffers
 

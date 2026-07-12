@@ -71,10 +71,10 @@ flowchart TD
     C -->|75° YES| D1
     C -->|59.33° NO| E{Check very_cold<br/>60.5° - 66.5°}
     
-    E -->|62.45° YES| D2["Zone: Very Cold<br/>Safety margin: +1.5°C<br/>Winter avg: -15°C"]
+    E -->|62.45° YES| D2["Zone: Very Cold<br/>Safety margin: +1.5°C<br/>Winter avg: -12°C"]
     E -->|59.33° NO| F{Check cold<br/>56.0° - 60.5°}
     
-    F -->|59.33° YES| D3["Zone: Cold<br/>Safety margin: +1.0°C<br/>Winter avg: -10°C"]
+    F -->|59.33° YES| D3["Zone: Cold<br/>Safety margin: +1.0°C<br/>Winter avg: -8°C"]
     F -->|55.68° NO| G{Check moderate_cold<br/>54.5° - 56.0°}
     
     G -->|55.68° YES| D4["Zone: Moderate Cold<br/>Safety margin: +0.5°C<br/>Winter avg: -1°C"]
@@ -113,7 +113,7 @@ flowchart TD
     
     E2 -->|Extract data| F["outdoor_temp = nibe_state.outdoor_temp<br/>current_flow = nibe_state.flow_temp<br/>Example: -12°C, 38°C"]
     
-    F -->|Calculate optimal| G["weather_comp.calculate_optimal_flow_temp()<br/>Uses André Kühne formula"]
+    F -->|Calculate optimal| G["weather_comp.calculate_optimal_flow_temp()<br/>Uses the EN 442 emitter law"]
     G -->|Result| H["flow_calc.flow_temp = 35.5°C<br/>(mathematical optimum)"]
     
     H -->|Check weather learner| I{self.weather_learner<br/>exists?}
@@ -126,7 +126,7 @@ flowchart TD
     
     K & M -->|Pass to climate system| N["climate_system.get_safety_margin(<br/>  outdoor_temp=-12.0,<br/>  unusual_weather_detected=False,<br/>  unusual_severity=0.0<br/>)"]
     
-    N -->|Get zone info| O["zone_info = CLIMATE_ZONES[self.climate_zone]<br/>Example Cold zone:<br/>  base: 1.0°C<br/>  winter_avg_low: -10.0°C"]
+    N -->|Get zone info| O["zone_info = CLIMATE_ZONES[self.climate_zone]<br/>Example Cold zone:<br/>  base: 1.0°C<br/>  winter_avg_low: -8.0°C"]
     
     O -->|Calculate component 1| P["base_margin = zone_info['safety_margin_base']<br/>= 1.0°C"]
     
@@ -306,14 +306,14 @@ detector = ClimateZoneDetector(latitude=59.33)
 # Zone info:
 #   name: "Cold"
 #   description: "Substantial winter heating demands"
-#   winter_avg_low: -10.0°C
+#   winter_avg_low: -8.0°C
 #   safety_margin_base: 1.0°C
 #   dm_normal_range: (-450, -700)
 #   examples: ["Stockholm (SWE)", "Oslo (NOR)", "Göteborg (SWE)", "Helsinki (FIN)"]
 
 _LOGGER.info(
     "Climate zone detected: Cold (Substantial winter heating demands) at latitude 59.33°N - "
-    "Winter avg: -10.0°C, DM normal range: -450 to -700"
+    "Winter avg: -8.0°C, DM normal range: -450 to -700"
 )
 ```
 
@@ -335,7 +335,7 @@ def _weather_compensation_layer(self, nibe_state, weather_data):
         outdoor_temp=-12.0,
         prefer_method="auto"
     )
-    # Result: flow_calc.flow_temp = 35.5°C (from Kühne formula)
+    # Result: flow_calc.flow_temp = 36.0°C (EN 442 emitter law, UFH n=1.1)
     
     # Check for unusual weather
     unusual_weather = False
@@ -445,7 +445,7 @@ Initialization:
   → dm_normal_range: (-800, -1200)
 
 Runtime (outdoor = -35°C, no unusual weather):
-  1. Kühne formula: 42.0°C optimal flow
+  1. EN 442 emitter law: 42.6°C optimal flow
   2. Safety margin calculation:
      - base: 2.5°C (extreme_cold)
      - temp: (-20 - (-35)) × 0.1 = 1.5°C (colder than avg)
@@ -463,18 +463,18 @@ Result: Aggressive heating to prevent thermal debt in extreme cold
 Initialization:
   hass.config.latitude = 59.33
   → Detected zone: cold
-  → winter_avg_low: -10.0°C
+  → winter_avg_low: -8.0°C
   → safety_margin_base: 1.0°C
   → dm_normal_range: (-450, -700)
 
 Runtime (outdoor = -10°C, no unusual weather):
-  1. Kühne formula: 35.5°C optimal flow
+  1. EN 442 emitter law: 36.0°C optimal flow
   2. Safety margin calculation:
      - base: 1.0°C (cold)
      - temp: 0.0°C (at winter average)
      - unusual: 0.0°C (no unusual weather)
      - total: 1.0°C
-  3. Adjusted flow: 35.5 + 1.0 = 36.5°C
+  3. Adjusted flow: 36.0 + 1.0 = 37.0°C
   4. Dynamic weight: 0.75 (cold)
   5. Final weight: 0.75 × 0.75 = 0.5625
 
@@ -491,7 +491,7 @@ Initialization:
   → dm_normal_range: (-300, -500)
 
 Runtime (outdoor = 2°C, no unusual weather):
-  1. Kühne formula: 28.0°C optimal flow
+  1. EN 442 emitter law: 31.5°C optimal flow
   2. Safety margin calculation:
      - base: 0.5°C (moderate_cold)
      - temp: 0.0°C (warmer than winter avg)
@@ -509,18 +509,18 @@ Result: Moderate heating for Øresund region winter conditions
 Initialization:
   hass.config.latitude = 48.86
   → Detected zone: standard
-  → winter_avg_low: 5.0°C
+  → winter_avg_low: 0.0°C
   → safety_margin_base: 0.0°C
   → dm_normal_range: (-200, -350)
 
 Runtime (outdoor = 8°C, no unusual weather):
-  1. Kühne formula: 24.0°C optimal flow
+  1. EN 442 emitter law: 27.7°C optimal flow
   2. Safety margin calculation:
      - base: 0.0°C (standard)
      - temp: 0.0°C (warmer than winter avg)
      - unusual: 0.0°C (no unusual weather)
      - total: 0.0°C
-  3. Adjusted flow: 24.0 + 0.0 = 24.0°C (formulas alone!)
+  3. Adjusted flow: 27.7 + 0.0 = 27.7°C (the emitter law alone)
   4. Dynamic weight: 0.50 (warm weather)
   5. Final weight: 0.50 × 0.75 = 0.375
 
@@ -683,3 +683,14 @@ Leave headroom for emergency/safety layers to override. Weather compensation is 
 - **Output**: Safety margin (°C) and dynamic weight (0.0-1.0) for decision layer
 - **Dependencies**: Optional weather_learner (Phase 6) for unusual weather detection
 - **Side effects**: None (pure calculation, no state modification)
+
+---
+
+⚠️ **The flow temperatures above are computed by `utils/emitter.py` (the EN 442 emitter law), not by
+"the Kühne formula" this document used to name.** That model was removed (audit F-119/F-121): it was
+fed a heat-loss coefficient where the derivation requires a dimensionless relative load, so a
+dimensionally inconsistent input went into a structurally correct law and produced numbers that
+looked plausible and were not. It drove the flow temperature of a real heat pump.
+
+Against NIBE's own published curve 9 (41.0 °C at 0 °C outdoor), the EN 442 law lands **0.20 °C** away;
+a straight line is out by **2.37 °C**. See `docs/research/02_emitter_law.md`.

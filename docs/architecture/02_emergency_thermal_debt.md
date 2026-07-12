@@ -12,7 +12,7 @@ flowchart TD
 
     subgraph "Context-Aware Analysis"
         D[Calculate Expected DM Range<br/>Based on Climate Zone + Temp]
-        E[Cold Zone at -10°C:<br/>Expected: -450 to -700 DM<br/>Warning: -700 DM]
+        E[Cold Zone at -10°C:<br/>Expected: -490 to -740 DM<br/>Warning: -740 DM]
         F[Extreme Cold Zone at -25°C:<br/>Expected: -900 to -1300 DM<br/>Warning: -1300 DM]
         G[Adjustment: -20 DM per °C<br/>colder than zone winter avg]
         H[Distance from Absolute Max<br/>-1500 DM NEVER EXCEED]
@@ -96,8 +96,8 @@ EffektGuard uses **climate zone detection** (based on latitude) combined with **
 | Zone | Latitude | Winter Avg | Base Normal Range | Base Warning |
 |------|----------|------------|-------------------|--------------|
 | Extreme Cold | 66.5°+ | -20°C | -800 to -1200 | -1200 |
-| Very Cold | 60.5°-66.5° | -15°C | -600 to -1000 | -1000 |
-| Cold | 56°-60.5° | -10°C | -450 to -700 | -700 |
+| Very Cold | 60.5°-66.5° | -12°C | -600 to -1000 | -1000 |
+| Cold | 56°-60.5° | -8°C | -450 to -700 | -700 |
 | Moderate Cold | 54.5°-56° | -1°C | -300 to -500 | -500 |
 | Standard | <54.5° | 0°C | -200 to -350 | -350 |
 
@@ -107,14 +107,24 @@ EffektGuard uses **climate zone detection** (based on latitude) combined with **
 adjusted_warning = zone_warning + (outdoor_temp - zone_winter_avg) × 20
 ```
 
-**Example: Stockholm (Cold zone, winter avg -10°C)**
-- At -10°C: warning = -700 (no adjustment)
-- At 0°C: warning = -700 + (0 - (-10)) × 20 = -700 + 200 = -500 (shallower)
-- At -20°C: warning = -700 + (-20 - (-10)) × 20 = -700 - 200 = -900 (deeper)
+**Example: Stockholm (Cold zone, winter avg -8°C)**
+- At -8°C: warning = -700 (no adjustment - this is the zone average)
+- At -10°C: warning = -700 + (-10 - (-8)) × 20 = -700 - 40 = **-740** (deeper)
+- At 0°C: warning = -700 + (0 - (-8)) × 20 = -700 + 160 = **-540** (shallower)
+- At -20°C: warning = -700 + (-20 - (-8)) × 20 = -700 - 240 = **-940** (deeper)
+
+⚠️ The Cold zone's winter average is **-8.0 °C**, not -10. This worked example used to say -10,
+and every threshold derived from it was 40 degree-minutes shallower than the code's. -450 to -700
+IS a real Stockholm range - at -8 °C. It is not the range at -10 °C.
 
 ### Absolute Safety Limit
 
-**DM -1500 is NEVER exceeded** regardless of outdoor temperature. This is the hard safety limit validated by Swedish NIBE forums and represents the point where heat pump damage becomes likely.
+**DM -1500 is NEVER exceeded** regardless of outdoor temperature - it is the absolute floor.
+
+⚠️ It is **not** the number that governs a real F750: the pump's own "start addition" (menu 4.9.3)
+fires at **-700** and works DM back up, so the immersion heater engages long before -1500 is
+approached. The -1500 figure is attributed to Swedish forums and is **not sourced in this
+repository** - see `docs/research/01_degree_minutes.md`.
 
 ### Graduated Response System
 

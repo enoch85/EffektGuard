@@ -40,20 +40,33 @@ Currently supports NIBE heat pumps via MyUplink integration, with plans to add s
 - **Proactive debt prevention** - trend-based future DM prediction
 - **Effect tariff** (peak avoidance) - predictive 15-min protection
 - **Prediction/Learning** (self-tuning) - learned thermal model for pre-heating
-- **Weather compensation** (mathematical flow temp) - André Kühne + Timbones formulas
+- **Weather compensation** (mathematical flow temp) - the **EN 442 emitter law**
 - **Weather prediction** (pre-heating) - time-aware cold snap protection
 - **Spot price** (cost reduction) - forward-looking optimization with adaptive horizon
 - **Comfort** (tolerance) - reactive temperature correction
 
 ### 🌍 Global Climate Adaptation
-Automatic latitude-based zone detection (Arctic to Mediterranean):
-- **Extreme Cold** (66.5°N+): Kiruna, Tromsø - DM -800 to -1200 normal
-- **Very Cold** (60.5-66.5°N): Luleå, Umeå - DM -600 to -1000 normal  
-- **Cold** (56-60.5°N): Stockholm, Oslo, Helsinki - DM -450 to -700 normal
-- **Moderate Cold** (54.5-56°N): Copenhagen, Malmö - DM -300 to -500 normal
-- **Standard** (<54.5°N): Paris, London - DM -200 to -350 normal
+Automatic latitude-based zone detection (Arctic to Mediterranean). The ranges below are each zone's
+**base** range — what is normal **at that zone's own winter average**. They shift with the outdoor
+temperature, by 20 DM per degree:
 
-**No configuration needed** - uses Home Assistant latitude. DM -1500 absolute maximum enforced globally.
+| Zone | Latitude | Winter avg | Base normal DM |
+|---|---|---|---|
+| **Extreme Cold** | 66.5°N+ | −20 °C | −800 to −1200 |
+| **Very Cold** | 60.5–66.5°N | −12 °C | −600 to −1000 |
+| **Cold** | 56–60.5°N | −8 °C | −450 to −700 |
+| **Moderate Cold** | 54.5–56°N | −1 °C | −300 to −500 |
+| **Standard** | <54.5°N | 0 °C | −200 to −350 |
+
+So Stockholm's normal range is −450 to −700 **at −8 °C**, and −490 to −740 at −10 °C. Quoting the
+base range as if it applied at every temperature is how four of this project's own documents came
+to be wrong; see `docs/CLIMATE_ZONES.md` for the full tables.
+
+**No configuration needed** — uses Home Assistant's latitude.
+
+**DM −1500 is the absolute floor**, enforced globally. ⚠️ It is *not* the number that governs a real
+F750: the pump's own "start addition" (menu 4.9.3) fires at **−700**, so the immersion heater engages
+and works DM back up long before −1500 is approached. See `docs/research/01_degree_minutes.md`.
 
 ### 🧠 Self-Learning Capability (observing only — not yet driving your pump)
 EffektGuard continuously observes your building and estimates:
@@ -89,7 +102,8 @@ Multi-factor forward-looking optimization combining:
 
 ### 🌡️ Weather Compensation (Mathematical)
 Physics-based flow temperature optimization:
-- **André Kühne formula** - validated across manufacturers (Vaillant, Daikin, NIBE, etc.)
+- **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264) - validated against NIBE's own
+  published curve 9: it lands **0.20 °C** from it, where a straight line is out by **2.37 °C**
 - **Timbones method** - radiator-specific calculations (BS EN442)
 - **UFH adjustments** - concrete slab (-8°C), timber (-5°C)
 - **Climate-aware margins** - automatic safety headroom by zone
@@ -280,7 +294,7 @@ Native quarterly (15-min) price periods:
 
 ### Weather Compensation Math
 ```python
-# André Kühne formula (universal)
+# EN 442 emitter law - see utils/emitter.py
 TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
 
 # Timbones method (radiator-specific)  
