@@ -34,7 +34,16 @@ from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# Service call cooldown tracking (per hass instance)
+# Service-call cooldowns. Module scope is DELIBERATE - do not move this onto the coordinator.
+#
+# These rate-limit the two services that can actually hurt the machine: boost_heating commands
+# MAX_OFFSET (+10 °C) and boost_dhw fires the immersion heater through NIBE's temporary lux.
+# Anything the coordinator owns dies with the coordinator, and Home Assistant's reload button
+# unloads and re-creates it - so a cooldown held there would be cleared by a reload, and a user
+# could drive the pump to +10 °C, reload, and do it again. A cooldown a reload clears is not a
+# cooldown. (Audit F-075 filed this global as a leak; it is a guard. `single_config_entry` is true,
+# so there is no second entry for it to leak into. See
+# tests/unit/test_the_boost_cooldown_survives_a_reload.py.)
 _service_last_called: dict[str, datetime] = {}
 
 
