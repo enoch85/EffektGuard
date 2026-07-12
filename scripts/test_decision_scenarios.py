@@ -89,12 +89,13 @@ MIT License - See LICENSE file for details
 import argparse
 import importlib.util
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Optional
 from enum import Enum
 
 # Import constants from production code - single source of truth
-sys.path.insert(0, "/workspaces/EffektGuard/custom_components/effektguard")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "effektguard"))
 from const import (
     DM_CRITICAL_T1_MARGIN,
     DM_CRITICAL_T1_OFFSET,
@@ -211,7 +212,8 @@ from const import (
 # Inject the const values into the module's globals before execution
 spec = importlib.util.spec_from_file_location(
     "climate_zones",
-    "/workspaces/EffektGuard/custom_components/effektguard/optimization/climate_zones.py",
+    str(Path(__file__).resolve().parents[1]
+        / "custom_components" / "effektguard" / "optimization" / "climate_zones.py"),
 )
 climate_zones_module = importlib.util.module_from_spec(spec)
 

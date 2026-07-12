@@ -9,6 +9,7 @@ Based on real data from 2025-12-05 showing:
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+from pathlib import Path
 from datetime import datetime, timedelta
 
 # Real price data approximated from screenshot (öre/kWh)
@@ -206,10 +207,10 @@ ax3.set_xticks(range(-16, 32, 4))
 ax3.set_xlim(-16, 32)
 
 plt.tight_layout()
-plt.savefig('/workspaces/EffektGuard/docs/dev/price_optimization_comparison.png', dpi=150, bbox_inches='tight')
+plt.savefig(str(Path(__file__).resolve().parents[1] / "docs" / "dev" / "price_optimization_comparison.png"), dpi=150, bbox_inches='tight')
 plt.show()
 
-print("\n✅ Graph saved to: /workspaces/EffektGuard/docs/dev/price_optimization_comparison.png")
+print(f"\n✅ Graph saved to: {Path(__file__).resolve().parents[1] / 'docs' / 'dev'}")
 print("\nKey observations:")
 print("  • Current (bug): +1°C offset during expensive period (176 öre)")
 print("  • Expected (fix): -1.8°C offset during expensive, +1.5°C during cheap tomorrow")
