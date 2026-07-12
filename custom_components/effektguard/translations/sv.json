@@ -257,5 +257,11 @@
       "name": "Boosta varmvatten",
       "description": "Starta omedelbar varmvattencykel"
     }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ingen elpriskälla",
+      "description": "EffektGuard saknar elprisdata, så prisoptimeringen är inte igång - värmekurvan styrs enbart av komfort och säkerhet. Konfigurera en spotprisentitet (GE-Spot, Nord Pool eller liknande) i integrationens inställningar för att aktivera den."
+    }
   }
 }

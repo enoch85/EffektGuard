@@ -686,6 +686,12 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 # The unit shown on the price sensor when the spot-price integration has not (yet) reported one.
 # The sensor prefers the user's own integration's unit; this is only the gap-filler during startup
 # or a brief outage. It is öre because that is what GE-Spot reports for SE4 (audit F-070).
+# Home Assistant repair-issue id raised when there is no electricity price source at all.
+# Without prices the price layer abstains entirely - which is correct - but the user has
+# `enable_price_optimization` switched on and believes it is trading. A log line does not tell
+# them; a repair issue does. (Audit F-123: the old code invented 96 quarters at 1.0 öre instead.)
+PRICE_SOURCE_ISSUE_ID: Final = "no_price_source"
+
 PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)

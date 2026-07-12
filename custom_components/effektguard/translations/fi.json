@@ -257,5 +257,11 @@
       "name": "Tehosta lämmintä vettä",
       "description": "Käynnistä välitön lämpimän veden kierros"
     }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ei sähkön hintalähdettä",
+      "description": "EffektGuardilla ei ole sähkön hintatietoja, joten hintaoptimointi ei ole käynnissä - lämpökäyrää ohjataan vain mukavuuden ja turvallisuuden perusteella. Määritä pörssisähköentiteetti (GE-Spot, Nord Pool tai vastaava) integraation asetuksissa ottaaksesi sen käyttöön."
+    }
   }
 }

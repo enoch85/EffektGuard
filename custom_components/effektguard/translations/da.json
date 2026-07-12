@@ -257,5 +257,11 @@
       "name": "Boost varmtvand",
       "description": "Start øjeblikkelig varmtvandscyklus"
     }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ingen elpriskilde",
+      "description": "EffektGuard mangler elprisdata, så prisoptimeringen kører ikke - varmekurven styres kun af komfort og sikkerhed. Konfigurer en spotprisentitet (GE-Spot, Nord Pool eller lignende) i integrationens indstillinger for at aktivere den."
+    }
   }
 }

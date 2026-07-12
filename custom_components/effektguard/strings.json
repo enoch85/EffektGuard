@@ -257,5 +257,11 @@
       "name": "Boost Hot Water",
       "description": "Start immediate hot water heating cycle"
     }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "No electricity price source",
+      "description": "EffektGuard has no electricity price data, so price optimisation is not running - the heating curve is being managed on comfort and safety alone. Configure a spot-price entity (GE-Spot, Nord Pool or similar) in the integration's options to enable it."
+    }
   }
 }

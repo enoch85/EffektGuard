@@ -25,7 +25,6 @@ from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
 from custom_components.effektguard.const import QuarterClassification
 from custom_components.effektguard.optimization.price_layer import (
     PriceAnalyzer,
-    get_fallback_prices,
 )
 
 DAY = datetime(2026, 1, 15, 0, 0)
@@ -91,12 +90,24 @@ def test_a_long_cheap_block_day_still_coasts_the_dear_evening(analyzer):
 
 
 def test_genuinely_uniform_prices_are_still_refused(analyzer):
-    """The guard must keep doing its real job: fallback data carries no signal to trade on."""
-    classes = analyzer.classify_quarterly_periods(get_fallback_prices().today)
+    """The guard must keep doing its real job: a flat day carries no signal to trade on.
+
+    This used to be fed get_fallback_prices() - 96 invented quarters at 1.0. That function is gone
+    (audit F-123): the integration no longer manufactures prices when it has none, because the
+    decision engine WEIGHED them and they voted the house colder. The invariant it was really
+    testing survives, and is built here from a genuinely flat tariff.
+    """
+    base = datetime(2026, 1, 15, 0, 0)
+    flat = [
+        QuarterPeriod(start_time=base.replace(hour=q // 4, minute=(q % 4) * 15), price=1.0)
+        for q in range(96)
+    ]
+
+    classes = analyzer.classify_quarterly_periods(flat)
 
     assert set(classes.values()) == {QuarterClassification.NORMAL}, (
-        "Fallback prices are 96 identical invented values. Classifying them would manufacture a "
-        "price signal out of the absence of one."
+        "96 identical prices carry no signal. Classifying them would manufacture a price signal "
+        "out of the absence of one."
     )
 
 

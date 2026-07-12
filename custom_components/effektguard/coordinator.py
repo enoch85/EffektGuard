@@ -14,10 +14,16 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    PRICE_SOURCE_ISSUE_ID,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
     CLIMATE_CENTRAL_SWEDEN,
@@ -68,7 +74,6 @@ from .optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
 )
 from .optimization.prediction_layer import ThermalStatePredictor
-from .optimization.price_layer import get_fallback_prices
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
@@ -343,6 +348,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
         # Startup grace: timeout after which observation cycles begin
         self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
+
+        # Whether the "no price source" repair issue is currently raised.
+        self._price_issue_active = False
 
         # One writer at a time. See _drive_the_pump: the aligned control loop and a service that
         # commands the pump are both long coroutines, and asyncio interleaves them freely.
@@ -811,6 +819,48 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         async with self._control_lock:
             return await self._read_and_decide(apply=True)
 
+    def _report_no_price_source(self, reason: str) -> None:
+        """Tell the user, in the UI, that price optimisation is not running.
+
+        A _LOGGER.warning is not telling anyone. The user has `enable_price_optimization` switched
+        on and believes the integration is trading on price; without a price source it simply is
+        not, and nothing on screen says so (audit F-123).
+        """
+        if self._price_issue_active:
+            return
+
+        _LOGGER.warning(
+            "No electricity price data (%s) - price optimization is NOT running", reason
+        )
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            PRICE_SOURCE_ISSUE_ID,
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=PRICE_SOURCE_ISSUE_ID,
+        )
+        self._price_issue_active = True
+
+    def _clear_price_source_issue(self) -> None:
+        """Prices are flowing again.
+
+        Deliberately NOT guarded on `_price_issue_active`. That flag lives on the coordinator and a
+        restart builds a new one with it False - while the repair issue, which Home Assistant
+        persists in its own registry, is still raised. Guarding the delete on it meant:
+
+            boot 1   no price source  -> issue raised, flag True
+            (the user configures GE-Spot and restarts)
+            boot 2   prices fine      -> flag is False again, the delete returns early, and the
+                                         issue stays raised. Forever, with nothing the user can do.
+
+        `async_delete_issue` is a no-op when there is nothing to delete, so there is no cost to
+        calling it. (Found on a live Home Assistant, not in the tests - the flag made the unit test
+        of the raise path pass perfectly well.)
+        """
+        async_delete_issue(self.hass, DOMAIN, PRICE_SOURCE_ISSUE_ID)
+        self._price_issue_active = False
+
     async def _read_and_decide(self, apply: bool) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
 
@@ -964,12 +1014,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_price,
                     unit,
                 )
+                self._clear_price_source_issue()
             else:
-                _LOGGER.debug("Spot price data empty, using fallback prices")
-                price_data = get_fallback_prices()
+                self._report_no_price_source("the price entity returned no quarters")
+                price_data = None
         except (AttributeError, KeyError, ValueError, TypeError) as err:
-            _LOGGER.warning("Price data unavailable, using fallback: %s", err)
-            price_data = get_fallback_prices()
+            # Do NOT fabricate. The old fallback returned 96 quarters all priced 1.0, and the
+            # decision engine WEIGHED them: they classify NORMAL, the price layer casts a real
+            # vote, and the aggregate is dragged down - +1.00 °C becomes +0.27 °C on a number
+            # nobody measured. The reasoning string then told the user "[Spot Price] ... NORMAL"
+            # as though a price had been analysed. (Audit F-123; same class as F-013/F-014, where
+            # the NIBE adapter invented degree minutes.)
+            #
+            # None is the honest answer, and the engine handles it: the price layer abstains and
+            # the thermal, comfort and safety layers decide on their own.
+            self._report_no_price_source(str(err))
+            price_data = None
 
         # Weather forecast
         try:
