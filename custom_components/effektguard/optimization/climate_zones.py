@@ -27,6 +27,7 @@ from typing import Final
 from ..const import (
     DM_NORMAL_MIN_BUFFER,
     DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_START,
     DM_WARNING_BUFFER,
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
@@ -254,11 +255,37 @@ class ClimateZoneDetector:
         normal_max = self.zone_info.dm_normal_max + adjustment
         warning = self.zone_info.dm_warning_threshold + adjustment
 
-        # Ensure we never expect DM beyond absolute maximum
-        # Leave 100 DM buffer before critical limit
+        # COLD SIDE: never expect degree minutes beyond the absolute limit.
         normal_min = max(normal_min, DM_THRESHOLD_AUX_LIMIT + DM_NORMAL_MIN_BUFFER)
         normal_max = max(normal_max, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
         warning = max(warning, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
+
+        # WARM SIDE: this had NO clamp at all, and the consequences were absurd.
+        #
+        # Shallowing the thresholds as it warms is right in itself - a pump that has fallen 400 DM
+        # behind in mild weather is in more trouble than one that has fallen 400 DM behind in a
+        # cold snap, because it should not be working hard at all. But `temp_delta * 20` was
+        # unbounded above, and NIBE starts the compressor at DM_THRESHOLD_START (-60) and stops it
+        # at 0 - so degree minutes traverse that band on EVERY NORMAL CYCLE, in every season.
+        #
+        # In Stockholm the warning threshold therefore climbed to:
+        #
+        #     outdoor +15 C  ->  -240
+        #     outdoor +25 C  ->   -40   <- INSIDE the compressor's own cycling band
+        #     outdoor +30 C  ->   +60   <- POSITIVE: any degree-minute reading is a "warning"
+        #
+        # A midsummer hot-water cycle dips degree minutes to -60 like any other, so the emergency
+        # ladder fired on a heat pump that was behaving perfectly - commanding a T1/T3 boost, in
+        # July. The threshold must never reach into the band the pump uses normally.
+        # NOTE the naming: `normal_min` is the SHALLOW end of the band (-450) and `normal_max` the
+        # DEEP end (-700), so numerically normal_min > normal_max. Both are negative.
+        # NOTE the naming: `normal_min` is the SHALLOW end of the band and `normal_max` the DEEP
+        # end, so numerically normal_min > normal_max. Only the two that act as TRIGGERS are
+        # clamped. `normal_min` is left alone deliberately - degree minutes really do reach 0 in
+        # mild weather, because that is where NIBE stops the compressor.
+        warm_ceiling = DM_THRESHOLD_START - DM_WARNING_BUFFER
+        normal_max = min(normal_max, warm_ceiling)
+        warning = min(warning, warm_ceiling)
 
         # Debug logging removed to reduce spam - this is called multiple times per update
 
