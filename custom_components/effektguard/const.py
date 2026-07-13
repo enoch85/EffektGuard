@@ -23,9 +23,6 @@ CONF_SUPPLY_TEMP_ENTITY: Final = "supply_temp_entity"  # Optional: BT2/BT25/BT63
 CONF_RETURN_TEMP_ENTITY: Final = "return_temp_entity"  # Optional: BT3 override
 CONF_DHW_CHARGING_TEMP_ENTITY: Final = "dhw_charging_temp_entity"  # Optional: BT6 override
 CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.temporary_lux_50004
-CONF_ENABLE_DHW_OPTIMIZATION: Final = "enable_dhw_optimization"  # Enable intelligent DHW scheduling
-CONF_DHW_DEMAND_PERIODS: Final = "dhw_demand_periods"  # High DHW demand periods (JSON list)
-CONF_DHW_TARGET_TEMP: Final = "dhw_target_temp"  # User-configurable DHW target temperature (°C)
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
@@ -36,13 +33,11 @@ CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
 CONF_ENABLE_HOT_WATER_OPTIMIZATION: Final = "enable_hot_water_optimization"
 CONF_ENABLE_WEATHER_COMPENSATION: Final = "enable_weather_compensation"  # Universal formulas
 CONF_ENABLE_OPTIMIZATION: Final = "enable_optimization"  # Master enable switch
-CONF_TARGET_TEMPERATURE: Final = "target_temperature"
 CONF_TOLERANCE: Final = "tolerance"
 CONF_OPTIMIZATION_MODE: Final = "optimization_mode"
 CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
 CONF_HEAT_PUMP_MODEL: Final = "heat_pump_model"
-CONF_WEATHER_COMPENSATION_WEIGHT: Final = "weather_compensation_weight"  # 0.0-1.0
 
 # Defaults
 DEFAULT_TOLERANCE: Final = 0.5
@@ -188,18 +183,13 @@ LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused
 # Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
 # Provides dynamic response to temperature overshoot severity
 # Dec 2, 2025: Lowered thresholds - comfort layer triggers at 0.5°C and 1.0°C
-COMFORT_OVERSHOOT_SEVERE: Final = 0.5  # °C over tolerance for severe response
-COMFORT_OVERSHOOT_CRITICAL: Final = 1.0  # °C over tolerance for critical response
 LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-0.5°C over tolerance
-LAYER_WEIGHT_COMFORT_SEVERE: Final = 0.9  # Very high priority: 0.5-1°C over tolerance
 LAYER_WEIGHT_COMFORT_CRITICAL: Final = (
     1.0  # Critical priority: 1°C+ over tolerance (same as safety)
 )
 
 # Graduated comfort layer correction multipliers (Phase 2)
 COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction
-COMFORT_CORRECTION_STRONG: Final = 1.2  # 1-2°C over tolerance: strong correction
-COMFORT_CORRECTION_CRITICAL: Final = 1.5  # 2°C+ over tolerance: emergency correction
 
 # Effect tariff / Peak protection layer weights and offsets
 # Oct 19, 2025: Increased weights to make peak protection more decisive
@@ -213,8 +203,6 @@ EFFECT_OFFSET_PREDICTIVE: Final = -1.5  # Moderate reduction before peak
 EFFECT_OFFSET_WARNING_RISING: Final = -1.0  # Gentle reduction near peak
 EFFECT_OFFSET_WARNING_STABLE: Final = -0.5  # Light reduction near peak
 EFFECT_MARGIN_PREDICTIVE: Final = 1.0  # kW margin threshold for predictive action
-EFFECT_MARGIN_WARNING: Final = 1.5  # kW margin threshold for warning
-EFFECT_MARGIN_WATCH: Final = 2.5  # kW margin threshold for watch
 
 # Effect layer predictive power thresholds (Oct 19, 2025)
 # Predicts future power demand based on thermal trend rate
@@ -304,8 +292,6 @@ DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max 
 DM_CRITICAL_T1_PEAK_AWARE_OFFSET: Final = 0.5  # T1 minimal: Just enough to stabilize
 DM_CRITICAL_T2_PEAK_AWARE_OFFSET: Final = 0.75  # T2 minimal: Moderate escalation
 DM_CRITICAL_T3_PEAK_AWARE_OFFSET: Final = 1.0  # T3 minimal: Aggressive recovery needed
-PEAK_AWARE_EFFECT_THRESHOLD: Final = -1.0  # Effect offset threshold for peak detection
-PEAK_AWARE_EFFECT_WEIGHT_MIN: Final = 0.5  # Minimum effect weight for peak detection
 
 # Emergency tier identifiers (see thermal_layer.EmergencyLayerDecision.tier)
 #
@@ -588,20 +574,20 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # DESIGN: All proactive zones trigger BEFORE warning threshold!
 # Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
 #
-PROACTIVE_ZONE5_MISSING_RUNG_NOTE = """
-Zone 5 was unreachable for the whole life of this project, in every release and every climate zone.
-
-Its band is `warning < DM <= zone5_threshold`, and the percent below was 1.00 - so zone5_threshold
-came out at exactly `normal_max`. Every climate zone ALSO sets `dm_warning_threshold` to exactly the
-deep end of `dm_normal_range`, so `warning == normal_max == zone5_threshold` and the band read
-`-740 < DM <= -740`: the empty set. Both ends were the same number, and the same temperature
-adjustment is added to both, so they could never separate.
-
-1.00 is the one value that gives this rung no step to stand on, and it contradicts the DESIGN note
-directly above: Z1-Z5 trigger BEFORE the warning threshold, so Z5's boundary must sit strictly before
-it. 0.875 splits the old Z4 band in half and hands the deeper half to Z5 - the ladder regains the
-+3.0 rung it was built with, and no threshold that governs when RECOVERY starts moves at all.
-"""
+# WHY ZONE 5 WAS UNREACHABLE (kept as a comment: it was a module-level string bound to a
+# name nothing read, which is dead code however useful the words are).
+# Zone 5 was unreachable for the whole life of this project, in every release and every climate zone.
+#
+# Its band is `warning < DM <= zone5_threshold`, and the percent below was 1.00 - so zone5_threshold
+# came out at exactly `normal_max`. Every climate zone ALSO sets `dm_warning_threshold` to exactly the
+# deep end of `dm_normal_range`, so `warning == normal_max == zone5_threshold` and the band read
+# `-740 < DM <= -740`: the empty set. Both ends were the same number, and the same temperature
+# adjustment is added to both, so they could never separate.
+#
+# 1.00 is the one value that gives this rung no step to stand on, and it contradicts the DESIGN note
+# directly above: Z1-Z5 trigger BEFORE the warning threshold, so Z5's boundary must sit strictly before
+# it. 0.875 splits the old Z4 band in half and hands the deeper half to Z5 - the ladder regains the
+# +3.0 rung it was built with, and no threshold that governs when RECOVERY starts moves at all.
 
 PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.02  # 2% of normal max (ultra-early warning, Jan 2026)
 PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
@@ -840,9 +826,6 @@ PRICE_PRE_PEAK_OFFSET: Final = -6.0  # °C - gradual reduction before PEAK arriv
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
-COMFORT_DM_COOLING_THRESHOLD: Final = (
-    -200  # Block cooling corrections when DM < -200 (thermal debt accumulating)
-)
 
 # Comfort layer thermal-aware calculations (Dec 8, 2025)
 # Heat loss rate calculation: base_heat_loss = temp_diff / (insulation * HEAT_LOSS_DIVISOR)
@@ -1105,9 +1088,6 @@ STORAGE_KEY: Final = f"{DOMAIN}_state"
 STORAGE_KEY_LEARNING: Final = f"{DOMAIN}_learned_data"
 
 # Services
-SERVICE_SET_OPTIMIZATION_MODE: Final = "set_optimization_mode"
-SERVICE_FORCE_UPDATE: Final = "force_update"
-SERVICE_RESET_PEAKS: Final = "reset_peaks"
 SERVICE_FORCE_OFFSET: Final = "force_offset"
 SERVICE_RESET_PEAK_TRACKING: Final = "reset_peak_tracking"
 SERVICE_BOOST_HEATING: Final = "boost_heating"
@@ -1120,14 +1100,6 @@ ATTR_DURATION: Final = "duration"
 ATTR_TARGET_TEMP: Final = "target_temp"
 
 # Attributes
-ATTR_CURRENT_OFFSET: Final = "current_offset"
-ATTR_DECISION_REASONING: Final = "decision_reasoning"
-ATTR_LAYER_VOTES: Final = "layer_votes"
-ATTR_PEAK_TODAY: Final = "peak_today"
-ATTR_PEAK_THIS_MONTH: Final = "peak_this_month"
-ATTR_THERMAL_DEBT: Final = "thermal_debt"
-ATTR_QUARTER_OF_DAY: Final = "quarter_of_day"
-ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 
 # DHW (Domestic Hot Water) Optimization Constants
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md

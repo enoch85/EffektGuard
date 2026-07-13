@@ -7,15 +7,18 @@ Tests:
 4. Ventilation optimization readiness
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from homeassistant.const import CONF_NAME
 
+from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
+    DEFAULT_TARGET_TEMP,
     CONF_NIBE_ENTITY,
     CONF_GESPOT_ENTITY,
     CONF_WEATHER_ENTITY,
-    CONF_TARGET_TEMPERATURE,
     CONF_TOLERANCE,
     CONF_THERMAL_MASS,
     CONF_INSULATION_QUALITY,
@@ -87,25 +90,40 @@ class TestSensorAvailability:
 class TestConfigurationFlow:
     """Test configuration flow validation and setup."""
 
-    def test_config_flow_schema(self):
-        """Test: Configuration flow has all required fields."""
-        # These should be in config_flow.py
-        required_config_fields = [
-            CONF_NAME,
-            CONF_NIBE_ENTITY,
-            CONF_GESPOT_ENTITY,
-            CONF_WEATHER_ENTITY,
-            CONF_TARGET_TEMPERATURE,
-            CONF_TOLERANCE,
-            CONF_THERMAL_MASS,
-            CONF_INSULATION_QUALITY,
-        ]
+    def test_the_target_temperature_key_the_engine_reads_is_the_one_it_is_given(self):
+        """This test used to assert `CONF_TARGET_TEMPERATURE is not None`. A constant never is.
 
-        # Verify constants exist
-        assert CONF_TARGET_TEMPERATURE is not None
-        assert CONF_TOLERANCE is not None
-        assert CONF_THERMAL_MASS is not None
-        assert CONF_INSULATION_QUALITY is not None
+        It claimed to verify the config flow's schema, called nothing, and listed a constant -
+        CONF_TARGET_TEMPERATURE, "target_temperature" - that PRODUCTION NEVER READS. The decision
+        engine reads "target_indoor_temp", so a config carrying the other key is silently ignored
+        and the engine falls back to DEFAULT_TARGET_TEMP.
+
+        The dead constant is gone. What matters is the property it pretended to check: the key the
+        engine reads has to be the key the config actually carries.
+        """
+        engine = DecisionEngine(
+            price_analyzer=MagicMock(),
+            effect_manager=MagicMock(),
+            thermal_model=MagicMock(),
+            config={"target_indoor_temp": 19.0},
+        )
+
+        assert engine.target_temp == 19.0, (
+            f"The engine was configured with a 19.0 C target and read {engine.target_temp}. The "
+            f"key it reads is 'target_indoor_temp'; a config carrying 'target_temperature' - which "
+            f"is what the deleted CONF_TARGET_TEMPERATURE named - is silently ignored, and the "
+            f"engine falls back to the default."
+        )
+
+    def test_a_config_without_a_target_falls_back_to_the_default(self):
+        engine = DecisionEngine(
+            price_analyzer=MagicMock(),
+            effect_manager=MagicMock(),
+            thermal_model=MagicMock(),
+            config={},
+        )
+
+        assert engine.target_temp == DEFAULT_TARGET_TEMP
 
     @pytest.mark.asyncio
     async def test_config_validation_temperature_ranges(self):
