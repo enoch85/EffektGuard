@@ -1376,12 +1376,35 @@ PEAK_CONTROL_POWER_SOURCES: Final = frozenset(
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
 
-# Plausibility band for user-supplied ADDITIONAL indoor room sensors (°C).
-# These are arbitrary entities the user points us at, so a mis-scaled Modbus register or a
-# sensor that is actually measuring something else must not be averaged into the indoor
-# temperature. Applied AFTER unit conversion to °C.
+# AN IMPLAUSIBLE READING IS NOT A READING.
+#
+# `get_current_state` already says this about a MISSING sensor: "Never substitute a plausible
+# constant for a missing one: that makes a broken installation indistinguishable from a healthy
+# one and still writes a curve offset to the pump." A reading that is physically impossible is the
+# same thing wearing a number, and the mechanism that produces one is mundane: NIBE's Modbus
+# registers hold temperatures in DECI-degrees, so a hand-written YAML that omits `scale: 0.1`
+# reports BT50's 213 as 213.0 C rather than 21.3 C. The repo's own Modbus simulator documents
+# exactly that register, with exactly that value.
+#
+# 213 C indoor is not a rounding error. The comfort layer reads a 192 C overshoot and commands
+# -10.0 C at critical weight, forever - maximum heat reduction in a Swedish January - and the
+# 18 C safety floor never fires, because the safety layer is reading the same 213 C.
+#
+# These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
+# catch a value that cannot be a temperature at all, not to second-guess a working sensor.
 INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
 INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+
+# Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
+# habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
+# the degree-minute warning threshold to -1450 - fifty short of the aux limit - so the immersion
+# heater engages with no warning at all.
+NIBE_OUTDOOR_PLAUSIBLE_MIN: Final = -50.0
+NIBE_OUTDOOR_PLAUSIBLE_MAX: Final = 50.0
+
+# Heating water (BT25/BT63 supply, BT3 return). It cannot freeze and it cannot boil.
+NIBE_WATER_PLAUSIBLE_MIN: Final = 0.0
+NIBE_WATER_PLAUSIBLE_MAX: Final = 100.0
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
     1.0  # °C - Write to NIBE when accumulator crosses ±1.0
 )

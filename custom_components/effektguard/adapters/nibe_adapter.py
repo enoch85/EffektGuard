@@ -48,6 +48,10 @@ from ..const import (
     DOMAIN,
     INDOOR_SENSOR_PLAUSIBLE_MAX,
     INDOOR_SENSOR_PLAUSIBLE_MIN,
+    NIBE_OUTDOOR_PLAUSIBLE_MAX,
+    NIBE_OUTDOOR_PLAUSIBLE_MIN,
+    NIBE_WATER_PLAUSIBLE_MAX,
+    NIBE_WATER_PLAUSIBLE_MIN,
     MAX_OFFSET,
     MIN_OFFSET,
     NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
@@ -242,8 +246,23 @@ class NibeAdapter:
         # still writes a curve offset to the pump. Refuse, and let the coordinator degrade
         # (startup_pending before the first success, UpdateFailed after) - entities go
         # unavailable and nothing is written.
-        outdoor_temp = await self._read_temperature(self._entity_cache.get("outdoor_temp"))
-        supply_temp = await self._read_temperature(self._entity_cache.get("supply_temp"))
+        # An IMPLAUSIBLE reading is not a reading either. NIBE's Modbus registers hold deci-degrees,
+        # so a hand-written YAML that omits `scale: 0.1` reports BT1's -32 as -32.0 C rather than
+        # -3.2 C - and a colder day as -105.0 C, which demands a 96.8 C flow temperature and pushes
+        # the degree-minute warning threshold to within fifty of the aux limit. These take the same
+        # path as a missing sensor: refuse, and let the coordinator degrade.
+        outdoor_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("outdoor_temp")),
+            NIBE_OUTDOOR_PLAUSIBLE_MIN,
+            NIBE_OUTDOOR_PLAUSIBLE_MAX,
+            "outdoor temperature (BT1)",
+        )
+        supply_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("supply_temp")),
+            NIBE_WATER_PLAUSIBLE_MIN,
+            NIBE_WATER_PLAUSIBLE_MAX,
+            "supply temperature (BT25/BT63)",
+        )
 
         # Degree minutes: configured sensor first, then auto-discovery. NEVER estimated -
         # DM is the primary thermal-debt safety signal and every NIBE exposes it
@@ -291,18 +310,41 @@ class NibeAdapter:
         # configuration - it runs on degree minutes and the heating curve. Keep the
         # placeholder for display, but mark it invalid so comfort-reasoning layers abstain
         # instead of reading a deviation of exactly 0.0 from a value that IS the target.
-        measured_indoor = await self._read_temperature(self._entity_cache.get("indoor_temp"))
+        # The plausibility band was applied to the ADDITIONAL sensors the user adds, and not to the
+        # one the HEAT PUMP sends - which is the only one exposed to a Modbus scaling typo. A BT50
+        # reporting 213.0 C instead of 21.3 C was taken at face value, and the comfort layer read a
+        # 192 C overshoot and commanded -10.0 C at critical weight. An implausible BT50 is treated
+        # as NO room sensor, which is a configuration this integration already handles properly:
+        # the comfort-reasoning layers abstain and the pump runs on degree minutes and its curve.
+        measured_indoor = self._plausible(
+            await self._read_temperature(self._entity_cache.get("indoor_temp")),
+            INDOOR_SENSOR_PLAUSIBLE_MIN,
+            INDOOR_SENSOR_PLAUSIBLE_MAX,
+            "indoor temperature (BT50)",
+        )
         indoor_temp_valid = measured_indoor is not None
         indoor_temp = measured_indoor if indoor_temp_valid else DEFAULT_INDOOR_TEMP
 
-        # Multi-sensor indoor temperature calculation
+        # Multi-sensor indoor temperature calculation.
+        #
+        # Pass the MEASURED value, never `indoor_temp` - which is the placeholder when there is no
+        # BT50. `_calculate_multi_sensor_temperature`'s own docstring forbids exactly that: "A
+        # placeholder must NEVER be passed here - seeding the median with DEFAULT_INDOOR_TEMP would
+        # drag the combined reading toward the target and mask a real deviation." It was being
+        # passed anyway. With one added sensor reading 17.0 C in a house targeting 21.0, the median
+        # of [21.0, 17.0] is 19.0 - a two-degree mask, biased toward the target, on a cold house.
         if self._additional_indoor_sensors:
-            combined = await self._calculate_multi_sensor_temperature(indoor_temp)
+            combined = await self._calculate_multi_sensor_temperature(measured_indoor)
             if combined is not None:
                 indoor_temp = combined
                 indoor_temp_valid = True
 
-        return_temp = await self._read_temperature(self._entity_cache.get("return_temp"))
+        return_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("return_temp")),
+            NIBE_WATER_PLAUSIBLE_MIN,
+            NIBE_WATER_PLAUSIBLE_MAX,
+            "return temperature (BT3)",
+        )
 
         # Read current offset
         current_offset = await self._read_entity_float(
@@ -936,6 +978,53 @@ class NibeAdapter:
             return default
 
         return value
+
+    def _plausible(
+        self,
+        value: float | None,
+        minimum: float,
+        maximum: float,
+        description: str,
+    ) -> float | None:
+        """A reading outside the physically possible is not a reading. Return None.
+
+        `get_current_state` already refuses to substitute a plausible constant for a MISSING
+        sensor, "because that makes a broken installation indistinguishable from a healthy one and
+        still writes a curve offset to the pump". A value that cannot be a temperature is the same
+        thing wearing a number, and the mechanism is mundane: NIBE's Modbus registers hold
+        DECI-degrees, so a hand-written YAML that omits `scale: 0.1` turns BT50's 21.3 C into
+        213.0 C and BT1's -3.2 C into -32.0 C.
+
+        Returning None puts such a value on exactly the same path as a missing one: a required
+        sensor raises UpdateFailed and nothing is written to the pump; an optional one (BT50)
+        degrades to "no room sensor", which this integration already handles by having the
+        comfort-reasoning layers abstain.
+
+        Args:
+            value: The reading, already converted to °C, or None.
+            minimum: Lowest value this sensor could physically report.
+            maximum: Highest value this sensor could physically report.
+            description: Human-readable sensor name, for the log line.
+
+        Returns:
+            The value, or None when it is outside the band.
+        """
+        if value is None:
+            return None
+
+        if minimum <= value <= maximum:
+            return value
+
+        _LOGGER.warning(
+            "%s reported %.1f°C, which is outside the possible range %.0f to %.0f°C. Treating it "
+            "as unread rather than controlling the heat pump on it. NIBE's Modbus registers hold "
+            "DECI-degrees: if you configured this sensor by hand, check it has `scale: 0.1`.",
+            description,
+            value,
+            minimum,
+            maximum,
+        )
+        return None
 
     async def _read_temperature(
         self,
