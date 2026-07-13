@@ -601,11 +601,26 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # DESIGN: All proactive zones trigger BEFORE warning threshold!
 # Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
 #
+PROACTIVE_ZONE5_MISSING_RUNG_NOTE = """
+Zone 5 was unreachable for the whole life of this project, in every release and every climate zone.
+
+Its band is `warning < DM <= zone5_threshold`, and the percent below was 1.00 - so zone5_threshold
+came out at exactly `normal_max`. Every climate zone ALSO sets `dm_warning_threshold` to exactly the
+deep end of `dm_normal_range`, so `warning == normal_max == zone5_threshold` and the band read
+`-740 < DM <= -740`: the empty set. Both ends were the same number, and the same temperature
+adjustment is added to both, so they could never separate.
+
+1.00 is the one value that gives this rung no step to stand on, and it contradicts the DESIGN note
+directly above: Z1-Z5 trigger BEFORE the warning threshold, so Z5's boundary must sit strictly before
+it. 0.875 splits the old Z4 band in half and hands the deeper half to Z5 - the ladder regains the
++3.0 rung it was built with, and no threshold that governs when RECOVERY starts moves at all.
+"""
+
 PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.02  # 2% of normal max (ultra-early warning, Jan 2026)
 PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
 PROACTIVE_ZONE3_THRESHOLD_PERCENT: Final = 0.50  # 50% of normal max (significant)
 PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 0.75  # 75% of normal max (strong)
-PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 1.00  # 100% of normal max (at warning boundary)
+PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 0.875  # 87.5% - strictly BEFORE warning (see note above)
 
 # Proactive layer zone offsets and weights (Oct 19, 2025)
 # Progressive escalation as DM approaches warning threshold
@@ -1017,12 +1032,35 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 
 # Adaptive learning parameters
 # Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
-# NOTE: these two counts are sized for 15-minute observations, but the coordinator records one per
-# aligned refresh - UPDATE_INTERVAL_MINUTES, i.e. every 5. The deque therefore spans 56 h, not the
-# week its comment claims. See F-132: that mismatch is real, and fixing it is an OWNER decision,
-# because widening the window is what would let learning engage on a live heat pump.
-LEARNING_OBSERVATION_WINDOW: Final = 672  # 1 week of 15-minute observations
-LEARNING_MIN_OBSERVATIONS: Final = 96  # 24 hours minimum for basic learning
+#
+# LEARNING OBSERVES ON A DIFFERENT CLOCK FROM CONTROL, and it has to.
+#
+# Control runs every UPDATE_INTERVAL_MINUTES because the pump needs steering that often. Learning
+# used to piggy-back on the same tick, and could therefore never learn anything: the NIBE BT1 indoor
+# sensor reports to 0.1 C, and a house warming at a brisk 0.6 C/h moves 0.05 C in five minutes - half
+# a sensor tick. Every observed rate quantised to 0.0 or 1.2 C/h with nothing in between, so the
+# scatter that `_calculate_confidence` scores was a measurement of the SAMPLING INTERVAL, not of the
+# building. Confidence sat at 0.467 against a 0.7 gate, on any house, forever (F-132).
+#
+# The same house, identical physics, identical sensor, watched more slowly:
+#     5 min   quantum 1.20 C/h   confidence 0.467   never engages
+#    15 min   quantum 0.40 C/h   confidence 0.600   never engages
+#    30 min   quantum 0.20 C/h   confidence 0.707   engages, barely
+#    60 min   quantum 0.10 C/h   confidence 0.811   engages, comfortably
+#
+# Hourly is also the honest timescale for the question being asked. A building's thermal time
+# constant is hours; the concrete slab in UFH_CONCRETE_* lags six of them. Sampling that every five
+# minutes is sampling noise.
+#
+# It fixes the memory as well. The 672-entry deque was commented "1 week" but spanned 56 HOURS at the
+# 5-minute cadence - and it is a rolling window, so the model on day 90 saw exactly what it saw on
+# day 3, and the README's "Day 8-14: high confidence" was unreachable by construction. At one
+# observation an hour the same deque remembers 28 days.
+LEARNING_OBSERVATION_INTERVAL_MINUTES: Final = (
+    60  # Learning observes hourly, not every control tick
+)
+LEARNING_OBSERVATION_WINDOW: Final = 672  # 672 hourly observations = 28 days of memory
+LEARNING_MIN_OBSERVATIONS: Final = 96  # 96 hourly observations = 4 days before learning may engage
 LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
 
 # What it takes for the heating observations to carry any information at all.
@@ -1300,19 +1338,16 @@ KILOWATTS_PER_MEGAWATT: Final = 1000.0
 # configured tells you nothing about whether it answered this cycle.
 POWER_SOURCE_EXTERNAL_METER: Final = "external_meter"
 POWER_SOURCE_NIBE_CURRENTS: Final = "nibe_currents"
-POWER_SOURCE_SOLAR_FALLBACK: Final = "solar_fallback"
 POWER_SOURCE_ESTIMATE: Final = "estimate"
 POWER_SOURCE_NONE: Final = "none"
 
-# Sources that may be recorded against the monthly effect tariff. Estimates never can: they are for
-# display and for the decision layers, and billing must be able to survive being checked.
-BILLABLE_POWER_SOURCES: Final = frozenset(
-    {
-        POWER_SOURCE_EXTERNAL_METER,
-        POWER_SOURCE_NIBE_CURRENTS,
-        POWER_SOURCE_SOLAR_FALLBACK,
-    }
-)
+# The Swedish effect tariff bills whole-house grid IMPORT, so only a whole-house meter can produce a
+# billing peak. Everything else is for the decision layers and the display, which want a magnitude.
+#
+# NIBE phase currents (BE1/BE2/BE3) measure the heat pump and nothing else - not the oven, not the EV
+# charger. They were billable, while the peak sensor simultaneously told the owner they were not.
+# Estimates were billable too, whenever a configured meter went unavailable. Neither is.
+BILLABLE_POWER_SOURCES: Final = frozenset({POWER_SOURCE_EXTERNAL_METER})
 
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable

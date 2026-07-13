@@ -245,23 +245,33 @@ class TestKilowattMeterNotDividedTwice:
         assert coordinator.peak_today == 6.0
 
 
-class TestSmartFallbackSolarOffset:
-    """Test smart fallback for grid meters with solar/battery offset."""
+class TestAMeterBehindSolarIsStillTheMeter:
+    """A grid-import meter reading low behind solar is reporting the truth, and the truth is billed.
+
+    There used to be a "smart fallback" here: a meter reading under 0.5 kW while the compressor ran
+    above 20 Hz was assumed to be masked by solar export, so an ESTIMATE of the compressor's draw was
+    substituted - and recorded against the effect tariff.
+
+    The grid operator bills grid IMPORT. If solar covers 4.7 kW of a 5.0 kW compressor, the house
+    imported 0.3 kW and 0.3 kW is what is charged. Recording ~5.5 kW instead inflated the month's peak
+    by an order of magnitude, in the owner's disfavour, and effect tariffs bill the top three quarters
+    of the month, so it stood for weeks.
+
+    Owner decision: "Math should be correct. So if solar covers everything but 0.5 kW, count 0.5 kW
+    for that period." The meter is the truth. There is nothing to override.
+    """
 
     @pytest.mark.asyncio
-    async def test_low_meter_reading_with_high_compressor_uses_estimate(
+    async def test_a_low_reading_with_the_compressor_running_hard_is_taken_at_face_value(
         self, coordinator_with_external_meter
     ):
-        """Test that low meter reading with high compressor Hz uses estimate."""
         coordinator = coordinator_with_external_meter
 
-        # Mock external meter showing low reading (solar export offset)
         mock_state = MagicMock()
-        mock_state.state = "300"  # Only 300W (likely solar offset)
+        mock_state.state = "300"  # 300 W of grid import; the panels are covering the rest
         mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
 
-        # Mock NIBE data showing compressor working hard
         nibe_data = NibeState(
             outdoor_temp=-5.0,
             indoor_temp=21.0,
@@ -272,40 +282,29 @@ class TestSmartFallbackSolarOffset:
             is_heating=True,
             is_hot_water=False,
             timestamp=datetime.now(),
-            phase1_current=12.0,  # High current
-            phase2_current=10.0,
-            phase3_current=11.0,
-            compressor_hz=60,  # Working hard
+            compressor_hz=60,  # working hard - this used to trigger the substitution
         )
-
-        # Mock _estimate_power_from_compressor for fallback
-        coordinator._estimate_power_from_compressor = lambda nd: 5.5
-
-        # Mock effect manager save as async
-        coordinator.effect.async_save = AsyncMock()
 
         await coordinator._update_peak_tracking(nibe_data)
 
-        # Smart fallback should detect solar offset and use estimate (>1 kW)
-        # However, the current implementation might not trigger fallback
-        # if external meter is available. Let's just check it uses external meter.
-        # The smart fallback is a planned feature, not fully implemented yet.
-        assert coordinator.peak_today >= 0.3  # At minimum uses meter reading
+        assert coordinator.peak_today == pytest.approx(0.3), (
+            f"The meter reported 0.3 kW of grid import and {coordinator.peak_today:.2f} kW was "
+            f"recorded. What the compressor draws is not what the grid delivered, and it is not "
+            f"what will be billed."
+        )
 
     @pytest.mark.asyncio
-    async def test_low_meter_reading_with_low_compressor_uses_meter(
+    async def test_a_low_reading_with_the_compressor_idle_is_also_taken_at_face_value(
         self, coordinator_with_external_meter
     ):
-        """Test that low meter with low compressor uses meter reading."""
+        """The same rule, with nothing there to tempt it."""
         coordinator = coordinator_with_external_meter
 
-        # Mock external meter showing low reading
         mock_state = MagicMock()
-        mock_state.state = "300"  # 300W
+        mock_state.state = "300"
         mock_state.attributes = {"unit_of_measurement": "W"}
         coordinator.hass.states.get.return_value = mock_state
 
-        # Mock NIBE data showing compressor idle
         nibe_data = NibeState(
             outdoor_temp=10.0,
             indoor_temp=21.0,
@@ -313,19 +312,15 @@ class TestSmartFallbackSolarOffset:
             return_temp=28.0,
             degree_minutes=-20.0,
             current_offset=0.0,
-            is_heating=False,  # Not heating
+            is_heating=False,
             is_hot_water=False,
             timestamp=datetime.now(),
-            phase1_current=0.5,  # Low current
-            phase2_current=0.0,
-            phase3_current=0.0,
-            compressor_hz=0,  # Not running
+            compressor_hz=0,
         )
 
         await coordinator._update_peak_tracking(nibe_data)
 
-        # Should use meter reading (0.3 kW) because compressor idle
-        assert coordinator.peak_today == pytest.approx(0.3, rel=0.1)
+        assert coordinator.peak_today == pytest.approx(0.3)
 
 
 class TestPeakTrackingOnlyWithRealMeasurements:

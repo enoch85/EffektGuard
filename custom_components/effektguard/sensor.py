@@ -32,7 +32,6 @@ from .const import (
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
     POWER_SOURCE_NONE,
-    POWER_SOURCE_SOLAR_FALLBACK,
     PRICE_UNIT_FALLBACK,
     DOMAIN,
 )
@@ -959,7 +958,6 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             source_descriptions = {
                 POWER_SOURCE_EXTERNAL_METER: "Whole-house power meter (best accuracy)",
                 POWER_SOURCE_NIBE_CURRENTS: "NIBE phase currents (NIBE only)",
-                POWER_SOURCE_SOLAR_FALLBACK: "Estimated - meter reads low behind solar",
                 POWER_SOURCE_ESTIMATE: "Estimated from compressor (display only)",
                 POWER_SOURCE_NONE: "No measurement available yet",
             }

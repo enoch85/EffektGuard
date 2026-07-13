@@ -45,13 +45,13 @@ from .const import (
     DM_THRESHOLD_START,
     DOMAIN,
     BILLABLE_POWER_SOURCES,
+    LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
     POWER_SOURCE_NONE,
-    POWER_SOURCE_SOLAR_FALLBACK,
     QUARTER_INTERVAL_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
@@ -360,6 +360,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
+        # Learning observes hourly, not per control cycle - see _record_learning_observations
+        self._last_learning_observation: datetime | None = None
         self._power_sensor_listener = None
 
     def _calculate_next_aligned_time(self) -> datetime:
@@ -2139,43 +2141,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power,
                 )
 
-            # SMART FALLBACK for grid import meters with solar/battery
-            # If meter shows unexpectedly low reading but compressor running significantly,
-            # the meter likely shows NET import (actual consumption minus solar export)
-            # In this case, use calculated/estimated heat pump power for peak tracking
-            # Only when the meter ACTUALLY READ low - which is the fallback's real precondition, a
-            # grid meter reading near zero because solar is covering the compressor. A dropped-out
-            # meter leaves an ESTIMATE in `current_power`, and substituting a second estimate for it
-            # and calling the result billable is the hole this method used to have.
+            # A meter reading low while the compressor runs hard used to be overridden here: the code
+            # assumed solar was masking the grid import and substituted an ESTIMATE of the
+            # compressor's draw. It billed that estimate.
             #
-            # This is defence in depth, not a live fix, and it is deliberately untested: the
-            # substitution already cannot happen on an estimate, because `estimated_power` below is
-            # the same `estimate_power_from_compressor(...)` call that produced `current_power`, so
-            # it would have to be both < 0.5 and > 1.0 at once. That safety is a coincidence of two
-            # thresholds in two files. The condition says what it means instead.
-            if power_source == POWER_SOURCE_EXTERNAL_METER and current_power < 0.5:
-                # Check if heat pump is actually working hard
-                compressor_hz = getattr(nibe_data, "compressor_hz", 0) or 0
-                is_heating = getattr(nibe_data, "is_heating", False)
-
-                if is_heating and compressor_hz > 20:
-                    # Compressor running significantly but meter shows low reading
-                    # This indicates solar/battery offsetting grid import
-                    estimated_power = self.effect.estimate_power_from_compressor(
-                        compressor_hz, getattr(nibe_data, "outdoor_temp", 0.0)
-                    )
-
-                    if estimated_power > 1.0:  # Estimated power seems reasonable
-                        _LOGGER.info(
-                            "Smart fallback: Using estimated power %.2f kW "
-                            "(meter shows %.2f kW - likely solar/"
-                            "battery offset, compressor: %d Hz)",
-                            estimated_power,
-                            current_power,
-                            compressor_hz,
-                        )
-                        current_power = estimated_power
-                        power_source = POWER_SOURCE_SOLAR_FALLBACK
+            # The grid operator bills grid IMPORT, and the import is exactly what the meter saw. If
+            # solar covers 4.7 kW of a 5.0 kW compressor, the house imported 0.3 kW and 0.3 kW is
+            # what is charged. Recording ~5.5 kW instead inflated the month's peak by an order of
+            # magnitude, in the owner's disfavour, and effect tariffs bill the top three quarters of
+            # the month, so it stood for weeks.
+            #
+            # The meter is the truth. There is nothing to override.
 
             # Publish the instantaneous reading for the effect layer.
             #
@@ -2524,13 +2500,29 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             now = dt_util.utcnow()
 
-            # Record adaptive thermal observation
-            self.adaptive_learning.record_observation(
-                timestamp=now,
-                indoor_temp=nibe_data.indoor_temp,
-                outdoor_temp=nibe_data.outdoor_temp,
-                heating_offset=current_offset,
+            # Learning observes on its own clock, not the control loop's.
+            #
+            # The BT1 indoor sensor reports to 0.1 C. A house warming at a brisk 0.6 C/h moves
+            # 0.05 C in five minutes - half a sensor tick - so an observation per control cycle
+            # records the quantisation, not the building. The thermal PREDICTOR below still wants
+            # every cycle: it tracks short-term trend, where five-minute resolution is the point.
+            # The learner is asking a different question on a different timescale, and a building's
+            # time constant is hours (LEARNING_OBSERVATION_INTERVAL_MINUTES, audit F-132).
+            since_last = (
+                None
+                if self._last_learning_observation is None
+                else now - self._last_learning_observation
             )
+            if since_last is None or since_last >= timedelta(
+                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            ):
+                self.adaptive_learning.record_observation(
+                    timestamp=now,
+                    indoor_temp=nibe_data.indoor_temp,
+                    outdoor_temp=nibe_data.outdoor_temp,
+                    heating_offset=current_offset,
+                )
+                self._last_learning_observation = now
 
             # Record thermal state for predictor
             self.thermal_predictor.record_state(
