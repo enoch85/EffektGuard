@@ -30,9 +30,6 @@ from ..const import (
     PRICE_OFFSET_NORMAL,
     PRICE_OFFSET_PEAK,
     PRICE_OFFSET_VERY_CHEAP,
-    PRICE_EXTREME_MARGIN,
-    PRICE_MILD_MARGIN,
-    PRICE_MIN_RELATIVE_SPREAD,
     PRICE_PERCENTILE_CHEAP,
     PRICE_PERCENTILE_EXPENSIVE,
     PRICE_PERCENTILE_NORMAL,
@@ -212,61 +209,31 @@ class PriceAnalyzer:
             p90,
         )
 
-        # No tradeable signal: the day carries no meaningful spread.
-        #
-        # This exists for fallback mode, where the adapter has no data and invents 96 identical
-        # quarters - classifying those manufactures a price signal out of the absence of one.
-        #
-        # It must test the SPREAD, never `p25 == p90`. Those percentiles are equal whenever the
-        # middle 65% of the day sits at one price, which is a PLATEAU, not a flat day: a day of 83
-        # quarters at 120 öre and 13 at MINUS 10 öre satisfies it, and every quarter - including
-        # the ones where the grid is paying to be consumed from - was classified NORMAL. The most
-        # profitable day of the year was the one on which optimisation switched itself off.
-        spread = float(np.max(prices) - np.min(prices))
-        mean_magnitude = float(np.mean(np.abs(prices)))
-        if spread <= PRICE_MIN_RELATIVE_SPREAD * mean_magnitude:
+        # Special case: Uniform prices (all equal) - happens with fallback mode
+        # When spot price unavailable, fallback creates 96 periods with price=1.0
+        # Without variance, classification is meaningless - mark all as NORMAL
+        if p25 == p90:  # No price variance
             _LOGGER.info(
-                "No tradeable price spread (%.3f across a mean magnitude of %.3f) - classifying "
-                "all periods as NORMAL",
-                spread,
-                mean_magnitude,
+                "Uniform prices detected (%.3f), classifying all periods as NORMAL (no optimization)",
+                p25,
             )
             return {index: QuarterClassification.NORMAL for index, _ in enumerate(periods)}
 
         # Classify each period
         # Order: VERY_CHEAP (bottom 10%) -> CHEAP (10-25%) -> NORMAL (25-75%) ->
         #        EXPENSIVE (75-90%) -> PEAK (top 10%)
-        # A band must be earned by BOTH rank and magnitude, and a quarter that fails on magnitude
-        # falls back to NORMAL rather than to the next band along.
-        #
-        # The percentiles say nothing about how far apart the prices actually are. Rank alone
-        # called 88 quarters at 40 öre VERY_CHEAP on a day whose median was 40 öre, and earned
-        # them +4 °C of pre-heat each. A PLATEAU breaks it in both directions: when 83 of 96
-        # quarters share one price they straddle p25 AND p75, so the day's most expensive price is
-        # simultaneously "cheap". Requiring a real distance from the median - measured against the
-        # day's mean magnitude, so the test is invariant to the price unit and survives negative
-        # prices - is what makes the band mean something.
-        # Referenced to the MEDIAN. The mean is not robust: one absurd quarter drags it upward
-        # and every ordinary quarter of the day then looks cheap by comparison - 95 quarters at
-        # 50 öre alongside a single 5000 öre spike came out as VERY_CHEAP, each earning +4 °C of
-        # pre-heat. The median cannot be moved by an outlier, only by the shape of the day.
-        reference = float(np.median(prices))
-        extreme_margin = PRICE_EXTREME_MARGIN * mean_magnitude
-        mild_margin = PRICE_MILD_MARGIN * mean_magnitude
-
         classifications = {}
         for index, period in enumerate(periods):
-            price = period.price
-            if price <= p10 and price <= reference - extreme_margin:
+            if period.price <= p10:
                 classification = QuarterClassification.VERY_CHEAP
-            elif price <= p25 and price < reference - mild_margin:
+            elif period.price <= p25:
                 classification = QuarterClassification.CHEAP
-            elif price >= p90 and price >= reference + extreme_margin:
-                classification = QuarterClassification.PEAK
-            elif price >= p75 and price > reference + mild_margin:
+            elif period.price <= p75:
+                classification = QuarterClassification.NORMAL
+            elif period.price <= p90:
                 classification = QuarterClassification.EXPENSIVE
             else:
-                classification = QuarterClassification.NORMAL
+                classification = QuarterClassification.PEAK
 
             classifications[index] = classification
 
@@ -1095,20 +1062,11 @@ class PriceAnalyzer:
                 final_offset = max(final_offset - (overshoot - max_overshoot), 0)
                 strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
 
-        # Apply weight based on classification and volatility.
-        #
-        # A PEAK takes critical priority only when it lasts long enough to be worth coasting
-        # through. An ISOLATED peak - a single quarter, gone before the water in the emitters has
-        # turned over - cannot be responded to: a concrete slab needs hours to shift, and a
-        # radiator system still needs longer than fifteen minutes. Giving such a quarter critical
-        # weight commanded a full shutdown (PRICE_OFFSET_PEAK, -10 °C) for a spike the house
-        # cannot feel, and left the offset flip-flopping - which is precisely what the volatility
-        # guard exists to stop. Volatility must therefore reach the PEAK branch too.
-        if (classification == QuarterClassification.PEAK or in_peak_cluster) and not is_volatile:
+        # Apply weight based on classification and volatility
+        if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority
         elif is_volatile:
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
-            final_offset *= VOLATILE_WEIGHT_REDUCTION
         else:
             price_weight = LAYER_WEIGHT_PRICE
 

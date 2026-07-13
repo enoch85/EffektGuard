@@ -796,23 +796,6 @@ VOLATILE_WEIGHT_REDUCTION: Final = 0.3  # Retain 30% weight during volatility
 
 # Price classification percentile thresholds (Dec 8, 2025)
 # Define the boundaries between price classifications
-# Below this RELATIVE spread there is nothing worth trading on, and the percentile classifier -
-# which is rank-based, so it will happily split a hair - would manufacture a signal out of noise.
-# Relative, because the price unit is the user's (öre/kWh or SEK/kWh) and an absolute threshold
-# would mean a hundredfold different thing in each. Compared against the mean ABSOLUTE price, so
-# that a day containing negative prices is measured on its magnitude rather than its sign.
-PRICE_MIN_RELATIVE_SPREAD: Final = 0.05  # spread must exceed 5% of the day's mean |price|
-
-# The extreme bands (VERY_CHEAP, PEAK) drive the extreme responses: +4 °C of pre-heat and a full
-# -10 °C shutdown. Rank alone must not earn them. The percentiles are rank-based, so on a day of
-# little real variation the bottom decile is "very cheap" and the top decile is a "peak" even when
-# they differ by a few öre - a day of 88 quarters at 40 öre classified all 88 as VERY_CHEAP and a
-# 60 öre quarter as PEAK. A quarter must therefore ALSO stand this far from the day's median,
-# measured against the day's mean magnitude so that the test is invariant to the price unit and
-# survives negative prices, before it can be called extreme. Otherwise it falls back one band.
-PRICE_EXTREME_MARGIN: Final = 0.20  # extreme bands need |price - median| > 20% of mean |price|
-PRICE_MILD_MARGIN: Final = 0.05  # CHEAP/EXPENSIVE need |price - median| > 5% of mean |price|
-
 PRICE_PERCENTILE_VERY_CHEAP: Final = 10  # Bottom 10% = VERY_CHEAP
 PRICE_PERCENTILE_CHEAP: Final = 25  # 10-25% = CHEAP
 PRICE_PERCENTILE_NORMAL: Final = 75  # 25-75% = NORMAL
