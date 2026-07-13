@@ -800,6 +800,17 @@ PRICE_PERCENTILE_VERY_CHEAP: Final = 10  # Bottom 10% = VERY_CHEAP
 PRICE_PERCENTILE_CHEAP: Final = 25  # 10-25% = CHEAP
 PRICE_PERCENTILE_NORMAL: Final = 75  # 25-75% = NORMAL
 PRICE_PERCENTILE_EXPENSIVE: Final = 90  # 75-90% = EXPENSIVE
+PRICE_PERCENTILE_MEDIAN: Final = 50  # the day's midpoint; guards every band against a plateau
+
+# A day whose prices barely move carries no signal, and percentile RANK cannot see that: it is
+# scale-invariant, so it cannot tell a 130 ore spread from a 0.4 ore one. A day that ran from
+# 39.80 to 40.20 ore used to earn the full VERY_CHEAP..PEAK banding - a 14 C swing in commanded
+# offset - to chase four tenths of an ore.
+#
+# The test is RELATIVE, not an absolute number of ore, because nothing in the price layer knows
+# its unit: PriceData carries none, and GE-Spot publishes whatever the owner configured. An
+# absolute threshold would be a hundred times wrong for anyone reporting SEK/kWh.
+PRICE_FLAT_DAY_SPREAD_FRACTION: Final = 0.05  # p90-p10 must exceed 5 % of the day's price scale
 # Above 90% = PEAK
 
 # Price classification base offsets (Dec 3, 2025, updated Dec 8, 2025)
