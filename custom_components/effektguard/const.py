@@ -1319,6 +1319,7 @@ DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estima
 # Unit conversion
 WATTS_PER_KILOWATT: Final = 1000.0
 KILOWATTS_PER_MEGAWATT: Final = 1000.0
+MILLIWATTS_PER_KILOWATT: Final = 1_000_000.0
 
 # Where a power reading came from. The monthly effect tariff may only be billed against a real
 # measurement, so the value has to carry its own provenance - asking whether a power ENTITY is
