@@ -15,9 +15,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from ..const import CONF_WEATHER_ENTITY
 
@@ -114,6 +116,21 @@ class WeatherAdapter:
             if self._next_random_attempt is None:
                 self._schedule_next_random_attempt()
             return None
+
+        # THE WEATHER ADAPTER READ FAHRENHEIT AS CELSIUS.
+        #
+        # A Home Assistant weather entity reports its temperatures in the user's configured unit
+        # system and declares which in `temperature_unit`. Nothing here ever looked. On an imperial
+        # install a -5 C cold snap arrives as "23", and 23 is what the weather, prediction and
+        # pre-heating layers were given - so the pre-heat is withdrawn at exactly the moment it is
+        # needed, while `nibe_adapter` (which DOES convert, via the same TemperatureConverter)
+        # correctly reports -5. The two primary temperature sources silently disagree by 28 degrees.
+        source_unit = state.attributes.get("temperature_unit") or UnitOfTemperature.CELSIUS
+
+        def to_celsius(value: float) -> float:
+            return TemperatureConverter.convert(
+                float(value), source_unit, UnitOfTemperature.CELSIUS
+            )
 
         # Get current temperature
         current_temp = state.attributes.get("temperature")
@@ -253,7 +270,7 @@ class WeatherAdapter:
                 forecast_hours.append(
                     WeatherForecastHour(
                         datetime=dt,
-                        temperature=float(temp),
+                        temperature=to_celsius(temp),
                         condition=item.get("condition"),
                     )
                 )
@@ -290,7 +307,7 @@ class WeatherAdapter:
         self._next_random_attempt = None
 
         return WeatherData(
-            current_temp=float(current_temp),
+            current_temp=to_celsius(current_temp),
             forecast_hours=forecast_hours,
             source_entity=self._weather_entity,
             source_method=source_method,

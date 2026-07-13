@@ -1229,10 +1229,17 @@ DHW_EXTENDED_RUNTIME_MINUTES: Final = 60  # High demand period heating
 DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
 
 # NIBE Power Calculation Constants (Swedish 3-phase standard)
-# All NIBE heat pumps in Sweden are 3-phase systems
-NIBE_VOLTAGE_PER_PHASE: Final = (
-    240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
-)
+# All NIBE heat pumps in Sweden are 3-phase systems.
+#
+# This was 240.0 V, and its own comment gave the reason it could not be: "400V between phases,
+# 240V phase-to-neutral". Those two numbers contradict each other by a factor of sqrt(3) -
+# 400 / sqrt(3) is 230.94, not 240. 240 V is the legacy UK/US figure.
+#
+# IEC 60038 and EN 50160 declare the European low-voltage supply as 230/400 V, and Sweden is
+# 230 V phase-to-neutral. At 240 V every power figure derived from NIBE's BE1/BE2/BE3 phase
+# currents came out 4.3 % HIGH - and those figures now feed the monthly peak history that drives
+# peak protection, so the bias is not cosmetic.
+NIBE_VOLTAGE_PER_PHASE: Final = 230.0  # V - IEC 60038: 230/400 V, phase-to-neutral
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
 
 # ============================================================================
