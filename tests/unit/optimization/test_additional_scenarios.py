@@ -68,17 +68,6 @@ class TestSensorAvailability:
         assert quarters_per_day == 24 * 4  # 24 hours × 4 quarters per hour
 
     @pytest.mark.asyncio
-    async def test_required_weather_sensors(self):
-        """Test: Verify required weather sensors.
-
-        Required from weather integration:
-        - Temperature forecast (next 12-24 hours)
-        - Hourly granularity minimum
-        """
-        required_forecast_hours = 12  # Minimum for pre-heating decisions
-        assert required_forecast_hours >= 12
-
-    @pytest.mark.asyncio
     async def test_graceful_degradation_without_optional_sensors(self):
         """Test: System works with only required sensors.
 
@@ -210,53 +199,6 @@ class TestWearProtection:
         # 5-minute updates = max 12 changes per hour
         max_changes_per_hour = 60 / expected_update_interval
         assert max_changes_per_hour == 12
-
-    @pytest.mark.asyncio
-    async def test_offset_change_rate_limiting(self):
-        """Test: Offset changes are rate limited.
-
-        Expected: Minimum time between offset changes to prevent wear.
-        """
-        # From copilot instructions and research:
-        # Should have minimum interval between writes to avoid wear
-        min_write_interval_seconds = 300  # 5 minutes minimum
-        assert min_write_interval_seconds >= 300
-
-        # This protects against:
-        # 1. Excessive compressor cycling
-        # 2. NIBE controller wear
-        # 3. Thermal oscillations
-
-    @pytest.mark.asyncio
-    async def test_offset_change_magnitude_limits(self):
-        """Test: Offset changes are gradual, not sudden.
-
-        Expected: Maximum offset change per update cycle.
-        """
-        # Offset changes should be gradual
-        # Typical offset range: -10 to +10
-        # Max change per cycle: ~2-3°C to prevent shock
-        max_offset_change = 3.0
-        assert max_offset_change <= 3.0
-
-        # Prevents:
-        # 1. Thermal shock
-        # 2. Comfort disruption
-        # 3. Excessive power spikes
-
-    @pytest.mark.asyncio
-    async def test_startup_delay_prevents_conflicts(self):
-        """Test: Startup delay allows other integrations to initialize.
-
-        Expected: 10-second delay after HA start.
-        """
-        startup_delay_seconds = 10
-        assert startup_delay_seconds >= 10
-
-        # Ensures:
-        # 1. NIBE Myuplink is ready
-        # 2. Spot price has data
-        # 3. Weather integration loaded
 
 
 class TestVentilationReadiness:

@@ -125,26 +125,6 @@ class TestPeakCalculationFrequency:
         # But only 3 peaks total for top 3 tracking
         assert len(effect_manager._monthly_peaks) <= 3
 
-    @pytest.mark.asyncio
-    async def test_offset_changes_are_gradual(self):
-        """Test: Offset changes are gradual to prevent thermal shock.
-
-        Expected:
-        - Maximum offset change per update: ~2-3°C
-        - Prevents sudden changes that cause cycling
-        - Smooth transitions protect compressor
-        """
-        max_offset_change_per_update = 3.0  # °C
-
-        # This limit is enforced by decision engine aggregation
-        # Even if one layer votes for large change, aggregation smooths it
-        assert max_offset_change_per_update <= 3.0
-
-        # Rationale:
-        # - Typical heating curve range: -10 to +10 (20°C total)
-        # - 3°C change per 5 minutes = 36°C/hour (very gradual)
-        # - Prevents thermal shock and excessive cycling
-
     def test_rate_limiting_prevents_wear(self):
         """Test: Rate limiting prevents excessive wear on NIBE controller.
 
