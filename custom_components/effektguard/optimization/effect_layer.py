@@ -20,6 +20,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BILLABLE_POWER_SOURCES,
     COMPRESSOR_HZ_MIN,
     COMPRESSOR_HZ_RANGE,
     COMPRESSOR_POWER_MAX_KW,
@@ -57,6 +58,8 @@ from ..const import (
     POWER_MULTIPLIER_COLD,
     POWER_MULTIPLIER_MILD,
     POWER_MULTIPLIER_VERY_COLD,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NONE,
     POWER_STANDBY_KW,
     POWER_TEMP_COLD_THRESHOLD,
     POWER_TEMP_VERY_COLD_THRESHOLD,
@@ -78,6 +81,7 @@ class PeakEventDict(TypedDict):
     actual_power: float
     effective_power: float
     is_daytime: bool
+    source: str
 
 
 class PeakSummaryPeakDict(TypedDict):
@@ -87,13 +91,22 @@ class PeakSummaryPeakDict(TypedDict):
     effective_power: float
     actual_power: float
     is_daytime: bool
+    source: str
+    billable: bool
 
 
 class MonthlyPeakSummaryDict(TypedDict):
-    """Summary of monthly peaks for display."""
+    """Summary of monthly peaks for display.
+
+    `billable` is False as soon as ANY peak in the history came from something other than a
+    whole-house meter. The tariff is charged on the top three quarters together, so one pump-only
+    quarter in the set makes the whole figure something other than the bill - and the owner is told
+    that rather than shown a number that looks like money.
+    """
 
     count: int
     highest: float
+    billable: bool
     peaks: list[PeakSummaryPeakDict]
 
 
@@ -109,6 +122,16 @@ class PeakEvent:
     actual_power: float  # kW
     effective_power: float  # kW (with day/night weighting)
     is_daytime: bool
+    # Where the number came from. A peak measured from NIBE's phase currents is a real measurement
+    # of the pump and a perfectly good CONTROL threshold, but it is not whole-house grid import and
+    # must never be reported to the owner as the month's billing peak. Carrying the provenance is
+    # what lets one history serve both purposes without lying about either.
+    source: str = POWER_SOURCE_EXTERNAL_METER
+
+    @property
+    def is_billable(self) -> bool:
+        """Whether this peak may appear in a billing figure shown to the owner."""
+        return self.source in BILLABLE_POWER_SOURCES
 
     def to_dict(self) -> PeakEventDict:
         """Convert to dictionary for storage."""
@@ -118,17 +141,25 @@ class PeakEvent:
             "actual_power": self.actual_power,
             "effective_power": self.effective_power,
             "is_daytime": self.is_daytime,
+            "source": self.source,
         }
 
     @classmethod
     def from_dict(cls, data: PeakEventDict) -> "PeakEvent":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Peaks stored before provenance was recorded could have come from a meter OR from phase
+        currents - the version that wrote them allowed both - so their source is genuinely unknown
+        and is recorded as such rather than guessed into one or the other. Monthly peaks are
+        discarded at the month boundary, so this can only apply for the remainder of one month.
+        """
         return cls(
             timestamp=dt_util.parse_datetime(data["timestamp"]),
             quarter_of_day=data["quarter_of_day"],
             actual_power=data["actual_power"],
             effective_power=data["effective_power"],
             is_daytime=data["is_daytime"],
+            source=data.get("source", POWER_SOURCE_NONE),
         )
 
 
@@ -211,6 +242,7 @@ class EffectManager:
         power_kw: float,
         quarter: int,
         timestamp: datetime,
+        source: str = POWER_SOURCE_EXTERNAL_METER,
     ) -> PeakEvent | None:
         """Record a 15-minute power measurement.
 
@@ -221,6 +253,8 @@ class EffectManager:
             power_kw: Power consumption in kW
             quarter: Quarter of day (0-95)
             timestamp: Measurement timestamp
+            source: Where the reading came from. A NIBE-currents peak is a valid CONTROL threshold
+                but is not whole-house grid import, so it never reaches a billing figure.
 
         Returns:
             PeakEvent if this creates a new monthly peak, None otherwise
@@ -262,6 +296,7 @@ class EffectManager:
                 actual_power=power_kw,
                 effective_power=effective_power,
                 is_daytime=is_daytime,
+                source=source,
             )
             self._monthly_peaks.append(peak_event)
 
@@ -419,18 +454,22 @@ class EffectManager:
             return {
                 "count": 0,
                 "highest": 0.0,
+                "billable": False,
                 "peaks": [],
             }
 
         return {
             "count": len(self._monthly_peaks),
             "highest": self._monthly_peaks[0].effective_power,
+            "billable": all(p.is_billable for p in self._monthly_peaks),
             "peaks": [
                 {
                     "timestamp": p.timestamp.isoformat(),
                     "effective_power": p.effective_power,
                     "actual_power": p.actual_power,
                     "is_daytime": p.is_daytime,
+                    "source": p.source,
+                    "billable": p.is_billable,
                 }
                 for p in self._monthly_peaks
             ],

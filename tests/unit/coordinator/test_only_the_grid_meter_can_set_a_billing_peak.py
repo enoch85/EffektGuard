@@ -124,17 +124,81 @@ def test_only_a_whole_house_meter_is_billable():
 
 
 @pytest.mark.asyncio
-async def test_nibe_phase_currents_are_not_a_billing_peak(monkeypatch):
-    """They measure the pump. The tariff bills the house."""
+async def test_nibe_phase_currents_still_drive_peak_protection(monkeypatch):
+    """NOT BILLABLE and NOT RECORDED are different things, and conflating them broke the feature.
+
+    The first version of this fix gated peak RECORDING on billability, so a house without a
+    whole-house meter never recorded a single peak - and `should_limit_power` returns
+    "OK - no peaks recorded yet" on an empty history. Peak protection, the integration's headline
+    feature, silently never fired at all for those users. The whole-house meter is OPTIONAL, and
+    `main` allowed phase currents here and ran a winter that way.
+
+    This test's own first draft said it: "They remain available to the decision layers, which want a
+    magnitude, not a bill." They were not.
+
+    The heat pump is the dominant CONTROLLABLE load, and `should_limit_power` compares this quarter
+    against the month's own recorded peaks - so a NIBE-only history compared against NIBE-only power
+    is self-consistent and still throttles the pump when the pump is the thing spiking. What must
+    never happen is that number being reported to the owner as the month's BILLING peak.
+    """
     coordinator = _coordinator(power_entity=None)  # no whole-house meter, only NIBE currents
 
     await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60, currents=10.0), monkeypatch)
 
+    coordinator.effect.record_quarter_measurement.assert_awaited_once()
+    recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+
+    assert recorded["source"] == POWER_SOURCE_NIBE_CURRENTS, (
+        f"The peak was recorded as {recorded['source']!r}. It must carry its provenance, because "
+        f"that is the only thing standing between a pump-only measurement and a billing figure."
+    )
+    assert coordinator.peak_today_source == POWER_SOURCE_NIBE_CURRENTS
+    assert coordinator.peak_today > 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_nibe_currents_peak_is_never_billable(monkeypatch):
+    """It drives control. It is not the bill. The PeakEvent itself has to know the difference."""
+    from custom_components.effektguard.optimization.effect_layer import PeakEvent
+
+    from_currents = PeakEvent(
+        timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        quarter_of_day=40,
+        actual_power=6.8,
+        effective_power=6.8,
+        is_daytime=True,
+        source=POWER_SOURCE_NIBE_CURRENTS,
+    )
+    from_meter = PeakEvent(
+        timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        quarter_of_day=40,
+        actual_power=6.8,
+        effective_power=6.8,
+        is_daytime=True,
+        source=POWER_SOURCE_EXTERNAL_METER,
+    )
+
+    assert not from_currents.is_billable, (
+        "A peak measured from the pump's own phase currents was marked billable. BE1/BE2/BE3 "
+        "measure the heat pump - not the oven, not the EV charger. The tariff bills the house."
+    )
+    assert from_meter.is_billable
+
+    # And it must survive a round-trip through storage, or the distinction is lost on the next
+    # Home Assistant restart - which is exactly when nobody is watching.
+    assert PeakEvent.from_dict(from_currents.to_dict()).is_billable is False
+    assert PeakEvent.from_dict(from_meter.to_dict()).is_billable is True
+
+
+@pytest.mark.asyncio
+async def test_an_estimate_drives_nothing_at_all(monkeypatch):
+    """Compressor-Hz estimates are excluded from BOTH. A guess must not throttle a house."""
+    coordinator = _coordinator(power_entity=None)
+
+    # No meter, no phase currents: PRIORITY 3 falls through to a compressor-Hz estimate.
+    await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60, currents=None), monkeypatch)
+
     coordinator.effect.record_quarter_measurement.assert_not_awaited()
-    assert (
-        coordinator.peak_today_source == POWER_SOURCE_NIBE_CURRENTS
-    ), "precondition: the currents should still be READ - they are useful to the decision layers"
-    assert coordinator.peak_today > 0.0, "precondition: and still shown as today's peak"
 
 
 @pytest.mark.asyncio

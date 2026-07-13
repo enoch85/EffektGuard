@@ -45,6 +45,7 @@ from .const import (
     DM_THRESHOLD_START,
     DOMAIN,
     BILLABLE_POWER_SOURCES,
+    PEAK_CONTROL_POWER_SOURCES,
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
@@ -2204,10 +2205,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # was configured, which a meter that has gone unavailable still satisfies - so the
             # estimate that replaced it was billed anyway, in the same cycle the log said it must
             # never be.
-            if power_source not in BILLABLE_POWER_SOURCES:
+            if power_source not in PEAK_CONTROL_POWER_SOURCES:
                 _LOGGER.debug(
                     "Skipping monthly peak recording: %.2f kW came from %s, which is not a "
-                    "measurement. Billing must use real readings only.",
+                    "measurement. Peak protection must not be driven by a guess.",
                     current_power,
                     power_source,
                 )
@@ -2244,6 +2245,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         power_kw=quarter_mean,
                         quarter=self._quarter_power_number,
                         timestamp=completed_start,
+                        source=power_source,
                     )
                 elif self._quarter_power_start is not None:
                     _LOGGER.debug(

@@ -1329,13 +1329,31 @@ POWER_SOURCE_NIBE_CURRENTS: Final = "nibe_currents"
 POWER_SOURCE_ESTIMATE: Final = "estimate"
 POWER_SOURCE_NONE: Final = "none"
 
-# The Swedish effect tariff bills whole-house grid IMPORT, so only a whole-house meter can produce a
-# billing peak. Everything else is for the decision layers and the display, which want a magnitude.
+# BILLABLE and USABLE-AS-A-CONTROL-THRESHOLD are two different questions, and conflating them broke
+# the integration's headline feature for everyone without a whole-house meter.
 #
-# NIBE phase currents (BE1/BE2/BE3) measure the heat pump and nothing else - not the oven, not the EV
-# charger. They were billable, while the peak sensor simultaneously told the owner they were not.
-# Estimates were billable too, whenever a configured meter went unavailable. Neither is.
+# BILLABLE: the Swedish effect tariff bills whole-house grid IMPORT, so only a whole-house meter can
+# produce a number that belongs in a billing figure. NIBE phase currents (BE1/BE2/BE3) measure the
+# heat pump and nothing else - not the oven, not the EV charger. Estimates are fabricated. Neither
+# may be reported to the owner as "your monthly peak".
 BILLABLE_POWER_SOURCES: Final = frozenset({POWER_SOURCE_EXTERNAL_METER})
+
+# PEAK CONTROL: a reading does not have to be the billed quantity to be worth acting on. The heat
+# pump is the dominant CONTROLLABLE load in the house, and `should_limit_power` compares this
+# quarter against the month's own recorded peaks - so a NIBE-only history compared against NIBE-only
+# power is self-consistent, and it still throttles the pump when the pump is the thing spiking.
+#
+# The whole-house meter is OPTIONAL in the config flow. Gating peak RECORDING on billability alone
+# left `_monthly_peaks` permanently empty for those users, and `should_limit_power` returns
+# "OK - no peaks recorded yet" on an empty history: peak protection silently never fired at all.
+# `main` allowed phase currents here (`has_external_power_sensor or phase1_current is not None`) and
+# ran a winter that way.
+#
+# Estimates stay out of BOTH. A number derived from compressor Hz is not a measurement, and driving
+# peak protection from it would throttle the house on the strength of a guess.
+PEAK_CONTROL_POWER_SOURCES: Final = frozenset(
+    {POWER_SOURCE_EXTERNAL_METER, POWER_SOURCE_NIBE_CURRENTS}
+)
 
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
