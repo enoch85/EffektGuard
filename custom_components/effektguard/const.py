@@ -645,10 +645,6 @@ OVERSHOOT_PROTECTION_START: Final = (
 OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for full response
 OVERSHOOT_PROTECTION_OFFSET_MIN: Final = -7.0  # Offset at start threshold (coast gently)
 OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # Offset at full threshold (full coast)
-OVERSHOOT_PROTECTION_WEIGHT_MIN: Final = 0.5  # Weight at start threshold
-OVERSHOOT_PROTECTION_WEIGHT_MAX: Final = 1.0  # Weight at full threshold (full override)
-OVERSHOOT_PROTECTION_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
-OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop that qualifies as cold snap
 
 # Price-aware overshoot protection (Dec 4, 2025)
 # Rapid cooling detection (Oct 19, 2025)
