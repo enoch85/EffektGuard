@@ -76,6 +76,7 @@ from ..const import (
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
+from ..utils.offset import integer_offset_for
 from ..utils.power import power_kw_from_state
 
 if TYPE_CHECKING:
@@ -186,7 +187,6 @@ class NibeAdapter:
         # Fractional accumulator for precise offset tracking
         # NIBE only accepts integers, so we accumulate fractional parts
         # and apply them when they sum to ±1°C
-        self._fractional_accumulator: float = 0.0
         # Track last integer offset sent to NIBE (to avoid redundant writes)
         self._last_nibe_offset: int | None = None
 
@@ -423,15 +423,14 @@ class NibeAdapter:
         optimization engine calculates precise fractional offsets (e.g., 0.35°C,
         -1.24°C).
 
-        Solution: Accumulate fractional parts and apply when they sum to ±1°C.
-        This preserves the precision of gentle optimization while respecting
-        NIBE's integer-only constraint.
+        The offset is ROUNDED to the nearest integer, and written only once it differs from
+        what the register holds by a whole degree - hysteresis, so the register is not rewritten
+        every five minutes as the demand wanders across a rounding boundary.
 
-        Example:
-            Cycle 1: Calculate 0.35°C → Send 0, accumulate +0.35
-            Cycle 2: Calculate 0.42°C → Delta +0.07, accumulator = +0.42
-            Cycle 3: Calculate 0.89°C → Delta +0.47, accumulator = +0.89
-            Cycle 4: Calculate 1.12°C → Delta +0.23, accumulator = +1.12 → Send +1
+        This never accumulated anything, despite the name it carried and the worked example that
+        used to be printed here. It is a deadband, and it used to TRUNCATE TOWARD ZERO on top of
+        that: int(-1.9) is -1, so the pump always did slightly less than the engine asked for.
+        See utils/offset.py.
 
         Args:
             offset: Calculated offset value in °C (e.g., -1.24, +0.87)
@@ -487,64 +486,33 @@ class NibeAdapter:
             or (entity_offset != self._last_nibe_offset and resync_window_passed)
         ):
             self._last_nibe_offset = entity_offset
-            self._fractional_accumulator = offset - self._last_nibe_offset
             _LOGGER.info(
-                "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                "✓ Synced with NIBE: register holds %d°C (engine asked for %.2f°C)",
                 self._last_nibe_offset,
                 offset,
-                self._fractional_accumulator,
             )
         elif self._last_nibe_offset is None:
             self._last_nibe_offset = 0
-            self._fractional_accumulator = offset
 
-        # Fractional accumulation logic
-        # The accumulator tracks the total difference between what we've calculated
-        # and what NIBE actually has.
-        self._fractional_accumulator = offset - self._last_nibe_offset
+        # The integer the register should hold. Shared with the simulation harness, which used to
+        # carry its own copy of this arithmetic - see utils/offset.py, and note that it ROUNDS
+        # rather than truncating: int(-1.9) is -1, so every offset used to come out smaller than
+        # the engine asked for, always in the same direction.
+        offset_to_apply = integer_offset_for(offset, self._last_nibe_offset)
 
         _LOGGER.debug(
-            "Offset calculation: calculated=%.2f°C, NIBE_current=%d°C, accumulator=%.2f°C",
+            "Offset: engine asked for %.2f°C, register holds %d°C -> writing %d°C",
             offset,
             self._last_nibe_offset,
-            self._fractional_accumulator,
+            offset_to_apply,
         )
-
-        # Determine what integer value to apply to NIBE
-        # Only write when accumulator crosses threshold
-        offset_to_apply = self._last_nibe_offset  # Start with current NIBE value
-
-        if abs(self._fractional_accumulator) >= NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD:
-            # Accumulator has crossed threshold, apply the integer part
-            accumulated_adjustment = int(self._fractional_accumulator)
-            offset_to_apply = self._last_nibe_offset + accumulated_adjustment
-
-            # Clamp to NIBE's valid range (MIN_OFFSET to MAX_OFFSET)
-            offset_to_apply = int(max(MIN_OFFSET, min(offset_to_apply, MAX_OFFSET)))
-
-            _LOGGER.info(
-                "✓ Accumulated fractional offset reached threshold: "
-                "applying %+d°C adjustment (accumulator: %.2f°C, new_offset: %d°C)",
-                accumulated_adjustment,
-                self._fractional_accumulator,
-                offset_to_apply,
-            )
-        else:
-            # Accumulator hasn't crossed threshold, keep current NIBE offset
-            _LOGGER.debug(
-                "Accumulator below threshold (%.2f°C), keeping NIBE at %d°C",
-                self._fractional_accumulator,
-                offset_to_apply,
-            )
 
         # Only write if integer part changed from last written value
         if offset_to_apply == self._last_nibe_offset:
             _LOGGER.debug(
-                "Offset unchanged: %.2f°C → int(%d°C) = NIBE already at %d°C (accumulator: %.2f°C)",
+                "Offset unchanged: engine asked for %.2f°C, register already holds %d°C",
                 offset,
-                offset_to_apply,
                 self._last_nibe_offset,
-                self._fractional_accumulator,
             )
             return False
 
@@ -593,11 +561,10 @@ class NibeAdapter:
             self._last_nibe_offset = offset_to_apply
 
             _LOGGER.info(
-                "✓ Applied offset to NIBE: %d°C → %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                "✓ Applied offset to NIBE: %d°C → %d°C (engine asked for %.2f°C)",
                 old_offset,
                 offset_to_apply,
                 offset,
-                self._fractional_accumulator,
             )
             return True
 

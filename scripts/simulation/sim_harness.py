@@ -51,6 +51,7 @@ from custom_components.effektguard.const import (
     POWER_SOURCE_EXTERNAL_METER,
 )
 from custom_components.effektguard.utils.emitter import en442_flow_temp
+from custom_components.effektguard.utils.offset import integer_offset_for
 from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
@@ -685,7 +686,6 @@ def simulate(
     indoor_start = indoor
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
-    accumulator_ref = 0  # mirrors adapter _last_nibe_offset behaviour
     compressor_on = True
     flow = 30.0
 
@@ -869,14 +869,13 @@ def simulate(
                 )
                 calc_offset = 0.0
 
-        # Adapter-faithful integer write (fractional accumulator, threshold 1.0)
-        if abs(calc_offset - accumulator_ref) >= 1.0:
-            new_int = accumulator_ref + int(calc_offset - accumulator_ref)
-            new_int = int(max(-10, min(10, new_int)))
-            if new_int != offset_applied:
-                offset_applied = new_int
-                accumulator_ref = new_int
-                stats["writes"] += 1
+        # The REAL quantisation the adapter uses, not a copy of it. This harness used to carry its
+        # own transcription of that arithmetic - including the int() truncation - which is exactly
+        # how a plant model and the code it is meant to be testing drift apart unnoticed.
+        new_int = integer_offset_for(calc_offset, offset_applied)
+        if new_int != offset_applied:
+            offset_applied = new_int
+            stats["writes"] += 1
 
         # --- invariants & stats ---
         # A degree-minute deficit that reaches the integrator floor means the recovery system -
