@@ -883,6 +883,37 @@ class NibeAdapter:
                 continue
 
             if key in NIBE_TEMPERATURE_KEYS:
+                # A MEASUREMENT IS NOT A SETPOINT, AND ONLY THE DOMAIN CAN TELL THEM APART.
+                #
+                # A `number.` entity is by definition something the OWNER SETS. A NIBE room
+                # temperature SETPOINT is a `number.` with device_class=temperature and a unit of
+                # °C - which is every attribute this gate used to check - and its entity id can
+                # match the `room_temperature` discovery pattern. Bound as the indoor MEASUREMENT
+                # it is catastrophic and completely silent:
+                #
+                #   the target is read as the measurement, and indoor_temp_valid is set True,
+                #   so the deviation from target is EXACTLY 0.0 forever, whatever the house does.
+                #   The comfort layer never corrects. The 18 C safety floor can never fire either,
+                #   because the safety layer is reading the same setpoint. A house at 12 C in
+                #   January reports itself perfectly on target.
+                #
+                # The `offset` key below already applies the mirror-image rule - a write target
+                # must BE a number - so the distinction is one this file already understands. And
+                # NIBE_DISCOVERY_EXCLUDE carries `control_room_sensor`, which is this same problem
+                # being fought one entity id at a time.
+                #
+                # Manual entity overrides seed the cache directly and never reach this function, so
+                # an installation that really does expose a reading as a `number.` can still say so.
+                if not entity_id.startswith("sensor."):
+                    _LOGGER.debug(
+                        "Skipping %s candidate %s: a measurement must come from a sensor, and a "
+                        "`number.` entity is a setpoint - something the owner writes, not "
+                        "something the pump reports",
+                        key,
+                        entity_id,
+                    )
+                    continue
+
                 # Accept if device_class is temperature OR unit is °C/°F
                 # (handles Modbus sensors where only the unit is configured)
                 if device_class != "temperature" and unit not in ["°C", "°F", "C", "F"]:
