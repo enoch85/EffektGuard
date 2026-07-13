@@ -92,6 +92,12 @@ class PowerValidationDict(TypedDict, total=False):
 # than by list position, so reordering the layers cannot silently re-target safety logic.
 SAFETY_LAYER_NAME: Final = "Safety"
 
+# Display name of the comfort layer. It is the ONLY layer that can see under-heating caused by a
+# negative curve offset: degree minutes are DM = integral(BT25 - S1), so lowering the curve lowers
+# S1 and DM improves as the house gets colder. _aggregate_layers looks it up by name to floor a
+# cost layer that is coasting the house out of its comfort band.
+COMFORT_LAYER_NAME: Final = "Comfort"
+
 
 @dataclass
 class LayerDecision:
@@ -715,8 +721,16 @@ class DecisionEngine:
             comfort_decision,
         ]
 
+        # Is the house actually outside the band the owner asked for? A cost layer is allowed to
+        # coast it around inside that band - that is the thermal battery - but not out of it, and
+        # degree minutes cannot tell the difference (see _aggregate_layers step 4).
+        below_comfort_band = (
+            getattr(nibe_state, "indoor_temp_valid", True)
+            and nibe_state.indoor_temp < self.target_temp - self.tolerance_range
+        )
+
         # Aggregate layers with priority weighting
-        raw_offset = self._aggregate_layers(layers)
+        raw_offset = self._aggregate_layers(layers, below_comfort_band=below_comfort_band)
 
         # NEW: Trend-aware damping to prevent overshoot/undershoot
         thermal_trend = self._get_thermal_trend()
@@ -922,7 +936,9 @@ class DecisionEngine:
         """
         return max(MIN_OFFSET, min(offset, MAX_OFFSET))
 
-    def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
+    def _aggregate_layers(
+        self, layers: list[LayerDecision], below_comfort_band: bool = False
+    ) -> float:
         """Aggregate layer decisions into the final offset.
 
         SAFETY CONTRACT - the invariant this method exists to enforce:
@@ -1003,10 +1019,54 @@ class DecisionEngine:
             # (`>` here returned the negative vote on an exact tie, and
             # SAFETY_EMERGENCY_OFFSET/+10 vs PRICE_OFFSET_PEAK/-10 tie by construction.)
             chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
+
+            # A COST LAYER MAY COAST THE HOUSE WITHIN ITS COMFORT BAND. IT MAY NOT COAST IT OUT.
+            #
+            # Using the band is the whole point of the integration - that is the thermal battery.
+            # But this step takes the critical layer's vote ALONE: with a price layer at PEAK the
+            # comfort layer never enters the sum at all, at any temperature, so cost kept cutting
+            # heat into a house that was already too cold and nothing objected until the hard 18 C
+            # floor fired, three degrees later.
+            #
+            # NOTHING ELSE CAN SEE THIS. Degree minutes are blind to it by construction:
+            # DM = integral(BT25 - S1), so lowering the curve lowers S1 and DM *improves* as the
+            # house gets colder. In the month-long simulation the house sat 1.1 C below target
+            # with DM at -45 - a "healthy" number - while the price layer held -3.0. Across five
+            # houses the optimiser spent between 4 000 and 33 000 minutes below the comfort band,
+            # and a do-nothing controller held target on every one of them.
+            #
+            # So a cost layer's heat reduction is floored once the house is outside the band. The
+            # comfort layer's own demand is the floor: it is already graduated by how far out the
+            # house is, and it is the only layer that can see the problem at all.
+            if chosen < 0 and below_comfort_band and self._all_critical_are_cost(critical_layers):
+                comfort = next(
+                    (layer for layer in layers if layer.name == COMFORT_LAYER_NAME), None
+                )
+                if comfort is not None and comfort.offset > chosen:
+                    _LOGGER.debug(
+                        "Cost layer asked for %.2f°C with the house outside its comfort band; "
+                        "floored at the comfort layer's %.2f°C",
+                        chosen,
+                        comfort.offset,
+                    )
+                    chosen = comfort.offset
+
             return self._clamp_offset(chosen)
 
         # 5. Weighted average of everything else.
         return self._clamp_offset(self._weighted_average(layers))
+
+    @staticmethod
+    def _all_critical_are_cost(critical_layers: list[LayerDecision]) -> bool:
+        """True when EVERY layer voting at critical weight is a cost layer.
+
+        The floor in step 4 must not weaken a critical SAFETY or physics vote - only a vote that
+        exists to save money. If anything other than cost is also critical, the tie-break already
+        had a non-cost opinion to weigh and there is nothing to protect the house from.
+        """
+        return bool(critical_layers) and all(
+            getattr(layer, "is_cost_layer", False) for layer in critical_layers
+        )
 
     @staticmethod
     def _has_critical_cost_layer(layers: list[LayerDecision]) -> bool:

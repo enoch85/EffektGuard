@@ -212,8 +212,13 @@ from const import (
 # Inject the const values into the module's globals before execution
 spec = importlib.util.spec_from_file_location(
     "climate_zones",
-    str(Path(__file__).resolve().parents[1]
-        / "custom_components" / "effektguard" / "optimization" / "climate_zones.py"),
+    str(
+        Path(__file__).resolve().parents[1]
+        / "custom_components"
+        / "effektguard"
+        / "optimization"
+        / "climate_zones.py"
+    ),
 )
 climate_zones_module = importlib.util.module_from_spec(spec)
 
@@ -812,9 +817,10 @@ class ScenarioTester:
         # Linear interpolation: 0.5 → 0.2 (conservative), 3.0 → 1.0 (full offset)
         tolerance_range = PRICE_TOLERANCE_MAX - PRICE_TOLERANCE_MIN  # 2.5
         factor_range = PRICE_TOLERANCE_FACTOR_MAX - PRICE_TOLERANCE_FACTOR_MIN  # 0.8
-        tolerance_factor = PRICE_TOLERANCE_FACTOR_MIN + (
-            (self.tolerance - PRICE_TOLERANCE_MIN) / tolerance_range
-        ) * factor_range
+        tolerance_factor = (
+            PRICE_TOLERANCE_FACTOR_MIN
+            + ((self.tolerance - PRICE_TOLERANCE_MIN) / tolerance_range) * factor_range
+        )
         adjusted_offset = offset * tolerance_factor
 
         # Extra boost for negative prices

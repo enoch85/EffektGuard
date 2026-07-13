@@ -38,14 +38,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.adapters.gespot_adapter import GESpotAdapter, PriceData
-from custom_components.effektguard.const import CONF_GESPOT_ENTITY
+from custom_components.effektguard.const import (
+    CONF_GESPOT_ENTITY,
+    INTERNAL_GAINS_W,
+    POWER_SOURCE_EXTERNAL_METER,
+)
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
@@ -54,11 +58,13 @@ from custom_components.effektguard.adapters.weather_adapter import (
     WeatherForecastHour,
 )
 
-try:
-    from custom_components.effektguard.models.nibe import NibeF750Profile, NibeF1155Profile
-except ImportError:  # F1155 profile ships with the multi-source PR (#19)
-    from custom_components.effektguard.models.nibe import NibeF750Profile
-    from custom_components.effektguard.models.nibe import NibeS1155Profile as NibeF1155Profile
+from custom_components.effektguard.models.nibe import (
+    NibeF730Profile,
+    NibeF750Profile,
+    NibeF1155Profile,
+    NibeF2040Profile,
+    NibeS1155Profile,
+)
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
@@ -76,11 +82,16 @@ ORE_PER_KWH_FROM_SEK_PER_MWH = 0.1
 GESPOT_UNIT_ORE = "öre/kWh"
 
 # Plant constants
-FLOW_RAMP_ON = 0.5  # C/min toward target while compressor runs
-FLOW_DECAY_OFF = 0.1  # C/min toward indoor when off
 DM_START = -60.0
 DM_STOP = 0.0
 AUX_STEP_KW = 3.0  # one aux step
+STANDBY_KW = 0.1  # controller, pumps, standby losses
+
+# Heat capacity of the water loop and the emitter metal it fills. Roughly 70 L of water
+# (0.081 kWh/K) plus the steel of the radiators. Without this the plant HANDS OUT the heat stored
+# in the water for free every time the compressor stops, and charges nothing to put it back.
+WATER_LOOP_J_PER_K = 350_000.0  # ~0.10 kWh/K
+COMPRESSOR_RESPONSE_S = 900.0  # how briskly the compressor closes on its flow target
 
 # Bounds on the degree-minute integrator. Reaching the floor is not a normal operating state: it
 # means the deficit grew without limit despite the curve offset AND the auxiliary heater, so the
@@ -115,6 +126,15 @@ SIM_DAYS = 31
 #
 # A ground-source pump draws from ~0 C brine year-round, so its capacity is flat
 # against outdoor temperature and it is not derated here.
+# COP is set by the LIFT, not by the weather. These place the source and the condenser.
+KELVIN = 273.15
+COP_RATING_FLOW_C = 35.0  # EN 14511 rating point is W35: the profile's COP curve is measured here
+CONDENSER_APPROACH_K = 5.0  # refrigerant condenses this far above the water it is heating
+EVAPORATOR_APPROACH_K = 5.0  # and evaporates this far below the source it is drawing from
+MIN_LIFT_K = 10.0  # a compressor cannot usefully run at zero lift; bound the division
+EXHAUST_AIR_SOURCE_C = 20.0  # F750/F730 draw ~20 C indoor extract air, all year
+BRINE_SOURCE_C = 0.0  # F1155/S1155 draw ~0 C brine, stable year-round
+
 ASHP_RATING_POINT_C = 7.0  # EN 14511 A7/W35
 ASHP_DERATE_PER_C = 0.025  # fraction of rated output lost per C below A7
 ASHP_MIN_CAPACITY_FRACTION = 0.45  # floor; below this the pump is aux-assisted
@@ -125,7 +145,6 @@ TARGET_INDOOR = 22.0
 COMFORT_TOLERANCE = 0.5
 DESIGN_OUTDOOR = -15.0
 DESIGN_SPREAD = 5.0
-EMITTER_SOLVE_ITERATIONS = 12  # fixed-point convergence of mean water temp vs output
 RADIATOR_EXPONENT = 1.3  # EN 442
 UFH_EXPONENT = 1.1  # EN 1264
 OVERSHOOT_TOLERANCE = 1.5  # overshoot band stays wider; heat is banked, not lost
@@ -163,8 +182,8 @@ class HouseConfig:
 
     @property
     def design_heat_w(self) -> float:
-        """Emitter output at the design point."""
-        return self.hlc_w_per_k * (TARGET_INDOOR - DESIGN_OUTDOOR)
+        """Emitter output at the design point - net of the free heat the house makes itself."""
+        return self.hlc_w_per_k * (TARGET_INDOOR - DESIGN_OUTDOOR) - INTERNAL_GAINS_W
 
     def heat_output_w(self, flow: float, indoor: float) -> float:
         """Emitter output, by the EN 442 characteristic equation.
@@ -172,20 +191,21 @@ class HouseConfig:
             Q / Q_design = (dT_mean / dT_mean_design) ** n
 
         A LINEAR emitter (n = 1) is not a radiator: it exaggerates output at low flow
-        temperatures, which flatters a controller that under-supplies. The plant must obey the
-        same law the controller reasons with, or the run measures the disagreement between two
-        models rather than the behaviour of the controller.
+        temperatures, which flatters a controller that under-supplies.
 
-        The mean water temperature and the output are mutually dependent - the flow-return spread
-        widens with load - so this converges them rather than assuming a fixed spread.
+        THE SPREAD IS CONSTANT. This model used to widen it with load - `DESIGN_SPREAD *
+        load_ratio` - and iterate to a fixed point. That is a FIXED-SPEED circulator on a wet
+        boiler: constant mass flow, so the flow-return spread rises and falls with the heat being
+        carried. A NIBE modulates its circulator (GP1) to HOLD the commissioned spread and varies
+        the flow RATE instead, which is why the controller's own emitter law holds it constant too.
+
+        With the spread fixed there is no fixed point left to solve: the mean water temperature is
+        just `flow - spread/2`, and the output follows directly.
         """
-        load_ratio = 1.0
-        for _ in range(EMITTER_SOLVE_ITERATIONS):
-            excess = flow - (DESIGN_SPREAD * load_ratio) / 2.0 - indoor
-            if excess <= 0:
-                return 0.0
-            load_ratio = (excess / self.design_excess) ** self.emitter_exponent
-        return self.design_heat_w * load_ratio
+        excess = flow - DESIGN_SPREAD / 2.0 - indoor
+        if excess <= 0:
+            return 0.0
+        return self.design_heat_w * (excess / self.design_excess) ** self.emitter_exponent
 
     def curve_flow_temp(self, outdoor: float) -> float:
         """The supply temperature the pump's own heating curve calls for, at offset 0.
@@ -234,6 +254,62 @@ class HouseConfig:
             return False
         return "GSHP" not in getattr(self.profile, "model_type", "")
 
+    def source_temp_c(self, outdoor_temp: float) -> float:
+        """The temperature of the heat SOURCE the compressor is lifting from.
+
+        A heat pump's efficiency is set by the LIFT - how far it has to raise the heat - not by
+        the weather as such. What the weather changes is the source, and only for some machines:
+
+        - Outdoor air (F2040): the source IS the outdoor air.
+        - Exhaust air (F750, F730): ~20 C indoor extract air, all year. The weather barely touches
+          it, which is why these pumps hold their COP through a cold snap.
+        - Ground source (F1155, S1155): ~0 C brine, stable year-round.
+        """
+        if getattr(self.profile, "supports_exhaust_airflow", False):
+            return EXHAUST_AIR_SOURCE_C
+        if "GSHP" in getattr(self.profile, "model_type", ""):
+            return BRINE_SOURCE_C
+        return outdoor_temp
+
+    def cop_at(self, outdoor_temp: float, flow_temp: float) -> float:
+        """COP as a function of the LIFT, anchored on the manufacturer's own COP curve.
+
+        THE SIMULATED PUMP USED TO IGNORE FLOW TEMPERATURE ENTIRELY:
+
+            cop = house.cop_at(tout, flow)     # outdoor only
+
+        A heat pump's COP is governed by the lift between the water it makes and the source it
+        draws from - Carnot, degraded by a real machine's exergy efficiency. OpenEnergyMonitor's
+        measured fleet puts the penalty at 2.5-3 % of COP per degree of flow temperature.
+
+        Ignoring that does not just make the plant unrealistic, it makes the harness INCAPABLE OF
+        MEASURING ITS OWN PRODUCT: running cooler water is the entire mechanism by which weather
+        compensation saves money, and with a flow-blind COP a lower curve buys no efficiency at
+        all - only less heat, to be paid back later. The optimiser could therefore only ever look
+        like a loss, and it duly did (+4 % against a do-nothing controller). That was an artefact
+        of this model, not a finding about the integration.
+
+        The profile's published COP curve is kept as the anchor - it is real manufacturer data,
+        measured at the W35 rating point - and Carnot supplies the flow-temperature dependence
+        around it. So at 35 C flow this returns exactly what it always returned.
+
+        The sensitivity this produces is NOT one number, and it should not be: it runs from about
+        1.9 %/C on a ground-source pump lifting from 0 C brine to about 3.7 %/C on an exhaust-air
+        pump lifting from 20 C extract air. A small lift is proportionally more sensitive to a
+        degree of flow than a large one. OEM's measured 2.5-3 %/C is a fleet average of mostly
+        air-source machines and sits inside that range - which is the check, rather than a target
+        to be hit by tuning an exponent.
+        """
+        source = self.source_temp_c(outdoor_temp)
+        rated = float(self.profile.get_cop_at_temperature(outdoor_temp))
+
+        def carnot(flow: float) -> float:
+            t_cond = flow + CONDENSER_APPROACH_K + KELVIN
+            t_evap = source - EVAPORATOR_APPROACH_K + KELVIN
+            return t_cond / max(t_cond - t_evap, MIN_LIFT_K)
+
+        return max(1.0, rated * carnot(flow_temp) / carnot(COP_RATING_FLOW_C))
+
     def capacity_kw_at(self, outdoor_temp: float) -> float:
         """Compressor heat output the pump can actually deliver right now."""
         rated = float(self.profile.rated_power_kw[1])
@@ -243,9 +319,14 @@ class HouseConfig:
         return rated * max(ASHP_MIN_CAPACITY_FRACTION, derate)
 
 
+# Every pump the integration ships a profile for. Two houses could not exercise the paths that
+# only exist for some hardware: an ASHP is the ONLY kind that derates as the weather gets colder,
+# so it is the only one that can saturate, drive degree minutes away and reach for the immersion
+# heater - which is precisely the failure the safety layers exist to prevent, and it was never
+# once simulated.
 HOUSES = [
     HouseConfig(
-        name="wooden_f750",
+        name="wooden_f750",  # exhaust air, radiators, light timber frame
         thermal_mass=0.7,
         insulation_quality=1.0,
         hlc_w_per_k=150.0,
@@ -255,7 +336,7 @@ HOUSES = [
         design_flow=50.0,
     ),
     HouseConfig(
-        name="concrete_f1155",
+        name="concrete_f1155",  # ground source, underfloor, heavy slab
         thermal_mass=1.8,
         insulation_quality=1.2,
         hlc_w_per_k=180.0,
@@ -263,6 +344,36 @@ HOUSES = [
         profile=NibeF1155Profile(),
         heating_type="concrete_ufh",
         design_flow=38.0,
+    ),
+    HouseConfig(
+        name="apartment_f730",  # small exhaust-air pump, tight modern flat
+        thermal_mass=0.9,
+        insulation_quality=1.3,
+        hlc_w_per_k=90.0,
+        tau_hours=45.0,
+        profile=NibeF730Profile(),
+        heating_type="radiator",
+        design_flow=45.0,
+    ),
+    HouseConfig(
+        name="villa_s1155",  # S-series ground source, timber underfloor
+        thermal_mass=1.2,
+        insulation_quality=1.1,
+        hlc_w_per_k=160.0,
+        tau_hours=55.0,
+        profile=NibeS1155Profile(),
+        heating_type="timber_ufh",
+        design_flow=40.0,
+    ),
+    HouseConfig(
+        name="airsource_f2040",  # THE HARD ONE: outdoor air, so capacity collapses in a cold snap
+        thermal_mass=1.0,
+        insulation_quality=0.9,
+        hlc_w_per_k=220.0,
+        tau_hours=40.0,
+        profile=NibeF2040Profile(),
+        heating_type="radiator",
+        design_flow=55.0,
     ),
 ]
 
@@ -511,17 +622,31 @@ def battery_reference_offset(price_data: PriceData, now: datetime, indoor: float
     return 0.0
 
 
-def build_engine(house: HouseConfig, mode: str = "balanced"):
+def build_engine(
+    house: HouseConfig,
+    mode: str = "balanced",
+    enable_price: bool = True,
+    enable_weather: bool = True,
+):
+    """Build the real DecisionEngine for this house.
+
+    `enable_price` / `enable_weather` exist so the harness can ABLATE a layer and attribute the
+    result. "The optimiser costs 2 % more than doing nothing" is not actionable; "the price layer
+    costs 3 % and the weather compensation saves 1 %" is.
+    """
     hass = MagicMock()
     effect = EffectManager(hass)
+    # The harness has no Home Assistant storage; the peak history lives for the run only.
+    effect._store = MagicMock()
+    effect._store.async_save = AsyncMock()
     thermal = ThermalModel(house.thermal_mass, house.insulation_quality)
     config = {
         "target_indoor_temp": TARGET_INDOOR,
         "tolerance": COMFORT_TOLERANCE,
         "optimization_mode": mode,
-        "enable_weather_compensation": True,
+        "enable_weather_compensation": enable_weather,
         "enable_peak_protection": True,
-        "enable_price_optimization": True,
+        "enable_price_optimization": enable_price,
         "latitude": 59.33,
         "heating_type": house.heating_type,
         "heat_loss_coefficient": house.hlc_w_per_k,
@@ -548,13 +673,16 @@ def simulate(
     baseline: bool = False,
     fixed_offset: float | None = None,
     battery: bool = False,
+    enable_price: bool = True,
+    enable_weather: bool = True,
 ):
-    engine, effect = build_engine(house, mode)
+    engine, effect = build_engine(house, mode, enable_price, enable_weather)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
 
     indoor = 22.0
+    indoor_start = indoor
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
     accumulator_ref = 0  # mirrors adapter _last_nibe_offset behaviour
@@ -579,6 +707,8 @@ def simulate(
         "comfort_minutes_above": 0,
         "compressor_starts": 0,
         "sign_flips": 0,
+        "heat_kwh": 0.0,
+        "loss_kwh": 0.0,
     }
     last_offsets = []
     quarter_samples: list[float] = []
@@ -600,34 +730,60 @@ def simulate(
         # --- plant step ---
         flow_target = house.curve_flow_temp(tout) + offset_applied
 
-        # The supply the compressor can actually sustain. Without this cap the flow tracks the
-        # curve target regardless of capacity, DM = integral(flow - flow_target) collapses to ~0,
-        # and every deep-DM path in the engine becomes unreachable.
-        # Highest supply the compressor can sustain: invert the emitter law for the flow whose
-        # output equals the pump's available capacity.
-        capacity_kw = house.capacity_kw_at(tout)
-        ratio = (capacity_kw * 1000.0) / house.design_heat_w
-        flow_ceiling = min(
-            indoor
-            + (DESIGN_SPREAD * ratio) / 2.0
-            + house.design_excess * ratio ** (1.0 / house.emitter_exponent),
-            float(house.profile.max_flow_temp),
-        )
+        # The compressor's capacity now bounds the water node directly (see below), so the flow
+        # saturates below target of its own accord when the pump runs out - which is what lets
+        # degree minutes actually run away, and is the real mechanism behind an undersized pump
+        # falling back on its immersion heater in a cold snap.
+
+        # THE WATER LOOP IS A THERMAL MASS, NOT A RAMP RATE.
+        #
+        # This used to move `flow` toward its target at a fixed C/min and then compute the room's
+        # heat from wherever the flow happened to be - including while the compressor was OFF, so
+        # the decaying water heated the room for free and nothing ever charged for putting the heat
+        # in. The plant manufactured energy in proportion to how long the compressor spent idle,
+        # which systematically flattered whichever controller ran the pump least.
+        #
+        # The physics is simply a first-order node: the compressor heats the water, the water heats
+        # the room, and the flow temperature is what the balance between them leaves behind.
+        #
+        #     C_water * dT_flow/dt = Q_compressor - Q_emitters
+        #
+        # Now every joule the room receives was paid for, the loop is a buffer rather than a
+        # source, and a controller that swings the flow pays the real cost of doing so.
+        q_emit_w = house.heat_output_w(flow, indoor)
 
         if compressor_on:
-            flow = min(flow + FLOW_RAMP_ON * STEP_MIN, flow_target + 1.0, flow_ceiling)
+            # The compressor modulates toward the flow its curve is asking for, bounded by what it
+            # can actually deliver at this outdoor temperature.
+            demand_w = q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
+            q_comp_w = max(0.0, min(demand_w, house.capacity_kw_at(tout) * 1000.0))
         else:
-            flow = max(flow - FLOW_DECAY_OFF * STEP_MIN, indoor)
+            q_comp_w = 0.0
 
-        q_w = house.heat_output_w(flow, indoor)
-
-        aux_kw = 0.0
+        aux_w = 0.0
         if dm <= house.dm_aux_limit:
-            aux_kw = AUX_STEP_KW
-            q_w += aux_kw * 1000.0
+            aux_w = AUX_STEP_KW * 1000.0
+
+        flow += (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
+        flow = max(indoor, min(flow, float(house.profile.max_flow_temp)))
+
+        q_w = q_emit_w
+
+        aux_kw = aux_w / 1000.0
 
         # Indoor temperature ODE
-        d_indoor = (q_w - house.hlc_w_per_k * (indoor - tout)) / house.capacity_j_per_k
+        # INTERNAL GAINS. The simulated house used to have none: its only heat source was the
+        # emitters. A real house is warmed by its occupants, its fridge, its lighting and the sun
+        # to the tune of a few hundred watts, all year - which is why heat demand reaches zero at
+        # the BALANCE POINT (~17 C outdoor) rather than at room temperature.
+        #
+        # Leaving them out did not just make the plant unrealistic, it made it BLIND: the
+        # controller models 600 W of gains and asks for correspondingly less flow, so a house with
+        # zero gains would be systematically under-supplied - and deleting the controller's gains
+        # term (a real regression) would have been INVISIBLE here, because the two errors cancel.
+        d_indoor = (
+            q_w + INTERNAL_GAINS_W - house.hlc_w_per_k * (indoor - tout)
+        ) / house.capacity_j_per_k
         indoor += d_indoor * STEP_MIN * 60.0
 
         # DM dynamics + compressor hysteresis
@@ -639,8 +795,8 @@ def simulate(
         elif compressor_on and dm >= DM_STOP:
             compressor_on = False
 
-        cop = house.profile.get_cop_at_temperature(tout)
-        power_kw = (q_w / 1000.0 - aux_kw) / cop + aux_kw + 0.1 if compressor_on or aux_kw else 0.1
+        cop = house.cop_at(tout, flow)
+        power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
         hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
 
         # --- price/weather context (parsed by the REAL GE-Spot adapter) ---
@@ -779,6 +935,13 @@ def simulate(
         stats["offset_max"] = max(stats["offset_max"], offset_applied)
         energy = power_kw * STEP_MIN / 60.0
         stats["energy_kwh"] += energy
+        # First-law audit. Heat INTO the room, and heat OUT of it. Over a month these must balance
+        # to within the change in the fabric's stored energy - otherwise the plant is inventing or
+        # destroying energy and every cost number it produces is fiction.
+        stats["heat_kwh"] += q_w * STEP_MIN / 60.0 / 1000.0
+        stats["loss_kwh"] += (
+            (house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W) * STEP_MIN / 60.0 / 1000.0
+        )
         stats["aux_kwh"] += aux_kw * STEP_MIN / 60.0
         stats["cost_sek"] += energy * cur_price_ore / 100.0
 
@@ -790,6 +953,27 @@ def simulate(
             day = quarter_id[0]
             daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
             running_peak_kw = max(running_peak_kw, q_mean)
+
+            # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
+            # `running_peak_kw` and handed it to the engine, but never called
+            # `record_quarter_measurement()` - so `EffectManager._monthly_peaks` stayed empty for
+            # all 8928 steps, and `should_limit_power()` short-circuits on an empty history:
+            #
+            #     if not self._monthly_peaks:
+            #         return PowerLimitDecision(should_limit=False, severity="OK", ...)
+            #
+            # The peak layer therefore voted weight 0.00 on every single step of every run. Every
+            # claim this harness made about effect-tariff protection - the feature the integration
+            # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
+            # houses; this is the same hole, in the instrument that was supposed to catch it.)
+            asyncio.run(
+                effect.record_quarter_measurement(
+                    power_kw=q_mean,
+                    quarter=quarter_id[1],
+                    timestamp=now,
+                    source=POWER_SOURCE_EXTERNAL_METER,
+                )
+            )
             quarter_samples = []
         quarter_id = this_quarter
         quarter_samples.append(power_kw)
@@ -828,6 +1012,16 @@ def simulate(
 
     stats["indoor_mean"] = round(stats["indoor_sum"] / steps, 2)
     del stats["indoor_sum"]
+
+    # The first law. Heat delivered minus heat lost must equal the change in stored energy.
+    stored_kwh = house.capacity_j_per_k * (indoor - indoor_start) / 3_600_000.0
+    residual = stats["heat_kwh"] - stats["loss_kwh"] - stored_kwh
+    stats["heat_kwh"] = round(stats["heat_kwh"], 1)
+    stats["loss_kwh"] = round(stats["loss_kwh"], 1)
+    stats["energy_balance_residual_kwh"] = round(residual, 2)
+    stats["mean_cop"] = round(
+        stats["heat_kwh"] / max(stats["energy_kwh"] - STANDBY_KW * steps * STEP_MIN / 60.0, 1e-9), 2
+    )
     stats["violations"] = len(violations)
     return stats, violations, trace
 
@@ -852,8 +1046,46 @@ FATAL_VIOLATIONS = frozenset(
 # than a do-nothing controller would. Baseline mean indoor is the comparison.
 MIN_MEAN_INDOOR_C = TARGET_INDOOR - COMFORT_TOLERANCE
 
+# THE INVARIANTS BELOW USED TO BE UNFALSIFIABLE, AND SO DID THIS WHOLE HARNESS.
+#
+# Every mutation of a safety constant still printed "PASS: all safety invariants held":
+#
+#     MIN_TEMP_LIMIT        18.0 -> 5.0     PASS      <- the comfort floor, gutted
+#     DM_THRESHOLD_AUX_LIMIT -1500 -> -400  PASS      <- immersion heater at shallow debt
+#     WEATHER_GENTLE_OFFSET  0.83 -> 2.0    PASS      <- the overheat bug, hand-tuned against
+#     INTERNAL_GAINS_W        600 -> 0      PASS
+#     comfort-layer abstention removed      PASS
+#
+# The reason was not the invariants themselves - it was that a mild January never brings the
+# house within reach of any of them, and three of the most telling numbers were COUNTED AND
+# NEVER ASSERTED. `aux_kwh` was tracked and ignored, so driving the pump into the immersion
+# heater was free. `comfort_minutes_below` and `comfort_minutes_above` were tracked and ignored,
+# so the house could sit outside its comfort band for the entire month and still report zero
+# violations. The file's own comment complains about exactly this pattern ("The harness counted
+# comfort_minutes_above and asserted nothing about it") - and then did it again, twice.
+#
+# A test that cannot fail cannot detect. These now bite, and the gate runs the COLD SNAP as well
+# as the mild month, so the house is actually taken near its limits.
 
-def check_invariants(tag: str, stats: dict, violations: list) -> list[str]:
+# The immersion heater is a COP-1.0 resistive element. On a correctly sized pump in a Swedish
+# January the optimiser must never reach for it: that is the whole point of the degree-minute
+# ladder. A little is tolerated in a deep cold snap on an air-source pump whose capacity has
+# genuinely collapsed - that is physics, not a control failure - so the budget is per-scenario.
+AUX_BUDGET_KWH_MILD = 0.0
+AUX_BUDGET_KWH_COLDSNAP = 25.0
+
+# Degree minutes must stay clear of the aux limit by a real margin. Skimming it means the ladder
+# is only just holding, and the next colder night tips into resistive heat.
+DM_AUX_MARGIN = 200.0
+
+# Minutes outside the comfort band, per 31-day month. Not zero - the optimiser is ALLOWED to
+# coast into the band's edge to dodge a price peak, that is its job - but a house that spends
+# whole days out of band is not being optimised, it is being neglected.
+MAX_COMFORT_MINUTES_BELOW = 240
+MAX_COMFORT_MINUTES_ABOVE = 720
+
+
+def check_invariants(tag: str, stats: dict, violations: list, house=None) -> list[str]:
     """Return the reasons this run must be treated as a failure."""
     failures = []
 
@@ -874,6 +1106,34 @@ def check_invariants(tag: str, stats: dict, violations: list) -> list[str]:
     if stats["exceptions"]:
         failures.append(f"{stats['exceptions']} engine exception(s)")
 
+    # Tracked since the harness was written. Asserted for the first time here.
+    aux_budget = AUX_BUDGET_KWH_COLDSNAP if "coldsnap" in tag else AUX_BUDGET_KWH_MILD
+    if stats["aux_kwh"] > aux_budget:
+        failures.append(
+            f"the immersion heater burned {stats['aux_kwh']:.1f} kWh (budget {aux_budget:.0f}) - "
+            f"the degree-minute ladder failed to recover the house before the aux limit"
+        )
+
+    if house is not None:
+        aux_limit = house.dm_aux_limit
+        if stats["dm_min"] <= aux_limit + DM_AUX_MARGIN:
+            failures.append(
+                f"degree minutes reached {stats['dm_min']:.0f}, within {DM_AUX_MARGIN:.0f} of the "
+                f"{aux_limit:.0f} aux limit - the ladder is only just holding"
+            )
+
+    if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:
+        failures.append(
+            f"{stats['comfort_minutes_below']} minutes below the comfort band "
+            f"(budget {MAX_COMFORT_MINUTES_BELOW}) - the optimiser starved the house"
+        )
+
+    if stats["comfort_minutes_above"] > MAX_COMFORT_MINUTES_ABOVE:
+        failures.append(
+            f"{stats['comfort_minutes_above']} minutes above the comfort band "
+            f"(budget {MAX_COMFORT_MINUTES_ABOVE}) - the optimiser cooked the house"
+        )
+
     return failures
 
 
@@ -883,6 +1143,8 @@ def main() -> int:
     baseline = "--baseline" in sys.argv
     battery = "--battery" in sys.argv
     live_se4 = "--live-se4" in sys.argv
+    no_price = "--no-price" in sys.argv
+    no_weather = "--no-weather" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
@@ -897,7 +1159,16 @@ def main() -> int:
 
     for house in HOUSES:
         stats, violations, trace = simulate(
-            house, times, temps, price_source, days, mode, baseline, battery=battery
+            house,
+            times,
+            temps,
+            price_source,
+            days,
+            mode,
+            baseline,
+            battery=battery,
+            enable_price=not no_price,
+            enable_weather=not no_weather,
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -911,11 +1182,15 @@ def main() -> int:
             tag += "-battery"
         if baseline:
             tag += "-baseline"
+        if no_price:
+            tag += "-noprice"
+        if no_weather:
+            tag += "-noweather"
 
         # The baseline run is a do-nothing controller used as a yardstick. It is
         # expected to breach comfort - that is the point of it - so it reports but
         # does not gate.
-        failures = [] if (baseline or battery) else check_invariants(tag, stats, violations)
+        failures = [] if (baseline or battery) else check_invariants(tag, stats, violations, house)
 
         json.dump(
             {
