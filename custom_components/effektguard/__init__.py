@@ -124,43 +124,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Event listener provides instant detection when external power sensor becomes available
     coordinator.setup_power_sensor_listener()
 
-    # Everything from here on runs with the clock-aligned control loop ALREADY ARMED: the first
-    # refresh above ends in _schedule_aligned_refresh(). So a failure here does not simply abort a
-    # setup - it abandons a live coordinator that goes on writing curve offsets to the heat pump
-    # every five minutes, while Home Assistant retries and builds a second one alongside it.
-    #
-    # HA will not save us. It runs the entry's async_on_unload callbacks - which is what would call
-    # async_shutdown() and cancel the timer - in exactly ONE of its failure branches, the generic
-    # `except (SystemExit, Exception)`. ConfigEntryNotReady, ConfigEntryError and
-    # ConfigEntryAuthFailed do not. A platform reporting "not ready" is the ordinary case, and it is
-    # precisely the one that leaks.
-    #
-    # "Two coordinators, one heat pump, conflicting curve offsets, forever" - the sentence already
-    # in _schedule_aligned_refresh, from the F-061 fix. This is the same bug through another door
-    # (audit F-071).
-    try:
-        # Forward setup to platforms (only if coordinator initialized successfully)
-        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Forward setup to platforms (only if coordinator initialized successfully)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        # Register services
-        await _async_register_services(hass)
+    # Register services
+    await _async_register_services(hass)
 
-        # Listen for options updates
-        entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-    except ConfigEntryNotReady as err:
-        # Routine during startup - a platform's dependencies are not up yet, and HA will retry.
-        # No traceback: this is expected, and a stack trace here reads like a crash.
-        _LOGGER.info("Setup deferred (%s) - shutting the coordinator down before HA retries", err)
-        await coordinator.async_shutdown()
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-        raise
-    except Exception:
-        _LOGGER.exception(
-            "EffektGuard setup failed after the coordinator was live - shutting it down"
-        )
-        await coordinator.async_shutdown()
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-        raise
+    # Listen for options updates
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     _LOGGER.info("EffektGuard setup complete")
     return True
