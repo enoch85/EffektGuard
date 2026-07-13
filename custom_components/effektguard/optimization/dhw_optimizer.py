@@ -68,6 +68,7 @@ from ..const import (
     SPACE_HEATING_DEMAND_LOW_THRESHOLD,
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
+from ..utils.price_math import price_savings_fraction
 from .thermal_layer import estimate_dm_recovery_time
 from .price_layer import PriceAnalyzer
 from ..utils.volatile_helpers import get_volatile_info
@@ -966,16 +967,11 @@ class IntelligentDHWScheduler:
                             # against the MAGNITUDE. `(current - optimal) / current` inverts on
                             # negative prices: current -50 ore against a WORSE window at -10 ore
                             # yields +0.8, i.e. "80% savings" for deferring to a dearer quarter.
-                            if (
-                                current_quarter_price is not None
-                                and optimal_window.avg_price < current_quarter_price
-                            ):
-                                price_delta = current_quarter_price - optimal_window.avg_price
-                                reference = abs(current_quarter_price)
-                                price_savings_pct = (
-                                    price_delta / reference if reference > 0 else 1.0
-                                )
+                            price_savings_pct = price_savings_fraction(
+                                current_quarter_price, optimal_window.avg_price
+                            )
 
+                            if price_savings_pct is not None:
                                 # Can wait if:
                                 # 1. Savings significant (≥15%)
                                 # 2. Optimal window reachable (time_to_window + heat_time < time_until_target)
@@ -1833,11 +1829,23 @@ class IntelligentDHWScheduler:
                         None,
                     )
 
-                    if current_quarter_price and optimal_window.avg_price < current_quarter_price:
-                        price_savings_pct = (
-                            current_quarter_price - optimal_window.avg_price
-                        ) / current_quarter_price
+                    # `price_savings_fraction`, not the arithmetic inline. This site used to read
+                    #
+                    #     if current_quarter_price and optimal.avg_price < current_quarter_price:
+                    #         pct = (current - optimal) / current
+                    #
+                    # which is falsy on a price of exactly 0.00 (a real Nordic price, ~100 hours a
+                    # year per SE zone) and INVERTS on a negative one: current -10 ore against a
+                    # genuinely cheaper -60 ore window gives -5.00, fails the 15 % test, and heats
+                    # the hot water NOW instead of waiting to be PAID for it.
+                    #
+                    # The sibling comparison in this same file had already been fixed, comment and
+                    # all. This one had not, because the logic was copied rather than shared.
+                    price_savings_pct = price_savings_fraction(
+                        current_quarter_price, optimal_window.avg_price
+                    )
 
+                    if price_savings_pct is not None:
                         # Can wait if:
                         # 1. Savings significant (≥15%)
                         # 2. Optimal window is not too far away (within lookahead)
