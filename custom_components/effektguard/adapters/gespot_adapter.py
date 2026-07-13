@@ -20,7 +20,7 @@ This adapter:
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, NotRequired, TypedDict
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -40,6 +40,29 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 QUARTER_DURATION: Final = timedelta(minutes=QUARTER_INTERVAL_MINUTES)
+
+
+class RawPricePeriod(TypedDict):
+    """One interval as GE-Spot publishes it in `today_interval_prices`.
+
+    `time` is a timezone-aware datetime OBJECT on a live GE-Spot, not an ISO string - it is
+    built as `datetime(y, m, d, hour, minute, tzinfo=area_tz)` and put straight into the
+    entity's attributes. It is a string only when Home Assistant has restored the attribute
+    from JSON across a restart, so both forms have to be handled.
+
+    `value` is the price the owner is billed. `raw_value` is the market price before VAT and
+    tariffs, present only when GE-Spot has it; nothing here reads it, and it must never be
+    mistaken for the price - it runs around 60 % of `value`, and ranking quarters by it would
+    optimise against a number nobody pays.
+
+    A TypedDict is erased at runtime and enforces nothing, and this dict comes from another
+    integration's state attributes. It records the contract; `_parse_periods` validates every
+    field it uses and drops the interval when it cannot.
+    """
+
+    time: datetime | str
+    value: float
+    raw_value: NotRequired[float]
 
 
 @dataclass
@@ -222,11 +245,13 @@ class GESpotAdapter:
             has_tomorrow=len(tomorrow_periods) > 0,
         )
 
-    def _parse_periods(self, raw_prices: list[dict[str, Any]]) -> list[QuarterPeriod]:
+    def _parse_periods(self, raw_prices: list[RawPricePeriod]) -> list[QuarterPeriod]:
         """Parse raw price data into QuarterPeriod objects.
 
         Args:
-            raw_prices: List of dicts with 'time' (datetime string) and 'value' (float)
+            raw_prices: GE-Spot's published intervals. See RawPricePeriod: `time` is a
+                timezone-aware datetime object on a live GE-Spot, and an ISO string when
+                Home Assistant has restored the attribute from JSON across a restart.
 
         Returns:
             The day's native intervals sorted by absolute instant: 96 on a
@@ -256,14 +281,21 @@ class GESpotAdapter:
                 else:
                     continue
 
-                # Parse price - use exactly as provided by GE-Spot (no conversion)
-                price = float(item.get("value", 0.0))
+                # Used exactly as GE-Spot provides it (no conversion). Deliberately NOT
+                # `.get("value", 0.0)`: a missing price is not a price of zero. Zero is a real
+                # Nordic price and the cheapest one possible, so a defaulted interval outranks
+                # every genuine quarter of the day and wins the most aggressive pre-heating the
+                # price layer can command. KeyError below drops the interval instead.
+                price = float(item["value"])
 
                 # Create period with just datetime and price (all else derived)
                 periods.append(QuarterPeriod(start_time=start_time, price=price))
 
             except (ValueError, TypeError, KeyError) as err:
-                _LOGGER.warning("Failed to parse price period: %s", err)
+                # Drop it rather than substitute anything. Lookups are by timestamp, so a gap
+                # means that quarter has no price and the price layer abstains for it; if every
+                # interval drops, the empty day trips the no-price-source repair issue.
+                _LOGGER.warning("Dropping unparseable price period (%s): %s", err, item)
                 continue
 
         # Sort by absolute instant. A local wall-clock sort cannot distinguish
