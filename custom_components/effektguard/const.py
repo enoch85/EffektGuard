@@ -993,6 +993,20 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # integration reads nothing and controls nothing.
 #
 # At UPDATE_INTERVAL_MINUTES this is a generous margin over any plausible MyUplink start-up.
+# How old a NIBE reading may be before it stops being a reading and becomes a memory.
+#
+# The adapter rejects `unavailable` and `unknown`, so an upstream integration that DIES is caught -
+# MyUplink and nibe_heatpump use a coordinator, and their entities go unavailable when polling
+# fails. But `manifest.json` also lists mqtt and modbus, and an MQTT sensor holds its last retained
+# value indefinitely: if the bridge publishing degree minutes stops, the sensor goes on reporting
+# the number it was given hours ago and every other check passes. The pump keeps being driven on it,
+# and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
+#
+# 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
+# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
+# today can be broken by the guard. (Audit F-015.)
+NIBE_READING_MAX_AGE_MINUTES: Final = 30
+
 STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
 
 STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control

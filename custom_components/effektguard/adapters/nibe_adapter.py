@@ -36,6 +36,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from ..const import (
+    NIBE_READING_MAX_AGE_MINUTES,
     CONF_ADDITIONAL_INDOOR_SENSORS,
     CONF_DEGREE_MINUTES_ENTITY,
     CONF_INDOOR_TEMP_METHOD,
@@ -911,6 +912,37 @@ class NibeAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             return default
 
+        # Age is the only thing that distinguishes a reading from a memory. Home Assistant records
+        # `last_reported` on every state write, even when the value is unchanged, precisely so that
+        # "steady at -150 for twenty minutes" can be told apart from "nothing has said anything
+        # about the pump for twenty minutes". An MQTT sensor whose publisher has stopped is
+        # available, unchanged, and worthless - and every other check here passes it (audit F-015).
+        #
+        # A stale reading is not a special case: it is a reading we do not have. It returns the
+        # default, and a REQUIRED sensor that comes back None raises UpdateFailed - so the pump is
+        # left on its last offset rather than driven on a number nobody has confirmed for hours.
+        # `last_reported` arrived in HA 2024.7 and `last_updated` only moves when the VALUE changes,
+        # which a steady pump's does not - so prefer the former and fall back to the latter.
+        #
+        # If neither is a datetime, the age is simply unknowable, and the reading is used. That is a
+        # deliberate fail-OPEN: this check is an ADDITIONAL guard, so being unable to apply it leaves
+        # us exactly where we were before it existed - whereas raising from inside the adapter would
+        # take the whole update down. (The first version of this did precisely that: comparing a
+        # non-datetime gave "TypeError: '>' not supported between MagicMock and timedelta", and a
+        # crash in the read path is strictly worse than the staleness it was meant to catch.)
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if isinstance(reported, datetime):
+            age = dt_util.utcnow() - reported
+            if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
+                _LOGGER.warning(
+                    "%s last reported %.0f minutes ago (limit %d) - treating it as unread. Nothing "
+                    "has confirmed this value since, and the heat pump will not be driven on it.",
+                    entity_id,
+                    age.total_seconds() / 60,
+                    NIBE_READING_MAX_AGE_MINUTES,
+                )
+                return default
+
         try:
             value = float(state.state)
         except (ValueError, TypeError):
@@ -955,6 +987,37 @@ class NibeAdapter:
         state = self.hass.states.get(entity_id)
         if not state or state.state in ["unknown", "unavailable"]:
             return default
+
+        # Age is the only thing that distinguishes a reading from a memory. Home Assistant records
+        # `last_reported` on every state write, even when the value is unchanged, precisely so that
+        # "steady at -150 for twenty minutes" can be told apart from "nothing has said anything
+        # about the pump for twenty minutes". An MQTT sensor whose publisher has stopped is
+        # available, unchanged, and worthless - and every other check here passes it (audit F-015).
+        #
+        # A stale reading is not a special case: it is a reading we do not have. It returns the
+        # default, and a REQUIRED sensor that comes back None raises UpdateFailed - so the pump is
+        # left on its last offset rather than driven on a number nobody has confirmed for hours.
+        # `last_reported` arrived in HA 2024.7 and `last_updated` only moves when the VALUE changes,
+        # which a steady pump's does not - so prefer the former and fall back to the latter.
+        #
+        # If neither is a datetime, the age is simply unknowable, and the reading is used. That is a
+        # deliberate fail-OPEN: this check is an ADDITIONAL guard, so being unable to apply it leaves
+        # us exactly where we were before it existed - whereas raising from inside the adapter would
+        # take the whole update down. (The first version of this did precisely that: comparing a
+        # non-datetime gave "TypeError: '>' not supported between MagicMock and timedelta", and a
+        # crash in the read path is strictly worse than the staleness it was meant to catch.)
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if isinstance(reported, datetime):
+            age = dt_util.utcnow() - reported
+            if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
+                _LOGGER.warning(
+                    "%s last reported %.0f minutes ago (limit %d) - treating it as unread. Nothing "
+                    "has confirmed this value since, and the heat pump will not be driven on it.",
+                    entity_id,
+                    age.total_seconds() / 60,
+                    NIBE_READING_MAX_AGE_MINUTES,
+                )
+                return default
 
         try:
             value = float(state.state)
