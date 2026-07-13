@@ -262,6 +262,10 @@
     "no_price_source": {
       "title": "No electricity price source",
       "description": "EffektGuard has no electricity price data, so price optimisation is not running - the heating curve is being managed on comfort and safety alone. Configure a spot-price entity (GE-Spot, Nord Pool or similar) in the integration's options to enable it."
+    },
+    "no_dhw_control_entity": {
+      "title": "No hot-water control entity",
+      "description": "EffektGuard drives hot water by toggling NIBE's temporary-lux switch, and no such entity was found. Home Assistant's NIBE integration exposes that register (50004) for F-series pumps only, so an S-series pump has no equivalent - hot-water optimisation is NOT running, and any scheduled boost shown by its sensors will not happen. Space-heating optimisation is unaffected."
     }
   }
 }

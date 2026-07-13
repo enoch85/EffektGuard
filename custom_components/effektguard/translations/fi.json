@@ -262,6 +262,10 @@
     "no_price_source": {
       "title": "Ei sähkön hintalähdettä",
       "description": "EffektGuardilla ei ole sähkön hintatietoja, joten hintaoptimointi ei ole käynnissä - lämpökäyrää ohjataan vain mukavuuden ja turvallisuuden perusteella. Määritä pörssisähköentiteetti (GE-Spot, Nord Pool tai vastaava) integraation asetuksissa ottaaksesi sen käyttöön."
+    },
+    "no_dhw_control_entity": {
+      "title": "Lämpimän veden ohjausentiteettiä ei löytynyt",
+      "description": "EffektGuard ohjaa lämmintä vettä kytkemällä NIBEn väliaikaisen luksus-kytkimen, eikä tällaista entiteettiä löytynyt. Home Assistantin NIBE-integraatio tuo kyseisen rekisterin (50004) esiin vain F-sarjalle, joten S-sarjan lämpöpumpulla ei ole vastaavaa - lämpimän veden optimointi EI ole käynnissä, eikä sensorien näyttämä ajastettu ajo toteudu. Lämmityksen optimointiin tämä ei vaikuta."
     }
   }
 }

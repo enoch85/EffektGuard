@@ -23,6 +23,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    DHW_CONTROL_ISSUE_ID,
     PRICE_SOURCE_ISSUE_ID,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
@@ -363,6 +364,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Whether the "no price source" repair issue is currently raised.
         self._price_issue_active = False
+        self._dhw_issue_active = False
 
         # One writer at a time. See _drive_the_pump: the aligned control loop and a service that
         # commands the pump are both long coroutines, and asyncio interleaves them freely.
@@ -844,6 +846,35 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             translation_key=PRICE_SOURCE_ISSUE_ID,
         )
         self._price_issue_active = True
+
+    def _raise_dhw_control_issue(self) -> None:
+        """Tell the user, in the UI, that hot-water optimisation is not running.
+
+        They have `enable_hot_water_optimization` switched on, the DHW sensors are populated, and
+        one of them is showing the time of a boost that will never happen.
+        """
+        if self._dhw_issue_active:
+            return
+
+        _LOGGER.warning(
+            "No temporary-lux switch found (register 50004) - hot-water optimization is NOT "
+            "running. Home Assistant's NIBE integration exposes this switch for F-series pumps "
+            "only; an S-series pump has no equivalent entity."
+        )
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            DHW_CONTROL_ISSUE_ID,
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=DHW_CONTROL_ISSUE_ID,
+        )
+        self._dhw_issue_active = True
+
+    def _clear_dhw_control_issue(self) -> None:
+        """A lux switch has appeared. Deliberately NOT guarded on the flag - see below."""
+        async_delete_issue(self.hass, DOMAIN, DHW_CONTROL_ISSUE_ID)
+        self._dhw_issue_active = False
 
     def _clear_price_source_issue(self) -> None:
         """Prices are flowing again.
@@ -1924,11 +1955,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         # Check temporary lux entity
         if not self.temp_lux_entity:
-            _LOGGER.debug(
-                "DHW control disabled: No temporary lux entity "
-                "configured (switch.temporary_lux_50004)"
-            )
+            # A _LOGGER.debug is not telling anyone, and this is a whole feature silently doing
+            # nothing. Home Assistant's NIBE integration maps the temporary-lux register (50004)
+            # for the F-series only, so an S-series pump exposes no such entity - while the UI goes
+            # on showing a hot-water status, a recommendation and a SCHEDULED START TIME that can
+            # never fire. Exactly the case the price-source repair issue was created for.
+            self._raise_dhw_control_issue()
             return
+
+        self._clear_dhw_control_issue()
 
         # Get current state of temporary lux switch
         temp_lux_state = self.hass.states.get(self.temp_lux_entity)

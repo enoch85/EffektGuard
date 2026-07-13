@@ -713,6 +713,14 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 # them; a repair issue does. (Audit F-123: the old code invented 96 quarters at 1.0 öre instead.)
 PRICE_SOURCE_ISSUE_ID: Final = "no_price_source"
 
+# EffektGuard drives hot water by toggling NIBE's temporary-lux switch. Home Assistant's own NIBE
+# integration only maps that register (50004) for the F-series, so an S-series pump exposes no such
+# entity at all - and the DHW half of EffektGuard then does nothing whatsoever. It said so in a
+# _LOGGER.debug, while the UI carried on showing a hot-water status, a recommendation and a
+# scheduled start time that could never fire. Same rule as the price source: a debug line is not
+# telling anyone.
+DHW_CONTROL_ISSUE_ID: Final = "no_dhw_control_entity"
+
 PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)

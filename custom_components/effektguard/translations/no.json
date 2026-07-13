@@ -262,6 +262,10 @@
     "no_price_source": {
       "title": "Ingen strømpriskilde",
       "description": "EffektGuard mangler strømprisdata, så prisoptimaliseringen kjører ikke - varmekurven styres kun av komfort og sikkerhet. Konfigurer en spotprisentitet (GE-Spot, Nord Pool eller lignende) i integrasjonens innstillinger for å aktivere den."
+    },
+    "no_dhw_control_entity": {
+      "title": "Ingen entitet for varmtvannsstyring",
+      "description": "EffektGuard styrer varmtvann ved å slå på NIBEs midlertidige luksus-bryter, og ingen slik entitet ble funnet. Home Assistants NIBE-integrasjon eksponerer det registeret (50004) kun for F-serien, så en S-seriepumpe har ingen tilsvarende - varmtvannsoptimaliseringen kjører IKKE, og en planlagt kjøring som sensorene viser vil ikke skje. Varmeoptimaliseringen påvirkes ikke."
     }
   }
 }
