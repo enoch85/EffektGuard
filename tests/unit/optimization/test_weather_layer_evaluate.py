@@ -12,7 +12,7 @@ from custom_components.effektguard.optimization.weather_layer import (
 )
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_WEATHER_PREDICTION,
-    WEATHER_PREHEAT_OFFSET,
+    WEATHER_GENTLE_OFFSET,
     WEATHER_WEIGHT_CAP,
 )
 
@@ -160,7 +160,7 @@ class TestEvaluateLayerForecastTrigger:
             enable_weather_prediction=True,
         )
 
-        assert result.offset == WEATHER_PREHEAT_OFFSET  # +0.5°C
+        assert result.offset == WEATHER_GENTLE_OFFSET  # +0.5°C
         assert result.weight > 0
         assert "proactive" in result.reason.lower() or "drop" in result.reason.lower()
 
@@ -199,7 +199,7 @@ class TestEvaluateLayerIndoorCoolingTrigger:
             enable_weather_prediction=True,
         )
 
-        assert result.offset == WEATHER_PREHEAT_OFFSET
+        assert result.offset == WEATHER_GENTLE_OFFSET
         assert result.weight > 0
         assert "cooling" in result.reason.lower()
 
