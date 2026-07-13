@@ -1224,6 +1224,13 @@ DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER: Final = (
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
 DM_DHW_ABORT_FALLBACK: Final = -500.0  # Fallback: Abort DHW if reached during run
 
+# How far BELOW the block threshold a running DHW cycle is allowed to sink before it gives up.
+# Heating hot water takes the compressor away from space heating, so degree minutes ALWAYS fall
+# during a cycle. Abort must therefore sit deeper than block, or every cycle that starts near the
+# block threshold is aborted on the next tick and the pump cycles (audit F-030). This 160 DM is the
+# gap the fallback pair above already encodes: -340 block, -500 abort.
+DM_DHW_ABORT_BUFFER: Final = 160.0
+
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)
 DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
 DHW_NORMAL_RUNTIME_MINUTES: Final = 45  # Normal DHW heating window

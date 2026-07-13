@@ -52,6 +52,9 @@ from ..const import (
     DHW_SPACE_HEATING_OUTDOOR_THRESHOLD,
     DHW_TREND_DEFICIT_THRESHOLD,
     DHW_TREND_RATE_THRESHOLD,
+    DM_CRITICAL_T2_MARGIN,
+    DM_THRESHOLD_AUX_LIMIT,
+    DM_DHW_ABORT_BUFFER,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
     DM_RECOVERY_SAFETY_BUFFER,
@@ -733,14 +736,10 @@ class IntelligentDHWScheduler:
             should_block_for_thermal_debt = self.emergency_layer.should_block_dhw(
                 thermal_debt_dm, outdoor_temp
             )
-            # Get THERMAL MASS ADJUSTED thresholds for abort conditions
-            # CRITICAL: Must use same adjusted thresholds as should_block_dhw() uses internally
-            # to prevent start-then-abort cycles when block passes but abort fails
+            dm_block_threshold, dm_abort_threshold = self.get_dm_block_and_abort_thresholds(
+                outdoor_temp
+            )
             dm_thresholds = self.emergency_layer.get_adjusted_dm_thresholds(outdoor_temp)
-            dm_block_threshold = dm_thresholds["warning"]
-            # Abort threshold should be LESS strict (more negative) than block threshold
-            # to avoid immediate abort after starting. Use 80 DM buffer beyond warning.
-            dm_abort_threshold = dm_thresholds["warning"] - 80
 
             _LOGGER.debug(
                 "DHW using shared EmergencyLayer: should_block=%s, DM=%.0f, outdoor=%.1f°C, "
@@ -754,8 +753,9 @@ class IntelligentDHWScheduler:
         elif self.climate_detector:
             # Fallback to local climate detector
             dm_thresholds = self.climate_detector.get_expected_dm_range(outdoor_temp)
-            dm_block_threshold = dm_thresholds["warning"]  # Use warning threshold for blocking
-            dm_abort_threshold = dm_thresholds["warning"] - 80  # 80 DM buffer before critical
+            dm_block_threshold, dm_abort_threshold = self.get_dm_block_and_abort_thresholds(
+                outdoor_temp
+            )
             should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
             _LOGGER.debug(
@@ -767,8 +767,9 @@ class IntelligentDHWScheduler:
             )
         else:
             # Fallback to fixed thresholds from const.py if climate detector unavailable
-            dm_block_threshold = DM_DHW_BLOCK_FALLBACK
-            dm_abort_threshold = DM_DHW_ABORT_FALLBACK
+            dm_block_threshold, dm_abort_threshold = self.get_dm_block_and_abort_thresholds(
+                outdoor_temp
+            )
             should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
         # Check if scheduling is active (user configured demand periods)
@@ -2250,6 +2251,49 @@ class IntelligentDHWScheduler:
         lines.append(f"Recommendation: {recommendation}")
 
         return "\n".join(lines)
+
+    def get_dm_block_and_abort_thresholds(self, outdoor_temp: float) -> tuple[float, float]:
+        """Return (block, abort) degree-minute thresholds for hot water.
+
+        BLOCK is "do not START a DHW cycle below this". ABORT is "STOP a running cycle below this".
+        **Abort is always the deeper of the two, and it has to be.** Heating hot water takes the
+        compressor away from space heating, so degree minutes always sink during a cycle: an abort
+        shallower than the block means every cycle permitted to start near the block threshold is
+        aborted on the next tick, and the pump starts, stops, starts, stops.
+
+        The two used to be computed in three places from two different bases, and the one that ran
+        got it backwards - block came from `should_block_dhw` at `warning - T2_MARGIN`, while abort
+        was computed here as `warning - 80`, leaving abort 120 DM SHALLOWER than block. Three lines
+        above it, a comment explained that the code existed to prevent exactly that. The fallback
+        pair in const.py (`-340` block, `-500` abort) had the relationship right the whole time.
+
+        So both now come from one place, and abort is DERIVED from whichever block the caller
+        actually enforces. The two paths enforce different blocks - the shared EmergencyLayer refuses
+        at T2, the local-detector fallback refuses at `warning` - and that discrepancy is left exactly
+        as it is here. It is a real inconsistency, and it is a SEPARATE question from this one:
+        changing it would move when hot water is refused, which is a safety behaviour, not a bug fix.
+        """
+        if self.emergency_layer:
+            # What should_block_dhw() actually enforces: "Block at T2 threshold or worse".
+            warning = self.emergency_layer.get_adjusted_dm_thresholds(outdoor_temp)["warning"]
+            block = warning - DM_CRITICAL_T2_MARGIN
+        elif self.climate_detector:
+            # What this branch actually enforces: `thermal_debt_dm <= warning`.
+            block = self.climate_detector.get_expected_dm_range(outdoor_temp)["warning"]
+        else:
+            return DM_DHW_BLOCK_FALLBACK, DM_DHW_ABORT_FALLBACK
+
+        # A running cycle gives up a buffer deeper than the block, never past the absolute limit.
+        #
+        # The floor is the limit ITSELF, not limit + buffer. A first draft of this used the latter
+        # and re-created the very inversion it was written to remove: in the coldest zone the block
+        # already sits at -1400, so clamping abort up to -1340 put it 60 DM SHALLOWER than block
+        # again. Deep zones simply have less room between the block and the floor, and that is fine -
+        # at the limit the emergency layer owns the pump and DHW is refused outright, so an abort
+        # exactly there is the hardest possible stop rather than a threshold that undoes itself.
+        abort = max(block - DM_DHW_ABORT_BUFFER, DM_THRESHOLD_AUX_LIMIT)
+
+        return block, abort
 
     def check_abort_conditions(
         self,
