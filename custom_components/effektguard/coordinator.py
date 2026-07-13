@@ -330,6 +330,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_heating_start = None  # When current/last DHW cycle started
         self.dhw_heating_end = None  # When last DHW cycle ended
         self.dhw_was_active = False  # Track DHW state (is_hot_water OR temp_lux)
+        # True while a temporary-lux boost that EFFEKTGUARD started is still running. The owner may
+        # also start one from the heat pump's own panel or their own automation, and that one is
+        # none of our business - so shutdown only cancels a boost we are responsible for.
+        self._lux_boost_is_ours = False
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -654,6 +658,36 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             power_state.state if power_state else "None",
         )
 
+    async def _cancel_our_dhw_boost(self) -> None:
+        """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
+
+        Called on unload. A boost the OWNER started is left alone.
+        """
+        if not (self._lux_boost_is_ours and self.temp_lux_entity):
+            return
+
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is None or state.state != STATE_ON:
+            self._lux_boost_is_ours = False
+            return
+
+        _LOGGER.info(
+            "Cancelling the EffektGuard hot-water boost on %s before unload - it would otherwise "
+            "run to NIBE's own timeout with nothing left to stop it",
+            self.temp_lux_entity,
+        )
+        try:
+            await self.hass.services.async_call(
+                "switch",
+                "turn_off",
+                {"entity_id": self.temp_lux_entity},
+                blocking=True,
+            )
+        except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
+            _LOGGER.error("Failed to cancel the hot-water boost on unload: %s", err)
+        finally:
+            self._lux_boost_is_ours = False
+
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
 
@@ -702,6 +736,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._power_sensor_listener()
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
+
+            # CANCEL OUR OWN DHW BOOST. EffektGuard turns the temporary-lux switch ON to run a
+            # high-temperature hot-water cycle, and it turned it OFF again on the next tick that
+            # decided the cycle was done. But nothing turned it off on UNLOAD - so a reload, an
+            # options change, or an HA restart in the middle of an EffektGuard-initiated boost left
+            # the pump running that boost until NIBE's own timeout expired. A full high-temperature
+            # DHW cycle, at the top of the tank where the immersion heater does the work, that
+            # nobody asked for and nobody was left to stop.
+            #
+            # Only OUR boost. The owner may also start one from the heat pump's panel or their own
+            # automation, and that one is none of our business - the DHW control path already says
+            # so: "Stopping the lux boost cannot harm the pump - it only stops an
+            # EffektGuard-initiated boost."
+            await self._cancel_our_dhw_boost()
 
             # Save learning state
             if self.adaptive_learning or self.thermal_predictor or self.weather_learner:
@@ -1949,6 +1997,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     blocking=True,
                 )
                 self._last_dhw_control_time = now_time
+                self._lux_boost_is_ours = True
             except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn on temporary lux: %s", err)
 
@@ -1968,6 +2017,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     blocking=True,
                 )
                 self._last_dhw_control_time = now_time
+                self._lux_boost_is_ours = False
             except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to turn off temporary lux: %s", err)
         else:

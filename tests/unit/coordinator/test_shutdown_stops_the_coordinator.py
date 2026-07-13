@@ -60,6 +60,9 @@ def make_coordinator() -> EffektGuardCoordinator:
     coordinator._save_learned_data = AsyncMock()
     coordinator.hass = MagicMock()
     coordinator._clock_aligned = True
+    # Shutdown now also cancels an EffektGuard-initiated hot-water boost, so it touches these.
+    coordinator.temp_lux_entity = None
+    coordinator._lux_boost_is_ours = False
     return coordinator
 
 
