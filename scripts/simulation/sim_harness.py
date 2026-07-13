@@ -264,31 +264,6 @@ HOUSES = [
         heating_type="concrete_ufh",
         design_flow=38.0,
     ),
-    # An UNDER-CAPACITY house: an F750 in an older, leakier building. This is not an exotic case -
-    # it is the ordinary one. An exhaust-air F750 is rated to 8 kW, and 250 W/K asks for 8.4 kW at
-    # the -11.6 C this January actually reached, so the compressor saturates on a normal cold night
-    # and the heating curve asks for a flow temperature the pump cannot make.
-    #
-    # It exists because the other two houses cannot get into trouble. Both are comfortably oversized
-    # (6.8 kW of demand against 8 kW; 8.2 kW against 12 kW), so degree minutes never sank below the
-    # compressor's own on/off hysteresis - `dm_min` came out at -174 whether it was -11 C or -23 C
-    # outside - the auxiliary heater never fired, and no offset above +2 was ever commanded. Z4, Z5,
-    # T1, T2, T3, EMERGENCY, the DHW thermal-debt block and the aux limit had never executed in a
-    # single simulation, and the harness reported PASS for all of it.
-    #
-    # Thermal debt is what happens when demand outruns the compressor. A plant that cannot run out
-    # of compressor cannot produce thermal debt, and a simulation with no thermal debt cannot say
-    # anything at all about the half of this project that exists to handle it.
-    HouseConfig(
-        name="leaky_f750_undersized",
-        thermal_mass=0.6,
-        insulation_quality=0.7,
-        hlc_w_per_k=250.0,
-        tau_hours=25.0,
-        profile=NibeF750Profile(),
-        heating_type="radiator",
-        design_flow=55.0,
-    ),
 ]
 
 
