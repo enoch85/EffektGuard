@@ -126,6 +126,28 @@ class ComfortLayer:
         Returns:
             ComfortLayerDecision with comfort correction
         """
+        # A NIBE with no room sensor (no BT50) is a legitimate configuration: it runs on degree
+        # minutes and the heating curve. The adapter substitutes DEFAULT_INDOOR_TEMP (21.0) so the
+        # display has something to show, and sets `indoor_temp_valid=False` - in its own words, "so
+        # comfort-reasoning layers abstain". This is the comfort-reasoning layer, and it did not.
+        #
+        # Every deviation computed from that placeholder is fiction. With a target BELOW 21.0 - and
+        # 18.5 is now an allowed target - the layer reads a permanent overshoot that no amount of
+        # heating can correct, because nothing is measuring the house:
+        #
+        #     target 19.0  ->  offset -10.00 at weight 1.00, "Overshoot: 2.0C above target"
+        #
+        # A full coast at critical weight, forever, on a house nobody is measuring. Only the
+        # degree-minute emergency path stands between that and a cold house, and it would be
+        # fighting this layer on every cycle for the whole winter.
+        if not getattr(nibe_state, "indoor_temp_valid", True):
+            return ComfortLayerDecision(
+                name="Comfort",
+                offset=0.0,
+                weight=0.0,
+                reason="No indoor sensor - abstaining (degree minutes protect this system)",
+            )
+
         temp_deviation = nibe_state.indoor_temp - self.target_temp
         tolerance = self.tolerance_range
         dead_zone = self.mode_config.dead_zone
