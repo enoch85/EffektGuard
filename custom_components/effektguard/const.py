@@ -1293,6 +1293,26 @@ DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estima
 
 # Unit conversion
 WATTS_PER_KILOWATT: Final = 1000.0
+KILOWATTS_PER_MEGAWATT: Final = 1000.0
+
+# Where a power reading came from. The monthly effect tariff may only be billed against a real
+# measurement, so the value has to carry its own provenance - asking whether a power ENTITY is
+# configured tells you nothing about whether it answered this cycle.
+POWER_SOURCE_EXTERNAL_METER: Final = "external_meter"
+POWER_SOURCE_NIBE_CURRENTS: Final = "nibe_currents"
+POWER_SOURCE_SOLAR_FALLBACK: Final = "solar_fallback"
+POWER_SOURCE_ESTIMATE: Final = "estimate"
+POWER_SOURCE_NONE: Final = "none"
+
+# Sources that may be recorded against the monthly effect tariff. Estimates never can: they are for
+# display and for the decision layers, and billing must be able to survive being checked.
+BILLABLE_POWER_SOURCES: Final = frozenset(
+    {
+        POWER_SOURCE_EXTERNAL_METER,
+        POWER_SOURCE_NIBE_CURRENTS,
+        POWER_SOURCE_SOLAR_FALLBACK,
+    }
+)
 
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable

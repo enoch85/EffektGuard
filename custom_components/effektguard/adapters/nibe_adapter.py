@@ -76,6 +76,7 @@ from ..const import (
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
+from ..utils.power import power_kw_from_state
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -107,6 +108,12 @@ class NibeState:
     phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
     compressor_hz: int | None = None  # Compressor frequency - optional
     power_kw: float | None = None  # Total power consumption in kW - optional
+    # True when power_kw was derived from supply and outdoor temperature rather than measured.
+    # The estimate is a coarse curve fit, floored at 1.0 kW even with the compressor off, and it
+    # is emitted in the SAME field as a real reading - so anything that reports power as fact, or
+    # bills against it, must consult this first. The savings calculator did not, and presented a
+    # number computed from a guess under the heading of actual consumption.
+    power_is_estimated: bool = False
     # False when no indoor sensor could be read and indoor_temp is DEFAULT_INDOOR_TEMP
     # rather than a measurement. A NIBE system without a room sensor (no BT50) is a
     # LEGITIMATE configuration - the pump runs on degree minutes and the heating curve
@@ -376,10 +383,16 @@ class NibeAdapter:
                 phase3_current or 0.0,
             )
 
-        # Read actual power consumption (if available)
-        power_kw = await self.get_power_consumption()
+        # Read power consumption. It may be a measurement or a temperature-derived estimate, and
+        # the two are not interchangeable - the flag travels with the number so nothing has to
+        # guess later.
+        power_kw, power_is_estimated = await self.get_power_consumption()
         if power_kw is not None:
-            _LOGGER.debug("Power consumption: %.2f kW", power_kw)
+            _LOGGER.debug(
+                "Power consumption: %.2f kW (%s)",
+                power_kw,
+                "estimated from temperatures" if power_is_estimated else "measured",
+            )
 
         return NibeState(
             outdoor_temp=outdoor_temp,
@@ -399,6 +412,7 @@ class NibeAdapter:
             phase3_current=phase3_current,
             compressor_hz=int(compressor_hz) if compressor_hz is not None else None,
             power_kw=power_kw,
+            power_is_estimated=power_is_estimated,
             indoor_temp_valid=indoor_temp_valid,
         )
 
@@ -1096,7 +1110,7 @@ class NibeAdapter:
             return "heating"
         return "other"
 
-    async def get_power_consumption(self) -> float | None:
+    async def get_power_consumption(self) -> tuple[float | None, bool]:
         """Get current power consumption of heat pump.
 
         Tries in order:
@@ -1104,24 +1118,22 @@ class NibeAdapter:
         2. Estimation from supply temperature (least accurate)
 
         Returns:
-            Power consumption in kW, or None if unavailable
+            (power in kW or None, whether that number was estimated). The estimate is useful for
+            layers that only need a magnitude, and useless to anything that reports or bills
+            consumption - so callers are made to see which one they got.
         """
-        # Try configured power sensor
+        # Try configured power sensor. The unit is read through the one shared helper the
+        # coordinator also uses - the two used to disagree about what an absent unit meant, and
+        # answered the same sensor a factor of 1000 apart.
         if self._power_sensor_entity:
-            power = await self._read_entity_float(self._power_sensor_entity, default=None)
+            power = power_kw_from_state(self.hass.states.get(self._power_sensor_entity))
             if power is not None:
-                # Convert W to kW if needed
-                state = self.hass.states.get(self._power_sensor_entity)
-                if state:
-                    unit = state.attributes.get("unit_of_measurement", "").lower()
-                    if unit == "w":
-                        power = power / 1000.0
                 _LOGGER.debug(
                     "Using configured power sensor: %s = %.2f kW",
                     self._power_sensor_entity,
                     power,
                 )
-                return power
+                return power, False
 
         # Fall back to estimation from supply temperature
         supply_temp = await self._read_entity_float(
@@ -1134,9 +1146,9 @@ class NibeAdapter:
         if supply_temp is not None and outdoor_temp is not None:
             estimated_power = self._estimate_power_from_temps(supply_temp, outdoor_temp)
             _LOGGER.debug("Estimating power from temperatures: %.2f kW", estimated_power)
-            return estimated_power
+            return estimated_power, True
 
-        return None
+        return None, False
 
     def calculate_power_from_currents(
         self,

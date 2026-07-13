@@ -44,8 +44,14 @@ from .const import (
     DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
+    BILLABLE_POWER_SOURCES,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
+    POWER_SOURCE_ESTIMATE,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NIBE_CURRENTS,
+    POWER_SOURCE_NONE,
+    POWER_SOURCE_SOLAR_FALLBACK,
     QUARTER_INTERVAL_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
@@ -53,7 +59,6 @@ from .const import (
     STARTUP_MAX_GRACE_ATTEMPTS,
     STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
-    WATTS_PER_KILOWATT,
 )
 from .models.nibe import NibeF750Profile
 from .models.registry import HeatPumpModelRegistry
@@ -72,6 +77,7 @@ from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
+from .utils.power import power_kw_from_state
 from .utils.time_utils import get_current_quarter
 from .utils.volatile_helpers import OffsetVolatilityTracker
 
@@ -1224,36 +1230,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
                 # Continue anyway - next cycle will retry
 
-        # Calculate actual spot savings for this cycle using real NIBE power
-        now_time = dt_util.now()
-        current_quarter = price_data.get_period_index(now_time) if price_data else None
-        if (
-            price_data
-            and hasattr(price_data, "today")
-            and price_data.today
-            and nibe_data
-            and nibe_data.power_kw is not None
-        ):
-            prices_today = [q.price for q in price_data.today]
-            if prices_today and current_quarter is not None:
-                average_price = sum(prices_today) / len(prices_today)
-                current_price = price_data.today[current_quarter].price
-
-                # Calculate savings using ACTUAL power consumption
-                self.savings_calculator.price_unit = getattr(self.gespot, "price_unit", None)
-                cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
-                    actual_power_kw=nibe_data.power_kw,
-                    current_price=current_price,
-                    average_price_today=average_price,
-                    cycle_minutes=UPDATE_INTERVAL_MINUTES,
-                )
-                if self.savings_calculator.is_sek_price_unit:
-                    self._daily_spot_savings += cycle_savings
-                else:
-                    _LOGGER.debug(
-                        "Skipping non-SEK spot-savings aggregation for price unit %s",
-                        self.savings_calculator.price_unit,
-                    )
+        self._accumulate_spot_savings(nibe_data, price_data)
 
         # Check for day change and save yesterday's peak
         now = dt_util.now()
@@ -1999,6 +1976,52 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.priority_reason,
             )
 
+    def _accumulate_spot_savings(self, nibe_data, price_data) -> None:
+        """Add this cycle's spot-price savings to the running daily total.
+
+        Savings are reported to the owner as money, so they may only be computed from power that was
+        MEASURED. Without a power sensor, `power_kw` holds a curve fit of the supply and outdoor
+        temperatures, floored at 1.0 kW even with the compressor off - and it arrives in the same
+        field as a real reading. It used to be passed straight to `actual_power_kw`, under a comment
+        saying "using ACTUAL power consumption", and the resulting kronor were indistinguishable from
+        earned ones.
+
+        The coordinator already refuses to bill an estimated PEAK, and says so three times. This is
+        the same rule, applied to the other number the owner is asked to trust.
+        """
+        if (
+            not price_data
+            or not getattr(price_data, "today", None)
+            or not nibe_data
+            or nibe_data.power_kw is None
+            or nibe_data.power_is_estimated
+        ):
+            return
+
+        current_quarter = price_data.get_period_index(dt_util.now())
+        if current_quarter is None:
+            return
+
+        prices_today = [quarter.price for quarter in price_data.today]
+        average_price = sum(prices_today) / len(prices_today)
+        current_price = price_data.today[current_quarter].price
+
+        self.savings_calculator.price_unit = getattr(self.gespot, "price_unit", None)
+        cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
+            actual_power_kw=nibe_data.power_kw,
+            current_price=current_price,
+            average_price_today=average_price,
+            cycle_minutes=UPDATE_INTERVAL_MINUTES,
+        )
+
+        if self.savings_calculator.is_sek_price_unit:
+            self._daily_spot_savings += cycle_savings
+        else:
+            _LOGGER.debug(
+                "Skipping non-SEK spot-savings aggregation for price unit %s",
+                self.savings_calculator.price_unit,
+            )
+
     async def _update_peak_tracking(self, nibe_data) -> None:
         """Update peak power tracking for effect tariff optimization.
 
@@ -2015,6 +2038,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.nibe.power_sensor_entity
             )
 
+            # Where this cycle's power reading came from. The billing guard at the end asks THIS,
+            # and nothing else. It used to ask whether a power entity was configured, which says
+            # nothing about whether the entity answered: a meter that dropped out left the estimate
+            # from PRIORITY 3 to be recorded as a tariff peak, stamped as a meter reading.
+            power_source = POWER_SOURCE_NONE
+
             # PRIORITY 1: External power meter (whole house including NIBE)
             # This is MOST IMPORTANT for peak billing - measures total house consumption
             # Used for: Monthly peak tracking (effect tariff billing)
@@ -2023,39 +2052,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 power_entity_id = self.nibe.power_sensor_entity
                 power_state = self.hass.states.get(power_entity_id)
 
-                # Only attempt to use external sensor if it's available
-                # Availability is tracked via event listener for fast startup detection
-                if power_state and power_state.state not in ["unknown", "unavailable"]:
-                    try:
-                        # Convert to kW only when the meter reports watts -
-                        # a kW meter must not be divided a second time
-                        # (a 6.0 kW whole-house meter would become 0.006 kW,
-                        # invalidating peak protection and peak records)
-                        power_unit = str(
-                            power_state.attributes.get("unit_of_measurement", "W")
-                        ).lower()
-                        current_power = float(power_state.state)
-                        if power_unit == "w":
-                            current_power = current_power / WATTS_PER_KILOWATT
-                        _LOGGER.debug(
-                            "📊 External power meter (whole house): %.3f kW from %s",
-                            current_power,
-                            power_entity_id,
-                        )
-                        # Mark sensor as available (in case event listener hasn't fired yet)
-                        if not self._power_sensor_available:
-                            self._power_sensor_available = True
-                            _LOGGER.debug("External power sensor marked as available")
-                    except (ValueError, TypeError) as e:
-                        _LOGGER.warning(
-                            "Failed to read power sensor %s (state: %s): %s",
-                            power_entity_id,
-                            power_state.state,
-                            e,
-                        )
+                # Unit handling lives in one place, shared with the NIBE adapter, which reads the
+                # same entity: an unrecognised or absent unit is refused rather than guessed.
+                current_power = power_kw_from_state(power_state)
+
+                if current_power is not None:
+                    power_source = POWER_SOURCE_EXTERNAL_METER
+                    _LOGGER.debug(
+                        "📊 External power meter (whole house): %.3f kW from %s",
+                        current_power,
+                        power_entity_id,
+                    )
+                    # Mark sensor as available (in case event listener hasn't fired yet)
+                    if not self._power_sensor_available:
+                        self._power_sensor_available = True
+                        _LOGGER.debug("External power sensor marked as available")
                 elif not self._power_sensor_available:
-                    # Sensor still not available - skip peak tracking this cycle
-                    # Event listener will trigger refresh when sensor becomes available
+                    # Never seen alive - wait for the listener rather than tracking peaks on nothing
                     _LOGGER.debug(
                         "External power sensor %s not yet available (state: %s) - "
                         "skipping peak tracking (listener active: %s)",
@@ -2064,6 +2077,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         self._power_sensor_listener is not None,
                     )
                     return  # Exit early, event listener will trigger refresh when ready
+                else:
+                    # It has answered before and is not answering now. Everything below still runs -
+                    # the decision layers need SOME power figure - but the source stays unbillable,
+                    # so nothing invented here reaches the tariff record.
+                    _LOGGER.warning(
+                        "External power meter %s did not yield a reading (state: %s). Peak billing "
+                        "is suspended until it does - estimates are not billable.",
+                        power_entity_id,
+                        power_state.state if power_state else "None",
+                    )
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
@@ -2076,6 +2099,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     nibe_data.phase3_current,
                 )
                 if current_power is not None:
+                    power_source = POWER_SOURCE_NIBE_CURRENTS
                     _LOGGER.debug(
                         "⚡ NIBE power from phase currents: %.3f kW "
                         "(L1=%.1fA, L2=%.1fA, L3=%.1fA)",
@@ -2092,6 +2116,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_power = self.effect.estimate_power_from_compressor(
                     nibe_data.compressor_hz, nibe_data.outdoor_temp
                 )
+                power_source = POWER_SOURCE_ESTIMATE
                 _LOGGER.debug(
                     "⚙️  Power estimated from compressor: %.2f kW (%d Hz, %.1f°C outdoor) "
                     "[ESTIMATE ONLY - not used for peak billing]",
@@ -2107,6 +2132,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 is_heating = getattr(nibe_data, "is_heating", False)
                 outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
+                power_source = POWER_SOURCE_ESTIMATE
                 _LOGGER.warning(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
@@ -2117,7 +2143,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # If meter shows unexpectedly low reading but compressor running significantly,
             # the meter likely shows NET import (actual consumption minus solar export)
             # In this case, use calculated/estimated heat pump power for peak tracking
-            if has_external_power_sensor and current_power < 0.5:
+            # Only when the meter ACTUALLY READ low - which is the fallback's real precondition, a
+            # grid meter reading near zero because solar is covering the compressor. A dropped-out
+            # meter leaves an ESTIMATE in `current_power`, and substituting a second estimate for it
+            # and calling the result billable is the hole this method used to have.
+            #
+            # This is defence in depth, not a live fix, and it is deliberately untested: the
+            # substitution already cannot happen on an estimate, because `estimated_power` below is
+            # the same `estimate_power_from_compressor(...)` call that produced `current_power`, so
+            # it would have to be both < 0.5 and > 1.0 at once. That safety is a coincidence of two
+            # thresholds in two files. The condition says what it means instead.
+            if power_source == POWER_SOURCE_EXTERNAL_METER and current_power < 0.5:
                 # Check if heat pump is actually working hard
                 compressor_hz = getattr(nibe_data, "compressor_hz", 0) or 0
                 is_heating = getattr(nibe_data, "is_heating", False)
@@ -2139,6 +2175,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             compressor_hz,
                         )
                         current_power = estimated_power
+                        power_source = POWER_SOURCE_SOLAR_FALLBACK
 
             # Publish the instantaneous reading for the effect layer.
             #
@@ -2153,20 +2190,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # measurement rather than a daily high-water mark.
             self.current_power_kw = current_power
 
-            # Determine measurement source for metadata
-            measurement_source = "unknown"
-            if has_external_power_sensor and current_power is not None:
-                # Check if this was from external meter or smart fallback
-                if has_external_power_sensor and current_power >= 0.5:
-                    measurement_source = "external_meter"
-                elif nibe_data.phase1_current is not None:
-                    measurement_source = "nibe_currents"
-                else:
-                    measurement_source = "estimate"
-            elif nibe_data.phase1_current is not None:
-                measurement_source = "nibe_currents"
-            else:
-                measurement_source = "estimate"
+            # The source was recorded where the value was produced. It used to be reconstructed here,
+            # after the fact, from the config entry and the magnitude of the number - so a compressor
+            # estimate above 0.5 kW was filed as "external_meter", and a peak that had been invented
+            # became indistinguishable from one that had been measured.
+            measurement_source = power_source
 
             # Get current timestamp for peak tracking
             now = dt_util.now()
@@ -2194,17 +2222,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # CRITICAL: Only record monthly peaks with REAL measurements
             # Monthly peak billing requires accurate whole-house power measurement
-            # We MUST have either:
-            #   1. External whole-house power meter (best for billing) OR
-            #   2. NIBE phase currents (accurate NIBE-only, but missing other house loads)
             # Estimates are NEVER used for monthly peak tracking - billing must be accurate
-            has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
-            if not has_real_measurement:
+            #
+            # This asks where THIS cycle's number came from. It used to ask whether a power entity
+            # was configured, which a meter that has gone unavailable still satisfies - so the
+            # estimate that replaced it was billed anyway, in the same cycle the log said it must
+            # never be.
+            if power_source not in BILLABLE_POWER_SOURCES:
                 _LOGGER.debug(
-                    "Skipping monthly peak recording: No real power measurement available. "
-                    "Current reading %.2f kW is estimated (not suitable for billing). "
-                    "Configure external power meter for accurate peak tracking.",
+                    "Skipping monthly peak recording: %.2f kW came from %s, which is not a "
+                    "measurement. Billing must use real readings only.",
                     current_power,
+                    power_source,
                 )
                 return
 

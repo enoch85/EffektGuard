@@ -27,6 +27,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BILLABLE_POWER_SOURCES,
+    POWER_SOURCE_ESTIMATE,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NIBE_CURRENTS,
+    POWER_SOURCE_NONE,
+    POWER_SOURCE_SOLAR_FALLBACK,
     PRICE_UNIT_FALLBACK,
     DOMAIN,
 )
@@ -951,26 +957,23 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
 
             # Human-readable source description
             source_descriptions = {
-                "external_meter": "Whole-house power meter (best accuracy)",
-                "nibe_currents": "NIBE phase currents (NIBE only)",
-                "estimate": "Estimated from compressor (display only)",
-                "unknown": "No measurement available yet",
+                POWER_SOURCE_EXTERNAL_METER: "Whole-house power meter (best accuracy)",
+                POWER_SOURCE_NIBE_CURRENTS: "NIBE phase currents (NIBE only)",
+                POWER_SOURCE_SOLAR_FALLBACK: "Estimated - meter reads low behind solar",
+                POWER_SOURCE_ESTIMATE: "Estimated from compressor (display only)",
+                POWER_SOURCE_NONE: "No measurement available yet",
             }
-            attrs["measurement_description"] = source_descriptions.get(
-                self.coordinator.peak_today_source, "Unknown source"
-            )
+            source = self.coordinator.peak_today_source
+            attrs["measurement_description"] = source_descriptions.get(source, "Unknown source")
 
-            # Is this real measurement or estimate?
-            attrs["is_real_measurement"] = self.coordinator.peak_today_source in [
-                "external_meter",
-                "nibe_currents",
-            ]
+            # What counts as billable is defined once, in const, and the coordinator's peak
+            # recorder tests the same set. These attributes previously carried their own hardcoded
+            # list, so what the owner was TOLD about a peak could disagree with whether it had in
+            # fact been recorded against the tariff.
+            attrs["is_real_measurement"] = source in BILLABLE_POWER_SOURCES
 
-            # Will this affect monthly billing?
-            # Only real measurements from external meter affect effect tariff billing
-            # NIBE currents measure only heat pump (missing other house loads)
             will_affect = (
-                self.coordinator.peak_today_source == "external_meter"
+                source in BILLABLE_POWER_SOURCES
                 and self.coordinator.peak_today > self.coordinator.peak_this_month
             )
             attrs["will_affect_billing"] = will_affect
@@ -980,8 +983,8 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                     f"New monthly peak: {self.coordinator.peak_today:.2f} kW "
                     f"(previous: {self.coordinator.peak_this_month:.2f} kW)"
                 )
-            elif self.coordinator.peak_today_source != "external_meter":
-                attrs["billing_impact"] = "Not used for billing (no external meter configured)"
+            elif source not in BILLABLE_POWER_SOURCES:
+                attrs["billing_impact"] = "Not used for billing (no real power measurement)"
             else:
                 attrs["billing_impact"] = (
                     f"Below monthly peak of {self.coordinator.peak_this_month:.2f} kW"
