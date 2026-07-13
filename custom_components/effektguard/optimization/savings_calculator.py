@@ -14,7 +14,6 @@ from typing import Optional
 from ..const import (
     BASELINE_EMA_WEIGHT_NEW,
     BASELINE_EMA_WEIGHT_OLD,
-    BASELINE_PEAK_MULTIPLIER,
     DAYS_PER_MONTH,
     ORE_TO_SEK_CONVERSION,
     PRICE_MAINUNIT_PREFIXES,
@@ -34,6 +33,10 @@ class SavingsEstimate:
     spot_savings: float  # Savings from spot price optimization (SEK)
     baseline_cost: float  # Estimated cost without optimization (SEK)
     optimized_cost: float  # Estimated cost with optimization (SEK)
+    # False when no unoptimized baseline peak has ever been observed, so the effect-tariff half of
+    # this estimate is not a measurement and is reported as zero rather than guessed. See
+    # estimate_monthly_savings.
+    effect_baseline_measured: bool = False
 
 
 class SavingsCalculator:
@@ -123,16 +126,30 @@ class SavingsCalculator:
         Returns:
             SavingsEstimate with breakdown
         """
-        # Estimate baseline peak if not provided
-        if baseline_peak_kw is None:
-            # Conservative estimate: optimization typically reduces peak by 10-15%
-            # Using 15% reduction assumption from const.py
-            baseline_peak_kw = current_peak_kw * BASELINE_PEAK_MULTIPLIER
+        # THE EFFECT-TARIFF SAVING WAS FABRICATED, AND IT COULD NOT READ ZERO.
+        #
+        # With no observed baseline the code assumed one:
+        #
+        #     baseline_peak_kw = current_peak_kw * BASELINE_PEAK_MULTIPLIER   # 1.176
+        #
+        # and `update_baseline_peak` - the only thing that could ever set a real baseline - had NO
+        # production caller, so the assumption fired every single time. The arithmetic then reduces
+        # to `effect_savings = 0.176 * current_peak * tariff`: a number computed from the peak
+        # itself, which means a HIGHER peak reported MORE "savings", and the sensor could never
+        # read zero however badly the optimiser was doing. It was unfalsifiable.
+        #
+        # This module already refuses to guess a price unit for exactly this reason. The same rule
+        # applies here: with no baseline there is no measured saving, and zero is the honest number.
+        # The coordinator now feeds `update_baseline_peak` from the quarters recorded while the
+        # optimisation switch is OFF - the offset is held at 0.0 then, so those peaks genuinely are
+        # what the house does unoptimised.
+        effect_baseline_measured = baseline_peak_kw is not None
 
-        # Calculate effect tariff savings
-        # Reduction in peak × monthly cost per kW
+        if not effect_baseline_measured:
+            baseline_peak_kw = current_peak_kw
+
         peak_reduction_kw = baseline_peak_kw - current_peak_kw
-        effect_savings = max(0, peak_reduction_kw * self.effect_tariff_sek_per_kw_month)
+        effect_savings = max(0.0, peak_reduction_kw * self.effect_tariff_sek_per_kw_month)
 
         # Calculate spot price savings (30 days)
         spot_savings = average_spot_savings_per_day * DAYS_PER_MONTH
@@ -161,6 +178,7 @@ class SavingsCalculator:
             spot_savings=round(spot_savings, 0),
             baseline_cost=round(baseline_cost, 0),
             optimized_cost=round(optimized_cost, 0),
+            effect_baseline_measured=effect_baseline_measured,
         )
 
     def calculate_spot_savings_per_cycle(

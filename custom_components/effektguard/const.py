@@ -1583,9 +1583,12 @@ SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand
 # Based on common Swedish grid operators (Ellevio ~55, Vattenfall/E.ON ~50 SEK/kW/month)
 SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
 
-# Baseline peak estimation - assumes optimization reduces peak by ~15%
-# If no baseline observed, estimate unoptimized peak from current optimized peak
-BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
+# BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the
+# CURRENT peak - `baseline = peak * 1.176` - so the reported effect-tariff saving reduced to
+# `0.176 * peak * tariff`: a higher peak reported MORE "savings", and the sensor could never read
+# zero however badly the optimiser was doing. A baseline is now either MEASURED (from the quarters
+# recorded while the optimisation switch is off, when the offset is held at 0.0) or absent, and an
+# absent one reports no effect saving at all.
 
 # Price-unit handling for savings math. GE-Spot preserves whatever display
 # unit the user configured; savings must convert to the MAIN currency unit

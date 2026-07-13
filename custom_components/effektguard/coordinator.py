@@ -2270,6 +2270,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 self._quarter_power_samples.append((now, current_power))
 
+            if peak_event and not self.entry.data.get("enable_optimization", True):
+                # THE UNOPTIMISED BASELINE, MEASURED RATHER THAN ASSUMED.
+                #
+                # With optimization switched off the coordinator holds the curve offset at 0.0 and
+                # the pump runs on its own heating curve - so the quarters recorded now are, by
+                # definition, what this house does WITHOUT EffektGuard. That is precisely what
+                # `update_baseline_peak` was written for ("Call this when you observe what the peak
+                # would have been without optimization"), and nothing had ever called it: the
+                # savings calculator fell back on `baseline = peak * 1.176` every single time, so a
+                # higher peak reported more "savings" and the sensor could never read zero.
+                self.savings_calculator.update_baseline_peak(peak_event.actual_power)
+
             if peak_event:
                 # The HIGHEST of the tracked peaks, never peak_event.effective_power:
                 # record_quarter_measurement returns an event for ANY new entry while the top-3
