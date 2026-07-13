@@ -1328,7 +1328,24 @@ CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
 # NIBE Enhanced Ventilation (F750/F730)
 # Controls the "Increased Ventilation" switch on exhaust air heat pumps
 # Entity pattern: switch.{device}_increased_ventilation
-NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 5  # Minimum minutes to run enhanced
+# THE VENTILATION FAN COULD CYCLE FOREVER, AND THE GUARD MEANT TO STOP IT GUARDED NOTHING.
+#
+# NIBE_VENTILATION_MIN_ENHANCED_DURATION was 5 minutes - exactly UPDATE_INTERVAL_MINUTES - so a
+# turn-off was permitted on the very next coordinator tick. And nothing at all guarded the turn-ON.
+# A decision that oscillates around its threshold, which is what a marginal COP gain does, produced
+# twelve fan state changes an hour, indefinitely. On an exhaust-air F750 every one of them perturbs
+# the source air the compressor is drawing from.
+#
+# It was also shorter than the SHORTEST duration the airflow optimizer ever recommends
+# (AIRFLOW_DURATION_SMALL_DEFICIT, 15 min) - so it could never enforce even the mildest of them.
+# The optimizer's own `duration_minutes` is now the minimum run time; this is only a floor under it,
+# for the case where a decision arrives with no duration at all.
+NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 15  # Minimum minutes to run enhanced
+
+# And a minimum REST before enhancing again, which did not exist. Without it the fan can go
+# ON -> hold -> OFF -> ON on the next tick, and the minimum run time above just sets the period of
+# the oscillation rather than preventing it.
+NIBE_VENTILATION_MIN_REST_DURATION: Final = 15  # Minimum minutes at normal before re-enhancing
 
 DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)

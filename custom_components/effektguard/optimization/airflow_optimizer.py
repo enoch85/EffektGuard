@@ -412,8 +412,6 @@ class AirflowOptimizer:
         flow_standard: Standard airflow rate in m³/h
         flow_enhanced: Enhanced airflow rate in m³/h
         current_decision: Most recent flow decision
-        enhancement_active: Whether enhanced mode is currently active
-        enhancement_end_time: When current enhancement should end
     """
 
     def __init__(
@@ -430,8 +428,6 @@ class AirflowOptimizer:
         self.flow_standard = flow_standard
         self.flow_enhanced = flow_enhanced
         self.current_decision: FlowDecision | None = None
-        self.enhancement_active = False
-        self.enhancement_end_time: datetime | None = None
         self._decision_history: list[FlowDecision] = []
 
     def evaluate(

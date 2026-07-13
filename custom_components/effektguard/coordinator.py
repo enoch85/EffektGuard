@@ -49,6 +49,7 @@ from .const import (
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
+    NIBE_VENTILATION_MIN_REST_DURATION,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
@@ -250,6 +251,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Track airflow enhancement state for minimum duration enforcement
         self._airflow_enhance_start: datetime | None = None
+        # How long the airflow optimizer asked this enhancement to run. It computes this
+        # (15-60 min, by deficit) and it used to be logged and thrown away, so nothing bounded the
+        # fan's cycling in either direction.
+        self._airflow_enhance_minutes: int = NIBE_VENTILATION_MIN_ENHANCED_DURATION
+        # When the fan last returned to normal, so it cannot be re-enhanced on the very next tick.
+        self._airflow_normal_since: datetime | None = None
 
         if demand_periods:
             try:
@@ -1815,53 +1822,67 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Ventilation control unavailable - no ventilation switch found")
             return
 
-        # Determine target state based on decision
+        now = dt_util.utcnow()
+
+        # THE FAN COULD CYCLE FOREVER. The minimum-enhanced-duration guard was 5 minutes - exactly
+        # one coordinator tick - so it permitted a turn-off on the very next cycle, and NOTHING at
+        # all guarded the turn-ON. A decision oscillating around its threshold, which is what a
+        # marginal COP gain does, produced twelve fan state changes an hour, indefinitely. On an
+        # exhaust-air F750 each one perturbs the source air the compressor is drawing from.
+        #
+        # The optimizer already computes how long the enhancement should run - `duration_minutes`,
+        # 15 to 60 min depending on the deficit - and that number was LOGGED and thrown away. It is
+        # now the minimum run time, and a minimum rest at normal speed bounds the other direction.
         if decision.should_enhance:
-            # Only turn on if not already enhanced
-            if not is_enhanced:
-                success = await self.nibe.set_enhanced_ventilation(True)
-                if success:
-                    # Track when we started enhanced mode
-                    self._airflow_enhance_start = dt_util.utcnow()
-                    _LOGGER.info(
-                        "🌀 Ventilation ENHANCED: ON for %d min (+%.2f kW gain) - %s",
-                        decision.duration_minutes,
-                        decision.expected_gain_kw,
-                        decision.reason,
-                    )
-            else:
-                _LOGGER.debug(
-                    "Ventilation already enhanced - %s",
-                    decision.reason,
-                )
-        else:
-            # Only reduce if currently enhanced and minimum duration passed
             if is_enhanced:
-                # Check minimum enhanced duration to prevent rapid cycling
-                if hasattr(self, "_airflow_enhance_start") and self._airflow_enhance_start:
-                    elapsed_minutes = (
-                        dt_util.utcnow() - self._airflow_enhance_start
-                    ).total_seconds() / 60
+                _LOGGER.debug("Ventilation already enhanced - %s", decision.reason)
+                return
 
-                    if elapsed_minutes < NIBE_VENTILATION_MIN_ENHANCED_DURATION:
-                        _LOGGER.debug(
-                            "Ventilation: keeping enhanced for %d more min (min duration)",
-                            int(NIBE_VENTILATION_MIN_ENHANCED_DURATION - elapsed_minutes),
-                        )
-                        return
-
-                success = await self.nibe.set_enhanced_ventilation(False)
-                if success:
-                    self._airflow_enhance_start = None
-                    _LOGGER.info(
-                        "🌀 Ventilation NORMAL: OFF - %s",
-                        decision.reason,
+            resting_since = self._airflow_normal_since
+            if resting_since is not None:
+                rested = (now - resting_since).total_seconds() / 60
+                if rested < NIBE_VENTILATION_MIN_REST_DURATION:
+                    _LOGGER.debug(
+                        "Ventilation: at normal for only %d of %d min - not re-enhancing yet",
+                        int(rested),
+                        NIBE_VENTILATION_MIN_REST_DURATION,
                     )
-            else:
-                _LOGGER.debug(
-                    "Ventilation at normal - %s",
+                    return
+
+            if await self.nibe.set_enhanced_ventilation(True):
+                self._airflow_enhance_start = now
+                self._airflow_normal_since = None
+                # The optimizer's own recommendation, floored so a decision that carries no
+                # duration still cannot produce a five-minute burst.
+                self._airflow_enhance_minutes = max(
+                    decision.duration_minutes, NIBE_VENTILATION_MIN_ENHANCED_DURATION
+                )
+                _LOGGER.info(
+                    "🌀 Ventilation ENHANCED: ON for at least %d min (+%.2f kW gain) - %s",
+                    self._airflow_enhance_minutes,
+                    decision.expected_gain_kw,
                     decision.reason,
                 )
+            return
+
+        if not is_enhanced:
+            _LOGGER.debug("Ventilation at normal - %s", decision.reason)
+            return
+
+        if self._airflow_enhance_start is not None:
+            elapsed = (now - self._airflow_enhance_start).total_seconds() / 60
+            if elapsed < self._airflow_enhance_minutes:
+                _LOGGER.debug(
+                    "Ventilation: keeping enhanced for %d more min (the optimizer asked for %d)",
+                    int(self._airflow_enhance_minutes - elapsed),
+                    self._airflow_enhance_minutes,
+                )
+                return
+
+        if await self.nibe.set_enhanced_ventilation(False):
+            self._airflow_enhance_start = None
+            self._airflow_normal_since = now
+            _LOGGER.info("🌀 Ventilation NORMAL: OFF - %s", decision.reason)
 
     def _is_dhw_start_rate_limited(self, now_time: datetime) -> bool:
         """True if a DHW boost was started or stopped too recently to start another.
