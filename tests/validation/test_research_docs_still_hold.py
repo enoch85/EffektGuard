@@ -31,7 +31,6 @@ QUOTED = {
     "DM_THRESHOLD_START": -60,  # 01: NIBE menu 4.9.3 "start compressor"
     "DM_THRESHOLD_AUX_LIMIT": -1500,  # 01: the absolute backstop
     "UFH_CONCRETE_PREDICTION_HORIZON": 24.0,  # 03: the slab's planning horizon
-    "THERMAL_BATTERY_BAND": 1.0,  # 03: the band being filled
     "WEATHER_COMP_MAX_OFFSET": 3.0,  # 03: the bound on weather-driven offsets
     "RADIATOR_RATED_DT": 50.0,  # 02: EN 442-1 §3.23
     "RADIATOR_POWER_COEFFICIENT": 1.3,  # 02: EN 442 panel radiators

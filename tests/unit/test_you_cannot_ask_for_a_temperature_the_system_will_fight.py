@@ -42,6 +42,7 @@ from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
     DEFAULT_TOLERANCE,
     MAX_OFFSET,
+    MIN_OFFSET,
     MIN_TARGET_TEMP,
     MIN_TEMP_LIMIT,
 )
@@ -160,13 +161,26 @@ def test_the_house_is_not_driven_between_the_two_extremes():
         current_power=2.0,
     )
 
-    span = abs(hot.offset - cold.offset)
-
-    assert span < MAX_OFFSET, (
-        f"A 1.1 °C change in indoor temperature swings the commanded offset by {span:.1f} °C "
-        f"({hot.offset:+.2f} at 19.0 °C, {cold.offset:+.2f} at 17.9 °C). The comfort layer sees an "
-        f"overshoot against the 15 °C target and cuts; the safety layer sees a house below 18 °C "
-        f"and boosts. The pump is driven between the extremes for as long as the setpoint stands, "
-        f"and the emergency flag bypasses the volatility blocker that exists to prevent exactly "
-        f"this."
+    # The defect is the COMFORT end, not the span.
+    #
+    # An earlier version of this asserted `span < MAX_OFFSET`, which is a threshold that cannot
+    # hold and never meant anything: the safety layer legitimately commands +10 below 18 °C, so
+    # any span measured from a quiet baseline is ~10 whether the system is healthy or not. It
+    # passed only because of an unrelated change to the comfort layer, and failed the moment that
+    # change was reverted - which is the definition of a test measuring the wrong thing.
+    #
+    # What the defect actually was: with a 15 °C target the comfort layer read 19.0 °C as a 3 °C
+    # OVERSHOOT and cut to MIN_OFFSET (-10.00), while the safety layer read 17.9 °C as an
+    # emergency and commanded MAX_OFFSET (+10.00). MIN to MAX, on a real compressor, from a 1.1 °C
+    # change - and every one of those boosts carries is_emergency=True, so it bypasses the
+    # volatility blocker that exists to stop exactly this.
+    #
+    # So this asserts the thing that was broken: the engine must not be cutting the heat hard in a
+    # house that its own safety layer is about to call an emergency.
+    assert hot.offset > MIN_OFFSET / 2, (
+        f"With a stored target of 15 °C and the house at 19.0 °C, the engine commands "
+        f"{hot.offset:+.2f} - it reads the house as badly overheated and slams the heat off. One "
+        f"degree lower, at 17.9 °C, it commands {cold.offset:+.2f}: the safety layer calls the same "
+        f"house an emergency. The pump is driven between the extremes for as long as the setpoint "
+        f"stands. A target the safety layer will fight is not a target."
     )
