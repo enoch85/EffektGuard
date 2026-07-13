@@ -45,6 +45,7 @@ from ..const import (
     WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
     WEATHER_COMP_MAX_OFFSET,
     WEATHER_FORECAST_DROP_THRESHOLD,
+    DEFAULT_BALANCE_POINT_OFFSET,
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
@@ -214,6 +215,11 @@ class WeatherCompensationCalculator:
             design_flow_temp=self.design_flow_temp,
             design_spread=self.design_spread,
             emitter_exponent=self.emitter_exponent,
+            # The house is not cold at 20 C outdoors. Bodies, appliances and the sun cover its
+            # losses until about four degrees below the setpoint, and pretending otherwise asks
+            # the pump to run hot in mild weather - where most of the season's kWh are delivered,
+            # and where every excess degree of flow costs 2.5-3 % of COP.
+            balance_point_temp=indoor_setpoint - DEFAULT_BALANCE_POINT_OFFSET,
         )
 
         _LOGGER.debug(

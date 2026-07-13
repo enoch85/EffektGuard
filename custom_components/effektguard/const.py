@@ -910,6 +910,29 @@ UFH_POWER_COEFFICIENT: Final = 1.1  # EN 1264 exponent n, underfloor (NOT 1.3)
 # it. Defaults describe a standard Swedish low-temperature radiator system, erring WARM: a
 # too-warm design point over-supplies slightly, a too-cold one silently under-heats, and degree
 # minutes cannot detect under-heating that a negative offset causes (they improve as it worsens).
+# The outdoor temperature at which the house needs NO heat, because bodies, appliances and the sun
+# are already covering its losses. Heat demand is NOT linear in (indoor - outdoor); it is linear in
+# (balance_point - outdoor), and it reaches zero well before the outdoor air reaches room
+# temperature. Ignoring that over-predicts the flow temperature by 1.3-1.8 C, worst in mild weather,
+# which is where most of the season's kWh are delivered - and OEM's measured fleet puts the COP
+# penalty at 2.5-3 % per degree of excess flow.
+#
+# Expressed as a DIFFERENCE from the indoor setpoint, so it follows the target the owner sets.
+#
+# Sources, three of them, all landing in the same place:
+#   * OpenEnergyMonitor's SCOP tool: baseTemp 15.5 C against a 19.3 C room - a 3.8 K difference. Its
+#     source carries the naive formula COMMENTED OUT, with the note "This approach would need to
+#     take into account gains, hence use of degree days approach".
+#   * heatpumpmonitor.org, 383 monitored systems with a fitted heat-demand line: median base_DT
+#     2.5 K, median implied gains 583 W (3.0 K / 750 W among the systems where it fitted non-zero).
+#   * NIBE's own published heating curve 9, fitted here: 4.0 K (RMS error 0.31 C across -15..+10 C,
+#     against 1.70 C for a no-gains model).
+#
+# 4.0 K is the NIBE fit, which is the pump this integration drives.
+DEFAULT_BALANCE_POINT_OFFSET: Final = (
+    4.0  # C below the indoor setpoint: 21 C target -> 17 C balance
+)
+
 DEFAULT_DESIGN_OUTDOOR_TEMP: Final = -15.0  # °C, dimensioning outdoor temperature (DUT/DVUT)
 DEFAULT_DESIGN_FLOW_TEMP_RADIATOR: Final = 50.0  # °C supply at DUT for radiators
 DEFAULT_DESIGN_FLOW_TEMP_UFH: Final = 35.0  # °C supply at DUT for UFH (NIBE: normally 35-45)

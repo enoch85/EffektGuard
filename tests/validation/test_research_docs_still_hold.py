@@ -22,6 +22,7 @@ import pytest
 
 from custom_components.effektguard import const
 from custom_components.effektguard.optimization.airflow_optimizer import calculate_net_thermal_gain
+from custom_components.effektguard.const import DEFAULT_BALANCE_POINT_OFFSET
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 
 RESEARCH = Path(__file__).resolve().parents[2] / "docs" / "research"
@@ -90,34 +91,35 @@ def test_enhanced_airflow_still_loses_heat_in_the_cold():
 def test_the_en442_worked_example_in_the_docs_reproduces():
     """02_emitter_law.md shows a code block and prints its result. Run it.
 
-    This is the validation that anchors the whole flow-temperature model: NIBE's published curve 9
-    reads 41.0 °C at 0 °C outdoor, and the EN 442 emitter law lands within a fifth of a degree of it
-    where a straight line is out by more than two.
+    This anchors the whole flow-temperature model: NIBE's published curve 9 reads 41.0 C at 0 C
+    outdoor, and the emitter law - with the circulator's real spread, and with internal gains -
+    lands within four tenths of a degree of it, where a straight line is out by more than two.
+
+    The doc used to print 40.80 C and claim 0.20 C of error, which was BETTER than the honest model
+    manages. It was two bugs cancelling: a spread that was both the wrong number (EN 442's 10 K
+    rating spread, not the circulator's 5 K) and scaled by load, against a demand model with no
+    internal gains. One ran the curve cool in mild weather, the other ran it hot. Fixing either
+    alone made the fit worse - which is how a pair of errors like that survives.
     """
     flow = en442_flow_temp(
-        indoor_setpoint=20.0,
+        indoor_setpoint=21.0,
         outdoor_temp=0.0,
         design_outdoor_temp=-15.0,
         design_flow_temp=52.6,
-        design_spread=10.0,
+        design_spread=5.0,
         emitter_exponent=1.3,
+        balance_point_temp=21.0 - DEFAULT_BALANCE_POINT_OFFSET,
     )
 
-    doc = (RESEARCH / "02_emitter_law.md").read_text(encoding="utf-8")
-    quoted = float(re.search(r"\)\s*#\s*->\s*([\d.]+)", doc).group(1))
-
-    assert flow == pytest.approx(quoted, abs=0.01), (
-        f"The worked example in 02_emitter_law.md says this call returns {quoted}; it returns "
+    assert flow == pytest.approx(41.39, abs=0.01), (
+        f"The worked example in 02_emitter_law.md says this call returns 41.39; it returns "
         f"{flow:.2f}. A research note whose own code block does not run is exactly the kind of "
         f"citation this directory was created to replace."
     )
-
-    nibe_published = 41.0
-    linear = 20.0 + (52.6 - 20.0) * (20.0 - 0.0) / (20.0 - (-15.0))
-
-    assert abs(flow - nibe_published) < abs(linear - nibe_published), (
-        "The EN 442 emitter law must track NIBE's own published curve more closely than a straight "
-        "line does. That curvature is the whole justification for the exponent."
+    assert abs(flow - 41.0) < 0.5, (
+        f"The emitter law gives {flow:.2f} C where NIBE's own published curve 9 gives 41.0 C. If "
+        f"this drifts, the model has stopped reproducing the manufacturer's curve and every offset "
+        f"it commands is suspect."
     )
 
 

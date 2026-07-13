@@ -63,24 +63,43 @@ extracted, axes calibrated, residuals < 0.11 °C. Validated three independent wa
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 
 en442_flow_temp(
-    indoor_setpoint=20.0,      # NIBE's curves are drawn for a 20 °C room
+    indoor_setpoint=21.0,
     outdoor_temp=0.0,
     design_outdoor_temp=-15.0, # DUT
     design_flow_temp=52.6,     # curve 9 at -15 °C, from the digitised artwork
-    design_spread=10.0,        # EN 442 reference: 75/65
+    design_spread=5.0,         # the spread the CIRCULATOR holds, not EN 442's 75/65 rating
     emitter_exponent=1.3,      # panel radiators
-)   # -> 40.80
+    balance_point_temp=17.0,   # 21 - DEFAULT_BALANCE_POINT_OFFSET: bodies, appliances, sun
+)   # -> 41.39
 ```
 
 | model | flow temp at 0 °C | error vs NIBE |
 |---|---|---|
 | NIBE's published curve 9 | **41.0 °C** | — |
-| **EN 442 emitter law** | **40.80 °C** | **0.20 °C** ✅ |
+| **EN 442 + balance point** | **41.39 °C** | **0.39 °C** ✅ |
+| EN 442, no gains (balance = 21 °C) | 42.72 °C | 1.72 °C ✗ |
 | a straight line between the endpoints | 38.63 °C | 2.37 °C ✗ |
 
-The emitter law tracks NIBE's own curve to a fifth of a degree; a linear interpolation is out by
-more than two. What it is reproducing is the **curvature**, and that curvature is the `φ^(1/n)`
-term. This is the whole reason the exponent matters and cannot be folded into a fitted slope.
+The emitter law tracks NIBE's own curve to under half a degree; a linear interpolation is out by
+more than two. What it reproduces is the **curvature**, and that curvature is the `φ^(1/n)` term.
+This is why the exponent matters and cannot be folded into a fitted slope.
+
+### Two corrections this example used to hide
+
+An earlier version of this page printed **40.80 °C, error 0.20 °C** — a better fit than the honest
+model achieves. It was not better. It was **two bugs cancelling**, and the cancellation is why
+neither was ever found:
+
+* **`design_spread=10.0`**, captioned "EN 442 reference: 75/65". That 10 K is the **rating** spread
+  that *defines* a radiator's ΔT50 output. It is not the spread a heat pump's circulator maintains,
+  which is ~5 K. And the code then **scaled** it by load, modelling a fixed-speed pump.
+* **No balance point.** Heat demand was taken as linear in `(indoor − outdoor)`, so the house was
+  assumed to need heat at 20 °C outdoors.
+
+The first made the curve too **cool** in mild weather; the second made it too **hot** in mild
+weather. Same place, opposite signs. Together they matched NIBE to a fifth of a degree; fixing
+either one alone made the fit *worse*, which is exactly the trap that keeps a pair of errors like
+this alive. Both are fixed now, and the residual 0.39 °C is real.
 
 (The exact figure moves a little with the assumed design spread and room setpoint — the inputs are
 spelled out above precisely so that it is checkable rather than quotable. The ranking does not move

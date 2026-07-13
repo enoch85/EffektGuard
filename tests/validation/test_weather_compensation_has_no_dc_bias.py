@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.effektguard.const import DEFAULT_BALANCE_POINT_OFFSET
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
@@ -45,18 +46,29 @@ NOW = datetime(2026, 1, 15, 12, 0)
 
 
 def _emitter_law_flow(outdoor: float) -> float:
-    """The flow the emitter law asks for - i.e. a PERFECTLY tuned curve, by definition.
+    """The flow a PERFECTLY tuned curve delivers - taken from OpenEnergyMonitor, not from us.
 
-    Computed here independently of the production model on purpose. Using the pump's own linear
-    curve would beg the question: a linear curve and a power law disagree between their anchors,
-    so any offset seen would be that disagreement rather than a bias. Feeding the layer the exact
-    flow its own law demands isolates the bias and nothing else.
+    This used to be hand-computed here, and the docstring said it was written out "independently of
+    the production model on purpose". The intent was right and the execution defeated it: the hand
+    copy reproduced the production model's own bug - it scaled the flow-return spread with load,
+    `DESIGN_SPREAD * phi / 2`, which models a fixed-speed circulator rather than a heat pump. So the
+    reference agreed with the code because it WAS the code, and this test confirmed a bias it existed
+    to detect.
+
+    A reference has to come from outside. This is OpenEnergyMonitor's weather-compensation tool
+    (github.com/openenergymonitor/tools, www/tools/weathercomp/weathercomp.js):
+
+        DT    = (heat_demand / rated_emitter_output_dt50) ** (1/1.3) * 50
+        flowT = room_temperature + DT + systemDT * 0.5        <- systemDT, NOT systemDT * phi
+
+    Anchored on our design point rather than theirs, which is the same equation rewritten.
     """
-    load = TARGET_INDOOR - outdoor
-    design_load = TARGET_INDOOR - DESIGN_OUTDOOR
+    balance = TARGET_INDOOR - DEFAULT_BALANCE_POINT_OFFSET
+    load = balance - outdoor
+    design_load = balance - DESIGN_OUTDOOR
     design_excess = DESIGN_FLOW - DESIGN_SPREAD / 2 - TARGET_INDOOR
     phi = load / design_load
-    return TARGET_INDOOR + design_excess * phi ** (1 / EMITTER_EXPONENT) + DESIGN_SPREAD * phi / 2
+    return TARGET_INDOOR + design_excess * phi ** (1 / EMITTER_EXPONENT) + DESIGN_SPREAD / 2
 
 
 @pytest.fixture
