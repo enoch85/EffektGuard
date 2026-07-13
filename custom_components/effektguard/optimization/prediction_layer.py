@@ -40,6 +40,9 @@ from ..const import (
     PREDICTION_THERMAL_RESPONSIVENESS_MIN,
     PREDICTION_TREND_FALLING_THRESHOLD,
     PREDICTION_TREND_RISING_THRESHOLD,
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
+    PREDICTION_MIN_HISTORY_HOURS,
+    PREDICTION_RESPONSIVENESS_MIN_HOURS,
     SAMPLES_PER_HOUR,
 )
 from .learning_types import (
@@ -199,7 +202,7 @@ class ThermalStatePredictor:
             - Uses heat_loss_coefficient for proper heat loss calculation
             - Uses thermal_decay_rate for natural cooling prediction
         """
-        if len(self.state_history) < 4:  # Need at least 1 hour of history
+        if len(self.state_history) < PREDICTION_MIN_HISTORY_HOURS * SAMPLES_PER_HOUR:
             # Insufficient data - return simple projection
             current_temp = self.state_history[-1].indoor_temp if self.state_history else 21.0
             return TempPrediction(
@@ -465,13 +468,21 @@ class ThermalStatePredictor:
         Returns:
             PredictionLayerDecision with learned pre-heating recommendation
         """
-        # Skip if not enough data
-        if len(self.state_history) < 96:  # Less than 24 hours of data
+        # Skip until a full day of history exists.
+        #
+        # This gate used to read `< 96  # Less than 24 hours of data`, and the reason string it
+        # printed hardcoded the 96 as well. At a five-minute coordinator tick 96 samples is EIGHT
+        # hours, not twenty-four - so the learned pre-heating layer engaged on a third of the data
+        # it believed it had, and eight hours of a Swedish winter night is not a representative day.
+        # SAMPLES_PER_HOUR was already derived correctly, and already sized this predictor's own
+        # deque; the gate simply did not use it.
+        required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+        if len(self.state_history) < required:
             return PredictionLayerDecision(
                 name="Learned Pre-heat",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Learning: {len(self.state_history)}/96 observations",
+                reason=f"Learning: {len(self.state_history)}/{required} observations",
             )
 
         # Skip if no weather forecast available
@@ -570,7 +581,7 @@ class ThermalStatePredictor:
         Returns:
             Responsiveness factor (°C per offset per hour)
         """
-        if len(self.state_history) < 8:  # Need 2+ hours
+        if len(self.state_history) < PREDICTION_RESPONSIVENESS_MIN_HOURS * SAMPLES_PER_HOUR:
             return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
         # Analyze temperature changes relative to offset

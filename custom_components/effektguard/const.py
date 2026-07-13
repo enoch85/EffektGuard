@@ -1029,6 +1029,19 @@ STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before obse
 # Thermal predictor history constants (derived from UPDATE_INTERVAL_MINUTES)
 SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 5-min intervals
 
+# THE PREDICTION GATES COUNTED SAMPLES AND SPOKE IN HOURS, AND THE TWO DISAGREED BY 3x.
+#
+# SAMPLES_PER_HOUR is derived correctly above, and the predictor's own deque is sized with it. The
+# gates were not: they hardcoded 4, 96 and 8, with comments claiming "1 hour", "24 hours" and
+# "2+ hours". At a five-minute coordinator tick those are 20 minutes, EIGHT hours, and 40 minutes.
+#
+# The learned pre-heating layer therefore engaged on a THIRD of the data it believed it had, and
+# eight hours of a Swedish winter night is not a representative day. The hours are named here and
+# the sample counts derived from them, so the two can no longer drift apart.
+PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all
+PREDICTION_RESPONSIVENESS_MIN_HOURS: Final = 2  # before estimating how fast the house responds
+PREDICTION_LEARNED_PREHEAT_MIN_HOURS: Final = 24  # before acting on learned pre-heating
+
 # Adaptive learning parameters
 # Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
 #

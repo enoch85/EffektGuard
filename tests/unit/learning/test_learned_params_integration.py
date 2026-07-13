@@ -17,6 +17,11 @@ from custom_components.effektguard.const import (
 from custom_components.effektguard.optimization.learning_types import (
     LearnedThermalParameters,
 )
+from custom_components.effektguard.const import (
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
+    SAMPLES_PER_HOUR,
+    UPDATE_INTERVAL_MINUTES,
+)
 from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
 )
@@ -28,11 +33,16 @@ def predictor_with_history():
     """Create a ThermalStatePredictor with sufficient history for predictions."""
     predictor = ThermalStatePredictor()
 
-    # Add 120 observations (30 hours at 4 per hour) - more than 96 required
+    # This fixture used to say "120 observations (30 hours at 4 per hour)". The coordinator records
+    # one every UPDATE_INTERVAL_MINUTES - TWELVE an hour - so 120 samples is ten hours, not thirty,
+    # and the gate it was clearing was itself miscounted by the same factor of three. Both the
+    # count and the cadence are derived now, so the test cannot hold a private belief about how
+    # fast time passes.
+    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
     base_time = datetime.now()
-    for i in range(120):
+    for i in range(required + SAMPLES_PER_HOUR):
         predictor.record_state(
-            timestamp=base_time - timedelta(minutes=15 * i),
+            timestamp=base_time - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
             indoor_temp=21.0 + (i % 4) * 0.1,  # Small variation
             outdoor_temp=0.0,
             heating_offset=1.0,
