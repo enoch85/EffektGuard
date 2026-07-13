@@ -54,6 +54,7 @@ from ..const import (
     DHW_TREND_RATE_THRESHOLD,
     DM_CRITICAL_T2_MARGIN,
     DM_THRESHOLD_AUX_LIMIT,
+    MIN_TEMP_LIMIT,
     DM_DHW_ABORT_BUFFER,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
@@ -258,6 +259,10 @@ class IntelligentDHWScheduler:
         self.emergency_layer = emergency_layer
         self.price_analyzer = price_analyzer
         self.last_legionella_boost: datetime | None = None
+        # A scheduled window that SAFETY refused. The owner asked for hot water and safety said not
+        # yet - which is a debt to be settled the moment the house is out of danger, not a shower
+        # silently cancelled. Cleared when the water reaches target.
+        self._scheduled_window_owed: bool = False
         self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
 
         # Learned DHW heating rate (persisted across restarts)
@@ -832,6 +837,44 @@ class IntelligentDHWScheduler:
 
             if within_scheduled_window:
                 # === LANE 1: SCHEDULED WINDOW - PRIORITY MODE ===
+                #
+                # This lane deliberately outranks the thermal-debt block (RULE 1) and the
+                # space-heating checks (RULES 2 and 4): it returns before any of them. That is the
+                # owner's choice - a shower they scheduled is a shower they want.
+                #
+                # It does not outrank safety, and it used to. Measured, before this gate: DM -1400
+                # with the house at 17.0 C - below the floor at which the safety layer commands
+                # maximum heat - and this lane still said heat the water.
+                unsafe = self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp)
+                if unsafe:
+                    # Not cancelled. OWED. Settled the moment the house is out of danger, even after
+                    # the window has closed - the owner still wants the shower.
+                    self._scheduled_window_owed = True
+                    _LOGGER.warning(
+                        "Scheduled DHW refused for safety: %s. It will be heated as soon as the "
+                        "house is safe again.",
+                        unsafe,
+                    )
+                    return DHWScheduleDecision(
+                        should_heat=False,
+                        priority_reason="DHW_SCHEDULED_BLOCKED_BY_SAFETY",
+                        target_temp=self.user_target_temp,
+                        max_runtime_minutes=0,
+                        abort_conditions=[],
+                        # The honest answer is "as soon as the house is safe", which has no clock
+                        # time. This is the project's estimate of when that is, and RULE 0.5 will
+                        # heat the moment it actually happens - whichever comes first.
+                        recommended_start_time=self._find_next_dhw_opportunity(
+                            current_time=current_time,
+                            current_dhw_temp=current_dhw_temp,
+                            thermal_debt_dm=thermal_debt_dm,
+                            outdoor_temp=outdoor_temp,
+                            price_periods=price_periods,
+                            blocking_reason="DHW_SCHEDULED_BLOCKED_BY_SAFETY",
+                            dm_block_threshold=dm_block_threshold,
+                        ),
+                    )
+
                 if target_reached:
                     # Target fully reached - STOP heating to avoid waste
                     reason = (
@@ -1053,11 +1096,9 @@ class IntelligentDHWScheduler:
                         priority_reason=reason,
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                            f"dhw_temp >= {self.user_target_temp}",
-                        ],
+                        # The safety gate that let this cycle start, and nothing else. Anything
+                        # narrower would abort it in the state it was permitted to begin in.
+                        abort_conditions=self.scheduled_dhw_abort_conditions(),
                         recommended_start_time=(
                             current_time if not optimal_window else optimal_window.start_time
                         ),
@@ -1083,6 +1124,35 @@ class IntelligentDHWScheduler:
                         hours_with_buffer,
                     )
                 # Continue to normal rules below (LANE 2 = normal optimization)
+
+        # === RULE 0.5: A SCHEDULED WINDOW THAT SAFETY REFUSED, SETTLED ===
+        #
+        # Safety can refuse a scheduled window, and when it does the shower is not cancelled - it is
+        # OWED. The owner asked for hot water at seven; the house was in danger at seven; the house is
+        # not in danger now. So heat it now, even though the window has closed, and even though the
+        # ordinary thermal-debt block below would otherwise refuse it: this is the same priority the
+        # window itself carried, honoured late rather than dropped in silence.
+        if self._scheduled_window_owed:
+            if current_dhw_temp >= self.user_target_temp:
+                # Settled - by this rule, or by the pump's own schedule. Either way, nothing is owed.
+                self._scheduled_window_owed = False
+            elif self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
+                _LOGGER.info(
+                    "Resuming the scheduled DHW that safety refused: house is safe again "
+                    "(DM %.0f, indoor %.1f°C)",
+                    thermal_debt_dm,
+                    indoor_temp,
+                )
+                return DHWScheduleDecision(
+                    should_heat=True,
+                    priority_reason="DHW_SCHEDULED_RETRY_AFTER_SAFETY",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
+                    abort_conditions=self.scheduled_dhw_abort_conditions(),
+                    recommended_start_time=current_time,
+                )
+            # Still unsafe: keep the debt on the books and fall through to the ordinary rules,
+            # which will refuse for thermal debt anyway.
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if should_block_for_thermal_debt:
@@ -2251,6 +2321,53 @@ class IntelligentDHWScheduler:
         lines.append(f"Recommendation: {recommendation}")
 
         return "\n".join(lines)
+
+    def scheduled_dhw_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
+        """Why a SCHEDULED hot-water cycle must not run, or None if it may.
+
+        A scheduled window outranks thermal debt and space-heating demand: a shower the owner asked
+        for is a shower the owner wants, and that is a deliberate priority. It does not outrank these
+        two, which are not comfort judgements but the points at which the house is in trouble:
+
+          * indoor below MIN_TEMP_LIMIT - the safety layer is already commanding maximum heat, and
+            hot water takes the compressor away from exactly that;
+          * degree minutes at the absolute limit - the immersion heater is engaging, and DHW must not
+            compete with the recovery.
+
+        This is also what the scheduled path's ABORT conditions are built from, and they must stay the
+        same two tests. If a cycle can be started in a state that its own abort conditions reject, it
+        starts, aborts, is rate-limited for an hour, and starts again - heating no water and cycling
+        the compressor. That is what the scheduled path did: it began at DM -1400 while handing back
+        `thermal_debt < -1100` as an abort condition, and `indoor_temp < 20.5` - target minus half a
+        degree, a COMFORT threshold used to abort a cycle RULE 0 had just declared more important than
+        comfort.
+
+        If it may start, it may run. One predicate, both ends.
+        """
+        if indoor_temp < MIN_TEMP_LIMIT:
+            return (
+                f"indoor {indoor_temp:.1f}°C is below the {MIN_TEMP_LIMIT:.1f}°C safety floor - "
+                f"the house needs the compressor more than the tank does"
+            )
+
+        if thermal_debt_dm <= DM_THRESHOLD_AUX_LIMIT:
+            return (
+                f"DM {thermal_debt_dm:.0f} is at the absolute limit {DM_THRESHOLD_AUX_LIMIT:.0f} - "
+                f"auxiliary heat is engaging and DHW must not compete with recovery"
+            )
+
+        return None
+
+    def scheduled_dhw_abort_conditions(self) -> list[str]:
+        """The abort conditions for a scheduled cycle: the safety gate, and nothing else.
+
+        Built from the same two thresholds as `scheduled_dhw_unsafe_reason`, so a cycle that was
+        permitted to start cannot be aborted by the state it started in.
+        """
+        return [
+            f"thermal_debt < {DM_THRESHOLD_AUX_LIMIT:.0f}",
+            f"indoor_temp < {MIN_TEMP_LIMIT:.1f}",
+        ]
 
     def get_dm_block_and_abort_thresholds(self, outdoor_temp: float) -> tuple[float, float]:
         """Return (block, abort) degree-minute thresholds for hot water.
