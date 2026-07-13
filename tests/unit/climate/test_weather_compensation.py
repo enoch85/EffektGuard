@@ -27,6 +27,7 @@ from custom_components.effektguard.const import (
     DEFAULT_DESIGN_FLOW_TEMP_RADIATOR,
     DEFAULT_DESIGN_FLOW_TEMP_UFH,
     DEFAULT_DESIGN_OUTDOOR_TEMP,
+    DEFAULT_DESIGN_SPREAD,
     RADIATOR_POWER_COEFFICIENT,
     UFH_POWER_COEFFICIENT,
     WEATHER_COMP_MAX_OFFSET,
@@ -84,16 +85,46 @@ class TestEmitterLawAnchors:
     def test_timbones_published_example(self):
         """External reference: Timbones' spreadsheet, 18 kW emitters, 260 W/K, 19 C, 0 C outdoor.
 
-        Published result ~40 C. The EN 442 rated-output anchor gives 39.99 C.
+        Published result ~40 C. Like OpenEnergyMonitor's WeatherComp, Timbones' spreadsheet models
+        demand as linear in (room - outdoor) and carries NO internal-gains term - so the demand
+        model is held identical on both sides here, and what is being checked is the EMITTER LAW,
+        which is what the reference is authoritative about.
         """
         calc = WeatherCompensationCalculator(
             heat_loss_coefficient=260.0,
             radiator_rated_output=18000.0,
+            internal_gains_w=0.0,  # match the reference's demand model, not our house
         )
 
         result = calc.calculate_optimal_flow_temp(indoor_setpoint=19.0, outdoor_temp=0.0)
 
         assert result.flow_temp == pytest.approx(40.0, abs=0.5)
+
+    def test_internal_gains_are_what_move_us_off_the_uk_reference_tools(self):
+        """And the size of that move is the whole point, so it is pinned rather than left implicit.
+
+        The UK tools ask for heat right up to room temperature. We stop at the balance point. On
+        Timbones' own house that is worth about 1.8 C of flow at 0 C outdoor - and every degree of
+        excess flow costs 2.5-3 % of COP on OEM's measured fleet.
+
+        This is a DEPARTURE from the reference, made deliberately and on evidence (583 W median
+        gains across 383 monitored systems on heatpumpmonitor.org). If it ever shrinks to nothing,
+        the gains term has been switched off by accident.
+        """
+        house = dict(heat_loss_coefficient=260.0, radiator_rated_output=18000.0)
+
+        reference = WeatherCompensationCalculator(**house, internal_gains_w=0.0)
+        ours = WeatherCompensationCalculator(**house)
+
+        flow_reference = reference.calculate_optimal_flow_temp(19.0, 0.0).flow_temp
+        flow_ours = ours.calculate_optimal_flow_temp(19.0, 0.0).flow_temp
+
+        assert flow_ours < flow_reference - 1.0, (
+            f"Modelling internal gains should ask for cooler water than the gains-free UK tools: "
+            f"they want {flow_reference:.2f} C and we want {flow_ours:.2f} C. If these have "
+            f"converged, the gains term is no longer reaching the rated-output anchor - which is "
+            f"the anchor this layer PREFERS, and which has silently missed the gains before."
+        )
 
 
 class TestHeatingCurveProperties:
@@ -141,13 +172,38 @@ class TestHeatingCurveProperties:
 
         assert flow > DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
 
-    def test_no_heat_needed_when_outdoor_reaches_the_setpoint(self):
-        """Water colder than the room would cool it."""
-        calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
+    def test_no_heat_needed_above_the_balance_point(self):
+        """Zero load means zero EXCESS over the room - but the spread term does not vanish.
 
-        for outdoor in (20.0, 25.0, 30.0):
+        This test used to assert a flat `flow == indoor_setpoint`, and that was a divergence from
+        the reference implementation, not a property. OpenEnergyMonitor's WeatherComp computes
+        `flowT = MWT + systemDT * 0.5` and its mean water temperature tends to the room temperature
+        as the load goes to zero - so at zero load it returns **room + spread/2**, not room.
+
+        Asserting a bare `indoor_setpoint` put a spread/2 CLIFF (2.5 C on the defaults) at the
+        boundary, and the balance point sits at ~17 C, in the middle of the Swedish shoulder season
+        where the outdoor temperature crosses it back and forth all day. Since the offset is
+        `(optimal - actual) / curve_sensitivity`, that step was 1.67 offset units of pure chatter.
+
+        What must hold: the flow never falls below the setpoint (water colder than the room would
+        cool it), and above the balance point it is FLAT - no heat is being demanded, and no step.
+        """
+        calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
+        balance = calc.balance_point_temp(20.0)
+        no_load_flow = 20.0 + DEFAULT_DESIGN_SPREAD / 2.0
+
+        for outdoor in (balance + 0.1, 20.0, 25.0, 30.0):
             result = calc.calculate_optimal_flow_temp(indoor_setpoint=20.0, outdoor_temp=outdoor)
-            assert result.flow_temp == 20.0
+
+            assert result.flow_temp >= 20.0, (
+                f"At {outdoor:.1f} C outdoor the layer asks for {result.flow_temp:.2f} C of flow, "
+                f"below the 20.0 C room. Water colder than the room removes heat from it."
+            )
+            assert result.flow_temp == pytest.approx(no_load_flow, abs=0.01), (
+                f"Above the balance point ({balance:.1f} C) the house heats itself, so the curve "
+                f"must be flat at room + spread/2 = {no_load_flow:.1f} C - the same value it "
+                f"converges to from below. It returns {result.flow_temp:.2f} C at {outdoor:.1f} C."
+            )
 
     def test_a_leakier_house_needs_hotter_water(self):
         """Only via the rated-output anchor: the design-point anchor encodes sizing already."""

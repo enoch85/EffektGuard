@@ -293,14 +293,21 @@ Native quarterly (15-min) price periods:
 - **Auto-discovery** - finds price entity automatically
 
 ### Weather Compensation Math
-```python
-# EN 442 emitter law - see utils/emitter.py
-TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
 
-# Timbones method (radiator-specific)  
-TFlow = ((Pin / Pout)^(1/1.3) × (DTout / DTin)) × (Tset - Tout) + Tset
+The flow temperature follows the **EN 442 emitter law** (`utils/emitter.py`) — the emitter's own
+characteristic curve, not a linear offset from outdoor temperature:
+
+```python
+# Demand reaches zero at the BALANCE POINT, not at room temperature:
+# bodies, appliances and the sun cover the losses until several degrees below the setpoint.
+balance = T_room - INTERNAL_GAINS_W / heat_loss_coefficient
+
+phi     = (balance - T_out) / (balance - T_out_design)   # dimensionless relative load
+T_flow  = T_room + dT_design * phi**(1/n) + spread/2     # n = 1.3 radiators, 1.1 UFH
 ```
-Combined with climate-aware safety margins (0.0-2.5°C by zone).
+
+The spread is held **constant** — a heat pump modulates its circulator, it does not run a
+fixed-speed pump. Combined with climate-aware safety margins (0.0–2.5 °C by zone).
 
 ### Self-Learning Status
 

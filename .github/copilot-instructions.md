@@ -870,19 +870,30 @@ The flow temperature is **not** a linear offset from outdoor temperature. It fol
 own characteristic curve:
 
 ```
-φ      = (T_room − T_out) / (T_room − T_out_design)      dimensionless relative load
-T_flow = T_room + ΔT_design · φ^(1/n) + spread_design · φ / 2      n = 1.3 radiators, 1.1 UFH
+balance = T_room − INTERNAL_GAINS_W / heat_loss_coefficient    demand reaches zero HERE, not at T_room
+φ       = (balance − T_out) / (balance − T_out_design)         dimensionless relative load
+T_flow  = T_room + ΔT_design · φ^(1/n) + spread_design / 2     n = 1.3 radiators, 1.1 UFH
 ```
 
-Against **NIBE's own published curve 9** (which reads **41.0 °C** at 0 °C outdoor):
+Two things in that equation are easy to get wrong, and they are easy to get wrong **in cancelling
+ways** — which is how both errors survived in this repository for months:
 
-| model | flow temp | error |
-|---|---|---|
-| **EN 442 emitter law** | 40.80 °C | **0.20 °C** |
-| a straight line between the endpoints | 38.63 °C | 2.37 °C |
+1. **The spread is CONSTANT — never scale it by φ.** A fixed-speed circulator gives constant mass
+   flow and a load-proportional spread; that is a wet boiler. A heat pump *modulates* its circulator
+   to hold the commissioned spread. Scaling it runs the curve too cool in mild weather and too hot
+   in cold, pivoting **invisibly on the design point**.
+2. **Internal gains are WATTS, never degrees, and NEVER fitted to a curve.** Divide them by the
+   house's own W/K. A fixed offset in degrees would make a leaky house get *more* credit for the
+   same fridge, which is backwards.
 
-**More than ten times worse.** That curvature is the `φ^(1/n)` term, and it is the whole reason the
-exponent exists and cannot be folded into a slope. See `docs/research/02_emitter_law.md`.
+⚠️ **Do not "validate" this against NIBE's published curve.** That was tried, and it produced a
+wrong constant twice. NIBE's curve 9 is **a straight line to within 0.19 °C** (its slopes even
+wobble the wrong way) so it cannot resolve curvature at all; and the constant-spread and
+balance-point terms are **the same basis function with opposite signs**, so any assumed spread
+manufactures a matching "gains" figure — even out of a curve with provably zero gains. NIBE
+interpolates its curves linearly; we follow EN 442. **The gap between them is the trim, not an
+error.** See `docs/research/02_emitter_law.md`, and the tests that prove both claims in
+`tests/validation/test_emitter_law_matches_openenergymonitor.py`.
 
 ⚠️ **This section used to offer "SPF 4.0+ systems: Flow = Outdoor + 27 °C ±3 °C" as OEM research.**
 That is a LINEAR rule — the very thing the emitter law was chosen over — sitting in the document

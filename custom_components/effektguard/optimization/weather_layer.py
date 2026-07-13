@@ -45,7 +45,9 @@ from ..const import (
     WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
     WEATHER_COMP_MAX_OFFSET,
     WEATHER_FORECAST_DROP_THRESHOLD,
-    DEFAULT_BALANCE_POINT_OFFSET,
+    BALANCE_POINT_MAX_OFFSET,
+    BALANCE_POINT_MIN_OFFSET,
+    INTERNAL_GAINS_W,
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
@@ -144,6 +146,7 @@ class WeatherCompensationCalculator:
         design_outdoor_temp: float = DEFAULT_DESIGN_OUTDOOR_TEMP,
         design_flow_temp: Optional[float] = None,
         design_spread: float = DEFAULT_DESIGN_SPREAD,
+        internal_gains_w: float = INTERNAL_GAINS_W,
     ):
         """Initialize weather compensation calculator.
 
@@ -156,9 +159,15 @@ class WeatherCompensationCalculator:
                 Defaults by emitter type, since an underfloor system is dimensioned far cooler
                 than radiators.
             design_spread: Flow-return spread at the design load (°C)
+            internal_gains_w: Free heat from bodies, appliances and the sun (W). Set to 0.0 to
+                reproduce the UK reference tools (OpenEnergyMonitor's WeatherComp, Timbones'
+                spreadsheet), which model demand as linear in (room - outdoor) and carry no gains
+                term - useful for checking the emitter law against them without the demand models
+                differing too. A real house is not gains-free; see const.py.
         """
         self.heat_loss_coefficient = heat_loss_coefficient
         self.radiator_rated_output = radiator_rated_output
+        self.internal_gains_w = internal_gains_w
         self.heating_type = heating_type
         self.design_outdoor_temp = design_outdoor_temp
         self.design_spread = design_spread
@@ -189,6 +198,36 @@ class WeatherCompensationCalculator:
             radiator_rated_output,
         )
 
+    def balance_point_temp(self, indoor_setpoint: float) -> float:
+        """Outdoor temperature at which this house needs no heat at all.
+
+        Derived from watts, not fitted to a curve:
+
+            balance = indoor_setpoint - internal_gains_W / heat_loss_W_per_K
+
+        Bodies, appliances and the sun supply a few hundred watts whatever the weather. Dividing
+        that by the house's own heat loss converts it to the degrees of outdoor temperature it is
+        worth - which is SMALLER for a leaky house, not larger. A fixed offset in degrees would
+        get that backwards, crediting a draughty house with more free heat than an insulated one
+        from the same fridge and the same occupants.
+
+        This is the only honest way to size the term: the balance point cannot be recovered by
+        fitting a heating curve, because the constant-spread term has the same shape and the
+        opposite sign (see `utils/emitter.py`).
+
+        Args:
+            indoor_setpoint: Target indoor temperature (°C)
+
+        Returns:
+            Balance-point outdoor temperature (°C)
+        """
+        if self.internal_gains_w <= 0.0:
+            return indoor_setpoint  # gains disabled: the UK reference tools' demand model
+
+        offset = self.internal_gains_w / self.heat_loss_coefficient
+        offset = max(BALANCE_POINT_MIN_OFFSET, min(offset, BALANCE_POINT_MAX_OFFSET))
+        return indoor_setpoint - offset
+
     def calculate_design_point_flow_temp(
         self,
         indoor_setpoint: float,
@@ -215,11 +254,7 @@ class WeatherCompensationCalculator:
             design_flow_temp=self.design_flow_temp,
             design_spread=self.design_spread,
             emitter_exponent=self.emitter_exponent,
-            # The house is not cold at 20 C outdoors. Bodies, appliances and the sun cover its
-            # losses until about four degrees below the setpoint, and pretending otherwise asks
-            # the pump to run hot in mild weather - where most of the season's kWh are delivered,
-            # and where every excess degree of flow costs 2.5-3 % of COP.
-            balance_point_temp=indoor_setpoint - DEFAULT_BALANCE_POINT_OFFSET,
+            balance_point_temp=self.balance_point_temp(indoor_setpoint),
         )
 
         _LOGGER.debug(
@@ -263,9 +298,14 @@ class WeatherCompensationCalculator:
         if self.radiator_rated_output is None or self.radiator_rated_output <= 0:
             return None
 
-        load = indoor_setpoint - outdoor_temp
+        # The SAME balance point the design-point anchor uses. This path is the one the layer
+        # PREFERS (confidence 0.95), so a gains term that reached only the other anchor would
+        # have been a no-op for every installer who filled in their emitters' rated output - and
+        # would have left the two anchors of "the same law" disagreeing by up to 3.5 C.
+        load = self.balance_point_temp(indoor_setpoint) - outdoor_temp
         if load <= 0:
-            return indoor_setpoint
+            # Continuous limit as load -> 0, matching en442_flow_temp. See utils/emitter.py.
+            return indoor_setpoint + (flow_return_dt / 2.0)
 
         heat_demand = self.heat_loss_coefficient * load
         output_ratio = heat_demand / self.radiator_rated_output

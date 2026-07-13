@@ -910,28 +910,40 @@ UFH_POWER_COEFFICIENT: Final = 1.1  # EN 1264 exponent n, underfloor (NOT 1.3)
 # it. Defaults describe a standard Swedish low-temperature radiator system, erring WARM: a
 # too-warm design point over-supplies slightly, a too-cold one silently under-heats, and degree
 # minutes cannot detect under-heating that a negative offset causes (they improve as it worsens).
-# The outdoor temperature at which the house needs NO heat, because bodies, appliances and the sun
-# are already covering its losses. Heat demand is NOT linear in (indoor - outdoor); it is linear in
-# (balance_point - outdoor), and it reaches zero well before the outdoor air reaches room
-# temperature. Ignoring that over-predicts the flow temperature by 1.3-1.8 C, worst in mild weather,
-# which is where most of the season's kWh are delivered - and OEM's measured fleet puts the COP
+# INTERNAL GAINS. Bodies, appliances and the sun heat a house for free. Demand is NOT linear in
+# (indoor - outdoor); it is linear in (balance_point - outdoor), and it reaches zero well before
+# the outdoor air reaches room temperature. Ignoring that asks the pump to run hot in mild weather
+# - where most of the season's kWh are delivered, and where OEM's measured fleet puts the COP
 # penalty at 2.5-3 % per degree of excess flow.
 #
-# Expressed as a DIFFERENCE from the indoor setpoint, so it follows the target the owner sets.
+# GAINS ARE WATTS, NOT DEGREES. The balance point is DERIVED, never fitted:
 #
-# Sources, three of them, all landing in the same place:
-#   * OpenEnergyMonitor's SCOP tool: baseTemp 15.5 C against a 19.3 C room - a 3.8 K difference. Its
-#     source carries the naive formula COMMENTED OUT, with the note "This approach would need to
-#     take into account gains, hence use of degree days approach".
-#   * heatpumpmonitor.org, 383 monitored systems with a fitted heat-demand line: median base_DT
-#     2.5 K, median implied gains 583 W (3.0 K / 750 W among the systems where it fitted non-zero).
-#   * NIBE's own published heating curve 9, fitted here: 4.0 K (RMS error 0.31 C across -15..+10 C,
-#     against 1.70 C for a no-gains model).
+#     balance_point = indoor_setpoint - INTERNAL_GAINS_W / heat_loss_coefficient
 #
-# 4.0 K is the NIBE fit, which is the pump this integration drives.
-DEFAULT_BALANCE_POINT_OFFSET: Final = (
-    4.0  # C below the indoor setpoint: 21 C target -> 17 C balance
-)
+# A fixed offset in degrees would make the gains scale with the house's heat loss - a leaky house
+# would be credited with MORE free heat than a well-insulated one, from the same bodies and the
+# same fridge. Backwards. Watts divided by W/K is the only form that gets this right, and it is
+# the form both measured sources below are expressed in.
+#
+# Measured sources:
+#   * heatpumpmonitor.org, 383 monitored systems with a fitted heat-demand line: median implied
+#     gains 583 W (750 W among the systems where it fitted non-zero).
+#   * OpenEnergyMonitor's SCOP tool: baseTemp 15.5 C against a 19.3 C room. Its source carries the
+#     naive no-gains formula COMMENTED OUT, with the note "This approach would need to take into
+#     account gains, hence use of degree days approach".
+#
+# NOT a source: fitting this against NIBE's published heating curve. That fit is DEGENERATE - a
+# constant spread lifts the curve by (spread/2)(1 - phi^(1/n)) and the balance point drops it by
+# the same basis function, so the two are not separately identifiable and any assumed spread
+# manufactures a matching "gains" figure. Fitting the post-fix law to Kuhne's Vaillant curve -
+# which contains PROVABLY ZERO gains - still yields 0.3 K at spread 0, 2.6 K at spread 5 and 4.9 K
+# at spread 10. A curve fit cannot see gains. Only a wattage can.
+INTERNAL_GAINS_W: Final = 600.0  # W of free heat; fleet median 583 W
+
+# A mis-configured heat loss must not drive the balance point somewhere absurd (a 20 W/K entry
+# would put it 30 K below the setpoint and switch heating off entirely).
+BALANCE_POINT_MIN_OFFSET: Final = 1.0  # C below setpoint, floor
+BALANCE_POINT_MAX_OFFSET: Final = 6.0  # C below setpoint, ceiling
 
 DEFAULT_DESIGN_OUTDOOR_TEMP: Final = -15.0  # °C, dimensioning outdoor temperature (DUT/DVUT)
 DEFAULT_DESIGN_FLOW_TEMP_RADIATOR: Final = 50.0  # °C supply at DUT for radiators

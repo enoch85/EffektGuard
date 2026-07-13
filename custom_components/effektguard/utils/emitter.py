@@ -46,11 +46,24 @@ Sources - this is OpenEnergyMonitor's method, not an invention:
     the radiator exponent. He fitted it to Vaillant's published curves and validated it against
     eBus readings from his own AroTherm to within 0.07 C.
 
-Also note what is NOT here: there is no internal-gains term. Heat demand is linear in
-(T_room - T_out), full stop. OEM's tool does the same. Free heat from bodies and appliances is
-real, but their own heat-loss guidance finds it roughly cancels the domestic hot water draw over
-a heating season, and a heat pump's own minimum modulation - not the gains - is what sets the
-outdoor temperature at which it stops being able to turn down.
+INTERNAL GAINS ARE REAL, AND A CURVE FIT CANNOT MEASURE THEM.
+
+OEM's tool has no gains term; a real house does. Demand is linear in (balance - T_out), not in
+(T_room - T_out). So this law takes a balance point - but the caller must DERIVE it from watts
+(`indoor - gains_W / heat_loss_W_per_K`), never fit it, because the fit is degenerate:
+
+    constant spread lifts the curve by   (spread / 2) * (1 - phi ** (1/n))
+    a balance point drops it by          a term with the same shape and the opposite sign
+
+Both vanish at the design point and grow in mild weather - the SAME basis function. They are not
+separately identifiable, so any assumed spread manufactures a matching "gains" figure out of
+nothing. Fit this law to Kuhne's Vaillant curve, which contains PROVABLY ZERO gains, and a
+spurious balance point appears anyway, scaling with whatever spread you assumed: 0.3 K at spread
+0, 2.6 K at spread 5, 4.9 K at spread 10.
+
+This is worth stating plainly because an earlier version of this file DID fit the balance point
+against NIBE's curve 9, reported "RMS 0.31 C vs 1.70 C for no gains", and presented that as
+evidence. It was not evidence. It was the constant-spread term being read back out.
 """
 
 import logging
@@ -77,46 +90,27 @@ def en442_flow_temp(
         design_spread: Flow-return spread the circulator holds (C). NOT scaled by load.
         emitter_exponent: EN 442 exponent n (1.3 radiators, 1.1 underfloor).
         balance_point_temp: Outdoor temperature at which the house needs no heat at all, because
-            bodies, appliances and the sun are already supplying its losses. Defaults to
-            ``indoor_setpoint``, i.e. no internal gains - which is what OpenEnergyMonitor's tool
-            assumes, and which is WRONG for a real house. See below.
+            bodies, appliances and the sun already supply its losses. DERIVE it from watts -
+            ``indoor - internal_gains_W / heat_loss_W_per_K`` - and never fit it against a heating
+            curve; see the module docstring for why that fit cannot work. Defaults to
+            ``indoor_setpoint``, i.e. no gains, which is what OpenEnergyMonitor's tool assumes and
+            what a bare emitter law implies.
 
     Returns:
         Required flow temperature (C). Never below ``indoor_setpoint``: water colder than the
         room removes heat from it.
-
-    THE BALANCE POINT, AND WHY IT IS NOT THE ROOM TEMPERATURE.
-
-    A house does not start needing heat the moment it is one degree cooler outside than in. Bodies,
-    appliances and the sun supply several hundred watts, so demand only reaches zero somewhere
-    around 17 C outdoors. Modelling demand as linear in (indoor - outdoor) therefore over-predicts
-    the flow temperature in mild weather - by up to 2.7 C - and asks the pump to run hot in exactly
-    the conditions where a heat pump is most efficient and has the most to lose.
-
-    Fitted against NIBE's OWN published heating curve 9 (52.6 C at -15 C; 41.0 C at 0 C):
-
-        balance    -15C    -10C     -5C     +0C     +5C    +10C |  RMS
-          21.0    +0.00   +0.84   +1.26   +1.72   +2.19   +2.69 |  1.70   <- no gains
-          17.0    +0.00   +0.43   +0.41   +0.39   +0.28   +0.04 |  0.31   <- best fit
-
-    17 C. And independently, from UK field data: "the heating demand is typically zero or negative
-    until the external temperature falls below about 17 C" (Protons for Breakfast, on Vaillant's
-    controls). Two unrelated sources, the same number.
-
-    It is derivable rather than guessed: balance = indoor - internal_gains_W / heat_loss_W_per_K.
-    A 150 W/K house with 600 W of gains balances at 21 - 4 = 17 C.
-
-    THIS IS WHY THE TWO BUGS HID EACH OTHER. The spread used to be scaled by load, which made the
-    curve too COOL in mild weather; omitting the gains made it too HOT in mild weather. The errors
-    are largest in the same place and point in opposite directions, so together they matched NIBE's
-    curve to a fifth of a degree, and fixing either one alone made the fit worse.
     """
     balance = indoor_setpoint if balance_point_temp is None else balance_point_temp
 
     load = balance - outdoor_temp
     if load <= 0:
-        # Warmer than the balance point: the house is heating itself.
-        return indoor_setpoint
+        # Warmer than the balance point: the house is heating itself, so the emitters need no
+        # excess over the room at all. Return the CONTINUOUS limit of the expression below as
+        # load -> 0 (excess -> 0), not the bare setpoint: dropping the spread term here would put
+        # a spread/2 cliff - 2.5 C on the defaults - at the balance point, and the balance point
+        # sits in the middle of the Swedish shoulder season, where the outdoor temperature crosses
+        # it back and forth all day. A step there is chatter.
+        return indoor_setpoint + (design_spread / 2.0)
 
     design_load = balance - design_outdoor_temp
     if design_load <= 0 or emitter_exponent <= 0:

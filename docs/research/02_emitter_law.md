@@ -6,23 +6,33 @@ removed** — it was being fed the wrong quantity, and the end of this page show
 ## The model
 
 ```
-φ      = (T_room − T_out) / (T_room − T_out_design)      dimensionless relative load
-ΔT     = ΔT_design · φ^(1/n)                             invert the emitter law
-spread = spread_design · φ                               constant mass flow
-T_flow = T_room + ΔT_design · φ^(1/n) + spread_design · φ / 2
+balance = T_room − internal_gains_W / heat_loss_W_per_K   the house heats itself to here
+φ       = (balance − T_out) / (balance − T_out_design)     dimensionless relative load
+ΔT      = ΔT_design · φ^(1/n)                              invert the emitter law
+T_flow  = T_room + ΔT_design · φ^(1/n) + spread_design / 2 ← spread CONSTANT, not scaled
 ```
 
 Every step from a published standard:
 
-1. **EN 12831** — building heat loss is linear in the air-temperature difference. Hence
-   `φ = Φ/Φ_design = (T_room − T_out) / (T_room − T_out_design)`.
+1. **EN 12831** — building heat loss is linear in the air-temperature difference, and it reaches
+   zero at the **balance point**, not at room temperature: bodies, appliances and the sun cover the
+   losses until several degrees below the setpoint. Hence
+   `φ = Φ/Φ_design = (balance − T_out) / (balance − T_out_design)`.
 2. **EN 442-1:2014 §3.31** ("characteristic equation") — an emitter's output follows
    `Φ/Φ_N = (ΔT/ΔT_N)^n`.
 3. Set emitter output equal to the building load and **invert (2)**:
    `ΔT = ΔT_design · φ^(1/n)`. **The 1/n exponent enters exactly here**, as the inverse of the
    emitter exponent — it is not a fitted constant.
-4. Constant mass flow: `Φ = ṁ·c·(T_V − T_R)`, so `spread = spread_design · φ`, linearly.
+4. **The spread is CONSTANT.** `Φ = ṁ·c·(T_V − T_R)`, so a *fixed-speed* circulator gives constant
+   mass flow and a spread proportional to load — that is a wet boiler. **A heat pump modulates its
+   circulator** to hold the commissioned spread and varies the flow *rate* instead. Scaling the
+   spread models the wrong machine, and the error pivots invisibly on the design point.
 5. `T_V = T_room + ΔT_mean + spread/2`.
+
+⚠️ **This page used to print `spread = spread_design · φ` right here**, in the headline equation,
+after the code below it had already been fixed. A reader implementing from the old version rebuilt
+the exact bug. Both halves of the model — the constant spread, and the balance point in `φ` — are
+easy to get wrong in *cancelling* ways; see the two warnings further down.
 
 ## The constants, checked against the standard's normative text
 
@@ -57,53 +67,69 @@ extracted, axes calibrated, residuals < 0.11 °C. Validated three independent wa
   **41**; digitised value **41.0**, exact);
 - reproduces NIBE's three official worked examples in VVM 225 IHB.
 
-**The test that matters:** NIBE curve 9 at 0 °C outdoor reads **41.0 °C**. Reproduce it yourself —
+### ⚠️ NIBE's published curve does not validate this model, and cannot
 
-```python
-from custom_components.effektguard.utils.emitter import en442_flow_temp
+This page used to claim it did. That claim was wrong three times over, and the corrections matter
+more than the original argument, so they are kept here rather than quietly deleted.
 
-en442_flow_temp(
-    indoor_setpoint=21.0,
-    outdoor_temp=0.0,
-    design_outdoor_temp=-15.0, # DUT
-    design_flow_temp=52.6,     # curve 9 at -15 °C, from the digitised artwork
-    design_spread=5.0,         # the spread the CIRCULATOR holds, not EN 442's 75/65 rating
-    emitter_exponent=1.3,      # panel radiators
-    balance_point_temp=17.0,   # 21 - DEFAULT_BALANCE_POINT_OFFSET: bodies, appliances, sun
-)   # -> 41.39
+**1. Curve 9 is a straight line.** Least-squares through the six digitised points leaves a residual
+of **0.19 °C**. Its successive slopes are −0.800, −0.740, −0.780, −0.820, −0.880 °C/°C — they wobble
+*non-monotonically*, and a real emitter law steepens monotonically toward cold. The wobble is
+digitisation noise and it is **larger than the curvature it was being used to detect**. Collinear
+points confirm every model fitted to them.
+
+The old table on this page claimed a straight line was out by **2.37 °C**. It is out by 0.19 °C. The
+honest comparison at 0 °C outdoor:
+
+| model | flow at 0 °C | error vs NIBE's 41.0 |
+|---|---|---|
+| least-squares straight line | 40.76 °C | **−0.24 °C** |
+| EN 442 + derived gains | 41.64 °C | +0.64 °C |
+| EN 442, no gains | 42.72 °C | +1.72 °C |
+
+NIBE's controller **interpolates its curves linearly**. Ours follows EN 442. The gap between them is
+not our error — **it is the trim**, which is the entire reason this layer exists.
+
+**2. The gains term cannot be fitted to a heating curve at all.** A constant spread lifts the curve
+by `(spread/2)·(1 − φ^(1/n))`; a balance point drops it by a term of the *same shape and opposite
+sign*. Both vanish at the design point and grow in mild weather. They are **the same basis
+function**, so they are not separately identifiable, and whatever spread you assume the fit hands
+you a "gains" figure that absorbs it.
+
+Proof, and it is run as a test: fit this law to **Kühne's Vaillant curve, which is a pure power law
+with provably zero gains**, and a balance point appears anyway, tracking the spread you assumed —
+0.3 K at spread 0, **2.6 K at spread 5**, 4.9 K at spread 10.
+
+**3. So `DEFAULT_BALANCE_POINT_OFFSET = 4.0` was fitted to noise, through a degenerate basis.** It is
+gone. Gains are **watts**, and the balance point is *derived*:
+
+```
+balance_point = indoor_setpoint − INTERNAL_GAINS_W / heat_loss_coefficient
 ```
 
-| model | flow temp at 0 °C | error vs NIBE |
-|---|---|---|
-| NIBE's published curve 9 | **41.0 °C** | — |
-| **EN 442 + balance point** | **41.39 °C** | **0.39 °C** ✅ |
-| EN 442, no gains (balance = 21 °C) | 42.72 °C | 1.72 °C ✗ |
-| a straight line between the endpoints | 38.63 °C | 2.37 °C ✗ |
+600 W over 180 W/K → 3.33 K → a balance point of 17.7 °C for a 21 °C room. A fixed offset in
+*degrees* would have made the free heat from your fridge scale with how leaky your house is, which
+is backwards. The two measured sources both express it in watts: heatpumpmonitor.org's **583 W
+median across 383 monitored systems**, and OpenEnergyMonitor's SCOP tool (15.5 °C base against a
+19.3 °C room).
 
-The emitter law tracks NIBE's own curve to under half a degree; a linear interpolation is out by
-more than two. What it reproduces is the **curvature**, and that curvature is the `φ^(1/n)` term.
-This is why the exponent matters and cannot be folded into a fitted slope.
+### The pair of errors this page used to hide
 
-### Two corrections this example used to hide
-
-An earlier version of this page printed **40.80 °C, error 0.20 °C** — a better fit than the honest
-model achieves. It was not better. It was **two bugs cancelling**, and the cancellation is why
-neither was ever found:
+An earlier version printed **40.80 °C, error 0.20 °C** — a *better* fit than the honest model gets.
+It was not better. It was **two bugs cancelling**:
 
 * **`design_spread=10.0`**, captioned "EN 442 reference: 75/65". That 10 K is the **rating** spread
-  that *defines* a radiator's ΔT50 output. It is not the spread a heat pump's circulator maintains,
-  which is ~5 K. And the code then **scaled** it by load, modelling a fixed-speed pump.
-* **No balance point.** Heat demand was taken as linear in `(indoor − outdoor)`, so the house was
-  assumed to need heat at 20 °C outdoors.
+  that *defines* a radiator's ΔT50 output, not the spread a heat pump's circulator holds (~5 K). And
+  the code then **scaled** it by load, modelling a fixed-speed pump.
+* **No balance point**, so the house was assumed to need heat at 20 °C outdoors.
 
-The first made the curve too **cool** in mild weather; the second made it too **hot** in mild
-weather. Same place, opposite signs. Together they matched NIBE to a fifth of a degree; fixing
-either one alone made the fit *worse*, which is exactly the trap that keeps a pair of errors like
-this alive. Both are fixed now, and the residual 0.39 °C is real.
+Same place, opposite signs. Together they matched NIBE to a fifth of a degree, and fixing *either
+one alone made the fit worse* — which is exactly what keeps a pair of errors like this alive.
 
-(The exact figure moves a little with the assumed design spread and room setpoint — the inputs are
-spelled out above precisely so that it is checkable rather than quotable. The ranking does not move
-at all.)
+And then the fix repeated the mistake in a subtler form: the replacement pair (constant spread +
+fitted balance point) is *also* a cancelling pair, which is how a curve fit could report a
+triumphant RMS for a constant that was measuring nothing. **Agreement with a curve is not evidence
+when your basis functions are degenerate.** That is the lesson worth keeping from this page.
 
 Reference points, offset 0, outdoor −15 °C:
 

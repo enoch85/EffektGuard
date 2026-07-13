@@ -22,7 +22,7 @@ import pytest
 
 from custom_components.effektguard import const
 from custom_components.effektguard.optimization.airflow_optimizer import calculate_net_thermal_gain
-from custom_components.effektguard.const import DEFAULT_BALANCE_POINT_OFFSET
+from custom_components.effektguard.const import DEFAULT_HEAT_LOSS_COEFFICIENT, INTERNAL_GAINS_W
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 
 RESEARCH = Path(__file__).resolve().parents[2] / "docs" / "research"
@@ -92,14 +92,15 @@ def test_the_en442_worked_example_in_the_docs_reproduces():
     """02_emitter_law.md shows a code block and prints its result. Run it.
 
     This anchors the whole flow-temperature model: NIBE's published curve 9 reads 41.0 C at 0 C
-    outdoor, and the emitter law - with the circulator's real spread, and with internal gains -
-    lands within four tenths of a degree of it, where a straight line is out by more than two.
+    outdoor. Our law lands 0.64 C above it - and that gap is the TRIM, not an error: NIBE
+    interpolates its curves linearly, we follow EN 442.
 
-    The doc used to print 40.80 C and claim 0.20 C of error, which was BETTER than the honest model
-    manages. It was two bugs cancelling: a spread that was both the wrong number (EN 442's 10 K
-    rating spread, not the circulator's 5 K) and scaled by load, against a demand model with no
-    internal gains. One ran the curve cool in mild weather, the other ran it hot. Fixing either
-    alone made the fit worse - which is how a pair of errors like that survives.
+    The doc used to claim the emitter law beat a straight line here (0.39 C against 2.37 C). It does
+    not. Curve 9 IS a straight line, to 0.19 C - so it cannot validate curvature, and the balance
+    point that was once fitted to it was fitted to digitisation noise through a degenerate basis.
+    See test_emitter_law_matches_openenergymonitor.py, which proves both.
+
+    This test now pins only what the doc actually claims: the numbers in its code block are real.
     """
     flow = en442_flow_temp(
         indoor_setpoint=21.0,
@@ -108,18 +109,19 @@ def test_the_en442_worked_example_in_the_docs_reproduces():
         design_flow_temp=52.6,
         design_spread=5.0,
         emitter_exponent=1.3,
-        balance_point_temp=21.0 - DEFAULT_BALANCE_POINT_OFFSET,
+        balance_point_temp=21.0 - INTERNAL_GAINS_W / DEFAULT_HEAT_LOSS_COEFFICIENT,
     )
 
-    assert flow == pytest.approx(41.39, abs=0.01), (
-        f"The worked example in 02_emitter_law.md says this call returns 41.39; it returns "
+    assert flow == pytest.approx(41.64, abs=0.01), (
+        f"The worked example in 02_emitter_law.md says this call returns 41.64; it returns "
         f"{flow:.2f}. A research note whose own code block does not run is exactly the kind of "
         f"citation this directory was created to replace."
     )
-    assert abs(flow - 41.0) < 0.5, (
-        f"The emitter law gives {flow:.2f} C where NIBE's own published curve 9 gives 41.0 C. If "
-        f"this drifts, the model has stopped reproducing the manufacturer's curve and every offset "
-        f"it commands is suspect."
+    assert abs(flow - 41.0) < 1.0, (
+        f"The emitter law gives {flow:.2f} C where NIBE's own published curve 9 gives 41.0 C. We "
+        f"TRIM that curve, so a gap is expected - but a large one would mean the design point, the "
+        f"spread or the gains are misconfigured, and every offset we emit would be a correction "
+        f"toward our own error."
     )
 
 

@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.effektguard.const import DEFAULT_BALANCE_POINT_OFFSET
+from custom_components.effektguard.const import DEFAULT_HEAT_LOSS_COEFFICIENT, INTERNAL_GAINS_W
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
@@ -63,7 +63,7 @@ def _emitter_law_flow(outdoor: float) -> float:
 
     Anchored on our design point rather than theirs, which is the same equation rewritten.
     """
-    balance = TARGET_INDOOR - DEFAULT_BALANCE_POINT_OFFSET
+    balance = TARGET_INDOOR - INTERNAL_GAINS_W / DEFAULT_HEAT_LOSS_COEFFICIENT
     load = balance - outdoor
     design_load = balance - DESIGN_OUTDOOR
     design_excess = DESIGN_FLOW - DESIGN_SPREAD / 2 - TARGET_INDOOR
