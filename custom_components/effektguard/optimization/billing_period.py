@@ -104,6 +104,34 @@ class BillingPeriodAccumulator:
         self._sources = {source}
         return completed
 
+    def projected_hour_mean(self, now: datetime, power_kw: float) -> float:
+        """What this billing hour's mean becomes if ``power_kw`` persists to the boundary.
+
+        Peak PROTECTION must compare like with like: the monthly record is an hourly mean,
+        and an instantaneous reading is not. Early in the hour a spike projects to almost
+        nothing; near the boundary the accumulated hour dominates. The current cycle's
+        reading is not yet in the samples when the decision runs, which is why it is passed
+        in rather than read.
+        """
+        local_start = now.replace(minute=0, second=0, microsecond=0)
+        absolute_start = local_start.astimezone(timezone.utc)
+        absolute_now = now.astimezone(timezone.utc)
+
+        if absolute_start != self._absolute_start or not self._samples:
+            # A fresh or unobserved hour: the only information is the draw itself.
+            return power_kw
+
+        period_end = self._absolute_start + BILLING_PERIOD
+        previous_time, previous_power = self._samples[0]
+        weighted = 0.0
+        for sample_time, sample_power in self._samples[1:]:
+            weighted += previous_power * (sample_time - previous_time).total_seconds()
+            previous_time = sample_time
+            previous_power = sample_power
+        weighted += previous_power * (absolute_now - previous_time).total_seconds()
+        weighted += power_kw * (period_end - absolute_now).total_seconds()
+        return weighted / (period_end - self._absolute_start).total_seconds()
+
     def flush(self) -> CompletedBillingPeriod | None:
         """Close the hour in progress and return it.
 

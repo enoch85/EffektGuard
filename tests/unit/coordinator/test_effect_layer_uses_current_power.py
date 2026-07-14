@@ -106,6 +106,9 @@ class TestCoordinatorPowerContract:
             "The decision engine is being fed peak_today (a daily MAXIMUM) as current power. "
             "One morning spike would pin the effect layer to CRITICAL until midnight."
         )
-        assert (
-            "current_power_for_decision = self.current_power_kw" in update_src
-        ), "The decision engine must be fed the instantaneous power reading."
+        assert "projected_hour_mean" in update_src and "self.current_power_kw" in update_src, (
+            "The decision engine must be fed the live reading PROJECTED over the billing hour "
+            "- the monthly record it is compared against is an hourly mean, so an instantaneous "
+            "spike is not the same quantity. See "
+            "tests/unit/optimization/test_peak_protection_compares_like_with_like.py."
+        )

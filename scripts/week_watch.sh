@@ -71,6 +71,12 @@ finally:
 " 2>/dev/null
 }
 
+# Devbox login. These default to the throwaway onboarding account this box's CLAUDE.md
+# creates (dev/dev); override via env for any box where that is not true. A committed literal
+# password is a bad habit even when it guards nothing.
+HA_USER="${WEEK_WATCH_HA_USER:-dev}"
+HA_PASS="${WEEK_WATCH_HA_PASS:-dev}"
+
 token() {
   local cid="http://localhost:8125/" fid code
   fid=$(curl -s -m 10 -X POST http://localhost:8125/auth/login_flow \
@@ -80,7 +86,7 @@ token() {
   [ -z "$fid" ] && return 1
   code=$(curl -s -m 10 -X POST "http://localhost:8125/auth/login_flow/$fid" \
     -H 'Content-Type: application/json' \
-    -d "{\"client_id\":\"$cid\",\"username\":\"dev\",\"password\":\"dev\"}" |
+    -d "{\"client_id\":\"$cid\",\"username\":\"$HA_USER\",\"password\":\"$HA_PASS\"}" |
     python3 -c "import sys,json;print(json.load(sys.stdin).get('result',''))" 2>/dev/null) || return 1
   [ -z "$code" ] && return 1
   curl -s -m 10 -X POST http://localhost:8125/auth/token \
@@ -144,7 +150,7 @@ row = [
     s('climate.effektguard', 'outdoor_temp'),
     s('climate.effektguard', 'current_price'),
     s('sensor.effektguard_peak_today'),
-    s('sensor.effektguard_monthly_peak'),
+    s('sensor.effektguard_peak_this_month'),
     s('climate.effektguard'),
     ''.join(c for c in os.environ.get('ERRS', '0') if c.isdigit()) or '0',
     ''.join(c for c in os.environ.get('RESTARTS', '0') if c.isdigit()) or '0',

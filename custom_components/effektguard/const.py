@@ -149,6 +149,10 @@ MIN_TEMP_LIMIT: Final = 18.0
 # bound - MIN_TEMP_LIMIT + the tolerance actually configured - and says so if it has to.
 MIN_TARGET_TEMP: Final = MIN_TEMP_LIMIT + DEFAULT_TOLERANCE  # 18.5 °C at the default ±0.5
 
+# Power-reading plausibility. The margin covers startup/defrost transients above the
+# machine's compressor-plus-immersion ceiling before a reading is called implausible.
+POWER_VALIDATION_MARGIN: Final = 1.2
+
 # Service call rate limiting (boost, DHW, general)
 HEATING_BOOST_COOLDOWN_MINUTES: Final = 45  # Space heating boost cooldown
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown

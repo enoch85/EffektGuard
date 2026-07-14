@@ -40,6 +40,7 @@ from ..const import (
     MIN_OFFSET,
     MIN_TARGET_TEMP,
     MIN_TEMP_LIMIT,
+    POWER_VALIDATION_MARGIN,
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
     TREND_BOOST_OFFSET_LIMIT,
@@ -1217,14 +1218,24 @@ class DecisionEngine:
 
         min_power, max_power = self.heat_pump_model.typical_electrical_range_kw
 
-        # Allow 20% margin for startup/defrost
-        max_with_margin = max_power * 1.2
+        # The compressor range plus the machine's own immersion heater is the machine's
+        # plausible ceiling. Winter draw above the compressor range alone is the elpatron
+        # doing its job - flagging that fired every five minutes all January, which teaches
+        # the owner to ignore this channel. Only a reading the HARDWARE cannot produce is
+        # worth a line.
+        immersion_kw = float(getattr(self.heat_pump_model, "immersion_heater_kw", 0.0) or 0.0)
+        machine_ceiling = (max_power + immersion_kw) * POWER_VALIDATION_MARGIN
 
-        if current_power_kw > max_with_margin:
+        if current_power_kw > machine_ceiling:
             return {
                 "valid": False,
-                "warning": f"Power {current_power_kw:.1f}kW exceeds {self.heat_pump_model.model_name} max {max_power:.1f}kW (auxiliary heating active?)",
-                "severity": "info",
+                "warning": (
+                    f"Power {current_power_kw:.1f}kW exceeds what a "
+                    f"{self.heat_pump_model.model_name} can draw "
+                    f"(compressor max {max_power:.1f}kW + immersion {immersion_kw:.1f}kW). "
+                    f"Check the sensor's unit and scaling."
+                ),
+                "severity": "warning",
             }
 
         # Check if unusually low (possible sensor issue)

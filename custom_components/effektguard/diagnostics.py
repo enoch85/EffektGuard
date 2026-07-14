@@ -25,6 +25,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .models.types import DiagnosticsDict
+from .optimization.thermal_layer import apply_thermal_mass_buffer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,10 +138,17 @@ def _dm_thresholds(coordinator: object, nibe: object) -> dict[str, object]:
         if detector is None or outdoor is None:
             return {}
 
+        # The band production ENFORCES is the zone range run through the thermal-mass buffer -
+        # a slab is helped ~1.3x sooner. Quoting the raw zone table here once told a slab-house
+        # owner "-414" while the code was intervening at -318.
+        heating_type = getattr(coordinator.engine.emergency_layer, "heating_type", "radiator")
+        zone_range = detector.get_expected_dm_range(float(outdoor))
         return {
             "climate_zone": detector.zone_info.name,
             "outdoor_temp": outdoor,
-            "range": detector.get_expected_dm_range(float(outdoor)),
+            "heating_type": heating_type,
+            "range": apply_thermal_mass_buffer(zone_range, heating_type),
+            "zone_range_before_thermal_mass": zone_range,
         }
     except (AttributeError, TypeError, ValueError) as err:
         _LOGGER.debug("Could not resolve DM thresholds for diagnostics: %s", err)

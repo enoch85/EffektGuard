@@ -159,13 +159,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry.
+
+    Platforms unload FIRST. If one refuses, HA keeps the entry loaded and its entities
+    alive - so the coordinator behind them must stay alive too. Shutting it down first
+    left a loaded entry served by a dead coordinator: every sensor frozen on its last
+    value, the control loop gone, nothing saying so.
+    """
     _LOGGER.info("Unloading EffektGuard integration")
 
-    # Get coordinator before removing from hass.data
-    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
 
-    # Save persistent state before unloading
+    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator:
         try:
             await coordinator.async_shutdown()
@@ -173,18 +180,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except (OSError, RuntimeError, ValueError) as err:
             _LOGGER.warning("Failed to shutdown coordinator cleanly: %s", err)
 
-    # Unload platforms
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    hass.data[DOMAIN].pop(entry.entry_id, None)
 
-    # Remove coordinator
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+    # Unregister services if this is the last config entry
+    if not hass.data[DOMAIN]:
+        _async_unregister_services(hass)
 
-        # Unregister services if this is the last config entry
-        if not hass.data[DOMAIN]:
-            _async_unregister_services(hass)
-
-    return unload_ok
+    return True
 
 
 def _async_unregister_services(hass: HomeAssistant) -> None:

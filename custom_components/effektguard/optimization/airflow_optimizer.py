@@ -35,10 +35,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-
-from homeassistant.util import dt as dt_util
 from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple
+
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     AIRFLOW_AIR_DENSITY,

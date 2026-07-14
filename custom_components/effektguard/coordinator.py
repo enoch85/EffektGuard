@@ -1152,7 +1152,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
                 else:
-                    current_power_for_decision = self.current_power_kw
+                    # LIKE FOR LIKE: the monthly record is an HOURLY MEAN, so the layer is
+                    # compared against the hour this cycle projects to, not the instant. A
+                    # five-minute oven spike early in the hour projects to almost nothing;
+                    # the same spike at :55 has already committed most of the hour.
+                    current_power_for_decision = self._billing_period.projected_hour_mean(
+                        dt_util.now(), self.current_power_kw
+                    )
 
                 # Check if DHW is active (EITHER is_hot_water sensor OR temp_lux switch)
                 # When NIBE heats DHW, flow temp reads charging temp (45-60°C), not space heating

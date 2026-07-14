@@ -175,6 +175,10 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     # The real detector: Stockholm's latitude, so the zone and the band are the ones a real house
     # would be held to - and so the redaction has something genuine to redact.
     coordinator.engine.climate_detector = ClimateZoneDetector(latitude=59.3293)
+    # A real string, as the real EmergencyLayer carries - the dump reports the band AFTER the
+    # thermal-mass adjustment, so it reads this. An auto-MagicMock here is unserialisable,
+    # which is exactly what this file's serializability test exists to catch.
+    coordinator.engine.emergency_layer.heating_type = "radiator"
     coordinator.effect.get_monthly_peak_summary.return_value = {"highest": 4.2}
 
     hass = MagicMock()
