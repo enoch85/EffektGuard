@@ -38,14 +38,28 @@ from homeassistant.util import dt as dt_util
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.const import CONF_WEATHER_ENTITY
 
-NOW = dt_util.utcnow()
+# The clock is read INSIDE each test, never at module import.
+#
+# A module-level `NOW = dt_util.utcnow()` is captured when pytest collects the file, while the
+# adapter reads the clock when the test RUNS. Today those agree, so the tests pass - but freeze the
+# clock (or collect at 23:59:58 on a slow machine) and they diverge, and the whole file goes red.
+# The test would then be measuring the gap between two clocks rather than the behaviour it names.
+#
+# Found by running the entire suite with the wall clock frozen at the DST transitions and at New
+# Year: ten tests failed, and every one of them was one of mine.
+
+
+@pytest.fixture
+def now():
+    return dt_util.utcnow()
+
 
 # A cold snap arriving within the hour, behind six hours of stale mild weather.
 STALE_LEADING_HOURS = [(-6, 5.0), (-5, 4.0), (-4, 3.0), (-3, 2.0), (-2, 1.0), (-1, 0.0)]
 THE_COLD_SNAP = [(0, -1.0), (1, -8.0), (2, -14.0), (3, -18.0)]
 
 
-def _adapter(hours: list[tuple[int, float]]) -> WeatherAdapter:
+def _adapter(now, hours: list[tuple[int, float]]) -> WeatherAdapter:
     state = MagicMock()
     state.state = "cloudy"
     state.attributes = {
@@ -53,7 +67,7 @@ def _adapter(hours: list[tuple[int, float]]) -> WeatherAdapter:
         "temperature_unit": "°C",
         "forecast": [
             {
-                "datetime": (NOW + timedelta(hours=offset)).isoformat(),
+                "datetime": (now + timedelta(hours=offset)).isoformat(),
                 "temperature": temp,
                 "condition": "cloudy",
             }
@@ -66,11 +80,11 @@ def _adapter(hours: list[tuple[int, float]]) -> WeatherAdapter:
 
 
 @pytest.mark.asyncio
-async def test_the_first_forecast_hour_is_actually_in_the_future():
-    data = await _adapter(STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
+async def test_the_first_forecast_hour_is_actually_in_the_future(now):
+    data = await _adapter(now, STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
 
     first = data.forecast_hours[0]
-    hours_away = (first.datetime - NOW).total_seconds() / 3600
+    hours_away = (first.datetime - now).total_seconds() / 3600
 
     assert hours_away > -1.0, (
         f"forecast_hours[0] is {hours_away:+.0f} hours from now, and reads {first.temperature:+.1f} "
@@ -80,9 +94,9 @@ async def test_the_first_forecast_hour_is_actually_in_the_future():
 
 
 @pytest.mark.asyncio
-async def test_the_cold_snap_is_inside_the_three_hour_trigger_window():
+async def test_the_cold_snap_is_inside_the_three_hour_trigger_window(now):
     """The whole point. thermal_layer reads forecast_hours[:3] to decide whether cold is coming."""
-    data = await _adapter(STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
+    data = await _adapter(now, STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
 
     next_three = [hour.temperature for hour in data.forecast_hours[:3]]
 
@@ -94,19 +108,19 @@ async def test_the_cold_snap_is_inside_the_three_hour_trigger_window():
 
 
 @pytest.mark.asyncio
-async def test_the_past_hours_are_dropped_entirely():
-    data = await _adapter(STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
+async def test_the_past_hours_are_dropped_entirely(now):
+    data = await _adapter(now, STALE_LEADING_HOURS + THE_COLD_SNAP).get_forecast()
 
     assert len(data.forecast_hours) == len(THE_COLD_SNAP)
-    assert all((hour.datetime - NOW).total_seconds() / 3600 > -1.0 for hour in data.forecast_hours)
+    assert all((hour.datetime - now).total_seconds() / 3600 > -1.0 for hour in data.forecast_hours)
 
 
 @pytest.mark.asyncio
-async def test_the_hours_come_back_in_order():
+async def test_the_hours_come_back_in_order(now):
     """A positional read is meaningless on an unsorted list, and nothing guaranteed the order."""
     shuffled = [THE_COLD_SNAP[2], THE_COLD_SNAP[0], THE_COLD_SNAP[3], THE_COLD_SNAP[1]]
 
-    data = await _adapter(shuffled).get_forecast()
+    data = await _adapter(now, shuffled).get_forecast()
     times = [hour.datetime for hour in data.forecast_hours]
 
     assert times == sorted(times)
@@ -114,9 +128,9 @@ async def test_the_hours_come_back_in_order():
 
 
 @pytest.mark.asyncio
-async def test_a_forecast_entirely_in_the_past_is_no_forecast_at_all():
+async def test_a_forecast_entirely_in_the_past_is_no_forecast_at_all(now):
     """A stalled weather integration stays 'available' forever. It must not drive the pre-heat."""
-    data = await _adapter(STALE_LEADING_HOURS).get_forecast()
+    data = await _adapter(now, STALE_LEADING_HOURS).get_forecast()
 
     assert data is None, (
         "Every hour this weather entity published has already passed - it has stalled, and its "
@@ -127,9 +141,9 @@ async def test_a_forecast_entirely_in_the_past_is_no_forecast_at_all():
 
 
 @pytest.mark.asyncio
-async def test_a_healthy_forecast_is_untouched():
+async def test_a_healthy_forecast_is_untouched(now):
     """The regression guard."""
-    data = await _adapter(THE_COLD_SNAP).get_forecast()
+    data = await _adapter(now, THE_COLD_SNAP).get_forecast()
 
     assert [hour.temperature for hour in data.forecast_hours] == pytest.approx(
         [temp for _, temp in THE_COLD_SNAP]
@@ -137,8 +151,8 @@ async def test_a_healthy_forecast_is_untouched():
 
 
 @pytest.mark.asyncio
-async def test_the_current_hour_is_kept():
+async def test_the_current_hour_is_kept(now):
     """A period that began forty minutes ago is still the weather now, not a memory."""
-    data = await _adapter([(0, -1.0), (1, -8.0)]).get_forecast()
+    data = await _adapter(now, [(0, -1.0), (1, -8.0)]).get_forecast()
 
     assert len(data.forecast_hours) == 2

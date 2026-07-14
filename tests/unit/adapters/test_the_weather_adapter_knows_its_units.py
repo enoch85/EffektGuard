@@ -29,18 +29,22 @@ from homeassistant.util import dt as dt_util
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.const import CONF_WEATHER_ENTITY
 
-# The adapter now drops forecast hours that have already passed - a stalled weather integration
-# holds a forecast whose every hour is in the past while its entity stays perfectly "available",
-# and every layer reads this list positionally as "the next N hours". So a fixture must build its
-# forecast relative to the REAL now; a hardcoded date is not a forecast, it is a memory.
-NOW = dt_util.utcnow()
+# The clock is read INSIDE each test, never at module import: a module-level `NOW` is captured at
+# COLLECTION time while the adapter reads the clock when the test RUNS, and the two only agree
+# while nothing moves the clock. Freeze it - or collect at 23:59:58 - and they diverge.
+
+
+@pytest.fixture
+def now():
+    return dt_util.utcnow()
+
 
 # -5 C, -10 C, -15 C: a Nordic cold snap, spelled in each unit system.
 COLD_SNAP_C = [-5.0, -10.0, -15.0]
 COLD_SNAP_F = [23.0, 14.0, 5.0]
 
 
-def _weather_entity(current: float, forecast: list[float], unit: str) -> MagicMock:
+def _weather_entity(now, current: float, forecast: list[float], unit: str) -> MagicMock:
     state = MagicMock()
     state.state = "cloudy"
     state.attributes = {
@@ -48,7 +52,7 @@ def _weather_entity(current: float, forecast: list[float], unit: str) -> MagicMo
         "temperature_unit": unit,
         "forecast": [
             {
-                "datetime": (NOW + timedelta(hours=i)).isoformat(),
+                "datetime": (now + timedelta(hours=i)).isoformat(),
                 "temperature": t,
                 "condition": "cloudy",
             }
@@ -65,9 +69,9 @@ def _adapter(state: MagicMock) -> WeatherAdapter:
 
 
 @pytest.mark.asyncio
-async def test_a_fahrenheit_cold_snap_is_not_read_as_a_warm_spell():
+async def test_a_fahrenheit_cold_snap_is_not_read_as_a_warm_spell(now):
     """23 F is -5 C. Read as Celsius it is a mild spring day, and the pre-heat stands down."""
-    adapter = _adapter(_weather_entity(23.0, COLD_SNAP_F, UnitOfTemperature.FAHRENHEIT))
+    adapter = _adapter(_weather_entity(now, 23.0, COLD_SNAP_F, UnitOfTemperature.FAHRENHEIT))
 
     data = await adapter.get_forecast()
 
@@ -81,9 +85,9 @@ async def test_a_fahrenheit_cold_snap_is_not_read_as_a_warm_spell():
 
 
 @pytest.mark.asyncio
-async def test_the_whole_fahrenheit_forecast_is_converted_not_just_the_current_reading():
+async def test_the_whole_fahrenheit_forecast_is_converted_not_just_the_current_reading(now):
     """The forecast drives the cold-snap trigger. It is the half that matters most."""
-    adapter = _adapter(_weather_entity(23.0, COLD_SNAP_F, UnitOfTemperature.FAHRENHEIT))
+    adapter = _adapter(_weather_entity(now, 23.0, COLD_SNAP_F, UnitOfTemperature.FAHRENHEIT))
 
     data = await adapter.get_forecast()
 
@@ -96,9 +100,9 @@ async def test_the_whole_fahrenheit_forecast_is_converted_not_just_the_current_r
 
 
 @pytest.mark.asyncio
-async def test_celsius_is_untouched():
+async def test_celsius_is_untouched(now):
     """The regression guard: every existing (metric) install must be bit-for-bit unchanged."""
-    adapter = _adapter(_weather_entity(-5.0, COLD_SNAP_C, UnitOfTemperature.CELSIUS))
+    adapter = _adapter(_weather_entity(now, -5.0, COLD_SNAP_C, UnitOfTemperature.CELSIUS))
 
     data = await adapter.get_forecast()
 
@@ -107,9 +111,9 @@ async def test_celsius_is_untouched():
 
 
 @pytest.mark.asyncio
-async def test_an_entity_that_declares_no_unit_is_assumed_celsius():
+async def test_an_entity_that_declares_no_unit_is_assumed_celsius(now):
     """Home Assistant's own default. Do not refuse to work with a sparse weather integration."""
-    state = _weather_entity(-5.0, COLD_SNAP_C, UnitOfTemperature.CELSIUS)
+    state = _weather_entity(now, -5.0, COLD_SNAP_C, UnitOfTemperature.CELSIUS)
     del state.attributes["temperature_unit"]
 
     data = await _adapter(state).get_forecast()
