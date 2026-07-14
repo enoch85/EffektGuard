@@ -87,6 +87,40 @@ async def test_changing_an_option_hot_reloads_and_does_not_unload():
     assert hass.config_entries.async_unload.await_count == 0
 
 
+@pytest.mark.asyncio
+async def test_the_entities_are_told_when_the_entry_changes():
+    """Hot-reloading the config must re-render the entities that are VIEWS of it.
+
+    Every switch reads `entry.data` in its `is_on`, and the thermostat's `hvac_mode` now reads the
+    same `enable_optimization` key. They are views of one fact, which is the point - but a view only
+    updates when something tells it to, and hot-reloading the entry told nobody.
+
+    Measured live: setting the thermostat to OFF wrote `enable_optimization = False` into the entry
+    immediately, and the `enable_optimization` SWITCH went on reading "on" for the next FIVE MINUTES,
+    until the coordinator's aligned refresh happened to re-render it:
+
+        switch: on   14:14:19
+        switch: on   14:14:59
+        switch: off  14:15:19      <- the next coordinator refresh, not the change
+
+    The truth was never in doubt - both read the same key - but for five minutes the user was looking
+    at a thermostat that said OFF and a master switch that said ON.
+    """
+    hass = MagicMock()
+    coordinator = MagicMock()
+    coordinator.async_update_config = AsyncMock()
+
+    entry = MagicMock()
+    entry.entry_id = "entry_1"
+    entry.data = {"enable_optimization": False}
+    entry.options = {}
+    hass.data = {DOMAIN: {"entry_1": coordinator}}
+
+    await async_reload_entry(hass, entry)
+
+    coordinator.async_update_listeners.assert_called_once_with()
+
+
 def test_the_reconfigure_flow_is_the_one_that_reloads():
     """And it is a real user action: swapping the power meter or the weather entity.
 

@@ -226,6 +226,22 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.info("Options updated, applying changes (no restart)")
     await coordinator.async_update_config(merged_config)
 
+    # AND TELL THE ENTITIES, because several of them are VIEWS of this entry.
+    #
+    # Every switch reads `entry.data` in its `is_on`, and the thermostat's `hvac_mode` reads the same
+    # `enable_optimization` key. A view only updates when something asks it to, and hot-reloading told
+    # nobody: setting the thermostat to OFF wrote the key immediately, and the master switch went on
+    # displaying "on" for the next FIVE MINUTES, until the coordinator's aligned refresh happened to
+    # re-render it. Measured, on a running Home Assistant:
+    #
+    #     switch: on   14:14:19
+    #     switch: on   14:14:59
+    #     switch: off  14:15:19      <- the next refresh, not the change
+    #
+    # The truth was never in doubt - they read the same key - but the user was looking at a thermostat
+    # that said OFF and a master switch that said ON.
+    coordinator.async_update_listeners()
+
 
 async def _create_coordinator(
     hass: HomeAssistant,
