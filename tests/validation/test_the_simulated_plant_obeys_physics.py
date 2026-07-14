@@ -143,39 +143,35 @@ class TestTheCopModelIsBoundedByPhysicsAndByTheDatasheet:
             f"ever look like a loss, and it duly did."
         )
 
-    def test_the_realised_cop_cannot_beat_the_datasheet_when_running_hot(self, house):
-        """The bound that catches a COP which is merely too generous, rather than super-Carnot.
+    def test_the_datasheet_check_lives_where_the_datasheet_does(self):
+        """Two tests used to live here, and BOTH rested on a COP model that was invented.
 
-        Carnot is far too loose to catch that on its own: an exhaust-air pump making 35 C water has
-        a Carnot ceiling above 12, so DOUBLING its COP to 5.7 still sits comfortably under it, and
-        the first version of this bound - the datasheet's global maximum - waved it through too,
-        because an F750 publishes 5.0 at +7 C outdoor.
+        They compared the plant against `profile.get_cop_at_temperature(outdoor)` - an outdoor-keyed
+        curve which, for four of the five machines, described a heat source that does not exist. The
+        F750's said COP 5.0 at +7 C outdoor. NIBE's datasheet has no such figure, and the outdoor
+        air never touches that machine's evaporator: its rating points are A20(12), twenty-degree
+        extract air from inside the house.
 
-        The bound has to be evaluated where the pump is actually working. Above the W35 rating
-        point the Carnot scaling factor is below one by construction, so the realised COP simply
-        cannot exceed the manufacturer's published figure. That is checkable, and it is what the
-        harness asserts over a whole run.
+        They are replaced by tests/validation/test_the_pump_models_match_their_datasheets.py, which
+        checks something strictly stronger, against real data: the model reproduces every published
+        EN 14511 rating point to within 2 %, and PREDICTS the F2040's W45 rows - which the fit never
+        saw - to within 8 %.
+
+        What stays in this file is the part that is a property of the PLANT rather than of the pump:
+        the second law, and the fact that hotter water costs efficiency.
         """
-        for outdoor in (-20.0, -10.0, 0.0, 5.0):
-            rated = float(house.profile.get_cop_at_temperature(outdoor))
+        source = pathlib.Path(
+            "tests/validation/test_the_pump_models_match_their_datasheets.py"
+        ).read_text(encoding="utf-8")
 
-            for flow in (40.0, 50.0, 60.0):
-                cop = house.cop_at(outdoor, flow)
-
-                assert cop <= rated, (
-                    f"{house.name} at {outdoor:+.0f} C makes {flow:.0f} C water at COP {cop:.2f}, "
-                    f"beating its own datasheet figure of {rated:.2f} - which is measured at the "
-                    f"W35 rating point, i.e. on water {flow - 35:.0f} C COOLER than this. A pump "
-                    f"does not get more efficient by working harder."
-                )
-
-    def test_below_the_rating_point_it_may_legitimately_do_better(self, house):
-        """The other side of it, so the bound above is understood as physics and not as a fudge.
-
-        The two ground-source houses run water below W35 in mild weather and post a seasonal COP
-        just over their datasheet figure. That is real, and the harness's tolerance exists for it.
-        """
-        assert house.cop_at(0.0, 25.0) > float(house.profile.get_cop_at_temperature(0.0))
+        assert "def test_it_reproduces_every_point_it_was_fitted_on" in source, (
+            "the datasheet reproduction test is gone, and this file no longer checks the COP model "
+            "against anything the manufacturer published"
+        )
+        assert "def test_it_predicts_the_points_it_never_saw" in source, (
+            "the held-out prediction test is gone. Reproducing a fit is not evidence; predicting "
+            "data the fit never saw is."
+        )
 
 
 class TestThePlantDoesNotDestroyEnergyItChargedFor:

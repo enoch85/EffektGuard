@@ -10,57 +10,67 @@ That is a positive feedback loop, and the owner named it before this simulation 
     "if you keep raising the DM during stress, it will never be able to get itself out of that
      spinning loop downwards, it will worsen."
 
-REPRODUCED - AND THE FIRST TIME I REPRODUCED IT, MY OWN PLANT WAS INFLATING IT ABOUT THREEFOLD.
+REPRODUCED - AND EVERY NUMBER I FIRST PUBLISHED FOR IT WAS WRONG, TWICE OVER.
 
-I originally published 28.4 C, 266 kWh of immersion heat, degree minutes pinned at the -3000
-integrator floor and 1134 `dm_runaway` violations, and cited a compressor-side energy audit reading
-0.0 % error as proof that the plant was sound. Every one of those numbers was wrong, and the audit
-was an algebraic identity that could not have detected otherwise (x - y + y = x; see
-test_the_simulated_plant_obeys_physics, where the honest checks now live).
+The first time, my own PLANT was inflating it: it integrated degree minutes against a setpoint the
+pump was forbidden to reach, and its immersion heater had no thermostat. I corrected that and
+reported 27.6 C and 73.8 kWh.
 
-The simulator had two defects of its own, both mine:
+The second time, the PUMP MODELS themselves turned out to be invented. The owner said so plainly -
+"your sim models aren't even based on real data, yet you claim it" - and he was right. The profiles
+carried an 8.0 kW compressor for a machine NIBE publishes at 4.994 kW, a COP curve keyed on outdoor
+temperature for machines whose heat source is 20 C house air or 0 C brine, and a capacity derating
+that ran BACKWARDS to the EN 14511 rating points it cited. See
+tests/validation/test_the_pump_models_match_their_datasheets.py.
 
-  * it clamped BT25 to the pump's maximum flow temperature but NOT S1, so degree minutes -
-    the integral of (BT25 - S1) - were accumulating against a setpoint the pump was physically
-    forbidden to reach. DM fell at up to 4.1 per minute no matter what any controller did.
-  * its immersion heater had no thermostat, and poured 3 kW into a water node already at its
-    ceiling. The clamp then deleted the heat: 183 kWh metered, paid for, and never delivered.
+CORRECTING THE MODELS DID NOT SHRINK THIS DEFECT. IT MADE IT BIGGER, AND IT FOUND A SECOND MACHINE.
 
-With a plant that obeys its own physics, `dm_runaway` disappears entirely - it was an artefact -
-and the trap is smaller than I said. IT IS ALSO STILL REAL, AND STILL FAILS THE RUN:
+The F750 could never saturate in the old simulator, because I had given it sixty per cent more
+compressor than it has. On its real 4.994 kW it saturates in a Swedish cold snap and falls into
+exactly the same trap - and THIS case rests on no extrapolation at all: 4.994 kW is a published
+maximum-compressor-frequency figure, and an exhaust-air pump's 20 C source does not move with the
+weather.
 
-                            optimiser   do-nothing
-    indoor_max                 27.6 C       22.5 C     <- the house is still COOKED
-    degree minutes (min)        -1673        -1516
-    immersion heat           73.8 kWh       16 kWh     <- four and a half times more
-    minutes above the band       3130            0
-    cost                     2320 SEK     2242 SEK
+                            optimiser   do-nothing        optimiser   do-nothing
+                              F750        F750              F2040       F2040
+    indoor_max                27.0 C      22.6 C            27.2 C      22.5 C
+    immersion heat           38.1 kWh    1.8 kWh          223.1 kWh    51.8 kWh
+    minutes above band          1090          0             12325           0
+    cost                     1730 SEK   1461 SEK          2952 SEK    2663 SEK
 
-And the mechanism is unchanged, which is the point: of the 109 samples where degree minutes are
-past the auxiliary limit, the commanded offset is +10 in ALL 109. It latches at maximum and never
-lets go. The house climbs to 27.6 C on immersion heat because S1 is pinned at maximum and BT25 can
-never catch it.
+A do-nothing controller is better on BOTH machines, on cost AND on comfort.
 
-A DO-NOTHING CONTROLLER IS STILL BETTER THAN THIS. It never cooks the house and burns a fifth of
-the resistive heat.
+And the mechanism is identical on both, which is what makes it a mechanism rather than a mishap:
 
-The lesson I am keeping: a defect measured on an instrument you have not verified is a number, not
-a finding. The mechanism here was right; my evidence for it was not.
+    F750:   of the  38 samples past the auxiliary limit, the commanded offset is +10 in ALL  38
+    F2040:  of the 459 samples past the auxiliary limit, the commanded offset is +10 in ALL 459
 
-AND THE RECOVERY LADDER IS OTHERWISE UNVALIDATED BY SIMULATION. The harness now reports which
-layers actually voted in each run, and the picture is stark:
+It latches at maximum and never lets go. The house climbs to 27 C on immersion heat while degree
+minutes sit near the floor, because S1 is pinned at maximum and BT25 can never catch it.
 
-  * four of the five houses pass the cold snap and NEVER engage the emergency ladder at all - only
-    the proactive Z-tiers fire. The thermal-debt tiers, T1/T2/T3 and the anti-windup never run.
-  * give the F2040 a correctly SIZED house (160 W/K instead of 220) and it passes the same cold
-    snap with the ladder still silent.
-  * the ONLY scenario in which the ladder fires is the one above - the saturated pump - and that
-    scenario FAILS. It still fails on the corrected plant; only its size changed.
+ONE HONEST CAVEAT, on the F2040 only. NIBE tabulates its maximum output down to -7 C and no
+further - below that the manual gives a graph and no numbers - so the model HOLDS capacity at the
+-7 C figure. That understates the machine, which means the F2040's saturation is an UPPER BOUND on
+the trap and not a measurement of it. The F750 case carries no such caveat, and it is the one to
+rely on.
 
-So there is no run anywhere in which the recovery ladder engages and RECOVERS. The simulator cannot
-currently tell anyone whether it works; it can only show that when it does fire, it makes things
-worse. Nobody should claim a green simulation validates the degree-minute recovery tiers, and I
-nearly did.
+AND THE RECOVERY LADDER IS STILL UNVALIDATED BY SIMULATION - THE SAME CONCLUSION, ON BETTER DATA.
+
+I used to write here that "four of the five houses pass the cold snap and never engage the ladder
+at all". That was true of the invented models. On the real ones it is THREE of five: the two
+ground-source houses and the small exhaust-air flat sail through with the ladder silent, and both
+saturating machines engage it and FAIL.
+
+The point survives intact, and it is the uncomfortable one:
+
+  * the three houses that pass never touch the emergency ladder. Only the proactive Z-tiers fire.
+    The thermal-debt tiers T1/T2/T3 and the anti-windup never run at all.
+  * the ONLY runs in which the ladder engages are the two above - and both of them FAIL.
+
+So there is still no run anywhere in which the recovery ladder engages and RECOVERS. The simulator
+cannot tell anyone whether it works; it can only show that when it fires, it makes things worse.
+Nobody should claim a green simulation validates the degree-minute recovery tiers, and I nearly
+did - twice, on models that were not real.
 
 WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup that the owner
 wrote for exactly this failure mode - and that bypass is documented twice, in his own code, as
@@ -96,10 +106,11 @@ def test_the_emergency_tier_asks_for_maximum_heat_at_the_aux_limit():
     reason=(
         "F-124, BLOCKED-ON-OWNER. A saturated compressor cannot raise BT25, so raising S1 makes "
         "DM = integral(BT25 - S1) fall FASTER. The emergency layer answers by raising it again and "
-        "latches at +10: 109 of 109 samples past the aux limit, the house cooked to 27.6 C on "
-        "73.8 kWh of immersion heat. A do-nothing controller never cooks it at all and burns a "
-        "fifth of the resistive heat. Fixing it means deciding what a pump should do when it "
-        "physically cannot meet its own curve - a heat-pump decision, not a code-cleanup one."
+        "latches at +10 - in 38 of 38 samples past the aux limit on a real F750, and 459 of 459 on "
+        "an F2040. Both houses are cooked to 27 C on immersion heat, and a do-nothing controller "
+        "beats the optimiser on cost AND comfort on both. Fixing it means deciding what a pump "
+        "should do when it physically cannot meet its own curve - a heat-pump decision, not a "
+        "code-cleanup one."
     ),
 )
 def test_the_emergency_layer_does_not_keep_raising_a_pump_that_has_nothing_left():

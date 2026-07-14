@@ -94,80 +94,60 @@ class TestNibeF750Profile:
         assert f750.supports_modulation is True
 
     def test_power_characteristics(self, f750):
-        """Test F750 power characteristics."""
-        assert f750.rated_power_kw == (2.0, 8.0)
-        assert f750.typical_electrical_range_kw == (1.2, 6.5)
+        """The F750's published output. It used to be asserted as (2.0, 8.0) kW.
+
+        NIBE's datasheet, "Output data according to EN 14 511", part no. 066 063, publishes a
+        maximum specified heating output of 4.994 kW - at A20(12)W45, 252 m3/h, MAX compressor
+        frequency. There is no 8 kW anywhere in it. This machine is an exhaust-air pump: its
+        evaporator is fed by the house's own ventilation air, and what it can make is bounded by
+        the airflow, not by what the model is called.
+        """
+        assert f750.rated_power_kw == (1.144, 4.994)
+        assert f750.max_heat_output_kw == 4.994
         assert f750.max_flow_temp == 60.0
-        assert f750.min_flow_temp == 20.0
 
-    def test_cop_at_rated_conditions(self, f750):
-        """Test COP at rated conditions (7°C outdoor)."""
-        cop = f750.get_cop_at_temperature(7.0)
-        assert cop == 5.0  # Rated COP
+    def test_cop_matches_the_datasheet(self, f750):
+        """It used to assert COP 5.0 "at rated conditions (7 C outdoor)". Both halves were wrong.
 
-    def test_cop_at_swedish_temperatures(self, f750):
-        """Test COP across Swedish temperature range."""
-        test_cases = [
-            (7, 5.0),  # Mild
-            (0, 4.0),  # Malmö/Gothenburg average
-            (-5, 3.5),  # Stockholm common cold
-            (-10, 3.0),  # Cold winter
-            (-15, 2.7),  # Design temperature
-            (-20, 2.3),  # Very cold
-            (-25, 2.0),  # Extreme (Kiruna)
-            (-30, 1.8),  # Survival mode
-        ]
+        The number 5.0 appears nowhere in the F750's datasheet, and "7 C outdoor" is not a condition
+        this machine is rated at. Its three published points are all A20(12) - twenty-degree extract
+        air - and the outdoor air never touches its evaporator.
+        """
+        published = {p.condition: (p.heat_output_kw, p.cop) for p in f750.datasheet_points}
 
-        for outdoor_temp, expected_cop in test_cases:
-            cop = f750.get_cop_at_temperature(outdoor_temp)
-            assert (
-                abs(cop - expected_cop) < 0.01
-            ), f"COP mismatch at {outdoor_temp}°C: expected {expected_cop}, got {cop}"
+        assert published == {
+            "A20(12)W35, exhaust air flow 108 m3/h (30 l/s) min compressor frequency": (
+                1.144,
+                4.20,
+            ),
+            "A20(12)W35, exhaust air flow 252 m3/h (70 l/s) min compressor frequency": (
+                1.498,
+                4.72,
+            ),
+            "A20(12)W45, exhaust air flow 252 m3/h (70 l/s) max compressor frequency": (
+                4.994,
+                2.43,
+            ),
+        }
+        assert f750.typical_cop_range == (2.43, 4.72)
 
-    def test_cop_interpolation(self, f750):
-        """Test COP interpolation between data points."""
-        # Between 0°C (COP 4.0) and -5°C (COP 3.5)
-        cop_minus_2_5 = f750.get_cop_at_temperature(-2.5)
-        expected = 3.75  # Midpoint
-        assert abs(cop_minus_2_5 - expected) < 0.01
+    def test_the_display_curve_is_labelled_as_a_proxy_not_a_measurement(self, f750):
+        """A table of eight (outdoor, COP) pairs used to be asserted here as measured fact:
 
-        # Between -10°C (COP 3.0) and -15°C (COP 2.7)
-        cop_minus_12_5 = f750.get_cop_at_temperature(-12.5)
-        expected = 2.85  # Midpoint
-        assert abs(cop_minus_12_5 - expected) < 0.01
+            (7, 5.0), (0, 4.0), (-5, 3.5), (-10, 3.0), (-15, 2.7), (-20, 2.3), (-25, 2.0), (-30, 1.8)
 
-    def test_cop_extrapolation_beyond_range(self, f750):
-        """Test COP at temperatures beyond defined range."""
-        # Above max temp
-        cop_high = f750.get_cop_at_temperature(15.0)
-        assert cop_high == 5.0  # Should return max COP
+        Not one of those numbers is in the datasheet, and the variable they are keyed on is not one
+        this machine responds to. The curve survives ONLY as a dashboard proxy - in a colder month
+        the house asks for hotter water and a higher compressor frequency, and both cost efficiency
+        - and it is now derived from the machine's own published endpoints instead of invented.
 
-        # Below min temp
-        cop_low = f750.get_cop_at_temperature(-35.0)
-        assert cop_low == 1.8  # Should return min COP
+        Nothing computes from it. The simulator's physics comes from `datasheet_points`.
+        """
+        curve = f750.cop_curve
 
-    def test_electrical_consumption_estimation(self, f750):
-        """Test electrical consumption estimation."""
-        # At 0°C with 6kW heat demand
-        # COP = 4.0, so electrical = 6 / 4.0 = 1.5kW
-        electrical = f750.estimate_electrical_consumption(heat_demand_kw=6.0, outdoor_temp=0.0)
-        assert abs(electrical - 1.5) < 0.1
-
-        # At -15°C with 10kW heat demand
-        # COP = 2.7, so electrical = 10 / 2.7 = 3.7kW
-        electrical = f750.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
-        assert abs(electrical - 3.7) < 0.2
-
-    def test_electrical_consumption_capped_at_max(self, f750):
-        """Test electrical consumption is capped at max power."""
-        # Very high heat demand should cap at max electrical
-        electrical = f750.estimate_electrical_consumption(heat_demand_kw=30.0, outdoor_temp=-20.0)
-        assert electrical <= f750.typical_electrical_range_kw[1]
-
-    # NOTE: tests for `calculate_optimal_flow_temp` were removed with the method itself. A heat
-    # pump profile cannot know what emitters the house has, so it cannot know the flow temperature
-    # the house needs; that lives in optimization/weather_layer.py via the EN 442 emitter law. See
-    # tests/unit/climate/test_weather_compensation.py, and audit F-119 / F-121.
+        assert max(curve.values()) == pytest.approx(4.72), "the best published COP, min freq at W35"
+        assert min(curve.values()) == pytest.approx(2.43), "the worst, max freq at W45"
+        assert 5.0 not in curve.values(), "COP 5.0 is not a figure NIBE publishes for this machine"
 
     def test_power_validation_normal(self, f750):
         """Test power validation for normal consumption."""
@@ -211,22 +191,34 @@ class TestNibeF730Profile:
         """NIBE F730 profile fixture."""
         return NibeF730Profile()
 
-    def test_smaller_than_f750(self, f730):
-        """Test F730 is smaller than F750."""
+    def test_the_f730_is_not_a_smaller_f750(self, f730):
+        """This test used to assert `f730.rated_power_kw[1] < f750.rated_power_kw[1]`, as fact.
+
+        The datasheets say the opposite. At A20(12)W45 and maximum compressor frequency, NIBE
+        publishes 5.35 kW for the F730 and 4.994 kW for the F750. The F730 is the STRONGER machine
+        at full tilt. The ordering was invented, and then enforced.
+        """
         f750 = NibeF750Profile()
 
-        assert f730.rated_power_kw[1] < f750.rated_power_kw[1]
-        assert f730.typical_electrical_range_kw[1] < f750.typical_electrical_range_kw[1]
+        assert f730.max_heat_output_kw == 5.35
+        assert f750.max_heat_output_kw == 4.994
+        assert f730.max_heat_output_kw > f750.max_heat_output_kw
 
-    def test_cop_same_as_f750(self, f730):
-        """Test F730 has same COP curve as F750 (same technology)."""
+    def test_the_f730_does_not_share_the_f750s_cop_curve(self, f730):
+        """THE TELL, AND IT WAS ENSHRINED AS A REQUIREMENT.
+
+        The test that stood here was called `test_cop_same_as_f750`, and its docstring read "Test
+        F730 has same COP curve as F750 (same technology)". Two different machines, with different
+        published outputs, carrying byte-identical COP curves - and a test demanding they stay that
+        way. That is what an invented number looks like when nobody checks it against a datasheet.
+
+        NIBE publishes COP 5.32 for the F730 at A20(12)W35 min frequency, and 4.72 for the F750.
+        """
         f750 = NibeF750Profile()
 
-        # Should have same COP at all temperatures
-        for temp in [7, 0, -5, -10, -15, -20, -25, -30]:
-            cop_730 = f730.get_cop_at_temperature(temp)
-            cop_750 = f750.get_cop_at_temperature(temp)
-            assert cop_730 == cop_750
+        assert f730.typical_cop_range == (2.43, 5.32)
+        assert f750.typical_cop_range == (2.43, 4.72)
+        assert f730.cop_curve != f750.cop_curve
 
 
 class TestNibeF2040Profile:
@@ -237,31 +229,31 @@ class TestNibeF2040Profile:
         """NIBE F2040 profile fixture."""
         return NibeF2040Profile()
 
-    def test_larger_than_f750(self, f2040):
-        """Test F2040 is larger than F750."""
-        f750 = NibeF750Profile()
+    def test_the_f2040_is_an_air_source_machine_and_the_only_one(self, f2040):
+        """It is the ONLY profile here whose heat source really is the outdoor air.
 
-        assert f2040.rated_power_kw[1] > f750.rated_power_kw[1]
-        assert f2040.typical_electrical_range_kw[1] > f750.typical_electrical_range_kw[1]
+        Which makes it the only one for which an outdoor-keyed COP curve was ever meaningful - and
+        its curve is now the datasheet's own W35 rows, not a template.
+        """
+        assert f2040.cop_curve == {7: 4.65, 2: 3.76, -7: 2.68}
+        assert f2040.max_flow_temp == 58.0, "the datasheet says 58, the profile used to say 63"
+        assert not f2040.supports_aux_heating, (
+            "The F2040 is an outdoor monobloc and has NO immersion heater - its technical "
+            "specifications table has no such row. The profile claimed 'True # Larger immersion "
+            "heaters'. The electric addition lives in the paired indoor module."
+        )
 
-    def test_slightly_lower_cop(self, f2040):
-        """Test F2040 has slightly lower COP than F750 (larger unit)."""
-        f750 = NibeF750Profile()
+    def test_its_capacity_rises_as_the_weather_cools(self, f2040):
+        """It does not derate. It ramps up. The simulator had this backwards and cited EN 14511.
 
-        # At -15°C: F750 = 2.7, F2040 = 2.5
-        cop_f2040 = f2040.get_cop_at_temperature(-15.0)
-        cop_f750 = f750.get_cop_at_temperature(-15.0)
+        NIBE publishes 3.86 kW at A7/W35 and 6.60 kW at A-7/W35. An inverter is throttled back at
+        its mild rating point and opens up as the load arrives. What collapses in the cold is the
+        COP - 4.65 to 2.68 - and not the capacity.
+        """
+        by_source = {p.source_temp_c: p for p in f2040.datasheet_points if p.flow_temp_c == 35.0}
 
-        assert cop_f2040 < cop_f750
-        assert abs(cop_f2040 - 2.5) < 0.1
-
-    def test_higher_power_consumption(self, f2040):
-        """Test F2040 has higher power consumption for large houses."""
-        # 12kW heat demand at -15°C
-        electrical = f2040.estimate_electrical_consumption(heat_demand_kw=12.0, outdoor_temp=-15.0)
-
-        # COP ~2.5, so electrical ~4.8kW
-        assert 4.0 <= electrical <= 5.5
+        assert by_source[-7.0].heat_output_kw > by_source[7.0].heat_output_kw
+        assert by_source[-7.0].cop < by_source[7.0].cop
 
 
 class TestNibeS1155Profile:
@@ -277,38 +269,6 @@ class TestNibeS1155Profile:
         assert s1155.model_type == "S-series GSHP"
         assert s1155.rated_power_kw[1] == 12.0
 
-    def test_much_better_cop_than_ashp(self, s1155):
-        """Test S1155 has much better COP than equivalent ASHP."""
-        f2040 = NibeF2040Profile()  # Similar size ASHP
-
-        # At -15°C: S1155 GSHP = 4.3, F2040 ASHP = 2.5
-        cop_gshp = s1155.get_cop_at_temperature(-15.0)
-        cop_ashp = f2040.get_cop_at_temperature(-15.0)
-
-        assert cop_gshp > cop_ashp
-        assert cop_gshp > 4.0  # GSHP stays high even in cold
-        assert abs(cop_gshp - 4.3) < 0.1
-
-    def test_lower_electrical_consumption(self, s1155):
-        """Test S1155 uses much less power than equivalent ASHP."""
-        f2040 = NibeF2040Profile()
-
-        # Same heat demand (10kW) at -15°C
-        elec_gshp = s1155.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
-        elec_ashp = f2040.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
-
-        # GSHP should use much less power
-        assert elec_gshp < elec_ashp
-        # S1155: 10 / 4.3 = ~2.3kW
-        # F2040: 10 / 2.5 = ~4.0kW
-        assert abs(elec_gshp - 2.3) < 0.3
-
-    def test_stable_cop_in_extreme_cold(self, s1155):
-        """Test S1155 COP stays high even in extreme cold."""
-        # At -30°C: GSHP = 3.5 (ground temp stable)
-        cop = s1155.get_cop_at_temperature(-30.0)
-        assert cop >= 3.5  # Much better than ASHP ~1.8
-
     def test_can_run_lower_flow_temps(self, s1155):
         """Test S1155 can run lower flow temperatures."""
         f750 = NibeF750Profile()
@@ -319,40 +279,6 @@ class TestNibeS1155Profile:
 
 class TestModelComparisons:
     """Test comparisons between different models."""
-
-    def test_power_consumption_hierarchy(self):
-        """Test power consumption increases with model size."""
-        f730 = NibeF730Profile()
-        f750 = NibeF750Profile()
-        f2040 = NibeF2040Profile()
-
-        # At -10°C with 8kW heat demand
-        # F730: May exceed capacity
-        # F750: ~2.7kW
-        # F2040: ~2.7kW but has more headroom
-
-        elec_730 = f730.estimate_electrical_consumption(8.0, -10.0)
-        elec_750 = f750.estimate_electrical_consumption(8.0, -10.0)
-        elec_2040 = f2040.estimate_electrical_consumption(8.0, -10.0)
-
-        # F730 may be capped at max
-        # F750 and F2040 should have similar electrical (same COP ~3.0)
-        assert abs(elec_750 - 2.7) < 0.4
-
-    def test_gshp_always_more_efficient_than_ashp(self):
-        """Test GSHP models are always more efficient than ASHP."""
-        f750 = NibeF750Profile()  # 8kW ASHP
-        s1155 = NibeS1155Profile()  # 12kW GSHP
-
-        test_temps = [7, 0, -5, -10, -15, -20, -25, -30]
-
-        for temp in test_temps:
-            cop_ashp = f750.get_cop_at_temperature(temp)
-            cop_gshp = s1155.get_cop_at_temperature(temp)
-
-            assert cop_gshp > cop_ashp, (
-                f"GSHP should be more efficient at {temp}°C: " f"GSHP {cop_gshp} vs ASHP {cop_ashp}"
-            )
 
     def test_all_models_have_required_attributes(self):
         """Test all models have required profile attributes."""
@@ -428,54 +354,3 @@ class TestValidationResults:
 
 class TestRealWorldScenarios:
     """Test real-world usage scenarios."""
-
-    def test_typical_swedish_house_f750(self):
-        """Test F750 in typical Swedish house (150m² standard insulation)."""
-        f750 = NibeF750Profile()
-
-        # Stockholm winter: -10°C, 7kW heat demand
-        electrical = f750.estimate_electrical_consumption(heat_demand_kw=7.0, outdoor_temp=-10.0)
-
-        # COP ~3.0, so 7 / 3.0 = ~2.3kW
-        assert 2.0 <= electrical <= 2.7
-        assert electrical < f750.typical_electrical_range_kw[1]  # Within normal range
-
-    def test_undersized_f730_for_large_house(self):
-        """Test F730 undersized for 150m² house."""
-        f730 = NibeF730Profile()
-
-        # 10kW heat demand (too much for F730)
-        electrical = f730.estimate_electrical_consumption(heat_demand_kw=10.0, outdoor_temp=-15.0)
-
-        # Should be at or below max electrical (may be capped)
-        assert electrical <= f730.typical_electrical_range_kw[1]
-        # For 10kW demand at -15°C (COP 2.7): 10/2.7 = 3.7kW
-        assert 3.5 <= electrical <= 4.5
-
-    def test_f2040_in_extreme_cold(self):
-        """Test F2040 in extreme cold (Kiruna -25°C)."""
-        f2040 = NibeF2040Profile()
-
-        # Large house, 15kW heat demand
-        electrical = f2040.estimate_electrical_consumption(heat_demand_kw=15.0, outdoor_temp=-25.0)
-
-        # COP ~1.9, so 15 / 1.9 = ~7.9kW
-        # Should be capped or close to max
-        assert electrical >= 7.0
-
-    def test_gshp_efficiency_advantage(self):
-        """Test GSHP efficiency advantage in real scenario."""
-        f2040 = NibeF2040Profile()  # ASHP
-        s1155 = NibeS1155Profile()  # GSHP
-
-        # Same conditions: -15°C, 10kW heat demand
-        elec_ashp = f2040.estimate_electrical_consumption(10.0, -15.0)
-        elec_gshp = s1155.estimate_electrical_consumption(10.0, -15.0)
-
-        # GSHP should use ~40-50% less power
-        savings_ratio = (elec_ashp - elec_gshp) / elec_ashp
-        assert savings_ratio > 0.35  # At least 35% savings
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
