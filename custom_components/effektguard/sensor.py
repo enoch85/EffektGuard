@@ -1379,21 +1379,11 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
 
         elif key == "airflow_thermal_gain":
-            # Thermal gain statistics and breakdown
+            # The decision-history statistics that used to accompany this attribute were
+            # deleted with AirflowOptimizer's bookkeeping; only the current mode remains.
             if "airflow_decision" in self.coordinator.data:
                 decision = self.coordinator.data["airflow_decision"]
                 if decision:
                     attrs["mode"] = decision.mode.value
-
-            # Enhancement statistics (gain-related)
-            if (
-                hasattr(self.coordinator, "airflow_optimizer")
-                and self.coordinator.airflow_optimizer
-            ):
-                stats = self.coordinator.airflow_optimizer.get_enhancement_stats()
-                attrs["total_decisions"] = stats.get("total_decisions", 0)
-                attrs["enhance_recommendations"] = stats.get("enhance_recommendations", 0)
-                attrs["enhance_percentage"] = round(stats.get("enhance_percentage", 0.0), 1)
-                attrs["average_gain_kw"] = round(stats.get("average_gain_kw", 0.0), 3)
 
         return attrs
