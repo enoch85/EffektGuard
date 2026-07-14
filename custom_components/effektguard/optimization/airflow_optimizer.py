@@ -35,6 +35,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+
+from homeassistant.util import dt as dt_util
 from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -105,9 +107,15 @@ class FlowDecision:
     timestamp: datetime | None = None
 
     def __post_init__(self):
-        """Set timestamp if not provided."""
+        """Set timestamp if not provided.
+
+        `dt_util.utcnow()`, never `datetime.now()`. Home Assistant works in aware UTC; a naive
+        datetime cannot be compared with an aware one at all (TypeError), and if it could, the box
+        runs UTC while `datetime.now()` returns local time - so the arithmetic would be wrong by the
+        UTC offset, which in a Swedish summer is two hours.
+        """
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            self.timestamp = dt_util.utcnow()
 
     @property
     def should_enhance(self) -> bool:
@@ -428,7 +436,6 @@ class AirflowOptimizer:
         self.flow_standard = flow_standard
         self.flow_enhanced = flow_enhanced
         self.current_decision: FlowDecision | None = None
-        self._decision_history: list[FlowDecision] = []
 
     def evaluate(
         self,
@@ -462,11 +469,6 @@ class AirflowOptimizer:
 
         # Update state
         self.current_decision = decision
-
-        # Maintain history (keep last 24 hours worth at 5-min intervals = 288 entries)
-        self._decision_history.append(decision)
-        if len(self._decision_history) > 288:
-            self._decision_history = self._decision_history[-288:]
 
         return decision
 
@@ -509,32 +511,3 @@ class AirflowOptimizer:
             compressor_pct=compressor_pct,
             trend_indoor=trend_indoor,
         )
-
-    def get_enhancement_stats(self) -> dict:
-        """Get statistics about enhancement recommendations.
-
-        Returns:
-            Dictionary with enhancement statistics
-        """
-        if not self._decision_history:
-            return {
-                "total_decisions": 0,
-                "enhance_recommendations": 0,
-                "enhance_percentage": 0.0,
-                "average_gain_kw": 0.0,
-            }
-
-        enhance_decisions = [d for d in self._decision_history if d.should_enhance]
-        enhance_count = len(enhance_decisions)
-        total = len(self._decision_history)
-
-        return {
-            "total_decisions": total,
-            "enhance_recommendations": enhance_count,
-            "enhance_percentage": (enhance_count / total) * 100 if total > 0 else 0.0,
-            "average_gain_kw": (
-                sum(d.expected_gain_kw for d in enhance_decisions) / enhance_count
-                if enhance_count > 0
-                else 0.0
-            ),
-        }

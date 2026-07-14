@@ -328,7 +328,6 @@ class TestAirflowOptimizer:
 
         assert optimizer.current_decision is not None
         assert optimizer.current_decision == decision
-        assert len(optimizer._decision_history) == 1
 
     def test_should_enhance_property(self):
         """Test the should_enhance property of FlowDecision."""
@@ -347,23 +346,6 @@ class TestAirflowOptimizer:
             reason="Test",
         )
         assert decision_standard.should_enhance is False
-
-    def test_enhancement_stats(self):
-        """Test enhancement statistics tracking."""
-        optimizer = AirflowOptimizer()
-
-        # Make several evaluations
-        for _ in range(5):
-            optimizer.evaluate(12.0, 20.5, 21.0, 80.0, -0.1)  # Enhances: above break-even
-        for _ in range(5):
-            optimizer.evaluate(-20.0, 20.0, 21.0, 80.0, 0.0)  # Does not: too cold
-
-        stats = optimizer.get_enhancement_stats()
-
-        assert stats["total_decisions"] == 10
-        assert stats["enhance_recommendations"] == 5
-        assert stats["enhance_percentage"] == 50.0
-        assert stats["average_gain_kw"] > 0
 
 
 class TestDurationCalculation:

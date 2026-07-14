@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional, Protocol
 
+from homeassistant.util import dt as dt_util
+
 from ..const import (
     THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     THERMAL_MASS_TIMBER_UFH_THRESHOLD,
@@ -689,7 +691,12 @@ class EmergencyLayer:
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
         current_offset = getattr(nibe_state, "current_offset", 0.0)
-        timestamp = getattr(nibe_state, "timestamp", datetime.now())
+        # dt_util.utcnow(), never datetime.now(). Every NibeState the adapter builds carries an
+        # AWARE timestamp, so this fallback does not fire today - but it feeds the anti-windup
+        # causation window, and mixing a naive datetime into that history raises TypeError inside
+        # the emergency layer, which is the one path that must never fail. A naive fallback in a
+        # safety path is a trap left for the first duck-typed caller.
+        timestamp = getattr(nibe_state, "timestamp", None) or dt_util.utcnow()
 
         # Track offset changes for causation detection (Jan 2026)
         # This records when offset was raised to distinguish self-induced spirals
