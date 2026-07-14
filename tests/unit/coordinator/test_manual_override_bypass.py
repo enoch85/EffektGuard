@@ -28,6 +28,9 @@ def _make_minimal_hass() -> MagicMock:
     hass.config = MagicMock()
     hass.config.latitude = 59.3
     hass.config.config_dir = "/tmp/test"
+    # A real Store computes its path via hass.config.path(); an unstubbed MagicMock there
+    # makes os.makedirs create a literal ./MagicMock/... directory in the repo root.
+    hass.config.path = MagicMock(side_effect=lambda *parts: "/".join(("/tmp/test", *parts)))
     hass.loop = MagicMock()
     hass.loop.call_soon_threadsafe = MagicMock()
     hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
@@ -117,7 +120,7 @@ async def test_manual_reduction_applies_immediately_after_raise():
     await coordinator._drive_the_pump()
 
     assert coordinator.current_offset == 0.0
-    coordinator.nibe.set_curve_offset.assert_awaited_with(0.0)
+    coordinator.nibe.set_curve_offset.assert_awaited_with(0.0, force_write=False)
     # The tracker adopted the manual value as the new baseline
     assert coordinator._offset_volatility_tracker.last_offset == 0.0
 

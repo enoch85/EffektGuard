@@ -68,6 +68,9 @@ def _coordinator() -> EffektGuardCoordinator:
 
     nibe = MagicMock()
     nibe.set_curve_offset = AsyncMock(return_value=2)
+    nibe.set_enhanced_ventilation = AsyncMock(return_value=True)
+    nibe.is_enhanced_ventilation_active = AsyncMock(return_value=False)
+    nibe.has_ventilation_control = False
 
     entry = MagicMock()
     entry.data = {}
@@ -91,7 +94,7 @@ async def test_a_refresh_in_flight_when_the_entry_unloads_does_not_write():
     reached_the_awaits = asyncio.Event()
     let_it_finish = asyncio.Event()
 
-    async def slow_read_and_decide(apply: bool = False):
+    async def slow_read_and_decide(apply: bool = False, explicit_command: bool = False):
         # Stands in for the real one, which awaits the weather service call, the price adapter and
         # the learning modules. Seconds of awaits - and the unload lands in the middle of them.
         #
@@ -133,7 +136,7 @@ async def test_a_live_coordinator_still_writes():
     """The control. The guard must refuse dead coordinators, not working ones."""
     coordinator = _coordinator()
 
-    async def read_and_decide(apply: bool = False):
+    async def read_and_decide(apply: bool = False, explicit_command: bool = False):
         if apply:
             await coordinator._write_curve_offset(2.0)
         return {}

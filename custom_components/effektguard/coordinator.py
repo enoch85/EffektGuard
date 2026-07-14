@@ -2438,9 +2438,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             return None
 
-        if force_write:
-            return await self.nibe.set_curve_offset(offset, force_write=True)
-        return await self.nibe.set_curve_offset(offset)
+        return await self.nibe.set_curve_offset(offset, force_write=force_write)
 
     async def _write_enhanced_ventilation(
         self, enabled: bool, *, force_write: bool = False
@@ -2459,9 +2457,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             return False
 
-        if force_write:
-            return await self.nibe.set_enhanced_ventilation(enabled, force_write=True)
-        return await self.nibe.set_enhanced_ventilation(enabled)
+        return await self.nibe.set_enhanced_ventilation(enabled, force_write=force_write)
 
     async def async_set_offset(self, offset: float, *, force_write: bool = False) -> int | None:
         """Apply heating curve offset to NIBE system.
@@ -2514,7 +2510,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             async with self._control_lock:
                 applied_offset = await self.async_set_offset(0.0, force_write=True)
                 await self._cancel_our_dhw_boost()
-                if await self.nibe.is_enhanced_ventilation_active():
+                is_enhanced = await self.nibe.is_enhanced_ventilation_active()
+                if is_enhanced is None and self.nibe.has_ventilation_control:
+                    # The fan may be enhanced and the switch cannot say. OFF must not be
+                    # displayed until every owned actuator is KNOWN neutral.
+                    raise HomeAssistantError(
+                        "Cannot confirm the NIBE ventilation is back to normal - "
+                        "the ventilation switch is unavailable"
+                    )
+                if is_enhanced:
                     ventilation_stopped = await self._write_enhanced_ventilation(
                         False,
                         force_write=True,

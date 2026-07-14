@@ -62,7 +62,7 @@ class _Fan:
     async def is_enhanced_ventilation_active(self) -> bool:
         return self.enhanced
 
-    async def set_enhanced_ventilation(self, on: bool) -> bool:
+    async def set_enhanced_ventilation(self, on: bool, *, force_write: bool = False) -> bool:
         if on != self.enhanced:
             self.changes += 1
         self.enhanced = on

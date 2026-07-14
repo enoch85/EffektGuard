@@ -698,6 +698,15 @@ class NibeAdapter:
             _LOGGER.error("Failed to set enhanced ventilation: %s", err)
             return False
 
+    @property
+    def has_ventilation_control(self) -> bool:
+        """Whether an increased-ventilation switch is configured or was discovered.
+
+        Distinguishes "this pump has no fan to neutralize" from "the fan's switch is
+        momentarily unavailable" - the OFF transition must refuse the latter, not skip it.
+        """
+        return self._entity_cache.get("increased_ventilation") is not None
+
     async def is_enhanced_ventilation_active(self) -> bool | None:
         """Check if enhanced ventilation is currently active.
 
