@@ -1301,7 +1301,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
         else:
             try:
-                was_applied = await self.nibe.set_curve_offset(decision.offset)
+                # Through the one guarded door: a coordinator whose entry has unloaded mid-refresh
+                # must not get the last word on the pump. See _write_curve_offset.
+                was_applied = await self._write_curve_offset(decision.offset)
                 if was_applied:
                     _LOGGER.info("Applied offset %.2f°C to NIBE", decision.offset)
                     # Track what NIBE actually has (integer) - synced from entity on restart
@@ -1878,7 +1880,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     return
 
-            if await self.nibe.set_enhanced_ventilation(True):
+            if await self._write_enhanced_ventilation(True):
                 self._airflow_enhance_start = now
                 self._airflow_normal_since = None
                 # The optimizer's own recommendation, floored so a decision that carries no
@@ -1908,7 +1910,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-        if await self.nibe.set_enhanced_ventilation(False):
+        if await self._write_enhanced_ventilation(False):
             self._airflow_enhance_start = None
             self._airflow_normal_since = now
             _LOGGER.info("🌀 Ventilation NORMAL: OFF - %s", decision.reason)
@@ -2386,6 +2388,58 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to update peak tracking: %s", err)
 
+    async def _write_curve_offset(self, offset: float) -> bool:
+        """The ONE way this integration reaches the heat pump. Returns whether it wrote.
+
+        A COORDINATOR THAT HAS BEEN SHUT DOWN IS NOT A WRITER.
+
+        `_shutdown_requested` used to be consulted in exactly two places: the code that re-arms the
+        aligned timer, and the code that sets the flag. In neither of the two places that drive the
+        pump. The bug was not a wrong value - it was a value nobody asked for.
+
+        And the coordinator's own comment already knew the task survives: `_do_aligned_refresh` runs
+        on `hass.async_create_task`, NOT `entry.async_create_task`, so Home Assistant cannot cancel
+        it on unload. It guarded the re-arm and not the write, and those are different things. A
+        refresh that is mid-flight when the entry unloads - and it is mid-flight for seconds, awaiting
+        the weather forecast service call over the network - carried on to the end and drove the pump.
+
+        Which matters most on a RELOAD, and Home Assistant reloads the entry every time an option is
+        changed. The old coordinator's write can land after the new one's, leaving the pump holding a
+        decision computed from the configuration the user has just changed away from. On a REMOVAL it
+        is the deleted integration getting the last word on somebody's heating.
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to write offset %.2f°C to the pump. The entry "
+                "is unloaded; an in-flight refresh does not get the last word.",
+                offset,
+            )
+            return False
+
+        return await self.nibe.set_curve_offset(offset)
+
+    async def _write_enhanced_ventilation(self, enabled: bool) -> bool:
+        """The ONE way this integration commands the exhaust fan. Returns whether it wrote.
+
+        The heating curve is not the only thing that reaches the pump, and the first version of the
+        shutdown guard quietly assumed it was. `set_enhanced_ventilation` is written from the control
+        loop too (`_apply_airflow_decision`, reached from `_read_and_decide`), so it rides the same
+        in-flight refresh and the same race.
+
+        On a reload it is worse than a stray write: the dead coordinator can switch the fan ON while
+        the new one starts up believing it is off - and then nothing is left that will ever turn it
+        off again.
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to set enhanced ventilation to %s. The entry "
+                "is unloaded; the fan is not its to command.",
+                enabled,
+            )
+            return False
+
+        return await self.nibe.set_enhanced_ventilation(enabled)
+
     async def async_set_offset(self, offset: float) -> None:
         """Apply heating curve offset to NIBE system.
 
@@ -2393,7 +2447,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             offset: Offset value in °C (-10 to +10)
         """
         try:
-            await self.nibe.set_curve_offset(offset)
+            if not await self._write_curve_offset(offset):
+                return
             self.current_offset = offset
             self.last_applied_offset = offset
             self.last_offset_timestamp = dt_util.utcnow()
@@ -2551,7 +2606,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._airflow_enhance_start = None
                 try:
                     if await self.nibe.is_enhanced_ventilation_active():
-                        await self.nibe.set_enhanced_ventilation(False)
+                        await self._write_enhanced_ventilation(False)
                         _LOGGER.info("Disabled enhanced ventilation on airflow optimizer disable")
                 except (AttributeError, ValueError, OSError) as err:
                     _LOGGER.warning("Failed to disable enhanced ventilation: %s", err)

@@ -75,6 +75,10 @@ def _coordinator(fan: _Fan) -> EffektGuardCoordinator:
     coordinator._airflow_enhance_start = None
     coordinator._airflow_enhance_minutes = NIBE_VENTILATION_MIN_ENHANCED_DURATION
     coordinator._airflow_normal_since = None
+    # `__new__` skips `__init__`, so every attribute the real object always has must be set here or
+    # the fake is not the object. Home Assistant's DataUpdateCoordinator.__init__ sets this one, and
+    # the fan write now consults it: a coordinator whose entry has unloaded does not command the fan.
+    coordinator._shutdown_requested = False
     return coordinator
 
 
