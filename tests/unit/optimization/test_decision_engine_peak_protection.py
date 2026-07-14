@@ -30,6 +30,13 @@ def mock_nibe_state():
     state.outdoor_temp = 5.0
     state.indoor_temp = 21.0
     state.supply_temp = 35.0
+    # On the real NibeState, `flow_temp` is a @property aliasing supply_temp. MagicMock does not
+    # emulate properties, so setting supply_temp alone left flow_temp as an auto-mock - and the
+    # weather-compensation layer reads flow_temp. These tests never noticed, because the layer used
+    # to return early on "No weather data" (this fixture's weather mock has an empty forecast) and
+    # so never reached it. Every test in this file was therefore driving the decision engine with
+    # its primary layer switched off. Mirror the property, or the mock is not the object.
+    state.flow_temp = 35.0
     state.degree_minutes = -100.0
     state.current_offset = 0.0
     state.is_heating = True
@@ -365,15 +372,27 @@ class TestOffsetAggregation:
             current_power=2.0,
         )
 
-        # Should NOT force heating
-        # Emergency layer returns 0.0, Price returns 0.0
-        assert decision.offset == 0.0
-
-        # Check the layer - when at target with normal prices, emergency should not force heating
+        # The claim is about the DEBT layer: at target, with normal prices, a DM of -1300 must not
+        # force heating. It doesn't - "At target & price not cheap - ignoring DM -1300".
         emergency_layer = decision.layers[1]
         assert emergency_layer.name in ("Thermal Debt", "T1", "T2", "T3")
-        # When smart recovery is active, weight should be 0 (ignoring DM)
         assert emergency_layer.weight == 0.0
+        assert emergency_layer.offset == 0.0
+
+        # This used to assert `decision.offset == 0.0`, and it passed for the wrong reason: Math WC
+        # was mute in every test in this file (the fixture's weather mock has an empty forecast, and
+        # the layer used to bail out on that), so the total was zero because nothing was voting.
+        #
+        # The debt layer is silent, which is what this test is for. Math WC is not, and must not be:
+        # the flow is 35.0C where the emitter law wants 36.3C at +5C outdoor, so it corrects a curve
+        # that is genuinely running cold. That correction is not debt recovery - and note its weight
+        # is already deferred to 0.15 from 0.49 BECAUSE of the critical DM, which is the system
+        # doing precisely what it should. So assert the intent: no layer but the heating curve votes.
+        voting = [layer.name for layer in decision.layers if layer.weight > 0.0]
+        assert voting == ["Math WC"], (
+            f"layers {voting} voted. At target with normal prices, the only thing entitled to move "
+            f"the offset is the weather-compensation curve. Anything else is the DM forcing heat."
+        )
 
 
 class TestReasoningGeneration:

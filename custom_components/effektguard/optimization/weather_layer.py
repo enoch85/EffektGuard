@@ -867,11 +867,18 @@ class WeatherCompensationLayer:
                     reason=f"DHW cooldown ({minutes_since_dhw:.0f}/{DHW_WEATHER_COOLDOWN_MINUTES}min)",
                 )
 
-        if not weather_data or not weather_data.forecast_hours:
-            return WeatherCompensationLayerDecision(
-                name="Math WC", offset=0.0, weight=0.0, reason="No weather data"
-            )
-
+        # NO GUARD ON weather_data HERE, AND THERE MUST NOT BE ONE.
+        #
+        # This layer is the EN 442 emitter law - at this outdoor temperature, what flow temperature
+        # do the emitters need? Its inputs are below: the pump's own outdoor and flow sensors. It
+        # has never read the forecast. The forecast is used once, further down, for unusual-weather
+        # detection, and that use carries its own guard.
+        #
+        # It used to open with `if not weather_data ...: return weight=0.0, "No weather data"`, and
+        # a weather entity is vol.Optional in the config flow. So an install that simply left the
+        # dropdown blank silently switched off the primary control law - the one layer that votes on
+        # every cycle - and nothing said so. On the air-source F2040 that was 13x more immersion heat
+        # than the compressor's capacity deficit forced, and 1265 minutes above the comfort ceiling.
         current_outdoor = nibe_state.outdoor_temp
         current_flow = nibe_state.flow_temp
 
@@ -887,7 +894,9 @@ class WeatherCompensationLayer:
         unusual_severity = 0.0
 
         # Check for unusual weather patterns if weather learner available
-        if self.weather_learner and weather_data.forecast_hours:
+        # The one thing here that DOES need the forecast. Without it, unusual-weather detection
+        # simply stands down - the emitter law above does not, and did not need to.
+        if self.weather_learner and weather_data and weather_data.forecast_hours:
             try:
                 current_date = get_current_datetime() if get_current_datetime else dt_util.now()
 

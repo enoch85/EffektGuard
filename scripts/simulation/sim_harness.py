@@ -1018,6 +1018,7 @@ def simulate(
     enable_price: bool = True,
     enable_weather: bool = True,
     tuned_curve: bool = False,
+    forecast_available: bool = True,
 ):
     engine, effect = build_engine(house, mode, enable_price, enable_weather)
 
@@ -1245,7 +1246,21 @@ def simulate(
             )
             for h in range(1, 49)
         ]
-        weather = WeatherData(current_temp=tout, forecast_hours=fc, source_entity="sim")
+        # A weather entity is vol.Optional in the config flow, and with none configured
+        # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no
+        # entity configured in setup"). That is a SUPPORTED install, and until this flag existed the
+        # harness had never simulated it: it fed a perfect 48 h forecast to every run.
+        #
+        # Note this is NOT --no-weather. That flag clears enable_weather_compensation, which kills
+        # the Math WC layer - the core control law, voting 100% of the time - and which the config
+        # flow never writes, so production cannot reach it. Withholding the FORECAST is the thing a
+        # real user can do, and it is the weaker ablation: Math WC still runs off outdoor and flow
+        # temperature. Only the forecast-fed layers go quiet.
+        weather = (
+            WeatherData(current_temp=tout, forecast_hours=fc, source_entity="sim")
+            if forecast_available
+            else None
+        )
 
         nibe = NibeState(
             outdoor_temp=round(tout, 1),
@@ -1694,6 +1709,7 @@ def main() -> int:
     no_weather = "--no-weather" in sys.argv
     tuned_curve = "--tuned-baseline" in sys.argv
     undersized = "--undersized" in sys.argv
+    no_forecast = "--no-forecast" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
@@ -1732,6 +1748,7 @@ def main() -> int:
             enable_price=not no_price,
             enable_weather=not no_weather,
             tuned_curve=tuned_curve,
+            forecast_available=not no_forecast,
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -1751,6 +1768,8 @@ def main() -> int:
             tag += "-noprice"
         if no_weather:
             tag += "-noweather"
+        if no_forecast:
+            tag += "-noforecast"
         if tuned_curve:
             tag += "-tuned"
 

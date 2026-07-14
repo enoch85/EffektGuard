@@ -4,6 +4,14 @@ The "Math WC" layer is enabled on every installation - `decision_engine.py` read
 `config.get("enable_weather_compensation", True)`, and `CONF_ENABLE_WEATHER_COMPENSATION` is
 defined in const.py but read nowhere, so no config-flow option can switch it off.
 
+    AND THAT SENTENCE WAS FALSE WHEN IT WAS WRITTEN, which is worth leaving here as a warning.
+    No config-flow OPTION could switch the layer off, true - but `evaluate_layer` opened with
+    `if not weather_data or not weather_data.forecast_hours: return weight=0.0`, and the weather
+    entity is `vol.Optional`. So any installation that left that dropdown blank ran with Math WC
+    silently disabled, and this docstring said it couldn't happen. See
+    tests/unit/optimization/test_the_core_control_law_does_not_need_a_forecast.py. Checking that
+    a flag cannot be set is not the same as checking that the code cannot take the early exit.
+
 The test house is the standard Swedish low-temperature radiator design used throughout the
 simulator: 22 C indoor, 150 W/K heat loss, 50 C supply at the -15 C design outdoor
 temperature. That design point is what "correctly tuned" means here - at -15 C the emitters

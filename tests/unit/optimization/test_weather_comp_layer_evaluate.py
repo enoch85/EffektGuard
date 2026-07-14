@@ -101,27 +101,44 @@ class TestWeatherCompensationLayerEvaluate:
         assert result.weight == 0.0
         assert result.reason == "Disabled"
 
-    def test_no_weather_data_returns_zero(self):
-        """Test that missing weather data returns zero offset/weight."""
+    def test_no_weather_data_still_runs_the_emitter_law(self):
+        """THESE TWO TESTS USED TO ASSERT THE BUG.
+
+        They were called `test_no_weather_data_returns_zero` and `test_empty_forecast_returns_zero`,
+        and they pinned `offset == 0.0, weight == 0.0, reason == "No weather data"` as the contract.
+
+        It is not a contract, it is a defect. Math WC is the EN 442 emitter law over the pump's own
+        outdoor and flow sensors; it has never read the forecast. And the weather entity is
+        `vol.Optional` in the config flow - so this "contract" meant that leaving one dropdown blank
+        silently switched off the layer that votes on 100% of cycles, with nothing said anywhere.
+
+        In the simulator, on the air-source F2040 over 90 days of real SE4 prices, that was 296
+        dm_runaway / indoor_above_ceiling violations, 1265 minutes above the comfort ceiling, and
+        13x more immersion heat at COP 1.0 than the compressor's capacity deficit forced.
+
+        A test that codifies the bug is how the bug survives review. Both now assert the fix.
+        """
         layer = self._create_layer()
-        nibe_state = MockNibeState()
+        nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=25.0)
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
-            weather_data=None,
+            weather_data=None,  # what WeatherAdapter returns with no entity configured
             target_temp=21.0,
             enable_weather_compensation=True,
         )
 
         assert result.name == "Math WC"
-        assert result.offset == 0.0
-        assert result.weight == 0.0
-        assert result.reason == "No weather data"
+        assert result.weight > 0.0, f"Math WC abstained with no forecast: {result.reason!r}"
+        assert result.offset > 0.0, (
+            "the flow is 25C at -5C outdoor, far below what the radiators need - the emitter law "
+            "must call for heat. It needs the outdoor temperature, not a forecast."
+        )
 
-    def test_empty_forecast_returns_zero(self):
-        """Test that empty forecast returns zero offset/weight."""
+    def test_empty_forecast_still_runs_the_emitter_law(self):
+        """Same defect, reached by the other path: an entity that returns no forecast hours."""
         layer = self._create_layer()
-        nibe_state = MockNibeState()
+        nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=25.0)
         weather_data = MockWeatherData(forecast_hours=[])
 
         result = layer.evaluate_layer(
@@ -132,9 +149,28 @@ class TestWeatherCompensationLayerEvaluate:
         )
 
         assert result.name == "Math WC"
-        assert result.offset == 0.0
-        assert result.weight == 0.0
-        assert result.reason == "No weather data"
+        assert result.weight > 0.0, f"Math WC abstained on an empty forecast: {result.reason!r}"
+        assert result.offset > 0.0
+
+    def test_the_weather_learner_stands_down_without_a_forecast(self):
+        """The half that DOES need the forecast must still abstain - and must not crash on None.
+
+        Unusual-weather detection is the one consumer of `weather_data` in this layer. Fixing the
+        emitter law must not drag the learner along, and must not leave it dereferencing None.
+        """
+        learner = MagicMock()
+        layer = self._create_layer(weather_learner=learner)
+        nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=25.0)
+
+        result = layer.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=None,
+            target_temp=21.0,
+            enable_weather_compensation=True,
+        )
+
+        learner.detect_unusual_weather.assert_not_called()
+        assert result.weight > 0.0 and not result.unusual_weather
 
     def test_returns_weather_compensation_layer_decision(self):
         """Test that result is WeatherCompensationLayerDecision with diagnostic fields."""
