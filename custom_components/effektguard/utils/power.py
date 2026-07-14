@@ -1,13 +1,11 @@
 """Reading a Home Assistant power entity as kilowatts.
 
-One function, used by everything that reads the owner's power meter. Two readers that each decide for
-themselves what an absent unit means will eventually disagree by a factor of a thousand, which is what
-happened here: the NIBE adapter treated a unit-less sensor as kilowatts and the coordinator treated the
-same sensor, in the same cycle, as watts.
+One function, used by everything that reads the owner's power meter, so two readers cannot disagree
+by a factor of a thousand over what an absent unit means - which is what happened when the NIBE
+adapter read a unit-less sensor as kilowatts and the coordinator read the same sensor as watts.
 
-There is no defensible default. This number decides whether the house is about to set a monthly billing
-peak, and watts and kilowatts are three orders of magnitude apart. An unrecognised unit is refused, and
-the caller withdraws whatever depends on it.
+There is no defensible default: this number decides whether the house is about to set a monthly
+billing peak. An unrecognised unit is refused, and the caller withdraws whatever depends on it.
 """
 
 import logging

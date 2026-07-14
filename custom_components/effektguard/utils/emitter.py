@@ -6,64 +6,25 @@ The single source of truth for "how hot must the water be right now".
     dT      = dT_design * phi ** (1 / n)                     emitter law     [EN 442-1 3.31]
     T_flow  = T_room + dT + spread_design / 2
 
-EN 12831 makes a building's heat loss linear in the indoor/outdoor difference, so the relative
-load `phi` is a ratio of temperature differences. EN 442-1 3.31 gives the emitter's output as
-`Phi / Phi_N = (dT / dT_N) ** n`; setting output equal to load and inverting it yields the 1/n
-exponent.
+EN 12831 makes heat loss linear in the indoor/outdoor difference, so relative load `phi` is a
+ratio of temperature differences. EN 442-1 3.31 gives output as (dT / dT_N) ** n; setting output
+equal to load and inverting yields the 1/n exponent.
 
-THE SPREAD IS CONSTANT, AND THIS FILE USED TO SCALE IT.
+THE SPREAD IS CONSTANT - never scale it by phi. A fixed-speed circulator gives constant mass flow
+and a load-proportional spread (a wet boiler); a heat pump MODULATES its circulator to hold the
+commissioned spread and varies the flow RATE. Scaling it runs the curve too COOL in mild weather
+and too HOT in cold, pivoting invisibly on the design point where the error is zero.
 
-    spread = spread_design * phi        # "constant mass flow"
+INTERNAL GAINS ARE WATTS, NEVER A CURVE FIT. Demand is linear in (balance - T_out), not
+(T_room - T_out), so the caller passes a balance point DERIVED from watts
+(`indoor - gains_W / heat_loss_W_per_K`). It must never be fitted: the constant-spread term and
+the balance-point term are the same basis function with opposite signs, so any assumed spread
+manufactures a matching "gains" figure - even out of a curve with provably zero gains. Fitting it
+against NIBE's curve once produced exactly that spurious number and read it back as evidence.
 
-A fixed-speed circulator gives constant mass flow, and then the flow-return spread really is
-proportional to the heat being carried. That is a wet boiler. A heat pump MODULATES its
-circulator to hold the spread at its commissioned value - typically 5 K - and varies the flow
-RATE instead. Scaling the spread models the wrong machine.
-
-It is not a rounding error, and it is not symmetric: the mistake pivots on the design point, so
-the flow temperature comes out too COOL in mild weather and too HOT in cold weather. Measured
-against OpenEnergyMonitor's own weather-compensation tool (their defaults: 3 kW loss, 15 kW of
-emitters rated at dT50, room 20 C, design -3 C, spread 5 K):
-
-    outdoor    OEM tool    scaled spread    error
-      +12 C      28.93         27.30        -1.63
-       +5 C      32.94         32.07        -0.87
-       -3 C      37.00         37.00        +0.00      <- the design point, where it hides
-      -12 C      41.19         42.17        +0.98
-
-With the spread held constant the two agree to 0.00 C at every outdoor temperature.
-
-Sources - this is OpenEnergyMonitor's method, not an invention:
-  - github.com/openenergymonitor/tools  www/tools/weathercomp/weathercomp.js
-        heat_demand = HTC * (room_temperature - outsideT)
-        DT    = (heat_demand / rated_emitter_output_dt50) ** (1/1.3) * 50
-        flowT = room_temperature + DT + systemDT * 0.5      <- systemDT, not systemDT * phi
-  - docs.openenergymonitor.org/heatpumps/basics.html
-        "Heat_output = Rated_Heat_Output x (Delta_T / Rated_Delta_T) ^ 1.3"
-        "Delta_T = (Heat_output / Rated_Heat_Output)^(1/1.3) x Rated_Delta_T"
-  - Andre Kuhne's reverse-engineering of Vaillant's heat curve is the SAME law wearing a
-    different hat: TFlow = 2.55 * (HC * (Tset - Tout))**0.78 + Tset, and 1/0.78 = 1.28 ~ 1.3,
-    the radiator exponent. He fitted it to Vaillant's published curves and validated it against
-    eBus readings from his own AroTherm to within 0.07 C.
-
-INTERNAL GAINS ARE REAL, AND A CURVE FIT CANNOT MEASURE THEM.
-
-OEM's tool has no gains term; a real house does. Demand is linear in (balance - T_out), not in
-(T_room - T_out). So this law takes a balance point - but the caller must DERIVE it from watts
-(`indoor - gains_W / heat_loss_W_per_K`), never fit it, because the fit is degenerate:
-
-    constant spread lifts the curve by   (spread / 2) * (1 - phi ** (1/n))
-    a balance point drops it by          a term with the same shape and the opposite sign
-
-Both vanish at the design point and grow in mild weather - the SAME basis function. They are not
-separately identifiable, so any assumed spread manufactures a matching "gains" figure out of
-nothing. Fit this law to Kuhne's Vaillant curve, which contains PROVABLY ZERO gains, and a
-spurious balance point appears anyway, scaling with whatever spread you assumed: 0.3 K at spread
-0, 2.6 K at spread 5, 4.9 K at spread 10.
-
-This is worth stating plainly because an earlier version of this file DID fit the balance point
-against NIBE's curve 9, reported "RMS 0.31 C vs 1.70 C for no gains", and presented that as
-evidence. It was not evidence. It was the constant-spread term being read back out.
+This is OpenEnergyMonitor's method (github.com/openenergymonitor/tools, weathercomp.js), not an
+invention; see docs/research/02_emitter_law.md and
+tests/validation/test_emitter_law_matches_openenergymonitor.py.
 """
 
 import logging

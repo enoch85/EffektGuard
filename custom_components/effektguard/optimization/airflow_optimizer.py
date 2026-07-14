@@ -177,29 +177,18 @@ def calculate_net_thermal_gain(
 ) -> float:
     """Calculate net thermal gain from enhanced airflow (kW).
 
-    Net gain = (extra heat extracted at the evaporator) - (extra air the building must reheat)
-
-    There is no third term. Extracting more heat from more air and "improving the COP" are not two
-    benefits; they are the same joules described twice. The first law, in steady state, gives
-
-        Q_cond = P_el + Q_evap
-
-    and differentiating at constant electrical input gives
-
-        d(Q_cond) = d(Q_evap) = P_el * d(COP)
-
-    - an identity. Adding `P_el * d(COP)` to `d(Q_evap)` counts the same heat a second time.
-
-    NIBE's S735 manual publishes four points at identical conditions (A20(12)W35, minimum
-    compressor frequency) with exhaust airflow as the only variable. Over the 90 -> 252 m³/h step
-    the measured heat-output rise is +0.410 kW, P_el*dCOP is +0.387 kW, and dQ_evap is +0.404 kW.
-    One number, three ways.
+    Net gain = (extra heat extracted at the evaporator) - (extra air the building must reheat).
+    There is no third term: "improved COP" is the same joules as the extra evaporator heat, not a
+    separate benefit. In steady state Q_cond = P_el + Q_evap, so at constant electrical input
+    d(Q_cond) = d(Q_evap) = P_el * d(COP) - an identity; adding P_el * d(COP) counts the heat twice.
+    NIBE's S735 EN 14511 table confirms it: over the 90 -> 252 m³/h step the heat-output rise,
+    dQ_evap and P_el*dCOP agree within 0.02 kW. See docs/research/04_exhaust_air_recovery.md.
 
     Consequence: enhancement pays only above an outdoor temperature of
-    (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP), around +9 °C. The evaporator recovers only
-    AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air, while the building must reheat every cubic
-    metre of it all the way from outdoor to indoor. Below break-even - which is the whole Swedish
-    heating season - enhancing is a net thermal LOSS, and this returns negative accordingly.
+    (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP), around +9 °C - the evaporator recovers only
+    AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air while the building reheats every cubic metre of
+    it from outdoor to indoor. Below break-even (the whole Swedish heating season) this returns
+    negative, a net thermal LOSS.
 
     Args:
         flow_standard: Standard airflow rate in m³/h

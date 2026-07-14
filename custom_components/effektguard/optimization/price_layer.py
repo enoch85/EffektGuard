@@ -213,18 +213,11 @@ class PriceAnalyzer:
 
         median = float(np.percentile(prices, PRICE_PERCENTILE_MEDIAN))
 
-        # A FLAT DAY CARRIES NO SIGNAL, AND `p25 == p90` IS NOT HOW YOU DETECT ONE.
-        #
-        # Percentile RANK is scale-invariant, so on its own it cannot tell a 130 ore spread from a
-        # 0.4 ore one. A day that ran from 39.80 to 40.20 ore earned the full VERY_CHEAP..PEAK
-        # banding - a 14 C swing in commanded offset, and a heat pump thrown around all day, to
-        # chase four tenths of an ore.
-        #
-        # The spread is compared against the day's own price SCALE rather than an absolute number
-        # of ore, because nothing here knows its unit: `PriceData` carries none, and GE-Spot
-        # publishes whatever the owner configured. A threshold in ore would be a hundred times
-        # wrong for anyone reporting SEK/kWh, and rank-based classification is precisely why that
-        # has never been noticed.
+        # A flat day carries no signal, and percentile RANK cannot detect one: rank is
+        # scale-invariant, so a 0.4 ore spread bands the same as a 130 ore one, throwing the pump
+        # around all day to chase four tenths of an ore. Compare the spread against the day's own
+        # price SCALE, not an absolute number of ore - PriceData carries no unit (GE-Spot publishes
+        # whatever the owner configured), so an ore threshold would be 100x wrong in SEK/kWh.
         spread = p90 - p10
         scale = max(abs(median), abs(p10), abs(p90))
         if scale <= 0.0 or spread < scale * PRICE_FLAT_DAY_SPREAD_FRACTION:
@@ -236,47 +229,14 @@ class PriceAnalyzer:
             )
             return {index: QuarterClassification.NORMAL for index, _ in enumerate(periods)}
 
-        # Classify each period.
-        #
-        # A BAND MUST NOT MERELY BE A RANK. On a high-wind day the price distribution is not a
-        # curve, it is a step: 83 quarters at 120 ore and 13 at MINUS 10, where the grid pays you
-        # to take the power. The middle of that distribution is a plateau, so p25 == p75 == p90 ==
-        # 120, and the 83 quarters at the day's HIGHEST price all satisfy `price <= p25`. On rank
-        # alone they classify CHEAP, and the optimiser commands +4.0 C of extra heat at the most
-        # expensive moment of the day.
-        #
-        # I GUARDED THAT WITH THE MEDIAN, AND THE MEDIAN BREAKS ON THE MIRROR IMAGE. Turn the step
-        # upside down - a long free stretch and a short expensive one, which is what a windy night
-        # into a calm evening looks like - and the plateau IS the median:
-        #
-        #     14 hours at exactly 0.00 ore, 10 hours at 80 ore
-        #     p10 = 0.0   p25 = 0.0   median = 0.0   p75 = 80.0   p90 = 80.0
-        #
-        #     the 56 free quarters   ->  NORMAL     because `0.0 < 0.0` is False
-        #     the 40 costly quarters ->  NORMAL     because `80.0 > 80.0` is False
-        #
-        # Every quarter of the day NORMAL, on a day with an 80 ore spread. The layer would not
-        # pre-heat on free electricity and would not coast at 80 ore. Exactly-zero prices are not
-        # exotic - price_math puts them at "roughly a hundred hours a year per SE bidding zone" -
-        # and they arrive in long contiguous runs, which is precisely the shape that does this.
-        #
-        # So ask the question the guard was standing in for: IS THERE ANYTHING MEANINGFULLY DEARER
-        # TODAY? That is `price < p90`, and it belongs on exactly one band.
-        #
-        # I had put the median on all four, and on three of them it was doing nothing whatever -
-        # it only ever broke the free day. Above, the spread check has already guaranteed
-        # p90 > p10, so:
-        #
-        #   VERY_CHEAP  `price <= p10` already implies `price < p90`.  Redundant.
-        #   PEAK        `price > p90` and p90 >= p10 implies price > p10.  Redundant.
-        #   EXPENSIVE   `price > p75` and p75 >= p10 implies price > p10.  Redundant.
-        #   CHEAP       p25 CAN equal p90 - that is exactly the dear plateau - so `price <= p25`
-        #               does NOT imply `price < p90`. This is the one guard that earns its place,
-        #               and the one that stops the 120 ore plateau being classified cheap.
-        #
-        # The dear side keeps its strict `>`. Loosening it to `>=` would make all 83 quarters of the
-        # high-wind day PEAK, telling the house to coast for twenty hours with three hours of cheap
-        # power to charge in. A plateau you cannot escape is not a peak; it is the price of the day.
+        # Classify each period. A band must not merely be a RANK: on a high-wind day the
+        # distribution is a step, not a curve (e.g. 83 quarters at 120 ore, 13 at -10), so
+        # p25 == p75 == p90 == 120 and the 83 dearest quarters all satisfy `price <= p25`. On rank
+        # alone they classify CHEAP and the optimiser commands +4 C at the most expensive moment.
+        # The `price < p90` guard on the CHEAP band is the one that stops that (the spread check
+        # above has already guaranteed p90 > p10, so it is redundant on every other band). The dear
+        # side keeps its strict `>`: an inescapable plateau is the price of the day, not a PEAK to
+        # coast through.
         classifications = {}
         for index, period in enumerate(periods):
             price = period.price

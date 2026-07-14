@@ -1030,39 +1030,16 @@ class DecisionEngine:
             chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
 
             # A COST LAYER MAY COAST THE HOUSE WITHIN ITS COMFORT BAND. IT MAY NOT COAST IT OUT.
+            # This step takes the critical layer's vote ALONE, so with a price layer at PEAK the
+            # comfort layer never enters the sum and cost kept cutting heat into an already-cold
+            # house until the hard floor fired three degrees later. Nothing else catches it: DM is
+            # blind by construction (DM = integral(BT25 - S1), so lowering the curve lowers S1 and
+            # DM *improves* as the house cools).
             #
-            # Using the band is the whole point of the integration - that is the thermal battery.
-            # But this step takes the critical layer's vote ALONE: with a price layer at PEAK the
-            # comfort layer never enters the sum at all, at any temperature, so cost kept cutting
-            # heat into a house that was already too cold and nothing objected until the hard 18 C
-            # floor fired, three degrees later.
-            #
-            # NOTHING ELSE CAN SEE THIS. Degree minutes are blind to it by construction:
-            # DM = integral(BT25 - S1), so lowering the curve lowers S1 and DM *improves* as the
-            # house gets colder. In the month-long simulation the house sat 1.1 C below target
-            # with DM at -45 - a "healthy" number - while the price layer held -3.0. Across five
-            # houses the optimiser spent between 4 000 and 33 000 minutes below the comfort band,
-            # and a do-nothing controller held target on every one of them.
-            #
-            # So a cost layer's heat reduction is floored as the house leaves the band. The comfort
-            # layer's own demand is the floor: it is already graduated by how far out the house is,
-            # and it is the only layer that can see the problem at all.
-            #
-            # AND THE FLOOR IS RAMPED IN, NOT SWITCHED ON. The first version of this was a boolean,
-            # and a boolean on a temperature threshold is a bang-bang controller:
-            #
-            #     indoor 20.80 C  ->  offset -10.00      (cost layer free)
-            #     indoor 20.79 C  ->  offset  +0.01      (floored at comfort, which is ~0 there)
-            #
-            # A hundredth of a degree flipped the command by ten degrees. Real indoor sensors
-            # dither by more than that, so the house would sit on the boundary chattering the curve
-            # between its extremes, and every flip is a Modbus write to the pump.
-            #
-            # The discontinuity is inherent to the switch: AT the boundary the comfort layer is
-            # asking for nothing, so "floor at comfort" means "jump to zero". Ramping fixes it by
-            # construction - at the boundary the floor IS the cost layer's own vote, so nothing
-            # moves, and it climbs to the comfort layer's demand as the house actually leaves the
-            # band the owner asked for.
+            # So floor a cost reduction at the comfort layer's own demand, which is graduated by how
+            # far out the house is. The floor is RAMPED in via `starvation`, not switched at a
+            # threshold - a boolean there is bang-bang and chatters a Modbus write on every dither
+            # of the indoor sensor; see _starvation_fraction.
             if chosen < 0 and starvation > 0.0 and self._all_critical_are_cost(critical_layers):
                 comfort = next(
                     (layer for layer in layers if layer.name == COMFORT_LAYER_NAME), None

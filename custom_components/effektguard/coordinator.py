@@ -164,9 +164,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Compressor health monitoring (Oct 19, 2025)
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
-        # The monitor's verdict, fed to the decision engine. Its own risk ladder was computed and
-        # written to a debug log; nothing consumed it, and the engine stayed free to demand +10
-        # from a compressor already at maximum.
+        # The monitor's verdict, fed to the decision engine so it will not demand more heat from a
+        # compressor already at maximum frequency.
         self.compressor_risk: str | None = None
         self.compressor_stats = None  # Latest CompressorStats from monitor
 
@@ -254,9 +253,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Track airflow enhancement state for minimum duration enforcement
         self._airflow_enhance_start: datetime | None = None
-        # How long the airflow optimizer asked this enhancement to run. It computes this
-        # (15-60 min, by deficit) and it used to be logged and thrown away, so nothing bounded the
-        # fan's cycling in either direction.
+        # How long the airflow optimizer asked this enhancement to run (15-60 min, by deficit).
+        # This bounds the fan's minimum run time so a marginal decision cannot cycle it every tick.
         self._airflow_enhance_minutes: int = NIBE_VENTILATION_MIN_ENHANCED_DURATION
         # When the fan last returned to normal, so it cannot be re-enhanced on the very next tick.
         self._airflow_normal_since: datetime | None = None
@@ -301,12 +299,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # _update_peak_tracking. None until the first successful measurement, in which
         # case peak protection stays disabled rather than acting on a guess.
         self.current_power_kw: float | None = None
-        # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
-        # instantaneous sample: accumulate real measurements within the
-        # What the effect tariff actually bills: the time-weighted mean power over a billing HOUR
-        # (not the quarter-hour - a quarter-hour mean overstates the billed peak by up to fourfold).
-        # The arithmetic lives in billing_period.py, once, and the simulator runs the same object -
-        # it used to keep a second, different implementation, and validated that one instead.
+        # What the effect tariff bills: the time-weighted mean power over a billing HOUR (a
+        # quarter-hour mean overstates the billed peak up to fourfold). The arithmetic lives in
+        # billing_period.py, once, so the simulator runs the same object rather than a second copy.
         self._billing_period = BillingPeriodAccumulator()
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
@@ -446,23 +441,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _do_aligned_refresh(self) -> None:
         """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        This is the outermost frame of the coordinator's own scheduling loop, and it is the
-        sole owner of the retry timer: the base class's scheduler is disabled
-        (update_interval=None), so nothing else will ever re-arm it.
+        This is the sole owner of the retry timer: the base class's scheduler is disabled
+        (update_interval=None), so nothing else will ever re-arm it. That makes the broad
+        `except Exception` correct rather than sloppy - anything the update path can raise
+        (HomeAssistantError, an IndexError from a price lookup on a DST day, numpy errors from
+        the learning modules) would otherwise kill the task, and the failure is silent and
+        permanent: `last_update_success` stays True while the pump sits on the last offset
+        written, until Home Assistant is restarted.
 
-        That makes the broad `except Exception` correct here rather than sloppy. The
-        previous except tuple was narrower than what the update path can actually raise -
-        HomeAssistantError from a weather service call, IndexError from a price lookup on a
-        DST 92/100-quarter day, ZeroDivisionError from the savings maths, numpy errors from
-        the learning modules. Any one of those escaped, the task died, and
-        _schedule_aligned_refresh() was never called again.
-
-        The failure was silent and permanent: `last_update_success` stayed True, so every
-        entity kept serving its last value and looked healthy, while the heat pump sat on
-        the last offset written - until Home Assistant was restarted.
-
-        The `finally` guarantees the loop survives any single bad cycle. Marking the update
-        unsuccessful lets HA show the entities as unavailable, which is the honest signal.
+        The `finally` guarantees the loop survives any single bad cycle.
         """
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
@@ -671,10 +658,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _set_temporary_lux(self, on: bool) -> bool:
         """The ONE way this integration commands the hot-water boost, and the only place that records
         WHO STARTED IT - which is what lets `_cancel_our_dhw_boost` tell ours from the household's.
-
-        Three call sites used to reach the switch directly and only one set `_lux_boost_is_ours`, so a
-        boost our own service started was disowned on unload and left running to NIBE's lux timeout on
-        the immersion heater.
+        Reaching the switch directly instead disowns a boost our own service started, leaving it to
+        run to NIBE's lux timeout on the immersion heater.
 
         Starting from a shut-down coordinator is refused, as for the curve offset and the fan.
         STOPPING is not - that IS the cleanup, and it runs during shutdown.
@@ -748,20 +733,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         _LOGGER.debug("Shutting down EffektGuard coordinator")
 
-        # Base shutdown FIRST, and it is not optional. It sets `_shutdown_requested`,
-        # cancels the base refresh handle, and shuts down the request debouncer.
-        #
-        # `_shutdown_requested` is what stops an in-flight refresh from RESURRECTING this
-        # coordinator. `_do_aligned_refresh` runs on a task created with
-        # hass.async_create_task (NOT entry.async_create_task), so HA cannot cancel it on
-        # unload. Its `finally` block calls _schedule_aligned_refresh() - which, without
-        # this flag, would re-arm a timer on a DEAD coordinator while the entry reload
-        # creates a second, live one. BOTH would then write curve offsets to the same heat
-        # pump, each with its own rate limiter and its own last_applied_offset, fighting
-        # each other. Every reload would add another writer, permanently.
-        #
-        # The debouncer matters for the same reason: a trailing 10 s debounced refresh
-        # queued by a service call can otherwise fire after unload and write an offset.
+        # Base shutdown FIRST, and not optional: it sets `_shutdown_requested`, cancels the base
+        # refresh handle, and shuts down the debouncer. `_shutdown_requested` stops an in-flight
+        # `_do_aligned_refresh` (run on hass.async_create_task, so HA cannot cancel it on unload)
+        # from re-arming its timer in `finally` - which would leave a DEAD coordinator and the
+        # reload's live one both writing curve offsets to the same pump, one more writer per reload.
+        # The debouncer matters for the same reason: a trailing debounced refresh could fire after
+        # unload and write an offset.
         await super().async_shutdown()
 
         try:
@@ -777,18 +755,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
 
-            # CANCEL OUR OWN DHW BOOST. EffektGuard turns the temporary-lux switch ON to run a
-            # high-temperature hot-water cycle, and it turned it OFF again on the next tick that
-            # decided the cycle was done. But nothing turned it off on UNLOAD - so a reload, an
-            # options change, or an HA restart in the middle of an EffektGuard-initiated boost left
-            # the pump running that boost until NIBE's own timeout expired. A full high-temperature
-            # DHW cycle, at the top of the tank where the immersion heater does the work, that
-            # nobody asked for and nobody was left to stop.
-            #
-            # Only OUR boost. The owner may also start one from the heat pump's panel or their own
-            # automation, and that one is none of our business - the DHW control path already says
-            # so: "Stopping the lux boost cannot harm the pump - it only stops an
-            # EffektGuard-initiated boost."
+            # Cancel OUR OWN DHW boost on unload. Nothing else does: a reload or restart mid-boost
+            # otherwise leaves the temporary-lux switch ON until NIBE's timeout, running a
+            # high-temperature cycle nobody asked for and nobody is left to stop. Only ours - a
+            # boost the owner started from the pump panel is none of our business.
             await self._cancel_our_dhw_boost()
 
             # Save learning state
@@ -1914,15 +1884,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         now = dt_util.utcnow()
 
-        # THE FAN COULD CYCLE FOREVER. The minimum-enhanced-duration guard was 5 minutes - exactly
-        # one coordinator tick - so it permitted a turn-off on the very next cycle, and NOTHING at
-        # all guarded the turn-ON. A decision oscillating around its threshold, which is what a
-        # marginal COP gain does, produced twelve fan state changes an hour, indefinitely. On an
-        # exhaust-air F750 each one perturbs the source air the compressor is drawing from.
-        #
-        # The optimizer already computes how long the enhancement should run - `duration_minutes`,
-        # 15 to 60 min depending on the deficit - and that number was LOGGED and thrown away. It is
-        # now the minimum run time, and a minimum rest at normal speed bounds the other direction.
+        # Bound the fan in BOTH directions or it cycles forever: a decision oscillating around its
+        # threshold (what a marginal COP gain does) otherwise flips it every tick, and on an
+        # exhaust-air F750 each flip perturbs the source air the compressor draws from. The
+        # optimizer's own `duration_minutes` (15-60 min by deficit) is the minimum run time, and a
+        # minimum rest at normal speed bounds the other direction.
         if decision.should_enhance:
             if is_enhanced:
                 _LOGGER.debug("Ventilation already enhanced - %s", decision.reason)
@@ -2091,18 +2057,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Apply control decision.
         #
-        # RATE LIMITING APPLIES TO STARTS ONLY - never to stops.
-        #
-        # Rate-limiting a stop would strand an in-progress DHW cycle: every `should_heat=False`
-        # path in should_start_dhw() returns an EMPTY abort_conditions list, so the abort branch
-        # above is skipped, and the limiter's clock is started by the turn-ON - meaning the
-        # interval runs from the beginning of the very cycle being stopped. DHW would hold the
-        # compressor away from space heating
-        # while thermal debt deepened.
-        #
-        # Stopping the lux boost cannot harm the pump - it only stops an EffektGuard-
-        # initiated boost. Throttling it has no safety benefit and a real safety cost.
-        # Oscillation stays bounded because the next START is still rate limited.
+        # RATE LIMITING APPLIES TO STARTS ONLY - never to stops. Rate-limiting a stop would strand
+        # an in-progress DHW cycle (the limiter's clock is started by the turn-ON, so the interval
+        # runs from the start of the very cycle being stopped), holding the compressor away from
+        # space heating while thermal debt deepened. Stopping the boost cannot harm the pump, and
+        # oscillation stays bounded because the next START is still rate limited.
         if decision.should_heat and not is_lux_on:
             if self._is_dhw_start_rate_limited(now_time):
                 return
@@ -2148,14 +2107,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Add this cycle's spot-price savings to the running daily total.
 
         Savings are reported to the owner as money, so they may only be computed from power that was
-        MEASURED. Without a power sensor, `power_kw` holds a curve fit of the supply and outdoor
-        temperatures, floored at 1.0 kW even with the compressor off - and it arrives in the same
-        field as a real reading. It used to be passed straight to `actual_power_kw`, under a comment
-        saying "using ACTUAL power consumption", and the resulting kronor were indistinguishable from
-        earned ones.
-
-        The coordinator already refuses to bill an estimated PEAK, and says so three times. This is
-        the same rule, applied to the other number the owner is asked to trust.
+        MEASURED. Without a power sensor, `power_kw` holds a curve fit floored at 1.0 kW even with
+        the compressor off, and it arrives in the same field as a real reading - so an estimate here
+        turns into kronor indistinguishable from earned ones. Same rule as the peak: never bill a guess.
         """
         if (
             not price_data
@@ -2207,9 +2161,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
             # Where this cycle's power reading came from. The billing guard at the end asks THIS,
-            # and nothing else. It used to ask whether a power entity was configured, which says
-            # nothing about whether the entity answered: a meter that dropped out left the estimate
-            # from PRIORITY 3 to be recorded as a tariff peak, stamped as a meter reading.
+            # and nothing else: keying on whether a power entity is configured says nothing about
+            # whether it answered, and let a dropped-out meter's estimate be billed as a meter peak.
             power_source = POWER_SOURCE_NONE
 
             # PRIORITY 1: External power meter (whole house including NIBE)
@@ -2248,13 +2201,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 else:
                     # It has answered before and is not answering now. Everything below still runs -
                     # the decision layers need SOME power figure - but the source stays unbillable,
-                    # so nothing invented here reaches the tariff record.
-                    # This used to say "Peak billing is suspended until it does", and it was not: no
-                    # sample is taken from an estimate, which is what that sentence was guarding, but
-                    # the billing hour carried on regardless and was billed when it closed, using
-                    # whatever the meter last said before it went quiet, stretched across the whole
-                    # silence. Now the hour is genuinely refused if the silence is long enough - see
-                    # MAX_BILLING_OBSERVATION_GAP_MINUTES - so the log can say what the code does.
+                    # so nothing invented here reaches the tariff record, and a silence longer than
+                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole hour rather than billing
+                    # a stale reading stretched across it.
                     _LOGGER.warning(
                         "External power meter %s did not yield a reading (state: %s). This cycle is "
                         "not billable, and if the silence exceeds %d minutes the whole hour is "
@@ -2315,35 +2264,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power,
                 )
 
-            # A meter reading low while the compressor runs hard used to be overridden here: the code
-            # assumed solar was masking the grid import and substituted an ESTIMATE of the
-            # compressor's draw. It billed that estimate.
-            #
-            # The grid operator bills grid IMPORT, and the import is exactly what the meter saw. If
-            # solar covers 4.7 kW of a 5.0 kW compressor, the house imported 0.3 kW and 0.3 kW is
-            # what is charged. Recording ~5.5 kW instead inflated the month's peak by an order of
-            # magnitude, in the owner's disfavour, and effect tariffs bill the top three quarters of
-            # the month, so it stood for weeks.
-            #
-            # The meter is the truth. There is nothing to override.
+            # Do NOT override a low meter reading with a compressor-draw estimate on the assumption
+            # that solar is masking grid import. The grid bills grid IMPORT, which is exactly what
+            # the meter saw: if solar covers 4.7 kW of a 5.0 kW compressor, 0.3 kW was imported and
+            # 0.3 kW is charged. Substituting ~5.5 kW inflated the month's peak tenfold, and the
+            # effect tariff bills the top three quarters, so it would stand for weeks.
 
-            # Publish the instantaneous reading for the effect layer.
-            #
-            # The decision engine needs CURRENT power to judge how close this quarter is
-            # to the monthly peak. It must never be given `peak_today`: that value is a
-            # monotonically non-decreasing daily MAXIMUM (see below) which is reset only at
-            # midnight, so a single morning spike would pin the effect layer to CRITICAL
-            # for the rest of the day even with the compressor idle.
-            #
-            # This method runs after the decision within a cycle, so the engine reads the
-            # previous cycle's value - at most UPDATE_INTERVAL_MINUTES old, and a genuine
-            # measurement rather than a daily high-water mark.
+            # Publish the instantaneous reading for the effect layer. The engine needs CURRENT power
+            # to judge how close this quarter is to the monthly peak, and must never be given
+            # peak_today - a daily MAXIMUM reset only at midnight, which a single morning spike would
+            # pin to CRITICAL all day. This runs after the decision, so the engine reads the previous
+            # cycle's value: at most UPDATE_INTERVAL_MINUTES old, a measurement, not a high-water mark.
             self.current_power_kw = current_power
 
-            # The source was recorded where the value was produced. It used to be reconstructed here,
-            # after the fact, from the config entry and the magnitude of the number - so a compressor
-            # estimate above 0.5 kW was filed as "external_meter", and a peak that had been invented
-            # became indistinguishable from one that had been measured.
+            # The source is recorded where the value was produced, never reconstructed here from the
+            # config entry and the number's magnitude - which once filed a compressor estimate above
+            # 0.5 kW as "external_meter", making an invented peak look measured.
             measurement_source = power_source
 
             # Get current timestamp for peak tracking
@@ -2367,14 +2303,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     measurement_source,
                 )
 
-            # CRITICAL: Only record monthly peaks with REAL measurements
-            # Monthly peak billing requires accurate whole-house power measurement
-            # Estimates are NEVER used for monthly peak tracking - billing must be accurate
-            #
-            # This asks where THIS cycle's number came from. It used to ask whether a power entity
-            # was configured, which a meter that has gone unavailable still satisfies - so the
-            # estimate that replaced it was billed anyway, in the same cycle the log said it must
-            # never be.
+            # Only record monthly peaks from REAL measurements: billing must be accurate. This asks
+            # where THIS cycle's number came from, not whether a power entity is configured - a
+            # meter that has gone unavailable still satisfies the latter, so the estimate that
+            # replaced it would be billed in the very cycle the log says it must not.
             if power_source not in PEAK_CONTROL_POWER_SOURCES:
                 _LOGGER.debug(
                     "Skipping monthly peak recording: %.2f kW came from %s, which is not a "
@@ -2384,17 +2316,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-            # THE TARIFF BILLS THE HOURLY MEAN, AND WHAT THAT MEANS IS DEFINED IN ONE PLACE.
-            #
-            # This block used to carry its own copy of the arithmetic - a time-weighted mean over an
-            # hour, on the absolute time line - and the simulator carried a DIFFERENT copy, an
-            # arithmetic mean over the samples. Two implementations of the single most consequential
-            # number this integration computes, and the harness was validating the one nobody runs.
-            #
-            # They were both wrong on the night the clocks go back, independently, so neither could
-            # see the other's bug: the coordinator merged the repeated hour and deleted a 9 kW
-            # billing peak. Now there is one definition, in billing_period.py, and the harness runs
-            # THAT - so breaking it fails the simulation too, which is the property that was missing.
+            # The billed quantity - the time-weighted mean over a billing hour - is defined once, in
+            # billing_period.py, so the coordinator and the simulator cannot diverge. Two copies
+            # once did, both wrong on the DST fall-back, and merged the repeated hour into one,
+            # deleting a 9 kW billing peak.
             completed = self._billing_period.add(now, current_power, power_source)
 
             peak_event = None
@@ -2412,29 +2337,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 and not self.entry.data.get("enable_optimization", True)
                 and peak_event.is_billable
             ):
-                # THE UNOPTIMISED BASELINE, MEASURED RATHER THAN ASSUMED.
+                # The unoptimised baseline, MEASURED: with optimization off the offset is held at
+                # 0.0 and the pump runs its own curve, so these quarters are what the house does
+                # without EffektGuard. Nothing else calls update_baseline_peak; without it the
+                # savings calculator assumes baseline = peak * 1.176 and can never read zero.
                 #
-                # With optimization switched off the coordinator holds the curve offset at 0.0 and
-                # the pump runs on its own heating curve - so the quarters recorded now are, by
-                # definition, what this house does WITHOUT EffektGuard. That is precisely what
-                # `update_baseline_peak` was written for ("Call this when you observe what the peak
-                # would have been without optimization"), and nothing had ever called it: the
-                # savings calculator fell back on `baseline = peak * 1.176` every single time, so a
-                # higher peak reported more "savings" and the sensor could never read zero.
-                #
-                # IT MUST BE `effective_power`, NOT `actual_power`. The other side of the
-                # comparison is `peak_this_month`, which is get_monthly_peak_summary()["highest"],
-                # which is the EFFECTIVE (tariff-weighted) peak. Feeding the baseline the unweighted
-                # number compared the same quarter against itself: one 6.0 kW quarter at 02:00, with
-                # the optimiser doing nothing at all, reported 150 SEK/month of "savings" - all of
-                # it the night weighting - and flagged it as MEASURED. That is the very bug this
-                # block was written to kill, re-introduced by the block itself.
-                #
-                # AND IT MUST COME FROM A BILLABLE SOURCE. Peak RECORDING accepts nibe_currents,
-                # because the pump is the dominant controllable load and throttling against a
-                # NIBE-only history is coherent. But this figure is MONEY, and the effect tariff
-                # bills WHOLE-HOUSE grid import. A baseline built from a sensor that cannot see the
-                # oven, the EV or the water heater is not a baseline for anything the owner pays.
+                # It must be `effective_power` (tariff-weighted, like the peak_this_month it is
+                # compared against) and billable (guarded above): a baseline in unweighted or
+                # NIBE-only numbers reports the night weighting, or load it cannot see, as savings.
                 self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
@@ -2452,10 +2362,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """The ONE way this integration reaches the heat pump. Return the applied integer.
 
         A coordinator that has been shut down is not a writer. `_do_aligned_refresh` runs on
-        `hass.async_create_task`, NOT `entry.async_create_task`, so HA cannot cancel it on unload -
-        and it is mid-flight for seconds, awaiting the weather forecast over the network. It used to
-        run to the end and drive the pump anyway: the shutdown flag guarded the timer re-arm, and
-        nothing consulted it here.
+        `hass.async_create_task`, so HA cannot cancel it on unload, and it is mid-flight for seconds
+        awaiting the weather forecast; without the shutdown check here it would run to the end and
+        drive the pump after unload, leaving the reload's new coordinator a second writer.
 
         The entry unloads on the reconfigure flow (swapping the power meter), a manual reload, a
         removal, or a restart - NOT on an options change, which hot-reloads.
