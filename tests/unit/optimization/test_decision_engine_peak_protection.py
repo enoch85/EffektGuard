@@ -45,13 +45,13 @@ def mock_price_data():
     price_data.tomorrow = []
     for i in range(96):
         quarter = MagicMock()
-        quarter.quarter_of_day = i
+        quarter.period_of_day = i
         quarter.price = 1.0
         quarter.is_daytime = 24 <= i <= 87
         price_data.today.append(quarter)
         # Also populate tomorrow with same data
         quarter_tomorrow = MagicMock()
-        quarter_tomorrow.quarter_of_day = i
+        quarter_tomorrow.period_of_day = i
         quarter_tomorrow.price = 1.0
         quarter_tomorrow.is_daytime = 24 <= i <= 87
         price_data.tomorrow.append(quarter_tomorrow)
@@ -149,7 +149,7 @@ class TestEffectLayerIntegration:
         """Test effect layer responds to critical peak risk."""
         # Set up peak in effect manager
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_quarter_measurement(3.0, 48, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
 
         # Mock high current power to exceed peak
         mock_nibe_state.is_heating = True
@@ -184,7 +184,7 @@ class TestLayerPriority:
 
         # Set up peak to trigger protection
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_quarter_measurement(3.0, 48, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,
@@ -224,7 +224,7 @@ class TestLayerPriority:
 
         # Set up CRITICAL monthly peak to trigger protection
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_quarter_measurement(3.0, 48, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,
@@ -253,9 +253,9 @@ class TestPeakProtectionScenarios:
         """Test peak avoidance during expensive daytime period."""
         # Set up monthly peaks
         timestamp = datetime(2025, 10, 14, 8, 0)  # Morning
-        await decision_engine.effect.record_quarter_measurement(5.0, 32, timestamp)
-        await decision_engine.effect.record_quarter_measurement(5.2, 33, timestamp)
-        await decision_engine.effect.record_quarter_measurement(5.5, 34, timestamp)
+        await decision_engine.effect.record_period_measurement(5.0, 8, timestamp)
+        await decision_engine.effect.record_period_measurement(5.2, 8, timestamp)
+        await decision_engine.effect.record_period_measurement(5.5, 8, timestamp)
 
         # Simulate approaching peak during daytime
         mock_nibe_state.timestamp = datetime(2025, 10, 14, 12, 0)
@@ -279,7 +279,7 @@ class TestPeakProtectionScenarios:
         """Test nighttime peak with 50% weighting."""
         # Set up daytime peaks
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_quarter_measurement(5.0, 48, timestamp)
+        await decision_engine.effect.record_period_measurement(5.0, 12, timestamp)
 
         # Simulate nighttime - can use more power due to 50% weight
         mock_nibe_state.timestamp = datetime(2025, 10, 14, 23, 0)  # 23:00

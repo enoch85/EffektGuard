@@ -1029,7 +1029,11 @@ PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a s
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
-QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+# The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that - it is NOT the
+# effect tariff's measurement period, which the comment here used to claim it was. See
+# BILLING_PERIOD_MINUTES below. Conflating the two is what made the integration defend a peak
+# nobody is billed for.
+QUARTER_INTERVAL_MINUTES: Final = 15  # Nordpool spot-price settlement interval
 QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
 # Native interval counts a day can have: 92 (spring DST), 96 (normal),
 # 100 (autumn DST). Anything else means the source delivered a data gap.
@@ -1658,10 +1662,45 @@ SPACE_HEATING_DEMAND_MODERATE_THRESHOLD: Final = 2.0  # kW - Display threshold
 SPACE_HEATING_DEMAND_LOW_THRESHOLD: Final = 0.5  # kW - Display threshold
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
 
-# Savings Calculation Constants (Swedish electricity market)
-# Swedish effect tariff - typical cost per kW of monthly peak
-# Based on common Swedish grid operators (Ellevio ~55, Vattenfall/E.ON ~50 SEK/kW/month)
-SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
+# THE SWEDISH EFFECT TARIFF, AS A REAL COMPANY ACTUALLY BILLS IT.
+#
+# Every number below used to be a guess. The rate was "50.0 # Conservative average", attributed to
+# "Ellevio ~55, Vattenfall/E.ON ~50" - figures that appear in no price list. The simulator
+# meanwhile used 81.25 and called it "fictional-but-typical". Two different numbers for one
+# quantity, neither sourced, and the one in the SEK figure shown to the owner was the wrong one.
+#
+# Ellevio publishes its model in full, and 81.25 is theirs:
+#
+#     "Genomsnittet av de tre hogsta effekttopparna under manaden" - the mean of the three highest
+#     peaks of the month, at most one per day, so on three different days. The measurement uses
+#     HOURLY AVERAGES. Between 22:00 and 06:00 "raknas bara halva effekttoppen" - only half the
+#     peak counts. 81,25 kr per kilowatt per manad.
+#     https://www.ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/
+#
+# REGULATORY STATUS, AND IT IS NOT SETTLED. On 13 March 2026 the government instructed
+# Energimarknadsinspektionen to repeal the requirement that grid companies levy effect charges at
+# all - the stated reason being that every DSO had built its own model, with different calculations,
+# different hours and different prices. EIFS 2022:1 was repealed in June 2026 and Ellevio dropped
+# its effect charge on 1 June 2026. Ei must propose a new, uniform model by 12 April 2027.
+#
+# Effect charges are NOT prohibited and several DSOs still levy them, so the feature is not dead -
+# but this rate is one company's, it is no longer that company's, and it is not configurable. That
+# is a product decision and it is the owner's.
+#     https://www.regeringen.se/pressmeddelanden/2026/03/krav-pa-inforande-av-effektavgifter-stoppas/
+#     https://ei.se/konsument/anvand-el-smartare/elnatsavtal-med-effektavgift
+SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 81.25  # Ellevio, kr/kW/month
+
+# THE TARIFF BILLS THE HOUR. IT DOES NOT BILL THE QUARTER-HOUR.
+#
+# The integration measured quarter-hour means and called them billing peaks, and the constant that
+# said so called itself "Swedish Effektavgift measurement period". Ellevio: "the measurement uses
+# hourly averages". Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+#
+# The difference is up to fourfold. A 15-minute hot-water cycle at 9 kW inside an otherwise idle
+# hour has an hourly mean of 3 kW - and EffektGuard recorded 9, then throttled the heat pump to
+# defend a peak that appears on no bill.
+BILLING_PERIOD_MINUTES: Final = 60
+BILLING_PERIODS_PER_DAY: Final = 24
 
 # BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the
 # CURRENT peak - `baseline = peak * 1.176` - so the reported effect-tariff saving reduced to

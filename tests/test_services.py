@@ -71,7 +71,7 @@ def mock_coordinator(mock_hass):
             today=[
                 MagicMock(
                     price=1.0 + (i * 0.01),
-                    quarter_of_day=i,
+                    period_of_day=i,
                     is_daytime=(24 <= i <= 87),
                 )
                 for i in range(96)
@@ -522,14 +522,14 @@ def test_effect_manager_reset_monthly_peaks():
     effect._monthly_peaks = [
         PeakEvent(
             timestamp=datetime.now(),
-            quarter_of_day=50,
+            period_of_day=50,
             actual_power=5.0,
             effective_power=5.0,
             is_daytime=True,
         ),
         PeakEvent(
             timestamp=datetime.now(),
-            quarter_of_day=60,
+            period_of_day=60,
             actual_power=4.5,
             effective_power=4.5,
             is_daytime=True,

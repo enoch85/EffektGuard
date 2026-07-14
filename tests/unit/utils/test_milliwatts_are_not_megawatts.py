@@ -129,9 +129,9 @@ class TestTheSecondLineOfDefence:
 
         what_the_old_code_produced = 5_000_000.0  # 5000 mW, read as megawatts
 
-        event = await manager.record_quarter_measurement(
+        event = await manager.record_period_measurement(
             power_kw=what_the_old_code_produced,
-            quarter=40,
+            period=10,
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -152,16 +152,16 @@ class TestTheSecondLineOfDefence:
         manager._store.async_save = AsyncMock()
         manager._monthly_peaks = []
 
-        await manager.record_quarter_measurement(
+        await manager.record_period_measurement(
             power_kw=5_000_000.0,
-            quarter=40,
+            period=10,
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
         # A real quarter, after the bad one.
-        await manager.record_quarter_measurement(
+        await manager.record_period_measurement(
             power_kw=6.0,
-            quarter=41,
+            period=10,
             timestamp=datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -180,9 +180,9 @@ class TestTheSecondLineOfDefence:
         manager._store.async_save = AsyncMock()
         manager._monthly_peaks = []
 
-        event = await manager.record_quarter_measurement(
+        event = await manager.record_period_measurement(
             power_kw=power_kw,
-            quarter=40,
+            period=10,
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )

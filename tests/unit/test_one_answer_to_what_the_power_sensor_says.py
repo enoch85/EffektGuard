@@ -110,7 +110,7 @@ async def _coordinator_says(value: str, unit: str | None) -> float | None:
     coordinator.peak_today = 0.0
     coordinator.peak_this_month = 0.0
     coordinator._power_sensor_available = True
-    coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+    coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
 
     await coordinator._update_peak_tracking(
         NibeState(

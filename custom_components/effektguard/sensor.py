@@ -954,16 +954,15 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_time"] = None
                 attrs["time_since_peak"] = "No peak recorded today"
 
-            # Which 15-minute quarter (Swedish effect tariff)
-            if self.coordinator.peak_today_quarter is not None:
-                attrs["peak_quarter"] = self.coordinator.peak_today_quarter
-                # Convert quarter to human-readable time
-                hour = self.coordinator.peak_today_quarter // 4
-                minute = (self.coordinator.peak_today_quarter % 4) * 15
-                attrs["peak_quarter_time"] = f"{hour:02d}:{minute:02d}"
+            # WHICH BILLING PERIOD - and the tariff's billing period is an HOUR, not a quarter.
+            # This used to report "peak_quarter" and a 15-minute clock time, because the whole
+            # integration believed the effect tariff billed quarter-hour means. It bills hourly.
+            if self.coordinator.peak_today_period is not None:
+                attrs["peak_billing_hour"] = self.coordinator.peak_today_period
+                attrs["peak_billing_hour_time"] = f"{self.coordinator.peak_today_period:02d}:00"
             else:
-                attrs["peak_quarter"] = None
-                attrs["peak_quarter_time"] = None
+                attrs["peak_billing_hour"] = None
+                attrs["peak_billing_hour_time"] = None
 
             # How was it measured? (Trust/accuracy)
             attrs["measurement_source"] = self.coordinator.peak_today_source
@@ -992,9 +991,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             # tariff will bill that blip as 1.55 kW. The night weighting is not a peak.
             today_as_billed = (
                 effective_tariff_power_kw(
-                    self.coordinator.peak_today, self.coordinator.peak_today_quarter
+                    self.coordinator.peak_today, self.coordinator.peak_today_period
                 )
-                if self.coordinator.peak_today_quarter is not None
+                if self.coordinator.peak_today_period is not None
                 else self.coordinator.peak_today
             )
             will_affect = (

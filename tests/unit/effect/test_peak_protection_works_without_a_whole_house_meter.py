@@ -43,7 +43,7 @@ from custom_components.effektguard.const import (
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 JANUARY = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)
-MIDDAY_QUARTER = 40  # inside DAYTIME, so no night weighting confuses the arithmetic
+MIDDAY_HOUR = 10  # inside DAYTIME, so no night weighting confuses the arithmetic
 
 
 def _manager() -> EffectManager:
@@ -80,9 +80,9 @@ async def test_peak_protection_actually_fires_for_a_house_with_no_meter():
 
     # A cold January morning. The pump pulls hard for three quarters; phase currents see it.
     for kw in (6.0, 5.5, 5.0):
-        await manager.record_quarter_measurement(
+        await manager.record_period_measurement(
             power_kw=kw,
-            quarter=MIDDAY_QUARTER,
+            period=MIDDAY_HOUR,
             timestamp=JANUARY,
             source=POWER_SOURCE_NIBE_CURRENTS,
         )
@@ -94,7 +94,7 @@ async def test_peak_protection_actually_fires_for_a_house_with_no_meter():
     )
 
     # Now the pump goes past the lowest of the top three. Protection must engage.
-    decision = manager.should_limit_power(current_power=7.0, current_quarter=MIDDAY_QUARTER)
+    decision = manager.should_limit_power(current_power=7.0, current_period=MIDDAY_HOUR)
 
     assert decision.should_limit, (
         f"The house is drawing 7.0 kW against a recorded monthly peak of 5.0 kW and peak "
@@ -110,9 +110,9 @@ async def test_the_resulting_peak_is_flagged_as_not_a_bill():
     """It controls the pump. It must never be shown to the owner as money."""
     manager = _manager()
 
-    await manager.record_quarter_measurement(
+    await manager.record_period_measurement(
         power_kw=6.0,
-        quarter=MIDDAY_QUARTER,
+        period=MIDDAY_HOUR,
         timestamp=JANUARY,
         source=POWER_SOURCE_NIBE_CURRENTS,
     )
@@ -132,11 +132,11 @@ async def test_one_unmetered_quarter_taints_the_whole_billing_figure():
     """The tariff charges the top THREE quarters together, so the set is billable or it is not."""
     manager = _manager()
 
-    await manager.record_quarter_measurement(
-        power_kw=6.0, quarter=MIDDAY_QUARTER, timestamp=JANUARY, source=POWER_SOURCE_EXTERNAL_METER
+    await manager.record_period_measurement(
+        power_kw=6.0, period=MIDDAY_HOUR, timestamp=JANUARY, source=POWER_SOURCE_EXTERNAL_METER
     )
-    await manager.record_quarter_measurement(
-        power_kw=5.0, quarter=MIDDAY_QUARTER, timestamp=JANUARY, source=POWER_SOURCE_NIBE_CURRENTS
+    await manager.record_period_measurement(
+        power_kw=5.0, period=MIDDAY_HOUR, timestamp=JANUARY, source=POWER_SOURCE_NIBE_CURRENTS
     )
 
     summary = manager.get_monthly_peak_summary()
@@ -155,9 +155,9 @@ async def test_a_metered_house_is_unaffected():
     manager = _manager()
 
     for kw in (6.0, 5.5, 5.0):
-        await manager.record_quarter_measurement(
+        await manager.record_period_measurement(
             power_kw=kw,
-            quarter=MIDDAY_QUARTER,
+            period=MIDDAY_HOUR,
             timestamp=JANUARY,
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -165,4 +165,4 @@ async def test_a_metered_house_is_unaffected():
     summary = manager.get_monthly_peak_summary()
     assert summary["billable"] is True
     assert summary["highest"] == pytest.approx(6.0)
-    assert manager.should_limit_power(7.0, MIDDAY_QUARTER).should_limit
+    assert manager.should_limit_power(7.0, MIDDAY_HOUR).should_limit

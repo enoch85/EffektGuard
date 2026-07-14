@@ -438,7 +438,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 27.0  # Average of 25-30
             period.is_daytime = False
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         # 04:00-12:00 (Q16-Q48): NORMAL/EXPENSIVE ~40-50 öre
@@ -446,7 +446,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 45.0 if q % 2 == 0 else 50.0  # Mix of NORMAL and EXPENSIVE
             period.is_daytime = True
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         # 12:00-19:15 (Q48-Q77): PEAK ~75-80 öre (massive spike extends into scan window)
@@ -455,7 +455,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 77.0  # Will be ~P90 = PEAK
             period.is_daytime = True
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         # 19:15-20:30 (Q77-Q82): Volatile drop - mix of PEAK and CHEAP bouncing
@@ -470,7 +470,7 @@ class TestVolatileWeightReduction:
             else:
                 period.price = 35.0  # CHEAP (P10<35<P25, not VERY_CHEAP)
             period.is_daytime = True
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         # 20:30-24:00 (Q82-Q96): Continuing volatility then stabilizing
@@ -483,7 +483,7 @@ class TestVolatileWeightReduction:
             else:
                 period.price = 35.0  # CHEAP (P10<35<P25, not VERY_CHEAP)
             period.is_daytime = False
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         # Rest stabilizes to NORMAL
@@ -491,7 +491,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 50.0
             period.is_daytime = False
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods.append(period)
 
         price_data = realize_price_data(price_periods)
@@ -653,7 +653,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 50.0
             period.is_daytime = 6 * 4 <= q < 22 * 4  # 06:00-22:00
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods_today.append(period)
 
         # Q91-Q95: Volatile spike - PEAK ~80 öre
@@ -661,7 +661,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 85.0  # PEAK
             period.is_daytime = False
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods_today.append(period)
 
         # Tomorrow Q0-Q3: Volatile drop - CHEAP ~20 öre
@@ -670,7 +670,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 20.0  # CHEAP
             period.is_daytime = False
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods_tomorrow.append(period)
 
         # Tomorrow Q4+: Stabilize to NORMAL
@@ -678,7 +678,7 @@ class TestVolatileWeightReduction:
             period = MagicMock()
             period.price = 50.0
             period.is_daytime = 6 * 4 <= q < 22 * 4
-            period.quarter_of_day = q
+            period.period_of_day = q
             price_periods_tomorrow.append(period)
 
         # Test WITH tomorrow prices

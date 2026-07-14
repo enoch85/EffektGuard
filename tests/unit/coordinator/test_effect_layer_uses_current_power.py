@@ -21,11 +21,11 @@ from datetime import datetime
 
 import pytest
 
-from custom_components.effektguard.const import DAYTIME_START_QUARTER
+from custom_components.effektguard.const import DAYTIME_START_HOUR
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 # A quarter safely inside the daytime band, so the 50% night weighting never applies.
-DAYTIME_QUARTER = DAYTIME_START_QUARTER + 4  # 07:00
+DAYTIME_HOUR = DAYTIME_START_HOUR + 1  # 07:00
 
 # Fixed instant - the effect layer's night/day weighting is wall-clock sensitive, so the
 # test must never read the real clock.
@@ -39,7 +39,7 @@ IDLE_KW = 0.3  # heat pump idling later the same day
 async def _seeded_effect_manager(hass) -> EffectManager:
     """EffectManager with one recorded monthly peak of MONTHLY_PEAK_KW."""
     effect = EffectManager(hass)
-    await effect.record_quarter_measurement(MONTHLY_PEAK_KW, DAYTIME_QUARTER, FIXED_TIME)
+    await effect.record_period_measurement(MONTHLY_PEAK_KW, DAYTIME_HOUR, FIXED_TIME)
     return effect
 
 
@@ -64,10 +64,10 @@ class TestEffectSeverityTracksInstantaneousPower:
         """
         effect = await _seeded_effect_manager(hass)
 
-        spike = effect.should_limit_power(SPIKE_KW, DAYTIME_QUARTER)
+        spike = effect.should_limit_power(SPIKE_KW, DAYTIME_HOUR)
         assert spike.severity == "CRITICAL", "5.5 kW against a 5.0 kW peak must be critical"
 
-        idle = effect.should_limit_power(IDLE_KW, DAYTIME_QUARTER)
+        idle = effect.should_limit_power(IDLE_KW, DAYTIME_HOUR)
 
         assert idle.severity == "OK", (
             f"Effect layer still {idle.severity} at {IDLE_KW} kW ({idle.reason}). "
@@ -81,9 +81,9 @@ class TestEffectSeverityTracksInstantaneousPower:
         """Relaxing on idle must not disable protection when demand genuinely returns."""
         effect = await _seeded_effect_manager(hass)
 
-        assert effect.should_limit_power(IDLE_KW, DAYTIME_QUARTER).severity == "OK"
+        assert effect.should_limit_power(IDLE_KW, DAYTIME_HOUR).severity == "OK"
 
-        back_at_peak = effect.should_limit_power(SPIKE_KW, DAYTIME_QUARTER)
+        back_at_peak = effect.should_limit_power(SPIKE_KW, DAYTIME_HOUR)
         assert back_at_peak.severity == "CRITICAL"
         assert back_at_peak.should_limit
 

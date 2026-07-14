@@ -86,7 +86,7 @@ def coordinator_with_external_meter():
     )
     coordinator.peak_today = 0.0
     coordinator.peak_this_month = 0.0
-    coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+    coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
     return coordinator
 
 
@@ -109,13 +109,20 @@ def _pump_running_but_unmetered() -> NibeState:
     )
 
 
-async def _run_a_complete_quarter(coordinator, nibe_data, monkeypatch) -> None:
-    """Four samples from 10:00 to 10:15, so quarter 40 is observed whole and recorded."""
-    for minute in (0, 5, 10, 15):
+async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
+    """Samples from 10:00 through 11:00, so the HOUR is observed whole and recorded.
+
+    It used to run 10:00-10:15 and call that a billing period. The Swedish effect tariff bills the
+    HOURLY mean - Ellevio: "the measurement uses hourly averages" - so a quarter-hour never
+    completes a billing period at all.
+    """
+    for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
         monkeypatch.setattr(
             dt_util,
             "now",
-            lambda tz=None, minute=minute: datetime(2026, 1, 15, 10, minute, tzinfo=timezone.utc),
+            lambda tz=None, hour=hour, minute=minute: datetime(
+                2026, 1, 15, hour, minute, tzinfo=timezone.utc
+            ),
         )
         await coordinator._update_peak_tracking(nibe_data)
 
@@ -135,9 +142,9 @@ async def test_a_meter_that_drops_out_does_not_keep_billing(
     dropped_out.attributes = {}
     coordinator.hass.states.get.return_value = dropped_out
 
-    await _run_a_complete_quarter(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
-    coordinator.effect.record_quarter_measurement.assert_not_awaited()
+    coordinator.effect.record_period_measurement.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -158,9 +165,9 @@ async def test_a_meter_reporting_garbage_does_not_keep_billing(
     garbage.attributes = {"unit_of_measurement": "W"}
     coordinator.hass.states.get.return_value = garbage
 
-    await _run_a_complete_quarter(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
-    coordinator.effect.record_quarter_measurement.assert_not_awaited()
+    coordinator.effect.record_period_measurement.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -181,7 +188,7 @@ async def test_an_estimate_is_never_stamped_as_a_meter_reading(
     dropped_out.attributes = {}
     coordinator.hass.states.get.return_value = dropped_out
 
-    await _run_a_complete_quarter(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
     assert coordinator.peak_today_source != "external_meter", (
         f"A peak of {coordinator.peak_today:.2f} kW, estimated from compressor Hz because the meter "
@@ -205,9 +212,9 @@ async def test_a_working_meter_still_bills(coordinator_with_external_meter, monk
     working.attributes = {"unit_of_measurement": "W"}
     coordinator.hass.states.get.return_value = working
 
-    await _run_a_complete_quarter(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
-    coordinator.effect.record_quarter_measurement.assert_awaited_once()
-    recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+    coordinator.effect.record_period_measurement.assert_awaited_once()
+    recorded = coordinator.effect.record_period_measurement.await_args.kwargs
     assert recorded["power_kw"] == pytest.approx(4.2)
     assert coordinator.peak_today_source == "external_meter"

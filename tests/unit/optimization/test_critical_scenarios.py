@@ -107,19 +107,19 @@ class TestPeakCalculationFrequency:
 
         Expected:
         - Each 15-minute period measured once
-        - Multiple measurements within same quarter don't create multiple peaks
-        - Only highest measurement in quarter matters
+        - Multiple measurements within same billing_hour don't create multiple peaks
+        - Only highest measurement in billing_hour matters
         """
         timestamp_1 = datetime(2025, 10, 14, 12, 2)  # Q48 (12:00-12:15)
-        timestamp_2 = datetime(2025, 10, 14, 12, 7)  # Q48 (same quarter)
-        timestamp_3 = datetime(2025, 10, 14, 12, 14)  # Q48 (same quarter)
+        timestamp_2 = datetime(2025, 10, 14, 12, 7)  # Q48 (same billing_hour)
+        timestamp_3 = datetime(2025, 10, 14, 12, 14)  # Q48 (same billing_hour)
 
-        quarter = 48  # All in same quarter
+        billing_hour = 12  # All in same billing_hour
 
-        # Record multiple measurements in same quarter
-        peak_1 = await effect_manager.record_quarter_measurement(4.0, quarter, timestamp_1)
-        peak_2 = await effect_manager.record_quarter_measurement(4.5, quarter, timestamp_2)
-        peak_3 = await effect_manager.record_quarter_measurement(4.2, quarter, timestamp_3)
+        # Record multiple measurements in same billing_hour
+        peak_1 = await effect_manager.record_period_measurement(4.0, billing_hour, timestamp_1)
+        peak_2 = await effect_manager.record_period_measurement(4.5, billing_hour, timestamp_2)
+        peak_3 = await effect_manager.record_period_measurement(4.2, billing_hour, timestamp_3)
 
         # All should be recorded (highest wins)
         # But only 3 peaks total for top 3 tracking
@@ -169,12 +169,12 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak at 5.0 kW (before outage)
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_quarter_measurement(5.0, 40, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10, timestamp)
 
         # Simulate system restart - storage persists
         # Current power: 4.2 kW (0.8 kW below peak)
-        quarter = 50  # Daytime
-        decision = effect_manager.should_limit_power(4.2, quarter)
+        billing_hour = 12  # Daytime
+        decision = effect_manager.should_limit_power(4.2, billing_hour)
 
         # Should be WARNING (between 0.5 and 1.0 kW margin)
         assert decision.severity == "WARNING"
@@ -190,10 +190,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_quarter_measurement(5.0, 40, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10, timestamp)
 
         # Current power: 4.7 kW (0.3 kW below peak - within 0.5 kW critical zone)
-        decision = effect_manager.should_limit_power(4.7, 50)
+        decision = effect_manager.should_limit_power(4.7, 12)
 
         assert decision.severity == "CRITICAL"
         assert decision.recommended_offset == -2.0
@@ -207,10 +207,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_quarter_measurement(5.0, 40, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10, timestamp)
 
         # Current power: 5.5 kW (exceeding peak by 0.5 kW)
-        decision = effect_manager.should_limit_power(5.5, 50)
+        decision = effect_manager.should_limit_power(5.5, 12)
 
         assert decision.severity == "CRITICAL"
         assert decision.recommended_offset == -3.0  # Maximum reduction
@@ -224,10 +224,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_quarter_measurement(5.0, 40, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10, timestamp)
 
         # Current power: 3.0 kW (2.0 kW below peak - safe)
-        decision = effect_manager.should_limit_power(3.0, 50)
+        decision = effect_manager.should_limit_power(3.0, 12)
 
         assert decision.severity == "OK"
         assert decision.should_limit is False
@@ -242,11 +242,11 @@ class TestPowerOutageRecovery:
         """
         # Set up daytime peak
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)  # Daytime
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)  # Daytime
 
         # Nighttime: 8.0 kW actual = 4.0 kW effective (1.0 kW margin from peak)
-        quarter = 94  # 23:30, nighttime
-        decision = effect_manager.should_limit_power(8.0, quarter)
+        billing_hour = 23  # 23:30, nighttime
+        decision = effect_manager.should_limit_power(8.0, billing_hour)
 
         # Should be OK since effective power (4.0) < peak (5.0) with >1.0 kW margin
         assert decision.severity == "OK"
@@ -398,7 +398,7 @@ class TestPresetModes:
 
 
 class TestQuarterMeasurementTiming:
-    """Test 15-minute quarter measurement timing and alignment."""
+    """Test 15-minute billing_hour measurement timing and alignment."""
 
     def test_quarter_calculation_is_correct(self):
         """Test: Quarter of day calculation matches Effektavgift windows.
@@ -416,12 +416,14 @@ class TestQuarterMeasurementTiming:
             (12, 0, 48),  # 12:00 = Q48
             (12, 15, 49),  # 12:15 = Q49
             (22, 0, 88),  # 22:00 = Q88 (night start)
-            (23, 45, 95),  # 23:45 = Q95 (last quarter)
+            (23, 45, 95),  # 23:45 = Q95 (last billing_hour)
         ]
 
         for hour, minute, expected_quarter in test_cases:
-            quarter = (hour * 4) + (minute // 15)
-            assert quarter == expected_quarter, f"{hour}:{minute:02d} should be Q{expected_quarter}"
+            billing_hour = (hour * 4) + (minute // 15)
+            assert (
+                billing_hour == expected_quarter
+            ), f"{hour}:{minute:02d} should be Q{expected_quarter}"
 
     def test_quarters_per_day(self):
         """Test: Verify 96 quarters per day."""
@@ -433,24 +435,24 @@ class TestQuarterMeasurementTiming:
 
     @pytest.mark.asyncio
     async def test_multiple_measurements_same_quarter_handled(self, effect_manager):
-        """Test: Multiple measurements in same quarter don't cause issues.
+        """Test: Multiple measurements in same billing_hour don't cause issues.
 
         Expected:
         - Each measurement evaluated independently
         - Only top 3 effective powers stored
-        - Same quarter can be measured multiple times (coordinator updates)
+        - Same billing_hour can be measured multiple times (coordinator updates)
         """
         timestamp_base = datetime(2025, 10, 14, 12, 0)
-        quarter = 48  # 12:00-12:15
+        billing_hour = 12  # 12:00-12:15
 
-        # Simulate 3 coordinator updates within same quarter
-        # (5-minute updates = 3 updates per 15-min quarter)
-        peak_1 = await effect_manager.record_quarter_measurement(4.0, quarter, timestamp_base)
-        peak_2 = await effect_manager.record_quarter_measurement(
-            4.5, quarter, timestamp_base + timedelta(minutes=5)
+        # Simulate 3 coordinator updates within same billing_hour
+        # (5-minute updates = 3 updates per 15-min billing_hour)
+        peak_1 = await effect_manager.record_period_measurement(4.0, billing_hour, timestamp_base)
+        peak_2 = await effect_manager.record_period_measurement(
+            4.5, billing_hour, timestamp_base + timedelta(minutes=5)
         )
-        peak_3 = await effect_manager.record_quarter_measurement(
-            4.2, quarter, timestamp_base + timedelta(minutes=10)
+        peak_3 = await effect_manager.record_period_measurement(
+            4.2, billing_hour, timestamp_base + timedelta(minutes=10)
         )
 
         # All measurements processed
@@ -472,7 +474,7 @@ class TestSystemRobustness:
         """
         # Add peaks from previous month
         old_timestamp = datetime(2025, 9, 15, 12, 0)  # September
-        await effect_manager.record_quarter_measurement(5.0, 48, old_timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, old_timestamp)
 
         # Simulate month cleanup
         effect_manager._clean_old_peaks()
@@ -502,7 +504,7 @@ class TestSystemRobustness:
 
         # Simulate saving peaks
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await manager.record_quarter_measurement(5.0, 48, timestamp)
+        await manager.record_period_measurement(5.0, 12, timestamp)
 
         stored_data = {"peaks": [p.to_dict() for p in manager._monthly_peaks]}
 
@@ -539,8 +541,8 @@ Test Coverage Summary for Critical Scenarios:
       - Tolerance affects price layer aggression (0.4x to 1.8x)
 
 ✅ Quarter Measurement Timing (3 tests)
-   - Correct quarter calculation (0-95)
-   - Multiple measurements per quarter handled
+   - Correct billing_hour calculation (0-95)
+   - Multiple measurements per billing_hour handled
    - Aligned with Effektavgift billing
 
 ✅ System Robustness (2 tests)

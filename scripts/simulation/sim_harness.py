@@ -52,6 +52,7 @@ from custom_components.effektguard.const import (
     CONF_GESPOT_ENTITY,
     INTERNAL_GAINS_W,
     POWER_SOURCE_EXTERNAL_METER,
+    SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 from custom_components.effektguard.utils.offset import integer_offset_for
@@ -196,7 +197,10 @@ OVERSHOOT_TOLERANCE = 1.5  # overshoot band stays wider; heat is banked, not los
 # Illustrative Swedish effect tariff (SEK per kW of the mean of the top-3
 # daily quarter-hour-mean peaks, per month). Rate is fictional-but-typical;
 # the point is comparing runs, not billing accuracy.
-EFFECT_TARIFF_SEK_PER_KW = 81.25
+# Ellevio's published rate, and it lives in const.py now - see SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH.
+# The harness used to carry its own copy and call it "fictional-but-typical". It is neither: it is
+# Ellevio's real 81,25 kr/kW/month, and production carried a DIFFERENT unsourced number (50.0).
+EFFECT_TARIFF_SEK_PER_KW = SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH
 
 
 @dataclass
@@ -954,9 +958,9 @@ def simulate(
     }
     best_published_cop = max(p.cop for p in house.profile.datasheet_points)
     last_offsets = []
-    quarter_samples: list[float] = []
-    quarter_id = None
-    daily_peaks: dict = {}  # date -> max quarter-mean kW
+    period_samples: list[float] = []
+    period_id = None
+    daily_peaks: dict = {}  # date -> max HOURLY-mean kW (the billed quantity)
     # Highest completed quarter-hour MEAN so far: what the coordinator publishes as
     # peak_this_month, and therefore what the effect layer is defending. Starts at
     # zero, as it does on a fresh install.
@@ -1296,12 +1300,17 @@ def simulate(
         )
         stats["cost_sek"] += energy * cur_price_ore / 100.0
 
-        # Effect tariff basis: quarter-hour MEAN power (Swedish effektavgift),
-        # never the instantaneous sample.
-        this_quarter = (now.date(), cur_q)
-        if quarter_id is not None and this_quarter != quarter_id:
-            q_mean = sum(quarter_samples) / len(quarter_samples)
-            day = quarter_id[0]
+        # EFFECT TARIFF BASIS: THE HOURLY MEAN. Not the quarter-hour, which is what this used to
+        # accumulate, and not the instantaneous sample, which is what it accumulated before that.
+        #
+        # Ellevio: "the measurement uses hourly averages". Energimarknadsinspektionen:
+        # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
+        # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
+        # 9 - so every tariff figure it produced was up to fourfold too high.
+        this_period = (now.date(), now.hour)
+        if period_id is not None and this_period != period_id:
+            q_mean = sum(period_samples) / len(period_samples)
+            day = period_id[0]
             daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
             running_peak_kw = max(running_peak_kw, q_mean)
 
@@ -1318,16 +1327,16 @@ def simulate(
             # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
             # houses; this is the same hole, in the instrument that was supposed to catch it.)
             asyncio.run(
-                effect.record_quarter_measurement(
+                effect.record_period_measurement(
                     power_kw=q_mean,
-                    quarter=quarter_id[1],
+                    period=period_id[1],
                     timestamp=now,
                     source=POWER_SOURCE_EXTERNAL_METER,
                 )
             )
-            quarter_samples = []
-        quarter_id = this_quarter
-        quarter_samples.append(power_kw)
+            period_samples = []
+        period_id = this_period
+        period_samples.append(power_kw)
 
         if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
             stats["comfort_minutes_below"] += STEP_MIN
@@ -1350,13 +1359,13 @@ def simulate(
                 }
             )
 
-    if quarter_samples and quarter_id is not None:
-        q_mean = sum(quarter_samples) / len(quarter_samples)
-        day = quarter_id[0]
+    if period_samples and period_id is not None:
+        q_mean = sum(period_samples) / len(period_samples)
+        day = period_id[0]
         daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
     top3 = sorted(daily_peaks.values(), reverse=True)[:3]
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
-    stats["peak_kw_quarter_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
+    stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)
     stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
     stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)

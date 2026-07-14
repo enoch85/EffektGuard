@@ -286,7 +286,7 @@ class TestSensorEntityDefinitions:
             "outdoor_temperature",
             "indoor_temperature",
             "nibe_power",
-            "quarter_of_day",
+            "period_of_day",
             "temperature_trend",
             "outdoor_temperature_trend",
             "optional_features_status",

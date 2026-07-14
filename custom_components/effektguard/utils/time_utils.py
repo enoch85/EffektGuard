@@ -65,3 +65,14 @@ def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> 
     if len(periods) == QUARTERS_PER_DAY and quarter < len(periods):
         return quarter
     return None
+
+
+def get_current_billing_period(now: Optional[datetime] = None) -> int:
+    """The effect tariff's billing period: the HOUR of the day, 0-23.
+
+    Not the quarter-hour. Ellevio: "the measurement uses hourly averages".
+    Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+    """
+    if now is None:
+        now = dt_util.now()
+    return now.hour

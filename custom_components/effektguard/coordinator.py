@@ -55,7 +55,7 @@ from .const import (
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
     POWER_SOURCE_NONE,
-    QUARTER_INTERVAL_MINUTES,
+    BILLING_PERIOD_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
     TOLERANCE_RANGE_MULTIPLIER,
@@ -82,7 +82,7 @@ from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
 from .utils.power import power_kw_from_state
-from .utils.time_utils import get_current_quarter
+from .utils.time_utils import get_current_billing_period
 from .utils.volatile_helpers import OffsetVolatilityTracker
 
 if TYPE_CHECKING:
@@ -307,10 +307,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # time), so autumn's repeated wall-clock hour yields two distinct
         # quarters. The first quarter after startup is observed but never
         # recorded - it began before we could watch it.
-        self._quarter_power_samples: list[tuple[datetime, float]] = []
-        self._quarter_power_start: datetime | None = None
-        self._quarter_power_number: int = 0
-        self._quarter_power_partial: bool = False
+        # The effect tariff's billing period is the HOUR, not the quarter-hour. See
+        # BILLING_PERIOD_MINUTES: a quarter-hour mean overstates the billed peak by up to fourfold.
+        self._period_power_samples: list[tuple[datetime, float]] = []
+        self._period_power_start: datetime | None = None
+        self._period_power_number: int = 0
+        self._period_power_partial: bool = False
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
         self._last_learning_save: datetime | None = None  # Track last learned data save time
@@ -330,7 +332,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
         self.peak_today_source: str = "unknown"  # external_meter, nibe_currents, estimate
-        self.peak_today_quarter: int | None = None  # 15-min quarter (0-95) for effect tariff
+        self.peak_today_period: int | None = None  # the billing HOUR (0-23) for the effect tariff
         self.yesterday_peak: float = 0.0  # Yesterday's peak for comparison
 
         # DHW tracking (unified: is_hot_water OR temp_lux active)
@@ -1364,7 +1366,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.peak_today = 0.0
             self.peak_today_time = None
             self.peak_today_source = "unknown"
-            self.peak_today_quarter = None
+            self.peak_today_period = None
             self._last_update_date = now.date()
 
         # Update peak tracking
@@ -2282,25 +2284,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Get current timestamp for peak tracking
             now = dt_util.now()
-            quarter_of_day = get_current_quarter(now)
-            quarter_start = now.replace(
-                minute=now.minute - now.minute % QUARTER_INTERVAL_MINUTES,
-                second=0,
-                microsecond=0,
-            )
+            billing_period = get_current_billing_period(now)
+            period_start = now.replace(minute=0, second=0, microsecond=0)
 
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
                 self.peak_today = current_power
                 self.peak_today_time = now
                 self.peak_today_source = measurement_source
-                self.peak_today_quarter = quarter_of_day
+                # The billing PERIOD this peak fell in - an hour. The sensor weights it through
+                # effective_tariff_power_kw, which now takes an hour, so it must be given one.
+                self.peak_today_period = billing_period
 
                 _LOGGER.info(
-                    "New daily peak: %.2f kW at %s (quarter %d, source: %s)",
+                    "New daily peak: %.2f kW at %s (billing hour %d, source: %s)",
                     current_power,
                     now.strftime("%H:%M:%S"),
-                    quarter_of_day,
+                    billing_period,
                     measurement_source,
                 )
 
@@ -2321,61 +2321,67 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-            # Swedish effect tariffs bill the 15-minute MEAN power. Recording
-            # each instantaneous sample would register a short spike (e.g. a
-            # 9 kW start among 1 kW readings) as a full quarter peak. Instead,
-            # accumulate this quarter's samples and record the mean when the
-            # quarter completes.
+            # THE TARIFF BILLS THE HOURLY MEAN. IT DOES NOT BILL THE QUARTER-HOUR.
+            #
+            # This block used to say "Swedish effect tariffs bill the 15-minute MEAN power", which
+            # is a citation I invented, and it accumulated quarter-hours accordingly. Ellevio: "the
+            # measurement uses hourly averages". Energimarknadsinspektionen: "elnatsforetagen mater
+            # din elanvandning per timme".
+            #
+            # The difference is up to fourfold. A 15-minute hot-water cycle at 9 kW inside an
+            # otherwise idle hour has an hourly mean of 3 kW - and this recorded 9, persisted it as
+            # the month's billing peak, and then throttled the heat pump for the rest of the month
+            # to defend a number that appears on no bill.
+            #
+            # Recording each instantaneous sample would be worse still, so the time-weighted mean
+            # stays; only the window it is taken over is corrected.
             peak_event = None
-            if quarter_start != self._quarter_power_start:
+            if period_start != self._period_power_start:
                 if (
-                    self._quarter_power_start is not None
-                    and self._quarter_power_samples
-                    and not self._quarter_power_partial
+                    self._period_power_start is not None
+                    and self._period_power_samples
+                    and not self._period_power_partial
                 ):
-                    completed_start, previous_power = self._quarter_power_samples[0]
-                    quarter_end = completed_start + timedelta(minutes=QUARTER_INTERVAL_MINUTES)
+                    completed_start, previous_power = self._period_power_samples[0]
+                    period_end = completed_start + timedelta(minutes=BILLING_PERIOD_MINUTES)
                     weighted_power = 0.0
                     previous_time = completed_start
-                    for sample_time, sample_power in self._quarter_power_samples[1:]:
+                    for sample_time, sample_power in self._period_power_samples[1:]:
                         weighted_power += (
                             previous_power * (sample_time - previous_time).total_seconds()
                         )
                         previous_time = sample_time
                         previous_power = sample_power
-                    weighted_power += previous_power * (quarter_end - previous_time).total_seconds()
-                    quarter_mean = weighted_power / (quarter_end - completed_start).total_seconds()
-                    # Stamp the event with the quarter it measures, not the
-                    # boundary-crossing time: at a month boundary "now" would
-                    # attribute the old month's last quarter to the new month
-                    peak_event = await self.effect.record_quarter_measurement(
-                        power_kw=quarter_mean,
-                        quarter=self._quarter_power_number,
+                    weighted_power += previous_power * (period_end - previous_time).total_seconds()
+                    period_mean = weighted_power / (period_end - completed_start).total_seconds()
+                    # Stamp the event with the hour it measures, not the boundary-crossing time:
+                    # at a month boundary "now" would attribute the old month's last hour to the
+                    # new month.
+                    peak_event = await self.effect.record_period_measurement(
+                        power_kw=period_mean,
+                        period=self._period_power_number,
                         timestamp=completed_start,
                         source=power_source,
                     )
-                elif self._quarter_power_start is not None:
+                elif self._period_power_start is not None:
                     _LOGGER.debug(
-                        "Discarding partial effect-tariff quarter %d (observation "
-                        "began mid-quarter)",
-                        self._quarter_power_number,
+                        "Discarding partial effect-tariff hour %d (observation began mid-hour)",
+                        self._period_power_number,
                     )
 
-                # Only the first quarter after startup can be partial: it began
-                # before observation started (unless the first sample landed in
-                # the quarter's first minute). Later quarters anchor their first
-                # sample at the quarter boundary - the reading backfills at most
-                # one update cycle, mirroring the forward extrapolation to the
-                # boundary at the end of the quarter.
-                self._quarter_power_partial = self._quarter_power_start is None and bool(
-                    now.minute % QUARTER_INTERVAL_MINUTES
+                # Only the first hour after startup can be partial: it began before observation
+                # started. Later hours anchor their first sample at the hour boundary - the reading
+                # backfills at most one update cycle, mirroring the forward extrapolation to the
+                # boundary at the end of the hour.
+                self._period_power_partial = self._period_power_start is None and bool(
+                    now.minute % BILLING_PERIOD_MINUTES
                 )
-                self._quarter_power_start = quarter_start
-                self._quarter_power_number = quarter_of_day
-                anchor = now if self._quarter_power_partial else quarter_start
-                self._quarter_power_samples = [(anchor, current_power)]
+                self._period_power_start = period_start
+                self._period_power_number = billing_period
+                anchor = now if self._period_power_partial else period_start
+                self._period_power_samples = [(anchor, current_power)]
             else:
-                self._quarter_power_samples.append((now, current_power))
+                self._period_power_samples.append((now, current_power))
 
             if (
                 peak_event

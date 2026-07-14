@@ -128,16 +128,18 @@ async def _observe_a_whole_quarter(coord, monkeypatch, hour: int, power_kw: floa
 
     nibe_data = _metered_house(hour, power_kw)
 
-    for minute in (0, 5, 10, 15):
+    # A whole BILLING HOUR, because that is what the tariff bills. It used to run 15 minutes and
+    # call that a billing period.
+    for h, m in [(hour, mm) for mm in range(0, 60, 5)] + [(hour + 1, 0)]:
         monkeypatch.setattr(
             dt_util,
             "now",
-            lambda tz=None, m=minute, h=hour: datetime(2026, 1, 15, h, m, tzinfo=timezone.utc),
+            lambda tz=None, m=m, h=h: datetime(2026, 1, 15, h, m, tzinfo=timezone.utc),
         )
         await coord._update_peak_tracking(nibe_data)
 
     assert coord.effect._monthly_peaks, (
-        "PRECONDITION FAILED: no quarter was recorded, so nothing downstream of here means "
+        "PRECONDITION FAILED: no billing hour was recorded, so nothing downstream of here means "
         "anything. The meter did not read."
     )
 
@@ -215,9 +217,9 @@ async def test_a_real_reduction_is_still_reported(coordinator, monkeypatch):
     optimised._store = MagicMock()
     optimised._store.async_save = AsyncMock()
     optimised._monthly_peaks = []
-    await optimised.record_quarter_measurement(
+    await optimised.record_period_measurement(
         power_kw=5.0,
-        quarter=DAY_HOUR * 4,
+        period=DAY_HOUR,
         timestamp=datetime(2026, 1, 20, DAY_HOUR, 0, tzinfo=timezone.utc),
         source="external_meter",
     )
@@ -277,16 +279,17 @@ async def test_the_heat_pumps_own_current_sensors_are_not_a_billing_baseline(mon
     pump_only.phase2_current = SIX_KW_OF_CURRENT
     pump_only.phase3_current = SIX_KW_OF_CURRENT
 
-    for minute in (0, 5, 10, 15):
+    # A whole billing HOUR, because that is what the tariff bills.
+    for h, m in [(DAY_HOUR, mm) for mm in range(0, 60, 5)] + [(DAY_HOUR + 1, 0)]:
         monkeypatch.setattr(
             dt_util,
             "now",
-            lambda tz=None, m=minute: datetime(2026, 1, 15, DAY_HOUR, m, tzinfo=timezone.utc),
+            lambda tz=None, m=m, h=h: datetime(2026, 1, 15, h, m, tzinfo=timezone.utc),
         )
         await coord._update_peak_tracking(pump_only)
 
     assert coord.effect._monthly_peaks, (
-        "PRECONDITION: the NIBE-currents quarter must still be RECORDED - peak control depends on "
+        "PRECONDITION: the NIBE-currents hour must still be RECORDED - peak control depends on "
         "it, and refusing to record it would break throttling. The point is what it must not FEED."
     )
     assert coord.savings_calculator._baseline_monthly_peak is None, (
@@ -309,13 +312,13 @@ class TestWhatTheOwnerIsTold:
         entry.data = {}
         return EffektGuardSensor(coord, entry, description)
 
-    def _coordinator(self, peak_today, quarter, peak_this_month):
+    def _coordinator(self, peak_today, period, peak_this_month):
         coord = MagicMock()
         # `extra_state_attributes` returns early on a falsy `data`, so an empty dict here would
         # make every assertion below a KeyError rather than a judgement about the attribute.
         coord.data = {"nibe": MagicMock()}
         coord.peak_today = peak_today
-        coord.peak_today_quarter = quarter
+        coord.peak_today_period = period
         coord.peak_today_source = "external_meter"
         coord.peak_today_time = None
         coord.peak_this_month = peak_this_month
@@ -324,7 +327,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_night_blip_is_not_announced_as_a_new_monthly_peak(self):
         """3.1 kW at 02:00 is billed as 1.55 kW. It cannot beat a 3.0 kW effective monthly peak."""
-        coord = self._coordinator(peak_today=3.1, quarter=NIGHT_HOUR * 4, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=3.1, period=NIGHT_HOUR, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 
@@ -336,7 +339,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_daytime_peak_that_really_does_beat_the_month_is_still_announced(self):
         """The regression guard. Weighting both sides must not silence a genuine new peak."""
-        coord = self._coordinator(peak_today=6.0, quarter=DAY_HOUR * 4, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=6.0, period=DAY_HOUR, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 
@@ -346,7 +349,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_night_peak_big_enough_to_win_on_its_billed_value_is_announced(self):
         """8.0 kW at 02:00 is billed as 4.0 kW, which does beat 3.0. The weighting cuts both ways."""
-        coord = self._coordinator(peak_today=8.0, quarter=NIGHT_HOUR * 4, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=8.0, period=NIGHT_HOUR, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 

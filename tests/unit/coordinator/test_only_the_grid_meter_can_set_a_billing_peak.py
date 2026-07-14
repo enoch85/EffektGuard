@@ -76,7 +76,7 @@ def _coordinator(power_entity: str | None) -> EffektGuardCoordinator:
     coordinator.peak_today = 0.0
     coordinator.peak_this_month = 0.0
     coordinator._power_sensor_available = True
-    coordinator.effect.record_quarter_measurement = AsyncMock(return_value=None)
+    coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
     return coordinator
 
 
@@ -105,12 +105,19 @@ def _pump(compressor_hz: int = 0, currents: float | None = None) -> NibeState:
     )
 
 
-async def _run_a_complete_quarter(coordinator, nibe_data, monkeypatch) -> None:
-    for minute in (0, 5, 10, 15):
+async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
+    """Samples through a whole HOUR, because that is the tariff's billing period.
+
+    It used to run 10:00-10:15 and call that a billing period. Ellevio bills the HOURLY mean, so a
+    quarter-hour never completes one.
+    """
+    for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
         monkeypatch.setattr(
             dt_util,
             "now",
-            lambda tz=None, minute=minute: datetime(2026, 1, 15, 10, minute, tzinfo=timezone.utc),
+            lambda tz=None, hour=hour, minute=minute: datetime(
+                2026, 1, 15, hour, minute, tzinfo=timezone.utc
+            ),
         )
         await coordinator._update_peak_tracking(nibe_data)
 
@@ -143,10 +150,12 @@ async def test_nibe_phase_currents_still_drive_peak_protection(monkeypatch):
     """
     coordinator = _coordinator(power_entity=None)  # no whole-house meter, only NIBE currents
 
-    await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60, currents=10.0), monkeypatch)
+    await _run_a_complete_billing_hour(
+        coordinator, _pump(compressor_hz=60, currents=10.0), monkeypatch
+    )
 
-    coordinator.effect.record_quarter_measurement.assert_awaited_once()
-    recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+    coordinator.effect.record_period_measurement.assert_awaited_once()
+    recorded = coordinator.effect.record_period_measurement.await_args.kwargs
 
     assert recorded["source"] == POWER_SOURCE_NIBE_CURRENTS, (
         f"The peak was recorded as {recorded['source']!r}. It must carry its provenance, because "
@@ -163,7 +172,7 @@ async def test_a_nibe_currents_peak_is_never_billable(monkeypatch):
 
     from_currents = PeakEvent(
         timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
-        quarter_of_day=40,
+        period_of_day=40,
         actual_power=6.8,
         effective_power=6.8,
         is_daytime=True,
@@ -171,7 +180,7 @@ async def test_a_nibe_currents_peak_is_never_billable(monkeypatch):
     )
     from_meter = PeakEvent(
         timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
-        quarter_of_day=40,
+        period_of_day=40,
         actual_power=6.8,
         effective_power=6.8,
         is_daytime=True,
@@ -196,9 +205,11 @@ async def test_an_estimate_drives_nothing_at_all(monkeypatch):
     coordinator = _coordinator(power_entity=None)
 
     # No meter, no phase currents: PRIORITY 3 falls through to a compressor-Hz estimate.
-    await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60, currents=None), monkeypatch)
+    await _run_a_complete_billing_hour(
+        coordinator, _pump(compressor_hz=60, currents=None), monkeypatch
+    )
 
-    coordinator.effect.record_quarter_measurement.assert_not_awaited()
+    coordinator.effect.record_period_measurement.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -211,10 +222,10 @@ async def test_a_meter_masked_by_solar_bills_what_the_grid_actually_delivered(mo
     coordinator = _coordinator(power_entity="sensor.house_power")
     _meter(coordinator.hass, "500")  # 500 W of grid import behind solar
 
-    await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump(compressor_hz=60), monkeypatch)
 
-    coordinator.effect.record_quarter_measurement.assert_awaited_once()
-    recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+    coordinator.effect.record_period_measurement.assert_awaited_once()
+    recorded = coordinator.effect.record_period_measurement.await_args.kwargs
 
     assert recorded["power_kw"] == pytest.approx(0.5), (
         f"The grid delivered 0.5 kW and {recorded['power_kw']:.2f} kW was recorded against the "
@@ -233,8 +244,8 @@ async def test_a_working_meter_still_bills(monkeypatch):
     coordinator = _coordinator(power_entity="sensor.house_power")
     _meter(coordinator.hass, "4200")
 
-    await _run_a_complete_quarter(coordinator, _pump(compressor_hz=60), monkeypatch)
+    await _run_a_complete_billing_hour(coordinator, _pump(compressor_hz=60), monkeypatch)
 
-    coordinator.effect.record_quarter_measurement.assert_awaited_once()
-    recorded = coordinator.effect.record_quarter_measurement.await_args.kwargs
+    coordinator.effect.record_period_measurement.assert_awaited_once()
+    recorded = coordinator.effect.record_period_measurement.await_args.kwargs
     assert recorded["power_kw"] == pytest.approx(4.2)

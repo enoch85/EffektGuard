@@ -13,7 +13,7 @@ month's. Only a restart or the manual `reset_peak_tracking` service cleared them
 
 F-056 - `peak_this_month` tracked the LATEST peak, not the highest
 ------------------------------------------------------------------
-`record_quarter_measurement()` returns a `PeakEvent` for ANY new entry while the top-3 list
+`record_period_measurement()` returns a `PeakEvent` for ANY new entry while the top-3 list
 is still filling. The coordinator assigned `peak_event.effective_power` straight to
 `peak_this_month`, so a 6.0 kW peak followed by a 2.0 kW quarter left it at 2.0 - silently
 dropping the monthly peak by 4 kW.
@@ -32,13 +32,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.effektguard.const import (
-    DAYTIME_START_QUARTER,
+    DAYTIME_START_HOUR,
     EFFECT_OFFSET_PREDICTIVE,
     EFFECT_WEIGHT_PREDICTIVE,
 )
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
-DAYTIME_QUARTER = DAYTIME_START_QUARTER + 4  # 07:00 - avoids the 50% night weighting
+DAYTIME_HOUR = DAYTIME_START_HOUR + 1  # 07:00 - avoids the 50% night weighting
 
 OCTOBER = datetime(2025, 10, 20, 7, 0)
 NOVEMBER = datetime(2025, 11, 3, 7, 0)
@@ -52,7 +52,7 @@ class TestMonthlyPeaksReset:
     async def test_last_months_peaks_do_not_survive_into_this_month(self, hass, monkeypatch):
         """F-108: an instance up across a month boundary carried October into November."""
         effect = EffectManager(hass)
-        await effect.record_quarter_measurement(6.0, DAYTIME_QUARTER, OCTOBER)
+        await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
         assert effect.get_monthly_peak_summary()["count"] == 1
 
         # Time moves into November. This is what the coordinator now calls on month change.
@@ -73,7 +73,7 @@ class TestMonthlyPeaksReset:
     async def test_this_months_peaks_are_kept(self, hass, monkeypatch):
         """Do not over-correct: pruning must not eat the current month."""
         effect = EffectManager(hass)
-        await effect.record_quarter_measurement(6.0, DAYTIME_QUARTER, NOVEMBER)
+        await effect.record_period_measurement(6.0, DAYTIME_HOUR, NOVEMBER)
 
         monkeypatch.setattr(
             "custom_components.effektguard.optimization.effect_layer.dt_util.now",
@@ -90,8 +90,8 @@ class TestMonthlyPeakIsTheHighest:
         """F-056: the coordinator must read `highest`, not the returned PeakEvent."""
         effect = EffectManager(hass)
 
-        await effect.record_quarter_measurement(6.0, DAYTIME_QUARTER, OCTOBER)
-        event = await effect.record_quarter_measurement(2.0, DAYTIME_QUARTER + 4, OCTOBER)
+        await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
+        event = await effect.record_period_measurement(2.0, DAYTIME_HOUR + 4, OCTOBER)
 
         # The second, SMALLER quarter still returns a PeakEvent (top-3 is not full yet).
         assert event is not None
@@ -139,7 +139,7 @@ class TestPredictiveBranchNeedsAPeakHistory:
     async def test_predictive_still_fires_once_a_peak_exists(self, hass):
         """Do not over-correct: with real history the predictive branch must still work."""
         effect = EffectManager(hass)
-        await effect.record_quarter_measurement(3.0, DAYTIME_QUARTER, OCTOBER)
+        await effect.record_period_measurement(3.0, DAYTIME_HOUR, OCTOBER)
 
         decision = effect.evaluate_layer(
             current_peak=3.0,

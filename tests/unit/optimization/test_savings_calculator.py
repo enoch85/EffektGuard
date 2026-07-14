@@ -80,11 +80,19 @@ class TestMonthlySavingsEstimation:
             average_spot_savings_per_day=5.0,
         )
 
-        assert estimate.monthly_estimate == 250.0
-        assert estimate.effect_savings == 100.0
+        assert estimate.monthly_estimate == pytest.approx(
+            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) + 150.0
+        )
+        assert estimate.effect_savings == pytest.approx(
+            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
         assert estimate.spot_savings == 150.0
-        assert estimate.baseline_cost == 500.0  # 10 kW × 50 SEK
-        assert estimate.optimized_cost == 400.0  # 8 kW × 50 SEK
+        assert estimate.baseline_cost == pytest.approx(
+            round(10.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
+        assert estimate.optimized_cost == pytest.approx(
+            round(8.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
 
     def test_without_a_measured_baseline_there_is_no_effect_saving(self):
         """This test used to ENSHRINE the fabrication. It asserted the invented number.
@@ -142,7 +150,7 @@ class TestMonthlySavingsEstimation:
 
         assert estimate.effect_baseline_measured is True
         assert estimate.effect_savings == pytest.approx(
-            2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH
+            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
 
     def test_a_measured_baseline_that_is_worse_reports_no_saving_not_a_negative_one(self):
@@ -210,9 +218,13 @@ class TestMonthlySavingsEstimation:
             average_spot_savings_per_day=4.0,  # 120 SEK/month
         )
 
-        assert estimate.effect_savings == 150.0
+        assert estimate.effect_savings == pytest.approx(
+            round(3.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
         assert estimate.spot_savings == 120.0
-        assert estimate.monthly_estimate == 270.0
+        assert estimate.monthly_estimate == pytest.approx(
+            round(3.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) + 120.0
+        )
 
 
 class TestCycleSavingsEstimation:
@@ -481,7 +493,9 @@ class TestEdgeCases:
         calc = SavingsCalculator()
         estimate = calc.estimate_monthly_savings(current_peak_kw=5.0, baseline_peak_kw=20.0)
         # 15 kW reduction × 50 SEK = 750 SEK
-        assert estimate.effect_savings == 750.0
+        assert estimate.effect_savings == pytest.approx(
+            round(15.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
 
     def test_zero_power_no_savings(self):
         """Test that zero power consumption yields no savings."""
@@ -576,9 +590,13 @@ class TestIntegration:
             average_spot_savings_per_day=0.0,
         )
 
-        assert estimate.effect_savings == 100.0  # 2 kW × 50 SEK
+        assert estimate.effect_savings == pytest.approx(
+            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
         assert estimate.spot_savings == 0.0
-        assert estimate.monthly_estimate == 100.0
+        assert estimate.monthly_estimate == pytest.approx(
+            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
+        )
 
     def test_spot_only_scenario(self):
         """Test scenario with only spot price savings."""
