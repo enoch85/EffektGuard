@@ -16,7 +16,11 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, SupportsResponse
-from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
+from homeassistant.exceptions import (
+    ConfigEntryNotReady,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -27,13 +31,11 @@ from .adapters.weather_adapter import WeatherAdapter
 from .const import (
     ATTR_DURATION,
     ATTR_OFFSET,
-    ATTR_TARGET_TEMP,
     CONF_NIBE_TEMP_LUX_ENTITY,
-    DEFAULT_DHW_TARGET_TEMP,
     DHW_BOOST_COOLDOWN_MINUTES,
-    DHW_MAX_TEMP,
-    DHW_MAX_TEMP_VALIDATION,
-    DHW_MIN_TEMP,
+    DHW_BOOST_DEFAULT_DURATION_MINUTES,
+    DHW_BOOST_MAX_DURATION_MINUTES,
+    DHW_BOOST_MIN_DURATION_MINUTES,
     DOMAIN,
     HEATING_BOOST_COOLDOWN_MINUTES,
     MAX_OFFSET,
@@ -460,22 +462,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if not coordinator:
             raise ServiceValidationError("No EffektGuard coordinator found")
 
-        target_temp = call.data.get(ATTR_TARGET_TEMP, DHW_MAX_TEMP)
-        duration = call.data.get(ATTR_DURATION, 180)  # 3 hours default (NIBE temporary lux)
+        duration = call.data.get(ATTR_DURATION, DHW_BOOST_DEFAULT_DURATION_MINUTES)
 
-        _LOGGER.info(
-            "Boost DHW service called: target_temp=%s°C, duration=%s minutes",
-            target_temp,
-            duration,
-        )
-
-        # Ceiling is DHW_MAX_TEMP_VALIDATION, the declared absolute maximum. Above it is a
-        # scald risk and forces sustained immersion-heater (elpatron) operation.
-        if not DHW_MIN_TEMP <= target_temp <= DHW_MAX_TEMP_VALIDATION:
-            raise ServiceValidationError(
-                f"Target temperature {target_temp}°C outside the safe range "
-                f"[{DHW_MIN_TEMP}, {DHW_MAX_TEMP_VALIDATION}]°C"
-            )
+        # `target_temp` is gone, deliberately: temporary lux is a SWITCH, the pump heats to its
+        # own lux temperature, and a parameter that is validated and then reaches nothing is a
+        # promise the service cannot keep. `duration` stays because it now does something real -
+        # the coordinator turns the boost off when the window ends.
+        _LOGGER.info("Boost DHW service called: duration=%s minutes", duration)
 
         # Get temporary lux entity from config
         temp_lux_entity = coordinator.config_entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
@@ -488,35 +481,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
             )
 
-        # Through the coordinator's door, not straight at the switch.
-        #
-        # This used to call `switch.turn_on` directly, leaving `_lux_boost_is_ours` False - so the
-        # unload cleanup disowned a boost this very service had started, and left it running to NIBE's
-        # lux timeout on the immersion heater.
-        _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
-        if not await coordinator._set_temporary_lux(True):
-            raise ServiceValidationError(
-                f"Could not start the hot-water boost on {temp_lux_entity}"
-            )
+        # Through the coordinator's door, not straight at the switch - that is what records the
+        # boost as OURS (so unload stops it) and opens the user window (so the price optimizer
+        # does not cancel it on the next cycle, which is what it used to do).
+        try:
+            await coordinator.async_start_dhw_boost(duration, dt_util.utcnow())
+        except HomeAssistantError as err:
+            raise ServiceValidationError(str(err)) from err
 
-        # The lux switch is already on - NIBE owns the boost from here. This refresh only lets the
-        # entities catch up; applying would let the DHW layer decide against the boost just made.
+        # The lux switch is on - the entities just need to catch up.
         await coordinator.async_request_refresh()
 
         # Update last called timestamp
         _update_service_timestamp("boost_dhw")
 
-        # NIBE's temporary lux owns the boost and does not take orders: `target_temp` and `duration`
-        # are validated and then reach nothing - the switch is a switch. The log used to assert both
-        # anyway. Removing the two arguments would break automations that pass them, so that is the
-        # owner's call; what is fixed here is the claim.
         _LOGGER.info(
-            "DHW boost activated via NIBE temporary lux on %s. NOTE: the pump's own lux cycle "
-            "decides the temperature and the duration - the target_temp (%s°C) and duration (%s min) "
-            "arguments are validated but are not sent to the pump, because the temporary-lux switch "
-            "cannot carry them.",
+            "DHW boost activated via NIBE temporary lux on %s for %s minutes. The pump decides "
+            "the lux temperature; EffektGuard ends the boost when the window closes, unless "
+            "NIBE's own lux timeout or the thermal-debt safety stop ends it first.",
             temp_lux_entity,
-            target_temp,
             duration,
         )
 
@@ -621,12 +604,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     boost_dhw_schema = vol.Schema(
         {
-            vol.Optional(ATTR_TARGET_TEMP, default=DEFAULT_DHW_TARGET_TEMP): vol.All(
-                vol.Coerce(float),
-                vol.Range(min=DHW_MIN_TEMP, max=DHW_MAX_TEMP_VALIDATION),
-            ),
-            vol.Optional(ATTR_DURATION, default=90): vol.All(
-                vol.Coerce(int), vol.Range(min=30, max=180)
+            vol.Optional(ATTR_DURATION, default=DHW_BOOST_DEFAULT_DURATION_MINUTES): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=DHW_BOOST_MIN_DURATION_MINUTES, max=DHW_BOOST_MAX_DURATION_MINUTES),
             ),
         }
     )

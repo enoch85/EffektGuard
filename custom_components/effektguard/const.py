@@ -152,6 +152,13 @@ MIN_TARGET_TEMP: Final = MIN_TEMP_LIMIT + DEFAULT_TOLERANCE  # 18.5 °C at the d
 # Service call rate limiting (boost, DHW, general)
 HEATING_BOOST_COOLDOWN_MINUTES: Final = 45  # Space heating boost cooldown
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
+
+# boost_dhw duration window. EffektGuard itself ends the boost when it expires; NIBE's own
+# temporary-lux timeout (~3 h one-shot on the F-series) still applies underneath, which is why
+# the ceiling matches it.
+DHW_BOOST_DEFAULT_DURATION_MINUTES: Final = 90
+DHW_BOOST_MIN_DURATION_MINUTES: Final = 30
+DHW_BOOST_MAX_DURATION_MINUTES: Final = 180
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 

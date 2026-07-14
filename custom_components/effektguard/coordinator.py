@@ -341,6 +341,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # also start one from the heat pump's own panel or their own automation, and that one is
         # none of our business - so shutdown only cancels a boost we are responsible for.
         self._lux_boost_is_ours = False
+        # While set, a boost_dhw SERVICE call owns the lux switch: ordinary price optimization
+        # may not cancel it before this instant. Safety still may - see _apply_dhw_control.
+        self._service_boost_until: datetime | None = None
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -709,6 +712,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Called on unload. A boost the OWNER started is left alone.
         """
+        # Whatever happens below, the entry is going away - no service window survives it.
+        self._service_boost_until = None
         if not (self._lux_boost_is_ours and self.temp_lux_entity):
             return
 
@@ -2022,6 +2027,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         is_lux_on = temp_lux_state.state == "on"
 
+        # A user-commanded boost (boost_dhw) opens a window ordinary optimization must not
+        # close. Expiry closes it here, through the owned door; the safety abort below closes
+        # it too - only safety outranks the user.
+        if self._service_boost_until is not None:
+            if not is_lux_on:
+                # NIBE's own lux timeout, or the household, ended it first.
+                self._service_boost_until = None
+            elif now_time >= self._service_boost_until:
+                _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+                if await self._set_temporary_lux(False):
+                    self._last_dhw_control_time = now_time
+                self._service_boost_until = None
+                return
+
         # Use pre-calculated decision from _calculate_dhw_recommendation()
         # This avoids duplicate optimizer calls and log spam
         # Get thermal_debt and indoor_temp from coordinator data for abort conditions
@@ -2059,6 +2078,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 # The safety stop was the THIRD place that reached the lux switch on its own, and it
                 # left `_lux_boost_is_ours` set after switching the boost off. Through the door.
+                # Safety also outranks a user boost - the window closes with the switch.
+                self._service_boost_until = None
                 if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
                 return  # Exit early - abort handled
@@ -2094,6 +2115,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._last_dhw_control_time = now_time
 
         elif not decision.should_heat and is_lux_on:
+            if self._service_boost_until is not None:
+                _LOGGER.debug(
+                    "User DHW boost active until %s - price optimization does not cancel it",
+                    self._service_boost_until,
+                )
+                return
             # Turn OFF temporary lux to block/stop DHW
             _LOGGER.info(
                 "DHW control: Deactivating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
@@ -2535,6 +2562,26 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             disabled_data = dict(self.entry.data)
             disabled_data[CONF_ENABLE_OPTIMIZATION] = False
             self.hass.config_entries.async_update_entry(self.entry, data=disabled_data)
+
+    async def async_start_dhw_boost(self, duration_minutes: int, now_time: datetime) -> None:
+        """Start a user-commanded hot-water boost that price optimization may not cancel.
+
+        Only safety outranks the user: the thermal-debt abort still stops it, and so does
+        unload. The duration is real - EffektGuard turns the switch back off when it expires,
+        through the same owned door the cleanup uses - so the service argument means what it
+        says instead of being validated and discarded. NIBE's own lux timeout still applies
+        underneath; whichever ends first wins.
+        """
+        if not self.optimization_enabled:
+            raise HomeAssistantError(
+                "EffektGuard is OFF. Turn optimization on before boosting hot water."
+            )
+
+        if not await self._set_temporary_lux(True):
+            raise HomeAssistantError(
+                f"Could not start the hot-water boost on {self.temp_lux_entity}"
+            )
+        self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
 
     async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
         """Apply one explicit user heating command through the locked control path."""

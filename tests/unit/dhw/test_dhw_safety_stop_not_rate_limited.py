@@ -77,6 +77,8 @@ def make_coordinator(lux_is_on: bool, last_control_time: datetime | None):
     # `_shutdown_requested` must be a real False, not an auto-mock: the door refuses to START a boost
     # when it is set, and every MagicMock attribute is truthy. The fake has to be the object.
     coordinator._shutdown_requested = False
+    # Same for the user-boost window: None means "no service boost", an auto-mock means chaos.
+    coordinator._service_boost_until = None
     coordinator._set_temporary_lux = lambda on: EffektGuardCoordinator._set_temporary_lux(
         coordinator, on
     )
