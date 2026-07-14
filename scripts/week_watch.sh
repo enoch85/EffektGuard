@@ -8,10 +8,17 @@
 #   1. keep Home Assistant up (restart it if it dies)
 #   2. snapshot what the integration actually DID, every 15 minutes, to a CSV
 #
-# SINGLE INSTANCE, ENFORCED. The first version was started twice - `pkill -f` does not reliably
-# reach a process in its own `setsid` session - and both copies appended to the same CSV. One had
-# a formatting bug, so the file ended up half-good and half-corrupt, which is worse than either.
-# flock makes a second copy exit immediately.
+# SINGLE INSTANCE, ENFORCED WITH A PID FILE. Two earlier attempts at this were both wrong:
+#
+#   `pkill -f week_watch.sh` does not reliably reach a process in its own `setsid` session, so a
+#   "restarted" watcher ran ALONGSIDE the old one and both appended to the same CSV.
+#
+#   Then `flock` on fd 9 - and an `exec 9>` fd is INHERITED BY CHILDREN. Killing the watcher left
+#   its `sleep 900` child holding the lock, so the lock outlived the process: start_week.sh reported
+#   "already running" when nothing was, and a new watcher could never take the lock. A lock a corpse
+#   can hold is worse than no lock.
+#
+# A pid file cannot be inherited. We check the pid is alive AND is actually a week_watch.
 #
 # THIS BOX HAS NO INIT. pid 1 is `docker-init -- sleep infinity`: no systemd, no cron, nothing that
 # runs on boot. A reboot kills Home Assistant and this watcher, and NOTHING brings them back.
@@ -25,17 +32,43 @@ set -u
 LOG=/workspace/.ha-config/ha.log
 CSV=/workspace/.ha-config/week_watch.csv
 WATCHLOG=/workspace/.ha-config/week_watch.log
-LOCK=/workspace/.ha-config/week_watch.lock
+PIDFILE=/workspace/.ha-config/week_watch.pid
 INTERVAL=900 # 15 minutes
 
-exec 9>"$LOCK"
-if ! flock -n 9; then
-  echo "$(date -u +%FT%TZ) another week_watch is already running - exiting" >>"$WATCHLOG"
-  exit 0
+if [ -f "$PIDFILE" ]; then
+  OLD=$(tr -dc '0-9' <"$PIDFILE")
+  if [ -n "$OLD" ] && [ -d "/proc/$OLD" ] && tr '\0' ' ' <"/proc/$OLD/cmdline" 2>/dev/null | grep -q week_watch.sh; then
+    echo "$(date -u +%FT%TZ) another week_watch is already running (pid $OLD) - exiting" >>"$WATCHLOG"
+    exit 0
+  fi
+  echo "$(date -u +%FT%TZ) stale pidfile (pid $OLD gone) - taking over" >>"$WATCHLOG"
 fi
+echo $$ >"$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
 
 ha_is_up() {
   curl -s -o /dev/null -m 8 "http://localhost:8125/" 2>/dev/null
+}
+
+# THE PUMP IS PART OF THE STACK, and the first version of this watcher did not know that.
+#
+# The simulated F1155 serves BT1, BT25 and the degree minutes over modbus on :5020. Without it
+# EffektGuard cannot read the sensors it requires, and it does the right thing - it refuses to
+# control the heat pump on incomplete data and says so, every cycle. After the reboot that is
+# exactly what the week recorded: a static house, a frozen price, and the error count climbing by
+# six every fifteen minutes. Home Assistant was up, the watcher was up, and the thing they were
+# both watching was not there.
+pump_is_up() {
+  python3 -c "
+import socket, sys
+s = socket.socket(); s.settimeout(3)
+try:
+    s.connect(('127.0.0.1', 5020))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+" 2>/dev/null
 }
 
 token() {
@@ -61,6 +94,17 @@ echo "$(date -u +%FT%TZ) week_watch started (pid $$)" >>"$WATCHLOG"
 RESTARTS=0
 
 while true; do
+  if ! pump_is_up; then
+    RESTARTS=$((RESTARTS + 1))
+    echo "$(date -u +%FT%TZ) NIBE simulator down - starting it (#$RESTARTS)" >>"$WATCHLOG"
+    setsid nohup /workspace/.venv/bin/python /workspace/scripts/simulation/nibe_modbus_simulator.py \
+      >>/workspace/.ha-config/nibe_sim.log 2>&1 </dev/null &
+    for _ in $(seq 1 15); do
+      sleep 1
+      pump_is_up && break
+    done
+  fi
+
   if ! ha_is_up; then
     RESTARTS=$((RESTARTS + 1))
     echo "$(date -u +%FT%TZ) HA not answering - starting it (#$RESTARTS)" >>"$WATCHLOG"
