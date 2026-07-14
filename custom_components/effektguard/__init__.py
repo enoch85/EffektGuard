@@ -496,22 +496,19 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
             )
 
-        # Turn on temporary lux switch (NIBE will handle 3-hour DHW priority)
+        # Through the coordinator's door, not straight at the switch.
+        #
+        # This used to call `switch.turn_on` here, directly. It worked - and `_lux_boost_is_ours`,
+        # which is the ONLY thing that tells the unload cleanup whether a running boost is ours to
+        # cancel, stayed False. So EffektGuard started a hot-water boost through its own service, and
+        # then, on the next reload - which is what Home Assistant does whenever an option changes -
+        # decided the household must have started it and left it running to NIBE's own temporary-lux
+        # timeout, on the immersion heater, with nothing left that would ever switch it off.
         _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
-        await hass.services.async_call(
-            "switch",
-            "turn_on",
-            {"entity_id": temp_lux_entity},
-            blocking=True,
-        )
-
-        # Store DHW boost request in coordinator for tracking
-        coordinator.data["dhw_boost"] = {
-            "target_temp": target_temp,
-            "duration_minutes": duration,
-            "requested_at": dt_util.now(),
-            "method": "temporary_lux",
-        }
+        if not await coordinator._set_temporary_lux(True):
+            raise ServiceValidationError(
+                f"Could not start the hot-water boost on {temp_lux_entity}"
+            )
 
         # The lux switch is already on - NIBE owns the boost from here. This refresh only lets the
         # entities catch up; applying would let the DHW layer decide against the boost just made.
@@ -520,8 +517,23 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Update last called timestamp
         _update_service_timestamp("boost_dhw")
 
+        # NIBE'S TEMPORARY LUX OWNS THE BOOST, AND IT DOES NOT TAKE ORDERS.
+        #
+        # `target_temp` and `duration` are accepted by this service, validated (target_temp against
+        # the scald ceiling, which is worth keeping), and then reach NOTHING: the switch is a switch.
+        # The pump heats to its own lux temperature for its own lux duration. This log used to read
+        # "DHW boost activated via temporary lux: 65.0°C target for 30 minutes", asserting two things
+        # that were not true, and the request was also filed in `coordinator.data["dhw_boost"]`, which
+        # nothing ever read.
+        #
+        # Removing the two parameters would break anybody's automation that passes them, so it is the
+        # owner's call, not mine. What is fixed here is the integration claiming to have done it.
         _LOGGER.info(
-            "DHW boost activated via temporary lux: %s°C target for %s minutes",
+            "DHW boost activated via NIBE temporary lux on %s. NOTE: the pump's own lux cycle "
+            "decides the temperature and the duration - the target_temp (%s°C) and duration (%s min) "
+            "arguments are validated but are not sent to the pump, because the temporary-lux switch "
+            "cannot carry them.",
+            temp_lux_entity,
             target_temp,
             duration,
         )

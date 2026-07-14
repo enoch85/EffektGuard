@@ -665,6 +665,49 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             power_state.state if power_state else "None",
         )
 
+    async def _set_temporary_lux(self, on: bool) -> bool:
+        """The ONE way this integration commands the hot-water boost. Returns whether it wrote.
+
+        AND THE ONLY PLACE THAT RECORDS WHO STARTED THE BOOST, which is the whole point.
+
+        `_cancel_our_dhw_boost` cleans up on unload, and it decides what to clean up by reading
+        `_lux_boost_is_ours` - "a boost the OWNER started is left alone". That flag used to be set in
+        exactly one place, the DHW optimizer. The `effektguard.boost_dhw` SERVICE turned the very same
+        switch on, through its own `switch.turn_on` call, and never set it. So the cleanup looked at a
+        boost EffektGuard had started through its own service, concluded the household must have
+        started it, and left it running - to NIBE's own temporary-lux timeout, on the immersion heater
+        at COP 1.0, with nothing left that would ever switch it off. An option change is enough to
+        get there: Home Assistant reloads the entry, and the coordinator that knew about the boost is
+        gone.
+
+        Starting a boost from a shut-down coordinator is refused for the same reason the curve offset
+        and the fan are. STOPPING one is not - that IS the cleanup, and it runs during shutdown.
+        """
+        if not self.temp_lux_entity:
+            return False
+
+        if on and self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to start a hot-water boost. The entry is "
+                "unloaded; nothing would be left to stop it."
+            )
+            return False
+
+        try:
+            await self.hass.services.async_call(
+                "switch",
+                "turn_on" if on else "turn_off",
+                {"entity_id": self.temp_lux_entity},
+                blocking=True,
+            )
+        except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
+            _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
+            return False
+
+        # Ours if we switched it on; not ours once it is off, whoever asked for that.
+        self._lux_boost_is_ours = on
+        return True
+
     async def _cancel_our_dhw_boost(self) -> None:
         """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
 
@@ -683,17 +726,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "run to NIBE's own timeout with nothing left to stop it",
             self.temp_lux_entity,
         )
-        try:
-            await self.hass.services.async_call(
-                "switch",
-                "turn_off",
-                {"entity_id": self.temp_lux_entity},
-                blocking=True,
-            )
-        except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-            _LOGGER.error("Failed to cancel the hot-water boost on unload: %s", err)
-        finally:
-            self._lux_boost_is_ours = False
+        await self._set_temporary_lux(False)
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
@@ -2008,16 +2041,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW heating aborted early: %s. Stopping DHW to prioritize space heating.",
                     abort_reason,
                 )
-                try:
-                    await self.hass.services.async_call(
-                        "switch",
-                        "turn_off",
-                        {"entity_id": self.temp_lux_entity},
-                        blocking=True,
-                    )
+                # The safety stop was the THIRD place that reached the lux switch on its own, and it
+                # left `_lux_boost_is_ours` set after switching the boost off. Through the door.
+                if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
-                except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                    _LOGGER.error("Failed to abort DHW heating: %s", err)
                 return  # Exit early - abort handled
 
         # Apply control decision.
@@ -2045,17 +2072,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_dhw_temp,
                 thermal_debt,
             )
-            try:
-                await self.hass.services.async_call(
-                    "switch",
-                    "turn_on",
-                    {"entity_id": self.temp_lux_entity},
-                    blocking=True,
-                )
+            # Through the one door, which is what records that this boost is ours - and therefore
+            # what lets the unload cleanup find it again. See _set_temporary_lux.
+            if await self._set_temporary_lux(True):
                 self._last_dhw_control_time = now_time
-                self._lux_boost_is_ours = True
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to turn on temporary lux: %s", err)
 
         elif not decision.should_heat and is_lux_on:
             # Turn OFF temporary lux to block/stop DHW
@@ -2065,17 +2085,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_dhw_temp,
                 thermal_debt,
             )
-            try:
-                await self.hass.services.async_call(
-                    "switch",
-                    "turn_off",
-                    {"entity_id": self.temp_lux_entity},
-                    blocking=True,
-                )
+            if await self._set_temporary_lux(False):
                 self._last_dhw_control_time = now_time
-                self._lux_boost_is_ours = False
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to turn off temporary lux: %s", err)
         else:
             # No change needed
             _LOGGER.debug(

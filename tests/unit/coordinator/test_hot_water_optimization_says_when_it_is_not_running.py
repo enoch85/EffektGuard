@@ -43,6 +43,10 @@ def _coordinator(lux_entity: str | None) -> EffektGuardCoordinator:
     coordinator._dhw_issue_active = False
     coordinator._lux_boost_is_ours = False
     coordinator._last_dhw_control_time = None
+    # `__new__` skips `__init__`, so anything the real object always carries has to be set here or
+    # the fake is not the object. Home Assistant's DataUpdateCoordinator.__init__ sets this, and the
+    # hot-water switch door reads it: a coordinator whose entry has unloaded does not start a boost.
+    coordinator._shutdown_requested = False
     coordinator.last_update_success = True
     coordinator.data = {}
     coordinator.entry = MagicMock()

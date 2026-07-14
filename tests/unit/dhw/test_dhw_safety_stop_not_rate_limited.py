@@ -70,6 +70,16 @@ def make_coordinator(lux_is_on: bool, last_control_time: datetime | None):
     coordinator._is_dhw_start_rate_limited = (
         lambda now: EffektGuardCoordinator._is_dhw_start_rate_limited(coordinator, now)
     )
+    # And the real switch door, for the same reason: it is the only place that records whether a
+    # running hot-water boost is EffektGuard's to cancel, and `_apply_dhw_control` now goes through
+    # it. A MagicMock would answer the call cheerfully and record nothing.
+    #
+    # `_shutdown_requested` must be a real False, not an auto-mock: the door refuses to START a boost
+    # when it is set, and every MagicMock attribute is truthy. The fake has to be the object.
+    coordinator._shutdown_requested = False
+    coordinator._set_temporary_lux = lambda on: EffektGuardCoordinator._set_temporary_lux(
+        coordinator, on
+    )
     return coordinator
 
 
