@@ -133,18 +133,20 @@ class TestPeakCalculationFrequency:
         - Prevents excessive MyUplink API calls
         - Protects NIBE controller from wear
         """
-        min_write_interval_seconds = 300  # 5 minutes
+        from custom_components.effektguard.const import (
+            SERVICE_RATE_LIMIT_MINUTES,
+            UPDATE_INTERVAL_MINUTES,
+        )
 
-        assert min_write_interval_seconds >= 300
+        # The PRODUCTION cooldown, not a local literal asserted against itself: the adapter
+        # refuses writes inside SERVICE_RATE_LIMIT_MINUTES, and a cooldown shorter than the
+        # update cadence would rate-limit nothing.
+        assert SERVICE_RATE_LIMIT_MINUTES * 60 >= 300
+        assert SERVICE_RATE_LIMIT_MINUTES >= UPDATE_INTERVAL_MINUTES
 
-        # This prevents:
-        # 1. API rate limiting issues
-        # 2. NIBE controller wear
-        # 3. Excessive compressor cycling
-        # 4. Network congestion
-
-        max_writes_per_hour = 3600 / min_write_interval_seconds
-        assert max_writes_per_hour == 12  # Max 12 writes/hour
+        # Bounds MyUplink API calls and NIBE controller wear.
+        max_writes_per_hour = 60 / SERVICE_RATE_LIMIT_MINUTES
+        assert max_writes_per_hour <= 12
 
 
 class TestPowerOutageRecovery:

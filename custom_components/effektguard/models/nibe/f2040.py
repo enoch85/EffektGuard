@@ -141,9 +141,6 @@ class NibeF2040Profile(HeatPumpProfile):
     max_flow_temp: float = 58.0  # "Min. / Max. HM temp continuous operation: 25 / 58 C"
     min_flow_temp: float = 25.0
 
-    min_runtime_minutes: int = 35
-    min_rest_minutes: int = 12
-
     def __post_init__(self):
         """The outdoor-keyed COP curve, and for THIS machine it is a real measurement.
 

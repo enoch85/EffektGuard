@@ -2,7 +2,7 @@
 
 The integration's core claim, written into the constant itself:
 
-    QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+    MINUTES_PER_QUARTER: Final = 15  # Swedish Effektavgift measurement period
 
 and into the effect layer's own docstring:
 

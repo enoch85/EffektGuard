@@ -196,7 +196,9 @@ LAYER_WEIGHT_PRICE: Final = 0.8  # Strong influence - balanced with other layers
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PREDICTION: Final = 0.65  # Prediction layer weight (Phase 6)
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
-LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
+LAYER_WEIGHT_COMFORT_MAX: Final = (
+    0.5  # Ceiling of the comfort layer's urgency ramp (comfort_layer.py)
+)
 
 # Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
 # Provides dynamic response to temperature overshoot severity
@@ -1044,7 +1046,6 @@ UPDATE_INTERVAL_MINUTES: Final = (
 # effect tariff's measurement period, which the comment here used to claim it was. See
 # BILLING_PERIOD_MINUTES below. Conflating the two is what made the integration defend a peak
 # nobody is billed for.
-QUARTER_INTERVAL_MINUTES: Final = 15  # Nordpool spot-price settlement interval
 QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
 # Native interval counts a day can have: 92 (spring DST), 96 (normal),
 # 100 (autumn DST). Anything else means the source delivered a data gap.

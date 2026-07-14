@@ -30,7 +30,7 @@ from ..const import (
     DAYTIME_END_HOUR,
     DAYTIME_START_HOUR,
     NATIVE_DAY_QUARTER_COUNTS,
-    QUARTER_INTERVAL_MINUTES,
+    MINUTES_PER_QUARTER,
 )
 from ..utils.time_utils import QUARTERS_PER_HOUR
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-QUARTER_DURATION: Final = timedelta(minutes=QUARTER_INTERVAL_MINUTES)
+QUARTER_DURATION: Final = timedelta(minutes=MINUTES_PER_QUARTER)
 
 
 class RawPricePeriod(TypedDict):
@@ -85,7 +85,7 @@ class QuarterPeriod:
         number only for display and tariff bookkeeping.
         """
         return (self.start_time.hour * QUARTERS_PER_HOUR) + (
-            self.start_time.minute // QUARTER_INTERVAL_MINUTES
+            self.start_time.minute // MINUTES_PER_QUARTER
         )
 
     @property

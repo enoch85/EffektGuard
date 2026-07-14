@@ -103,23 +103,12 @@ class NibeF750Profile(HeatPumpProfile):
     max_flow_temp: float = 60.0
     min_flow_temp: float = 20.0
 
-    # DM tuning parameters. Only -60 is SOURCED (menu 4.9.3 "start compressor" default).
-    # -240/-400/-500 descend from forum anecdote and are ASSUMED - kept because changing
-    # them is a control change, marked so nobody mistakes them for datasheet values.
-    dm_threshold_start: float = -60  # SOURCED: IHB GB 1301-1, menu 4.9.3 default
-    dm_threshold_extended: float = -240  # ASSUMED (forum anecdote)
-    dm_threshold_warning: float = -400  # ASSUMED (forum anecdote)
-    dm_threshold_critical: float = -500  # ASSUMED (forum anecdote)
     # The simulator reads this so the plant model tracks what the integration believes.
     # It cannot do that while the profile restates the number, so it references it (F-076).
     dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
     # SOURCED: F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3 "start addition",
     # setting range -2000..-30, factory default -700. The pump's own elpatron fires here.
     aux_start_dm: float = -700.0
-
-    # Cycling protection (prevents compressor wear)
-    min_runtime_minutes: int = 30  # NIBE recommendation
-    min_rest_minutes: int = 10  # Minimum off time between cycles
 
     # Exhaust air heat pump features
     # F750 is an EAHP - supports airflow optimization for heat extraction

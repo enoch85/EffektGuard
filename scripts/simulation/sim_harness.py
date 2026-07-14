@@ -1149,445 +1149,462 @@ def simulate(
     # 9 kW recorded as 1) would have been invisible to it. Step UTC; derive local from it.
     start_absolute = start.astimezone(zoneinfo.ZoneInfo("UTC"))
 
-    for step in range(steps):
-        now = (start_absolute + timedelta(minutes=STEP_MIN * step)).astimezone(TZ)
-        # Freeze engine wall clock to sim time
-        dt_util.now = lambda tz=None, _n=now: _n
-        dt_util.utcnow = lambda _n=now: _n.astimezone(zoneinfo.ZoneInfo("UTC"))
+    # The engine's clock is frozen to sim time below. RESTORE IT even on a crash - a
+    # leaked monkeypatch poisons every test that runs after a failed simulation (F-100).
+    _real_now, _real_utcnow = dt_util.now, dt_util.utcnow
+    try:
+        for step in range(steps):
+            now = (start_absolute + timedelta(minutes=STEP_MIN * step)).astimezone(TZ)
+            # Freeze engine wall clock to sim time
+            dt_util.now = lambda tz=None, _n=now: _n
+            dt_util.utcnow = lambda _n=now: _n.astimezone(zoneinfo.ZoneInfo("UTC"))
 
-        tout = outdoor_at(times, temps, now)
+            tout = outdoor_at(times, temps, now)
 
-        # --- plant step ---
-        # S1 IS CLAMPED TO THE PUMP'S MAXIMUM SUPPLY TEMPERATURE, as it is on the real hardware.
-        #
-        # This clamp was missing while `flow` (BT25) was clamped, twelve lines below. Degree
-        # minutes are the integral of (BT25 - S1), so the plant was integrating against a setpoint
-        # the pump was physically forbidden to reach: in the F2040 cold snap the curve asked for up
-        # to 4.1 C above max_flow_temp for 513 samples, and DM therefore fell at up to 4.1 per
-        # minute NO MATTER WHAT ANY CONTROLLER DID. Degree minutes ran to the integrator floor on
-        # their own, and the harness reported it as a control failure. It was a plant artefact.
-        #
-        # A NIBE limits the calculated supply temperature to the configured maximum; it does not
-        # chase a setpoint it cannot make. Removing this artefact is what makes the residual trap
-        # underneath it (F-124) measurable at its true size rather than at an inflated one.
-        max_flow = float(house.profile.max_flow_temp)
-        flow_target = min(house.curve_flow_temp(tout, tuned_curve) + offset_applied, max_flow)
+            # --- plant step ---
+            # S1 IS CLAMPED TO THE PUMP'S MAXIMUM SUPPLY TEMPERATURE, as it is on the real hardware.
+            #
+            # This clamp was missing while `flow` (BT25) was clamped, twelve lines below. Degree
+            # minutes are the integral of (BT25 - S1), so the plant was integrating against a setpoint
+            # the pump was physically forbidden to reach: in the F2040 cold snap the curve asked for up
+            # to 4.1 C above max_flow_temp for 513 samples, and DM therefore fell at up to 4.1 per
+            # minute NO MATTER WHAT ANY CONTROLLER DID. Degree minutes ran to the integrator floor on
+            # their own, and the harness reported it as a control failure. It was a plant artefact.
+            #
+            # A NIBE limits the calculated supply temperature to the configured maximum; it does not
+            # chase a setpoint it cannot make. Removing this artefact is what makes the residual trap
+            # underneath it (F-124) measurable at its true size rather than at an inflated one.
+            max_flow = float(house.profile.max_flow_temp)
+            flow_target = min(house.curve_flow_temp(tout, tuned_curve) + offset_applied, max_flow)
 
-        # The compressor's capacity now bounds the water node directly (see below), so the flow
-        # saturates below target of its own accord when the pump runs out - which is what lets
-        # degree minutes actually run away, and is the real mechanism behind an undersized pump
-        # falling back on its immersion heater in a cold snap.
+            # The compressor's capacity now bounds the water node directly (see below), so the flow
+            # saturates below target of its own accord when the pump runs out - which is what lets
+            # degree minutes actually run away, and is the real mechanism behind an undersized pump
+            # falling back on its immersion heater in a cold snap.
 
-        # THE WATER LOOP IS A THERMAL MASS, NOT A RAMP RATE.
-        #
-        # This used to move `flow` toward its target at a fixed C/min and then compute the room's
-        # heat from wherever the flow happened to be - including while the compressor was OFF, so
-        # the decaying water heated the room for free and nothing ever charged for putting the heat
-        # in. The plant manufactured energy in proportion to how long the compressor spent idle,
-        # which systematically flattered whichever controller ran the pump least.
-        #
-        # The physics is simply a first-order node: the compressor heats the water, the water heats
-        # the room, and the flow temperature is what the balance between them leaves behind.
-        #
-        #     C_water * dT_flow/dt = Q_compressor - Q_emitters
-        #
-        # Now every joule the room receives was paid for, the loop is a buffer rather than a
-        # source, and a controller that swings the flow pays the real cost of doing so.
-        q_emit_w = house.heat_output_w(flow, indoor)
+            # THE WATER LOOP IS A THERMAL MASS, NOT A RAMP RATE.
+            #
+            # This used to move `flow` toward its target at a fixed C/min and then compute the room's
+            # heat from wherever the flow happened to be - including while the compressor was OFF, so
+            # the decaying water heated the room for free and nothing ever charged for putting the heat
+            # in. The plant manufactured energy in proportion to how long the compressor spent idle,
+            # which systematically flattered whichever controller ran the pump least.
+            #
+            # The physics is simply a first-order node: the compressor heats the water, the water heats
+            # the room, and the flow temperature is what the balance between them leaves behind.
+            #
+            #     C_water * dT_flow/dt = Q_compressor - Q_emitters
+            #
+            # Now every joule the room receives was paid for, the loop is a buffer rather than a
+            # source, and a controller that swings the flow pays the real cost of doing so.
+            q_emit_w = house.heat_output_w(flow, indoor)
 
-        capacity_w = house.capacity_kw_at(tout) * 1000.0
-        if compressor_on:
-            # The compressor modulates toward the flow its curve is asking for, bounded by what it
-            # can actually deliver - which comes from the datasheet, not from an invented derating.
-            demand_w = q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
-            q_comp_w = max(0.0, min(demand_w, capacity_w))
-        else:
-            q_comp_w = 0.0
-
-        # How hard the compressor is being pushed, which is what sets its efficiency. No
-        # circularity: q_comp is fixed by demand and capacity, both computed above.
-        load_fraction = q_comp_w / capacity_w if capacity_w > 0 else 0.0
-
-        # THE IMMERSION HEATER IS THERMOSTATIC, because every real one is.
-        #
-        # It used to dump a flat 3 kW into the water node whenever degree minutes passed the aux
-        # limit - including when the node was already at its ceiling. In a five-minute step that is
-        # 900 kJ into a 350 kJ/K loop: 2.6 K of overshoot per step, which the clamp below then
-        # deleted. The heater was metered, paid for, and its heat thrown away, 183 kWh of it in the
-        # F2040 cold snap, while every energy "audit" in the harness reported 0.00 % error.
-        #
-        # A real immersion heater has a high-limit thermostat and cycles on the water temperature.
-        # So it injects at most what fits under the ceiling: the heat the emitters are taking out,
-        # less what the compressor is already putting in, plus whatever headroom the node has left.
-        aux_headroom_w = (
-            WATER_LOOP_J_PER_K * (max_flow - flow) / (STEP_MIN * 60.0) + q_emit_w - q_comp_w
-        )
-        aux_w = 0.0
-        if dm <= house.aux_start_dm:
-            aux_w = min(house.immersion_heater_kw * 1000.0, max(0.0, aux_headroom_w))
-
-        flow_unclamped = (
-            flow + (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
-        )
-        flow = max(indoor, min(flow_unclamped, max_flow))
-
-        # THE ONLY ENERGY STATEMENT IN THIS PLANT THAT CAN ACTUALLY FAIL.
-        #
-        # Everything downstream of here - the room ODE, the "first law residual", the compressor
-        # audit - is an algebraic rearrangement of the same two lines and CANNOT disagree with
-        # itself. This clamp is different: it overwrites a state variable AFTER the ODE has
-        # integrated it, so every joule it removes is energy the meter charged for and the room
-        # never received. Nothing else in the harness can see that, and it measured 0.00 % error
-        # while 183 kWh vanished in the F2040 cold snap.
-        #
-        # In a healthy plant the clamp never binds and this stays at zero. It is an assertion, not
-        # a statistic.
-        stats["water_node_leak_kwh"] += WATER_LOOP_J_PER_K * (flow - flow_unclamped) / J_PER_KWH
-
-        # THE DATASHEET, AT THE WEATHER THIS RUN ACTUALLY SAW. Accumulated here, asserted in
-        # check_invariants. The plant's COP is the manufacturer's rated figure scaled by the Carnot
-        # ratio between the flow it is making and the W35 rating point, so whenever the water is
-        # HOTTER than W35 the scale is below one and the realised COP cannot exceed the datasheet.
-        # That is a bound the energy bookkeeping does not determine, which is exactly why it can
-        # fail - and a doubled COP, the bug the deleted identity waved through, breaks it on every
-        # house.
-        heat_kwh_this_step = q_comp_w / 1000.0 * STEP_MIN / 60.0
-        stats["compressor_heat_kwh"] += heat_kwh_this_step
-        stats["datasheet_cop_x_heat"] += best_published_cop * heat_kwh_this_step
-
-        q_w = q_emit_w
-
-        aux_kw = aux_w / 1000.0
-
-        # Indoor temperature ODE
-        # INTERNAL GAINS. The simulated house used to have none: its only heat source was the
-        # emitters. A real house is warmed by its occupants, its fridge, its lighting and the sun
-        # to the tune of a few hundred watts, all year - which is why heat demand reaches zero at
-        # the BALANCE POINT (~17 C outdoor) rather than at room temperature.
-        #
-        # Leaving them out did not just make the plant unrealistic, it made it BLIND: the
-        # controller models 600 W of gains and asks for correspondingly less flow, so a house with
-        # zero gains would be systematically under-supplied - and deleting the controller's gains
-        # term (a real regression) would have been INVISIBLE here, because the two errors cancel.
-        d_indoor = (
-            q_w + INTERNAL_GAINS_W - house.hlc_w_per_k * (indoor - tout)
-        ) / house.capacity_j_per_k
-        indoor += d_indoor * STEP_MIN * 60.0
-
-        # DM dynamics + compressor hysteresis
-        dm += (flow - flow_target) * STEP_MIN
-        dm = max(DM_INTEGRATOR_FLOOR, min(dm, DM_INTEGRATOR_CEILING))
-        if not compressor_on and dm <= DM_START:
-            compressor_on = True
-            stats["compressor_starts"] += 1
-        elif compressor_on and dm >= DM_STOP:
-            compressor_on = False
-
-        cop = house.cop_at(tout, flow, load_fraction)
-
-        # THE SECOND LAW. No machine can beat Carnot between the temperatures it is working across.
-        #
-        # Unlike the energy "audits" this replaces, this one is not derived from the plant's own
-        # bookkeeping - it is an external physical bound on the COP MODEL, so it can disagree with
-        # it. It catches a wrong anchor, a flipped exponent or bad approach temperatures. It does
-        # NOT catch a COP that is merely too generous but still sub-Carnot; the datasheet envelope
-        # in check_invariants is what covers that, and between them they bracket the model from
-        # both sides.
-        if cop > house.carnot_cop(tout, flow):
-            violations.append(
-                {
-                    "t": now.isoformat(),
-                    "type": "cop_beats_carnot",
-                    "detail": f"COP {cop:.2f} > Carnot {house.carnot_cop(tout, flow):.2f}",
-                }
-            )
-
-        power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
-        hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
-
-        # --- price/weather context (parsed by the REAL GE-Spot adapter) ---
-        price_data = price_source.get(now)
-        cur_q = (now.hour * 4) + now.minute // 15
-        # Locate the interval by timestamp, exactly as the integration does, rather
-        # than indexing by quarter number - the two disagree on DST days.
-        cur_period = price_data.get_period(now)
-        if cur_period is None:
-            violations.append(
-                {"t": now.isoformat(), "type": "no_price_for_instant", "detail": f"q{cur_q}"}
-            )
-            cur_price_ore = 100.0
-        else:
-            cur_price_ore = cur_period.price
-
-        fc = [
-            WeatherForecastHour(
-                datetime=now + timedelta(hours=h),
-                temperature=outdoor_at(times, temps, now + timedelta(hours=h)),
-            )
-            for h in range(1, 49)
-        ]
-        # A weather entity is vol.Optional in the config flow, and with none configured
-        # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no
-        # entity configured in setup"). That is a SUPPORTED install, and until this flag existed the
-        # harness had never simulated it: it fed a perfect 48 h forecast to every run.
-        #
-        # Note this is NOT --no-weather. That flag clears enable_weather_compensation, which kills
-        # the Math WC layer - the core control law, voting 100% of the time - and which the config
-        # flow never writes, so production cannot reach it. Withholding the FORECAST is the thing a
-        # real user can do, and it is the weaker ablation: Math WC still runs off outdoor and flow
-        # temperature. Only the forecast-fed layers go quiet.
-        weather = (
-            WeatherData(current_temp=tout, forecast_hours=fc, source_entity="sim")
-            if forecast_available
-            else None
-        )
-
-        nibe = NibeState(
-            outdoor_temp=round(tout, 1),
-            indoor_temp=round(indoor, 2),
-            supply_temp=round(flow, 1),
-            return_temp=round(flow - 5.0, 1),
-            degree_minutes=round(dm, 0),
-            current_offset=float(offset_applied),
-            is_heating=compressor_on,
-            is_hot_water=False,
-            timestamp=now,
-            compressor_hz=hz,
-            power_kw=round(power_kw, 2),
-        )
-
-        # --- the real decision engine (or neutral baseline) ---
-        if battery:
-            calc_offset = battery_reference_offset(price_data, now, indoor)
-        elif fixed_offset is not None:
-            calc_offset = fixed_offset
-        elif baseline:
-            calc_offset = 0.0
-        else:
-            try:
-                # The peak the effect layer defends is the one this simulation has
-                # actually produced so far, not a constant. A hardcoded 6.0 kW meant
-                # the layer was always defending a peak the plant never set, and the
-                # "no peak recorded yet" path (where predictive protection must stay
-                # silent) was never reached at all.
-                decision = engine.calculate_decision(
-                    nibe_state=nibe,
-                    price_data=price_data,
-                    weather_data=weather,
-                    current_peak=running_peak_kw,
-                    current_power=power_kw,
+            capacity_w = house.capacity_kw_at(tout) * 1000.0
+            if compressor_on:
+                # The compressor modulates toward the flow its curve is asking for, bounded by what it
+                # can actually deliver - which comes from the datasheet, not from an invented derating.
+                demand_w = (
+                    q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
                 )
-                calc_offset = decision.offset
-                # WHICH LAYERS ACTUALLY VOTED. "5/5 PASS" says nothing about a layer that never
-                # fired - and this harness has already shipped a run where the Peak layer voted
-                # weight 0.00 in all 8928 steps of every run ever made, while reporting PASS. A
-                # green run over silent code is not evidence, and the only way to know which it is
-                # is to count.
-                for layer in decision.layers:
-                    if layer.weight > 0.0:
-                        stats["layer_votes"][layer.name] = (
-                            stats["layer_votes"].get(layer.name, 0) + 1
-                        )
-            except Exception as err:  # noqa: BLE001 - we are hunting bugs
-                stats["exceptions"] += 1
+                q_comp_w = max(0.0, min(demand_w, capacity_w))
+            else:
+                q_comp_w = 0.0
+
+            # How hard the compressor is being pushed, which is what sets its efficiency. No
+            # circularity: q_comp is fixed by demand and capacity, both computed above.
+            load_fraction = q_comp_w / capacity_w if capacity_w > 0 else 0.0
+
+            # THE IMMERSION HEATER IS THERMOSTATIC, because every real one is.
+            #
+            # It used to dump a flat 3 kW into the water node whenever degree minutes passed the aux
+            # limit - including when the node was already at its ceiling. In a five-minute step that is
+            # 900 kJ into a 350 kJ/K loop: 2.6 K of overshoot per step, which the clamp below then
+            # deleted. The heater was metered, paid for, and its heat thrown away, 183 kWh of it in the
+            # F2040 cold snap, while every energy "audit" in the harness reported 0.00 % error.
+            #
+            # A real immersion heater has a high-limit thermostat and cycles on the water temperature.
+            # So it injects at most what fits under the ceiling: the heat the emitters are taking out,
+            # less what the compressor is already putting in, plus whatever headroom the node has left.
+            aux_headroom_w = (
+                WATER_LOOP_J_PER_K * (max_flow - flow) / (STEP_MIN * 60.0) + q_emit_w - q_comp_w
+            )
+            aux_w = 0.0
+            if dm <= house.aux_start_dm:
+                aux_w = min(house.immersion_heater_kw * 1000.0, max(0.0, aux_headroom_w))
+
+            flow_unclamped = (
+                flow + (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
+            )
+            flow = max(indoor, min(flow_unclamped, max_flow))
+
+            # THE ONLY ENERGY STATEMENT IN THIS PLANT THAT CAN ACTUALLY FAIL.
+            #
+            # Everything downstream of here - the room ODE, the "first law residual", the compressor
+            # audit - is an algebraic rearrangement of the same two lines and CANNOT disagree with
+            # itself. This clamp is different: it overwrites a state variable AFTER the ODE has
+            # integrated it, so every joule it removes is energy the meter charged for and the room
+            # never received. Nothing else in the harness can see that, and it measured 0.00 % error
+            # while 183 kWh vanished in the F2040 cold snap.
+            #
+            # In a healthy plant the clamp never binds and this stays at zero. It is an assertion, not
+            # a statistic.
+            stats["water_node_leak_kwh"] += WATER_LOOP_J_PER_K * (flow - flow_unclamped) / J_PER_KWH
+
+            # THE DATASHEET, AT THE WEATHER THIS RUN ACTUALLY SAW. Accumulated here, asserted in
+            # check_invariants. The plant's COP is the manufacturer's rated figure scaled by the Carnot
+            # ratio between the flow it is making and the W35 rating point, so whenever the water is
+            # HOTTER than W35 the scale is below one and the realised COP cannot exceed the datasheet.
+            # That is a bound the energy bookkeeping does not determine, which is exactly why it can
+            # fail - and a doubled COP, the bug the deleted identity waved through, breaks it on every
+            # house.
+            heat_kwh_this_step = q_comp_w / 1000.0 * STEP_MIN / 60.0
+            stats["compressor_heat_kwh"] += heat_kwh_this_step
+            stats["datasheet_cop_x_heat"] += best_published_cop * heat_kwh_this_step
+
+            q_w = q_emit_w
+
+            aux_kw = aux_w / 1000.0
+
+            # Indoor temperature ODE
+            # INTERNAL GAINS. The simulated house used to have none: its only heat source was the
+            # emitters. A real house is warmed by its occupants, its fridge, its lighting and the sun
+            # to the tune of a few hundred watts, all year - which is why heat demand reaches zero at
+            # the BALANCE POINT (~17 C outdoor) rather than at room temperature.
+            #
+            # Leaving them out did not just make the plant unrealistic, it made it BLIND: the
+            # controller models 600 W of gains and asks for correspondingly less flow, so a house with
+            # zero gains would be systematically under-supplied - and deleting the controller's gains
+            # term (a real regression) would have been INVISIBLE here, because the two errors cancel.
+            d_indoor = (
+                q_w + INTERNAL_GAINS_W - house.hlc_w_per_k * (indoor - tout)
+            ) / house.capacity_j_per_k
+            indoor += d_indoor * STEP_MIN * 60.0
+
+            # DM dynamics + compressor hysteresis
+            dm += (flow - flow_target) * STEP_MIN
+            dm = max(DM_INTEGRATOR_FLOOR, min(dm, DM_INTEGRATOR_CEILING))
+            if not compressor_on and dm <= DM_START:
+                compressor_on = True
+                stats["compressor_starts"] += 1
+            elif compressor_on and dm >= DM_STOP:
+                compressor_on = False
+
+            cop = house.cop_at(tout, flow, load_fraction)
+
+            # THE SECOND LAW. No machine can beat Carnot between the temperatures it is working across.
+            #
+            # Unlike the energy "audits" this replaces, this one is not derived from the plant's own
+            # bookkeeping - it is an external physical bound on the COP MODEL, so it can disagree with
+            # it. It catches a wrong anchor, a flipped exponent or bad approach temperatures. It does
+            # NOT catch a COP that is merely too generous but still sub-Carnot; the datasheet envelope
+            # in check_invariants is what covers that, and between them they bracket the model from
+            # both sides.
+            if cop > house.carnot_cop(tout, flow):
                 violations.append(
                     {
                         "t": now.isoformat(),
-                        "type": "exception",
-                        "detail": f"{type(err).__name__}: {err}",
+                        "type": "cop_beats_carnot",
+                        "detail": f"COP {cop:.2f} > Carnot {house.carnot_cop(tout, flow):.2f}",
                     }
                 )
-                calc_offset = 0.0
 
-        # The REAL quantisation the adapter uses, not a copy of it. This harness used to carry its
-        # own transcription of that arithmetic - including the int() truncation - which is exactly
-        # how a plant model and the code it is meant to be testing drift apart unnoticed.
-        new_int = integer_offset_for(calc_offset, offset_applied)
-        if new_int != offset_applied:
-            offset_applied = new_int
-            stats["writes"] += 1
+            power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
+            hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
 
-        # --- invariants & stats ---
-        # A degree-minute deficit that reaches the integrator floor means the recovery system -
-        # the curve offset AND the auxiliary heater together - failed to arrest it. That is the
-        # signal worth failing on.
-        #
-        # The previous invariant here ("DM below the aux limit while aux is off") was a FALSE
-        # POSITIVE: aux is decided from the degree minutes at the START of the step and the check
-        # ran against the value at the END, so a deficit that crossed the limit mid-step tripped
-        # it even though aux engages on the very next step - which is simply what a controller
-        # sampling at an interval does. Worse, it could never catch a real defect, because aux
-        # engages exactly when DM crosses the limit. It was unfalsifiable in both directions.
-        if dm <= DM_INTEGRATOR_FLOOR:
-            violations.append(
-                {"t": now.isoformat(), "type": "dm_runaway", "detail": f"DM floored at {dm:.0f}"}
-            )
-
-        # Nothing here used to fail on OVERHEATING. The harness counted comfort_minutes_above and
-        # asserted nothing about it, so a run that cooked the house to 35 C reported "violations:
-        # 0". Overheating is a comfort failure, an efficiency failure, and - when it is auxiliary
-        # heat doing it - an expensive one.
-        if indoor > INDOOR_CEILING:
-            violations.append(
-                {
-                    "t": now.isoformat(),
-                    "type": "indoor_above_ceiling",
-                    "detail": f"indoor {indoor:.2f}",
-                }
-            )
-        if indoor < 18.0:
-            violations.append(
-                {"t": now.isoformat(), "type": "indoor_below_18", "detail": f"indoor {indoor:.2f}"}
-            )
-        if not -10 <= calc_offset <= 10:
-            violations.append(
-                {
-                    "t": now.isoformat(),
-                    "type": "offset_out_of_range",
-                    "detail": f"offset {calc_offset:.2f}",
-                }
-            )
-
-        last_offsets.append(offset_applied)
-        if len(last_offsets) > 9:
-            last_offsets.pop(0)
-            deltas = [b - a for a, b in zip(last_offsets, last_offsets[1:])]
-            flips = sum(1 for a, b in zip(deltas, deltas[1:]) if a * b < 0)
-            if flips >= 3:
-                stats["sign_flips"] += 1
-
-        stats["indoor_min"] = min(stats["indoor_min"], indoor)
-        stats["indoor_max"] = max(stats["indoor_max"], indoor)
-        stats["indoor_sum"] += indoor
-        stats["dm_min"] = min(stats["dm_min"], dm)
-        # What the plant actually ASKED the pump for. Degree minutes integrate (BT25 - S1), so if
-        # S1 can exceed what the pump may make, DM falls forever regardless of the controller. The
-        # number is published so a test can check the plant rather than recompute the clamp and
-        # assert on its own arithmetic - which is what the first version of that test did.
-        stats["flow_target_max"] = max(stats["flow_target_max"], flow_target)
-        stats["offset_min"] = min(stats["offset_min"], offset_applied)
-        stats["offset_max"] = max(stats["offset_max"], offset_applied)
-        energy = power_kw * STEP_MIN / 60.0
-        stats["energy_kwh"] += energy
-
-        # First-law audit. Heat INTO the room, and heat OUT of it. Over a month these must balance
-        # to within the change in the fabric's stored energy - otherwise the plant is inventing or
-        # destroying energy and every cost number it produces is fiction.
-        stats["heat_kwh"] += q_w * STEP_MIN / 60.0 / 1000.0
-        stats["loss_kwh"] += (
-            (house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W) * STEP_MIN / 60.0 / 1000.0
-        )
-        stats["aux_kwh"] += aux_kw * STEP_MIN / 60.0
-
-        # THE RESISTIVE HEAT PHYSICS FORCES, as opposed to the resistive heat the optimiser causes.
-        #
-        # A correctly-sized air-source system in Sweden is BIVALENT: NIBE declares Tbiv = -9 C for
-        # the F2040-8, below which the machine cannot meet the design load and supplementary heat is
-        # REQUIRED. The harness used to assert that a healthy pump burns no resistive heat at all,
-        # which is an assertion about a machine that does not exist - and it duly failed the only
-        # correctly-sized air-source house in the set, for doing exactly what it is designed to do.
-        #
-        # What CAN be asked, and is worth asking, is whether the optimiser burns more resistive heat
-        # than the pump's own capacity deficit forces. That is computable here: the house's heat
-        # demand at this instant, against what the compressor can physically deliver. Anything above
-        # it is the controller's doing, not the weather's.
-        demand_now_w = house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W
-        stats["unavoidable_aux_kwh"] += (
-            max(0.0, demand_now_w - capacity_w) / 1000.0 * STEP_MIN / 60.0
-        )
-        stats["cost_sek"] += energy * cur_price_ore / 100.0
-
-        # EFFECT TARIFF BASIS: THE HOURLY MEAN. Not the quarter-hour, which is what this used to
-        # accumulate, and not the instantaneous sample, which is what it accumulated before that.
-        #
-        # Ellevio: "the measurement uses hourly averages". Energimarknadsinspektionen:
-        # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
-        # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
-        # 9 - so every tariff figure it produced was up to fourfold too high.
-        # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
-        #
-        # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
-        # keyed on its own idea of an hour. The coordinator has always used a TIME-WEIGHTED mean over
-        # an absolute hour. Two implementations of the single most consequential number this
-        # integration computes - and the harness was validating the one nobody runs.
-        #
-        # They agreed only because this loop steps a perfectly uniform five minutes, which Home
-        # Assistant does not. And they were both wrong on the night the clocks go back, INDEPENDENTLY,
-        # so neither could see the other's bug: the coordinator merged the repeated hour and deleted a
-        # 9 kW billing peak. An instrument that re-implements the thing it measures cannot measure it.
-        #
-        # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
-        # and --dst fails here as well as in the unit tests.
-        completed = billing.add(now, power_kw, POWER_SOURCE_EXTERNAL_METER)
-        if completed is not None:
-            # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
-            #
-            # The first version of this counter re-derived the hour key here, from `now`, and so it
-            # kept reporting 25 hours on the fall-back day even when the production accumulator was
-            # merging the two 02:00s into one. It was measuring the harness, not the code under test
-            # - the exact vacuity this whole commit exists to remove, reintroduced one line below the
-            # comment complaining about it. Verified by mutation: reinstate the DST bug in
-            # billing_period.py and this now reports 24 hours and fails the run.
-            # COUNTED, not collected in a set: on the fall-back day both 02:00 hours carry the SAME
-            # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
-            # equal), so a set would silently merge them back into one and report 24 again - passing
-            # the check by making the same mistake it exists to catch.
-            billing_hours[completed.started_at.date()] = (
-                billing_hours.get(completed.started_at.date(), 0) + 1
-            )
-
-            day = completed.started_at.date()
-            daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
-            # What the tariff COUNTS is the effective power - Ellevio halves 22:00-06:00.
-            # The harness used to skip the night weighting, overstating every tariff figure
-            # with night-shifted load - which is exactly where this optimiser puts load.
-            daily_billed[day] = max(
-                daily_billed.get(day, 0.0),
-                effective_tariff_power_kw(completed.mean_power_kw, completed.billing_hour),
-            )
-            running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
-
-            # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
-            # `running_peak_kw` and handed it to the engine, but never called
-            # `record_quarter_measurement()` - so `EffectManager._monthly_peaks` stayed empty for
-            # all 8928 steps, and `should_limit_power()` short-circuits on an empty history:
-            #
-            #     if not self._monthly_peaks:
-            #         return PowerLimitDecision(should_limit=False, severity="OK", ...)
-            #
-            # The peak layer therefore voted weight 0.00 on every single step of every run. Every
-            # claim this harness made about effect-tariff protection - the feature the integration
-            # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
-            # houses; this is the same hole, in the instrument that was supposed to catch it.)
-            asyncio.run(
-                effect.record_period_measurement(
-                    power_kw=completed.mean_power_kw,
-                    period=completed.billing_hour,
-                    timestamp=completed.started_at,
-                    source=POWER_SOURCE_EXTERNAL_METER,
+            # --- price/weather context (parsed by the REAL GE-Spot adapter) ---
+            price_data = price_source.get(now)
+            cur_q = (now.hour * 4) + now.minute // 15
+            # Locate the interval by timestamp, exactly as the integration does, rather
+            # than indexing by quarter number - the two disagree on DST days.
+            cur_period = price_data.get_period(now)
+            if cur_period is None:
+                violations.append(
+                    {"t": now.isoformat(), "type": "no_price_for_instant", "detail": f"q{cur_q}"}
                 )
+                cur_price_ore = 100.0
+            else:
+                cur_price_ore = cur_period.price
+
+            fc = [
+                WeatherForecastHour(
+                    datetime=now + timedelta(hours=h),
+                    temperature=outdoor_at(times, temps, now + timedelta(hours=h)),
+                )
+                for h in range(1, 49)
+            ]
+            # A weather entity is vol.Optional in the config flow, and with none configured
+            # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no
+            # entity configured in setup"). That is a SUPPORTED install, and until this flag existed the
+            # harness had never simulated it: it fed a perfect 48 h forecast to every run.
+            #
+            # Note this is NOT --no-weather. That flag clears enable_weather_compensation, which kills
+            # the Math WC layer - the core control law, voting 100% of the time - and which the config
+            # flow never writes, so production cannot reach it. Withholding the FORECAST is the thing a
+            # real user can do, and it is the weaker ablation: Math WC still runs off outdoor and flow
+            # temperature. Only the forecast-fed layers go quiet.
+            weather = (
+                WeatherData(current_temp=tout, forecast_hours=fc, source_entity="sim")
+                if forecast_available
+                else None
             )
 
-        if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
-            stats["comfort_minutes_below"] += STEP_MIN
-        elif indoor > TARGET_INDOOR + OVERSHOOT_TOLERANCE:
-            stats["comfort_minutes_above"] += STEP_MIN
-
-        if step % 6 == 0:  # 30-min trace resolution
-            trace.append(
-                {
-                    "t": now.isoformat(),
-                    "tout": round(tout, 1),
-                    "tin": round(indoor, 2),
-                    "flow": round(flow, 1),
-                    "dm": round(dm),
-                    "offset": offset_applied,
-                    "calc": round(calc_offset, 2),
-                    "kw": round(power_kw, 2),
-                    "price": round(cur_price_ore, 1),
-                    "comp": int(compressor_on),
-                }
+            nibe = NibeState(
+                outdoor_temp=round(tout, 1),
+                indoor_temp=round(indoor, 2),
+                supply_temp=round(flow, 1),
+                return_temp=round(flow - 5.0, 1),
+                degree_minutes=round(dm, 0),
+                current_offset=float(offset_applied),
+                is_heating=compressor_on,
+                is_hot_water=False,
+                timestamp=now,
+                compressor_hz=hz,
+                power_kw=round(power_kw, 2),
             )
+
+            # --- the real decision engine (or neutral baseline) ---
+            if battery:
+                calc_offset = battery_reference_offset(price_data, now, indoor)
+            elif fixed_offset is not None:
+                calc_offset = fixed_offset
+            elif baseline:
+                calc_offset = 0.0
+            else:
+                try:
+                    # The peak the effect layer defends is the one this simulation has
+                    # actually produced so far, not a constant. A hardcoded 6.0 kW meant
+                    # the layer was always defending a peak the plant never set, and the
+                    # "no peak recorded yet" path (where predictive protection must stay
+                    # silent) was never reached at all.
+                    decision = engine.calculate_decision(
+                        nibe_state=nibe,
+                        price_data=price_data,
+                        weather_data=weather,
+                        current_peak=running_peak_kw,
+                        current_power=power_kw,
+                    )
+                    calc_offset = decision.offset
+                    # WHICH LAYERS ACTUALLY VOTED. "5/5 PASS" says nothing about a layer that never
+                    # fired - and this harness has already shipped a run where the Peak layer voted
+                    # weight 0.00 in all 8928 steps of every run ever made, while reporting PASS. A
+                    # green run over silent code is not evidence, and the only way to know which it is
+                    # is to count.
+                    for layer in decision.layers:
+                        if layer.weight > 0.0:
+                            stats["layer_votes"][layer.name] = (
+                                stats["layer_votes"].get(layer.name, 0) + 1
+                            )
+                except Exception as err:  # noqa: BLE001 - we are hunting bugs
+                    stats["exceptions"] += 1
+                    violations.append(
+                        {
+                            "t": now.isoformat(),
+                            "type": "exception",
+                            "detail": f"{type(err).__name__}: {err}",
+                        }
+                    )
+                    calc_offset = 0.0
+
+            # The REAL quantisation the adapter uses, not a copy of it. This harness used to carry its
+            # own transcription of that arithmetic - including the int() truncation - which is exactly
+            # how a plant model and the code it is meant to be testing drift apart unnoticed.
+            new_int = integer_offset_for(calc_offset, offset_applied)
+            if new_int != offset_applied:
+                offset_applied = new_int
+                stats["writes"] += 1
+
+            # --- invariants & stats ---
+            # A degree-minute deficit that reaches the integrator floor means the recovery system -
+            # the curve offset AND the auxiliary heater together - failed to arrest it. That is the
+            # signal worth failing on.
+            #
+            # The previous invariant here ("DM below the aux limit while aux is off") was a FALSE
+            # POSITIVE: aux is decided from the degree minutes at the START of the step and the check
+            # ran against the value at the END, so a deficit that crossed the limit mid-step tripped
+            # it even though aux engages on the very next step - which is simply what a controller
+            # sampling at an interval does. Worse, it could never catch a real defect, because aux
+            # engages exactly when DM crosses the limit. It was unfalsifiable in both directions.
+            if dm <= DM_INTEGRATOR_FLOOR:
+                violations.append(
+                    {
+                        "t": now.isoformat(),
+                        "type": "dm_runaway",
+                        "detail": f"DM floored at {dm:.0f}",
+                    }
+                )
+
+            # Nothing here used to fail on OVERHEATING. The harness counted comfort_minutes_above and
+            # asserted nothing about it, so a run that cooked the house to 35 C reported "violations:
+            # 0". Overheating is a comfort failure, an efficiency failure, and - when it is auxiliary
+            # heat doing it - an expensive one.
+            if indoor > INDOOR_CEILING:
+                violations.append(
+                    {
+                        "t": now.isoformat(),
+                        "type": "indoor_above_ceiling",
+                        "detail": f"indoor {indoor:.2f}",
+                    }
+                )
+            if indoor < 18.0:
+                violations.append(
+                    {
+                        "t": now.isoformat(),
+                        "type": "indoor_below_18",
+                        "detail": f"indoor {indoor:.2f}",
+                    }
+                )
+            if not -10 <= calc_offset <= 10:
+                violations.append(
+                    {
+                        "t": now.isoformat(),
+                        "type": "offset_out_of_range",
+                        "detail": f"offset {calc_offset:.2f}",
+                    }
+                )
+
+            last_offsets.append(offset_applied)
+            if len(last_offsets) > 9:
+                last_offsets.pop(0)
+                deltas = [b - a for a, b in zip(last_offsets, last_offsets[1:])]
+                flips = sum(1 for a, b in zip(deltas, deltas[1:]) if a * b < 0)
+                if flips >= 3:
+                    stats["sign_flips"] += 1
+
+            stats["indoor_min"] = min(stats["indoor_min"], indoor)
+            stats["indoor_max"] = max(stats["indoor_max"], indoor)
+            stats["indoor_sum"] += indoor
+            stats["dm_min"] = min(stats["dm_min"], dm)
+            # What the plant actually ASKED the pump for. Degree minutes integrate (BT25 - S1), so if
+            # S1 can exceed what the pump may make, DM falls forever regardless of the controller. The
+            # number is published so a test can check the plant rather than recompute the clamp and
+            # assert on its own arithmetic - which is what the first version of that test did.
+            stats["flow_target_max"] = max(stats["flow_target_max"], flow_target)
+            stats["offset_min"] = min(stats["offset_min"], offset_applied)
+            stats["offset_max"] = max(stats["offset_max"], offset_applied)
+            energy = power_kw * STEP_MIN / 60.0
+            stats["energy_kwh"] += energy
+
+            # First-law audit. Heat INTO the room, and heat OUT of it. Over a month these must balance
+            # to within the change in the fabric's stored energy - otherwise the plant is inventing or
+            # destroying energy and every cost number it produces is fiction.
+            stats["heat_kwh"] += q_w * STEP_MIN / 60.0 / 1000.0
+            stats["loss_kwh"] += (
+                (house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W) * STEP_MIN / 60.0 / 1000.0
+            )
+            stats["aux_kwh"] += aux_kw * STEP_MIN / 60.0
+
+            # THE RESISTIVE HEAT PHYSICS FORCES, as opposed to the resistive heat the optimiser causes.
+            #
+            # A correctly-sized air-source system in Sweden is BIVALENT: NIBE declares Tbiv = -9 C for
+            # the F2040-8, below which the machine cannot meet the design load and supplementary heat is
+            # REQUIRED. The harness used to assert that a healthy pump burns no resistive heat at all,
+            # which is an assertion about a machine that does not exist - and it duly failed the only
+            # correctly-sized air-source house in the set, for doing exactly what it is designed to do.
+            #
+            # What CAN be asked, and is worth asking, is whether the optimiser burns more resistive heat
+            # than the pump's own capacity deficit forces. That is computable here: the house's heat
+            # demand at this instant, against what the compressor can physically deliver. Anything above
+            # it is the controller's doing, not the weather's.
+            demand_now_w = house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W
+            stats["unavoidable_aux_kwh"] += (
+                max(0.0, demand_now_w - capacity_w) / 1000.0 * STEP_MIN / 60.0
+            )
+            stats["cost_sek"] += energy * cur_price_ore / 100.0
+
+            # EFFECT TARIFF BASIS: THE HOURLY MEAN. Not the quarter-hour, which is what this used to
+            # accumulate, and not the instantaneous sample, which is what it accumulated before that.
+            #
+            # Ellevio: "the measurement uses hourly averages". Energimarknadsinspektionen:
+            # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
+            # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
+            # 9 - so every tariff figure it produced was up to fourfold too high.
+            # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
+            #
+            # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
+            # keyed on its own idea of an hour. The coordinator has always used a TIME-WEIGHTED mean over
+            # an absolute hour. Two implementations of the single most consequential number this
+            # integration computes - and the harness was validating the one nobody runs.
+            #
+            # They agreed only because this loop steps a perfectly uniform five minutes, which Home
+            # Assistant does not. And they were both wrong on the night the clocks go back, INDEPENDENTLY,
+            # so neither could see the other's bug: the coordinator merged the repeated hour and deleted a
+            # 9 kW billing peak. An instrument that re-implements the thing it measures cannot measure it.
+            #
+            # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
+            # and --dst fails here as well as in the unit tests.
+            completed = billing.add(now, power_kw, POWER_SOURCE_EXTERNAL_METER)
+            if completed is not None:
+                # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
+                #
+                # The first version of this counter re-derived the hour key here, from `now`, and so it
+                # kept reporting 25 hours on the fall-back day even when the production accumulator was
+                # merging the two 02:00s into one. It was measuring the harness, not the code under test
+                # - the exact vacuity this whole commit exists to remove, reintroduced one line below the
+                # comment complaining about it. Verified by mutation: reinstate the DST bug in
+                # billing_period.py and this now reports 24 hours and fails the run.
+                # COUNTED, not collected in a set: on the fall-back day both 02:00 hours carry the SAME
+                # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
+                # equal), so a set would silently merge them back into one and report 24 again - passing
+                # the check by making the same mistake it exists to catch.
+                billing_hours[completed.started_at.date()] = (
+                    billing_hours.get(completed.started_at.date(), 0) + 1
+                )
+
+                day = completed.started_at.date()
+                daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
+                # What the tariff COUNTS is the effective power - Ellevio halves 22:00-06:00.
+                # The harness used to skip the night weighting, overstating every tariff figure
+                # with night-shifted load - which is exactly where this optimiser puts load.
+                daily_billed[day] = max(
+                    daily_billed.get(day, 0.0),
+                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_hour),
+                )
+                running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
+
+                # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
+                # `running_peak_kw` and handed it to the engine, but never called
+                # `record_quarter_measurement()` - so `EffectManager._monthly_peaks` stayed empty for
+                # all 8928 steps, and `should_limit_power()` short-circuits on an empty history:
+                #
+                #     if not self._monthly_peaks:
+                #         return PowerLimitDecision(should_limit=False, severity="OK", ...)
+                #
+                # The peak layer therefore voted weight 0.00 on every single step of every run. Every
+                # claim this harness made about effect-tariff protection - the feature the integration
+                # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
+                # houses; this is the same hole, in the instrument that was supposed to catch it.)
+                asyncio.run(
+                    effect.record_period_measurement(
+                        power_kw=completed.mean_power_kw,
+                        period=completed.billing_hour,
+                        timestamp=completed.started_at,
+                        source=POWER_SOURCE_EXTERNAL_METER,
+                    )
+                )
+
+            if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
+                stats["comfort_minutes_below"] += STEP_MIN
+            elif indoor > TARGET_INDOOR + OVERSHOOT_TOLERANCE:
+                stats["comfort_minutes_above"] += STEP_MIN
+
+            if step % 6 == 0:  # 30-min trace resolution
+                trace.append(
+                    {
+                        "t": now.isoformat(),
+                        "tout": round(tout, 1),
+                        "tin": round(indoor, 2),
+                        "flow": round(flow, 1),
+                        "dm": round(dm),
+                        "offset": offset_applied,
+                        "calc": round(calc_offset, 2),
+                        "kw": round(power_kw, 2),
+                        "price": round(cur_price_ore, 1),
+                        "comp": int(compressor_on),
+                    }
+                )
+
+    finally:
+        dt_util.now, dt_util.utcnow = _real_now, _real_utcnow
 
     # The run ends on an hour boundary, and that final hour is complete in sim-time. Production
     # never flushes - Home Assistant keeps running, and an hour cut short by a shutdown was never

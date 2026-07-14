@@ -313,7 +313,9 @@ class TestModelComparisons:
 
             # Limits
             assert model.max_flow_temp > model.min_flow_temp
-            assert model.min_runtime_minutes > 0
+            # The pump's own factory aux-start, per installer manual - the simulator's plant
+            # fires the elpatron here. Must sit above EffektGuard's -1500 emergency floor.
+            assert model.aux_start_dm > -1500
 
 
 class TestValidationResults:

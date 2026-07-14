@@ -18,6 +18,7 @@ from typing import TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPRESSOR_HZ_MAX,
     COMPRESSOR_RISK_ELEVATED,
     COMPRESSOR_RISK_HIGH,
     COMPRESSOR_RISK_NOTABLE,
@@ -134,10 +135,13 @@ class CompressorHealthMonitor:
         if timestamp is None:
             timestamp = dt_util.now()
 
-        # Validate Hz reading
-        if hz < 0 or hz > 150:
-            _LOGGER.warning("Invalid compressor Hz reading: %d (expected 0-120 range)", hz)
-            hz = max(0, min(hz, 150))
+        # Validate Hz reading against the machine's own ceiling - the clamp and the
+        # message used to disagree (clamped at 150 while warning about 0-120).
+        if hz < 0 or hz > COMPRESSOR_HZ_MAX:
+            _LOGGER.warning(
+                "Invalid compressor Hz reading: %d (expected 0-%d range)", hz, COMPRESSOR_HZ_MAX
+            )
+            hz = max(0, min(hz, COMPRESSOR_HZ_MAX))
 
         # Add to history
         self.hz_history.append((timestamp, hz))

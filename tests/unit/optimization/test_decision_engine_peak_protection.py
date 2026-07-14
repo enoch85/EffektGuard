@@ -86,9 +86,12 @@ async def decision_engine(hass_mock, mock_price_data):
     effect_manager = EffectManager(hass_mock)
     thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
 
+    # The keys the engine actually reads - the old fixture set "target_temperature" and
+    # "tolerance" 5.0, neither of which exists, so the engine ran on defaults and every
+    # assertion here was made against a configuration nobody had set (F-098).
     config = {
-        "target_temperature": 21.0,
-        "tolerance": 5.0,  # Mid-range
+        "target_indoor_temp": 21.0,
+        "tolerance": 0.5,
     }
 
     engine = DecisionEngine(
@@ -173,9 +176,13 @@ class TestEffectLayerIntegration:
             3
         ]  # Effect is layer 3 (after safety, emergency, thermal debt)
 
-        # Should have Peak layer with appropriate weight
         assert effect_layer.name == "Peak"
-        assert effect_layer.weight >= 0.0  # Has some weight
+        # A weight >= 0.0 cannot fail. With power below the recorded peak and a healthy
+        # margin, the correct behavior is a QUIET layer - pin that instead (F-097).
+        assert effect_layer.weight == 0.0, (
+            f"Peak layer voted weight {effect_layer.weight} with power comfortably under "
+            f"the monthly peak - peak protection should be silent here."
+        )
 
 
 class TestLayerPriority:

@@ -86,9 +86,6 @@ class NibeF730Profile(HeatPumpProfile):
     max_flow_temp: float = 58.0
     min_flow_temp: float = 20.0
 
-    min_runtime_minutes: int = 30
-    min_rest_minutes: int = 10
-
     # Exhaust air heat pump features
     # F730 is an EAHP - supports airflow optimization for heat extraction
     supports_exhaust_airflow: bool = True

@@ -117,9 +117,6 @@ class NibeS1155Profile(HeatPumpProfile):
     max_flow_temp: float = 65.0  # "compressor provides a supply temperature up to 65 C"
     min_flow_temp: float = 18.0  # Can go lower with ground source
 
-    min_runtime_minutes: int = 30
-    min_rest_minutes: int = 10
-
     def __post_init__(self):
         """Initialize COP curve - GSHP has much better COP than ASHP.
 

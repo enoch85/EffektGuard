@@ -122,9 +122,9 @@ if command -v black &> /dev/null; then
     if black custom_components/effektguard/ --check --line-length 100 &> /dev/null; then
         echo -e "${GREEN}✓ Black formatting: PASS${NC}"
     else
-        echo -e "${YELLOW}⚠ Black formatting issues detected. Running black...${NC}"
-        black custom_components/effektguard/ --line-length 100
-        echo -e "${GREEN}✓ Black formatting: FIXED${NC}"
+        # A gate that silently rewrites the tree and reports success is not a gate.
+        echo -e "${RED}✗ Black formatting: FAIL - run: black custom_components/effektguard/ --line-length 100${NC}"
+        exit 1
     fi
 else
     echo -e "${YELLOW}⚠ Black not installed, skipping formatting check${NC}"

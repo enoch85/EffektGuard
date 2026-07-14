@@ -136,11 +136,6 @@ class HeatPumpProfile(ABC):
     max_flow_temp: float
     min_flow_temp: float
 
-    # Optimization parameters (Swedish NIBE research)
-    dm_threshold_start: float = -60  # Normal compressor start
-    dm_threshold_extended: float = -240  # Extended runs acceptable
-    dm_threshold_warning: float = -400  # Approaching danger
-    dm_threshold_critical: float = -500  # Emergency recovery
     # The simulator reads this so the plant model tracks what the integration believes.
     # It cannot do that while the profile restates the number, so it references it (F-076).
     dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
@@ -153,10 +148,6 @@ class HeatPumpProfile(ABC):
     # auxiliary heat by hundreds of degree-minutes and misreports both aux energy and overshoot.
     # Overridden per model with the value from its own installer manual.
     aux_start_dm: float = -700.0
-
-    # Cycling protection
-    min_runtime_minutes: int = 30
-    min_rest_minutes: int = 10
 
     # Exhaust air heat pump features
     # Only EAHP models (F730, F750) support airflow optimization
