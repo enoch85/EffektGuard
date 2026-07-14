@@ -25,8 +25,8 @@ hardcoded 12.0 for every thermal mass and says so in its own docstring. Every pa
 horizon is severed.
 
 Measured on the owner's slab (2-node transient, 100 mm ground slab + 60 mm screed): the room moves
-+1.0 C in 2.4-4.6 h, but the slab reaches only 63% of its response in ~14 h. Six hours is the lag;
-twenty-four is the horizon you have to plan over.
++1.0 C in 2.4-4.6 h, but the slab is only ~19% charged at 14 h and ~29% at 24 h (slow time
+constant ~70 h). Six hours is the lag; twenty-four is the MINIMUM horizon to plan over.
 """
 
 import pytest

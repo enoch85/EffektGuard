@@ -74,6 +74,37 @@ def _constants_cited_in_the_research() -> list[tuple[str, str, float]]:
     return sorted(set(cited))
 
 
+def _constants_declared_in_code_fences() -> list[tuple[str, str, float]]:
+    """Every `NAME = value` inside a fenced code block - a DECLARATION, not a mention.
+
+    Prose may lawfully name a constant that no longer exists ("DEFAULT_BALANCE_POINT_OFFSET
+    ... is gone"). A fenced ```python block reads as the code the document is deriving, so a
+    name there that const.py does not have is a promise the codebase is not keeping - which
+    is how a document declared WEATHER_PREHEAT_OFFSET = 2.0 for months while production
+    shipped WEATHER_GENTLE_OFFSET = 0.83, and the hasattr filter above silently skipped it.
+    """
+    declared = []
+    for filename, text in _all_research_text():
+        for fence in re.findall(r"```[a-z]*\n(.*?)```", text, flags=re.DOTALL):
+            for name, value in re.findall(
+                r"^\s*([A-Z][A-Z0-9_]{3,})\s*=\s*(-?[0-9]+(?:\.[0-9]+)?)", fence, flags=re.M
+            ):
+                declared.append((filename, name, float(value)))
+    return sorted(set(declared))
+
+
+def test_no_fenced_declaration_names_a_constant_the_code_does_not_have():
+    declared = _constants_declared_in_code_fences()
+    assert declared, "the fence parser matched nothing - it can no longer catch anything either"
+
+    phantoms = [(f, n, v) for f, n, v in declared if not hasattr(const, n)]
+    assert not phantoms, (
+        f"docs/research declares constants the code does not have: {phantoms}. A reader takes a "
+        f"fenced declaration as fact; if the constant was renamed or the change never landed, "
+        f"the document must say so in prose instead of declaring it."
+    )
+
+
 def _net_gain_table() -> list[tuple[float, float]]:
     """The `| outdoor | net gain |` table in 04. `| +10 °C | **+0.03 kW** |` -> (10.0, 0.03)."""
     rows = re.findall(

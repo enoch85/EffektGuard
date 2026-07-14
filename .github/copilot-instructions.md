@@ -420,12 +420,13 @@ def calculate_preheating_target(
         Target indoor temperature for pre-heating phase (°C)
         
     Notes:
-        Six hours is the slab's LAG, not its horizon: it reaches only ~63% of its response
-        in ~14 h, so a cold snap has to be seen a day out, not six hours out.
+        Six hours is the slab's LAG, not its horizon: it is only ~19% charged at 14 h and
+        ~29% at 24 h (slow time constant ~70 h), so a cold snap has to be seen at least a
+        day out, not six hours out.
 
     References:
-        - docs/research/03_concrete_slab_response.md: the two-node transient, and why the
-          horizon is 24 h and the pre-heat +2.0 C
+        - docs/research/03_concrete_slab_response.md: the two-node transient, why the
+          horizon is 24 h, and the OPEN pre-heat sizing question (owner decision)
         - docs/research/01_degree_minutes.md: why DM cannot see under-heating we cause
     """
 ```
@@ -754,9 +755,9 @@ DM_THRESHOLD_AUX_LIMIT = -1500  # auxiliary heat limit
 
 ```python
 # ✅ Show the research basis
-# Concrete slab: 6+ hours of conduction lag from pipe to floor surface, but the slab reaches
-# only ~63% of its response in ~14 h. Six hours is the LAG; twenty-four is the horizon you
-# have to plan over. Confirmed against the owner's slab (2-node transient, 100 mm + 60 mm).
+# Concrete slab: 6+ hours of conduction lag from pipe to floor surface, but the slab is only
+# ~19% charged at 14 h and ~29% at 24 h (slow time constant ~70 h). Six hours is the LAG;
+# twenty-four is the MINIMUM horizon. Confirmed on the owner's slab (2-node, 100 mm + 60 mm).
 UFH_CONCRETE_PREDICTION_HORIZON = 24.0  # hours
 
 # ❌ No context
@@ -858,7 +859,7 @@ The structure was right; the input was not. `docs/research/02_emitter_law.md` sh
 - **Timber**: 2-3 hours lag, **12h** prediction horizon
 - **Radiators**: <1 hour lag, **6h** prediction horizon
 
-⚠️ **Six hours is the LAG, not the horizon.** The slab is only ~63 % charged at fourteen hours, so a
+⚠️ **Six hours is the LAG, not the horizon.** The slab is only ~19 % charged at fourteen hours (slow time constant ~70 h), so a
 12 h window cannot see the thing that actually drains it: a slow, deep, multi-day slide shows less
 than 4 °C of drop in any twelve hours and never triggers the pre-heat at all, while the sudden plunge
 that *does* trigger it is the case the pump's own curve already handles.

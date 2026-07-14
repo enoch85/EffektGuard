@@ -302,8 +302,9 @@ class ThermalModel:
         """How far ahead this house has to look to act in time.
 
         The heavier the fabric, the longer the lag, and the further ahead it must see. A concrete
-        slab moves the room by a degree in a few hours but reaches only 63% of its response in
-        about fourteen - so six hours is the LAG, and a day is the horizon it has to plan over.
+        slab moves the room by a degree in a few hours but is only about a fifth charged at
+        fourteen - its slow time constant is ~70 h - so six hours is the LAG, and a day is the
+        MINIMUM horizon it has to plan over.
         UFH_CONCRETE_PREDICTION_HORIZON says as much in its own comment.
 
         This returned a flat 12.0 for every house. The pre-heat layer fires on a drop of

@@ -634,7 +634,7 @@ class WeatherPredictionLayer:
             forecast_horizon: How far ahead to scan, in hours. From the thermal model, because it
                 depends on what the house is built of. This layer took thermal_mass already and
                 used it ONLY to scale its weight - it scanned a fixed twelve hours whatever the
-                house was. A concrete slab reaches 63% of its response in about fourteen hours, and
+                house was. A concrete slab is only about a fifth charged at fourteen hours, and
                 a 15 C fall spread over two days shows less than 4 C inside any twelve-hour window,
                 so the drop never crossed the trigger and the pre-heat never fired at all.
         """
