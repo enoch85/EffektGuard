@@ -45,6 +45,7 @@ import asyncio
 import functools
 import importlib.util
 import pathlib
+from dataclasses import replace
 
 import pytest
 
@@ -79,15 +80,22 @@ _SATURATING_HOUSE = "airsource_f2040"
 
 @functools.lru_cache(maxsize=1)
 def _the_only_run_that_reaches_the_immersion_heater() -> dict:
-    """A full cold-snap month on the F2040, cached: the only scenario that saturates a pump.
+    """An UNDERSIZED F2040 through a cold-snap month, cached: the run that saturates a pump.
 
     It is an outdoor-air machine, so it is the only one whose capacity collapses as the weather
     does. The other four sail through a Swedish January without ever touching resistive heat, which
     means a leak test run on them proves nothing about a plant that mishandles the heater - and the
     first version of that test was run on exactly those, and passed on a broken plant.
+
+    UNDERSIZED, because since the plant fires its elpatron at the pump's own start-addition
+    (menu 4.9.3) rather than EffektGuard's -1500 floor, a correctly-sized F2040 no longer
+    latches the emergency ladder - the hardware catches DM at about -760 and holds the house.
+    The saturation clamp this class tests only engages when the machine is genuinely beyond
+    its envelope, which is what average-climate sizing against a Swedish winter produces.
     """
     times, temps, price_days, unit = sim.load_data(selftest=False)
     house = next(h for h in sim.HOUSES if h.name == _SATURATING_HOUSE)
+    house = replace(house, hlc_w_per_k=house.hlc_w_per_k * sim.UNDERSIZED_PUMP_FACTOR)
     try:
         stats, _violations, _trace = sim.simulate(
             house,

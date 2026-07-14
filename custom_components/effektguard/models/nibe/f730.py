@@ -58,6 +58,10 @@ class NibeF730Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "F-series ASHP"
 
+    # SOURCED: F730 Installer Manual, menu 4.9.3 "start addition" factory default -700,
+    # same additive-heat control as the F750.
+    aux_start_dm: float = -700.0
+
     datasheet_points: tuple[RatingPoint, ...] = F730_DATASHEET
     datasheet_source: str = F730_SOURCE
 

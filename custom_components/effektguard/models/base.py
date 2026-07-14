@@ -145,6 +145,15 @@ class HeatPumpProfile(ABC):
     # It cannot do that while the profile restates the number, so it references it (F-076).
     dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
 
+    # The DM at which THE PUMP ITSELF engages its additive heat, at factory settings -
+    # NIBE menu 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with
+    # the compressor start (S-series/F11xx). This is a fact about the HARDWARE, distinct from
+    # DM_THRESHOLD_AUX_LIMIT (EffektGuard's own emergency floor, audit F-112): a real pump's
+    # elpatron fires HERE and works DM back up, so a plant model that waits for -1500 delays
+    # auxiliary heat by hundreds of degree-minutes and misreports both aux energy and overshoot.
+    # Overridden per model with the value from its own installer manual.
+    aux_start_dm: float = -700.0
+
     # Cycling protection
     min_runtime_minutes: int = 30
     min_rest_minutes: int = 10
@@ -186,6 +195,12 @@ class HeatPumpProfile(ABC):
     # test what happens when one does.
     design_heat_load_kw: float = 0.0
 
+    # Pdesignh for the EN 14825 AVERAGE climate (design temperature -10 C). Tbiv and Psup below
+    # are declared FOR THAT climate, so any statement that combines them must use this figure -
+    # mixing the cold-climate Pdesignh with the average-climate Psup manufactured a compressor
+    # capacity that appears in no NIBE document.
+    design_heat_load_average_kw: float = 0.0
+
     # Tbiv - the BIVALENT TEMPERATURE, from the ErP declaration. Below this outdoor temperature the
     # heat pump cannot meet the design heat load on its own and supplementary heat is REQUIRED.
     #
@@ -199,11 +214,11 @@ class HeatPumpProfile(ABC):
     # same sense, because their heat source does not weaken with the weather.
     bivalent_temp_c: float = 0.0
 
-    # Psup - the supplementary heat the ErP declaration says this machine needs at its design point.
-    # For the F2040-8 it closes the capacity model exactly: NIBE says Pdesignh 9.0 kW cold with
-    # Psup 1.1 kW, so the COMPRESSOR delivers 7.9 kW at the cold-climate design temperature. That
-    # is the only published statement about its capacity below -7 C, where the manual gives a graph
-    # and no numbers.
+    # Psup - the supplementary heat the ErP AVERAGE-climate declaration says this machine needs
+    # at that climate's design point (-10 C). For the F2040-8: Pdesignh(avg) 8.2 kW with Psup
+    # 1.1 kW, so the COMPRESSOR delivers 7.1 kW at -10 C. That is the only published statement
+    # about its capacity below -7 C, where the manual gives a graph and no numbers - and it is
+    # one COMPLETE declaration, not a splice of two.
     supplementary_heat_kw: float = 0.0
 
     @property
@@ -218,13 +233,17 @@ class HeatPumpProfile(ABC):
         if self.heating_capacity_range_kw[1] > 0.0:
             return self.heating_capacity_range_kw[1]
 
-        # The ErP declaration is also a published statement about the maximum. For the F2040-8 NIBE
-        # says Pdesignh 9.0 kW with Psup 1.1 kW, so the COMPRESSOR reaches 7.9 kW at the design
-        # temperature - above its coldest tabulated rating point (6.60 kW at -7 C), because capacity
-        # keeps rising as the weather cools. The rating points alone would understate it.
+        # The ErP declaration is also a published statement about the maximum. For the F2040-8
+        # the AVERAGE declaration says Pdesignh 8.2 kW with Psup 1.1 kW at -10 C, so the
+        # COMPRESSOR reaches 7.1 kW there - above its coldest tabulated rating point (6.60 kW at
+        # -7 C), because inverter capacity keeps rising as the weather cools. The rating points
+        # alone would understate it. One declaration, used whole: Tbiv and Psup belong to the
+        # average climate, so the average Pdesignh is the only figure they may be combined with.
         published = max(point.heat_output_kw for point in self.datasheet_points)
-        if self.design_heat_load_kw > 0.0 and self.supplementary_heat_kw > 0.0:
-            published = max(published, self.design_heat_load_kw - self.supplementary_heat_kw)
+        if self.design_heat_load_average_kw > 0.0 and self.supplementary_heat_kw > 0.0:
+            published = max(
+                published, self.design_heat_load_average_kw - self.supplementary_heat_kw
+            )
         return published
 
     def rating_point_at(self, flow_temp_c: float) -> RatingPoint:

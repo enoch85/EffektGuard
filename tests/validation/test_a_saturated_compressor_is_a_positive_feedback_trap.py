@@ -10,44 +10,46 @@ positive feedback loop, and the owner named it before this simulation ever ran:
     "if you keep raising the DM during stress, it will never be able to get itself out of that
      spinning loop downwards, it will worsen."
 
-REPRODUCED, on pump models and houses now sourced to NIBE's own datasheets (see
-tests/validation/test_the_pump_models_match_their_datasheets.py). The sizing convention moves the
-answer - NIBE publishes Pdesignh at two reference climates - so the finding is reported under both.
+THE MECHANISM IS REAL AND THE UNIT TEST BELOW PROVES IT: handed a pump at maximum flow, a house
+ABOVE target and DM at the integrator floor, the emergency layer still commands +10.
 
-    SWEDISH SIZING (cold climate, -22 C). Only the F2040 saturates, and BY DESIGN: NIBE declares
-    Tbiv = -9 C and Psup = 1.1 kW, so below -9 C its supplementary heater is SUPPOSED to run.
+HOW MUCH IT COSTS WAS ONCE OVERSTATED, BY THIS FILE. Earlier versions here reported the house
+"cooked to ~30 C" and "2-5x the resistive heat" - measured on a plant whose immersion heater
+waited for EffektGuard's -1500 floor. No factory-default NIBE does that: the F750 arms its
+elpatron at DM -700 (menu 4.9.3), the S-series controllers near -460, the VVM 320 near -760,
+and the elpatron then works DM back UP. Re-measured with the pumps' own start-addition values
+(see test_the_plant_engages_aux_where_the_pump_does.py):
 
-        airsource_f2040   239 kWh of resistive heat where the capacity deficit forced 85 (2.8x),
-                          house cooked to 31.5 C
+    SWEDISH SIZING (cold climate, -22 C). Only the F2040 saturates, BY DESIGN: NIBE declares
+    Tbiv -9 C, so below -9 C its supplementary heat is SUPPOSED to run.
 
-    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter) - the commonest installation
-    fault there is. Both figures come from NIBE's own datasheet.
+        airsource_f2040   38.5 kWh resistive where the deficit forced 22.4 (1.7x).
+                          Indoor held (max 22.6 C); DM settles at -771 - the hardware
+                          start-addition, exactly where Swedish forum reports say a real
+                          pump's DM asymptotes. The damage is ~16 kWh of COP-1.0 money per
+                          cold snap, not a cooked house.
 
-                          optimiser   physics forced   do-nothing      optimiser   do-nothing
-                             aux                          aux           indoor       indoor
-        wooden_f750        221 kWh       104 kWh         61 kWh         29.3 C       22.6 C
-        concrete_f1155     685 kWh       277 kWh        135 kWh         29.8 C       22.2 C
-        villa_s1155        555 kWh       283 kWh        126 kWh         29.8 C       22.2 C
-        airsource_f2040   2184 kWh      2113 kWh       1066 kWh         29.1 C       23.0 C
-        apartment_f730       0 kWh         0 kWh          0 kWh         22.9 C       22.8 C
+    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter):
 
-EVERY MACHINE THAT SATURATES IS MADE WORSE BY THE OPTIMISER, under both sizing conventions: two to
-five times the resistive heat of a do-nothing controller, and the house cooked to ~30 C while doing
-nothing holds 22. The only escape is the apartment, whose pump has 1.8x the capacity its house needs
-and cannot saturate. The immersion heat is measured against what the capacity deficit PHYSICALLY
-FORCES, computed step by step in the plant, so "2.8x more resistive heat than it had to" is a
-statement about the controller, not the weather.
+        wooden_f750       76.4 kWh vs 50.8 forced (1.5x), indoor held
+        concrete_f1155   164.5 kWh vs 116.9 forced (1.4x), indoor held
+        villa_s1155      143.5 kWh vs 115.9 forced (1.24x - inside the tolerance bound)
+        airsource_f2040  the raw trap, still: DM pegs the -3000 integrator floor, indoor
+                         hits 29.2 C, 9303 violations - a machine driven below its own
+                         operating envelope, where nearly all of the burn (1652 of 1743 kWh)
+                         is physically forced but the controller's latching places it as
+                         overshoot.
 
-AND THE RECOVERY LADDER IS STILL UNVALIDATED BY SIMULATION. The three houses that pass never touch
-it - only the proactive Z-tiers fire, and T1/T2/T3 and the anti-windup never run at all. The only
-runs in which the ladder engages are the two above, and both FAIL. There is no run anywhere in which
-it engages and RECOVERS. Nobody should claim a green simulation validates the degree-minute recovery
-tiers.
+THE FINDING STANDS, at its honest size: on every machine that saturates, the optimiser buys
+MORE resistive heat than the capacity deficit forces (1.4-1.7x on datasheet-sized systems),
+because the emergency ladder keeps raising a setpoint the compressor cannot follow. What it no
+longer claims: that a correctly-sized system gets cooked. The hardware's own elpatron catches
+the house; the controller wastes money fighting a wall.
 
 WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup written for
 exactly this failure mode, and that bypass is documented twice, in the owner's own code, as
-intentional. Changing it means deciding what a heat pump should do when it physically cannot meet its
-own curve - a heat-pump decision, not a code cleanup. BLOCKED-ON-OWNER, and it stays that way.
+intentional. Changing it means deciding what a heat pump should do when it physically cannot meet
+its own curve - a heat-pump decision, not a code cleanup. BLOCKED-ON-OWNER, and it stays that way.
 
 The `xfail` is STRICT on purpose: if someone fixes this, the suite goes RED and they are forced to
 come here and delete the marker. A known defect nobody trips over is a defect that gets forgotten.
@@ -73,6 +75,7 @@ def test_the_emergency_tier_asks_for_maximum_heat_at_the_aux_limit():
 
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "F-124, BLOCKED-ON-OWNER. A saturated compressor cannot raise BT25, so raising S1 makes "
         "DM = integral(BT25 - S1) fall FASTER. The emergency layer answers by raising it again and "
@@ -102,7 +105,16 @@ def test_the_emergency_layer_does_not_keep_raising_a_pump_that_has_nothing_left(
         is_heating = True
         is_hot_water = False
 
-    decision = layer.evaluate_layer(_SaturatedPump(), price_classification="normal")
+    # The first version of this call passed a keyword the layer does not have, so it died on
+    # TypeError before reaching the assertion - and ordinary CI counted that as the expected
+    # xfail. raises=AssertionError above makes that impersonation impossible now.
+    decision = layer.evaluate_layer(
+        _SaturatedPump(),
+        weather_data=None,
+        price_data=None,
+        target_temp=21.0,
+        tolerance_range=1.0,
+    )
 
     assert decision.offset < SAFETY_EMERGENCY_OFFSET, (
         f"The pump is at maximum flow ({_SaturatedPump.supply_temp} C), already commanded to "

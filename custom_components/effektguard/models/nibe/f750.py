@@ -111,6 +111,9 @@ class NibeF750Profile(HeatPumpProfile):
     # The simulator reads this so the plant model tracks what the integration believes.
     # It cannot do that while the profile restates the number, so it references it (F-076).
     dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
+    # SOURCED: F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3 "start addition",
+    # setting range -2000..-30, factory default -700. The pump's own elpatron fires here.
+    aux_start_dm: float = -700.0
 
     # Cycling protection (prevents compressor wear)
     min_runtime_minutes: int = 30  # NIBE recommendation

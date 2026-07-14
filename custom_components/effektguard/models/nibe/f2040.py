@@ -102,6 +102,11 @@ class NibeF2040Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "F-series air/water"
 
+    # SOURCED: the F2040 is an outdoor monobloc with no additive heat of its own; the indoor
+    # controller owns it. VVM 320 (its standard pairing) ships "start diff additional heat" 700
+    # below the compressor start (-60): additive heat engages at about -760.
+    aux_start_dm: float = -760.0
+
     datasheet_points: tuple[RatingPoint, ...] = F2040_8_DATASHEET
     datasheet_source: str = F2040_SOURCE
 
@@ -122,12 +127,13 @@ class NibeF2040Profile(HeatPumpProfile):
     # Below -9 C this machine is DESIGNED to need supplementary heat.
     bivalent_temp_c: float = -9.0
     supplementary_heat_kw: float = 1.1  # ErP: "Psup Rated heat output 1.1 kW"
-    # Pdesignh at the EN 14825 COLD climate, 35 C application (spec sheet): 9.0 kW. The
-    # average-climate figure is 8.2 kW. The harness sizes every house at the average-climate design point, which is
-    # the reference every NIBE datasheet declares Pdesignh at - so the average figure is the one
-    # that belongs here. Mixing the two conventions produced a house that was nobody's, and it moved
-    # a pump between saturating and not.
+    # Pdesignh at the EN 14825 COLD climate, 35 C application (spec sheet): 9.0 kW. The harness
+    # sizes every house at the COLD design temperature (-22 C), so the cold figure is the one that
+    # belongs here. The AVERAGE-climate declaration (design temp -10 C) is carried separately
+    # below, because Tbiv and Psup above belong to IT - splicing the cold Pdesignh onto the
+    # average Psup manufactured a 7.9 kW compressor that appears in no NIBE document.
     design_heat_load_kw: float = 9.0
+    design_heat_load_average_kw: float = 8.2  # spec sheet, average/35
     immersion_heater_kw: float = 0.0
     supports_aux_heating: bool = False
     supports_modulation: bool = True

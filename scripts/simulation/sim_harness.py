@@ -21,7 +21,7 @@ Plant model (deliberately simple but honest):
   - DM integrates (flow_actual - flow_target) minutes, clamped to [-3000, 100]
   - Heat output Q = K_EMIT * (flow - Tin); K_EMIT sized for design point
   - Electrical power = Q / COP(Tout) from the pump profile curve
-  - Aux heat: DM below -1500 adds electric aux steps (like real NIBE)
+  - Aux heat: engages at the pump's own factory start-addition DM (menu 4.9.3)
 
 The engine's wall-clock reads (dt_util.now/utcnow) are monkeypatched to the
 simulation clock each step so price-quarter and forecast logic see sim time.
@@ -148,9 +148,11 @@ DST_FALL_BACK_HOURS = 25
 # COP is set by the LIFT, not by the weather. These place the source and the condenser.
 KELVIN = 273.15
 # The exergy penalty for hotter water, BEYOND what Carnot already accounts for. Measured on the
-# machines whose datasheets identify it (F1155/S1155: -0.0055/K; F2040: -0.0028/K) and imported as
-# a STATED ASSUMPTION by the two whose datasheets cannot (F750/F730 confound load with flow).
-FLOW_EXERGY_PENALTY_PER_K = -0.0046
+# machines whose datasheets identify it (F1155/S1155: -0.00552/K; F2040: -0.00277/K) and imported
+# as a STATED ASSUMPTION by the two whose datasheets cannot (F750/F730 confound load with flow).
+# The value is the arithmetic mean of the two measured ones - it used to say that while being
+# -0.0046, which is the mean of nothing.
+FLOW_EXERGY_PENALTY_PER_K = -0.00415
 
 # Physical bounds on the exergy efficiency. A real machine achieves 30-70% of Carnot; these only
 # stop a fit extrapolating off the end of its own data into nonsense, which the first version did.
@@ -310,14 +312,16 @@ class HouseConfig:
         return published if published > 0.0 else ASSUMED_INDOOR_MODULE_HEATER_KW
 
     @property
-    def dm_aux_limit(self) -> float:
-        """Aux-heat threshold, taken from the pump profile rather than restated.
+    def aux_start_dm(self) -> float:
+        """Where the PLANT's additive heat engages: the pump's own factory start-addition.
 
-        The correct value for real NIBE hardware is contested (see the audit's
-        F-112). Reading it from the profile means the plant model tracks whatever
-        the integration believes, instead of silently diverging from it.
+        Not EffektGuard's -1500 emergency floor. A factory-default F750 fires its elpatron at
+        DM -700 and works the debt back up (menu 4.9.3; audit F-112) - waiting for the floor
+        under-fired the elpatron by hundreds of degree-minutes in exactly the runs meant to
+        measure what it costs, and the cold-snap headline was computed against a machine no
+        factory ships.
         """
-        return float(self.profile.dm_threshold_aux_swedish)
+        return float(self.profile.aux_start_dm)
 
     def source_temp_c(self, outdoor_temp: float) -> float:
         """The temperature of the heat SOURCE the compressor is lifting from.
@@ -505,21 +509,24 @@ class HouseConfig:
         # BELOW THE COLDEST RATING POINT, NIBE'S OWN ErP DECLARATION CLOSES THE MODEL.
         #
         # The manual tabulates the F2040's maximum output down to -7 C and no further - below that
-        # it gives a graph. But the ErP says the machine covers a Pdesignh design load with Psup of
-        # supplementary heat, so the COMPRESSOR must deliver (Pdesignh - Psup) at the design
-        # temperature. For the F2040-8 that is 8.2 - 1.1 = 7.1 kW at -10 C, against 6.60 kW at -7 C.
+        # it gives a graph. But the AVERAGE-climate ErP declaration is one complete published
+        # statement: Pdesignh 8.2 kW at -10 C with Psup 1.1 kW, so the COMPRESSOR must deliver
+        # 8.2 - 1.1 = 7.1 kW at -10 C, against 6.60 kW measured at -7 C. An earlier version
+        # spliced the COLD-climate Pdesignh (9.0, declared at -22) onto that same Psup and
+        # anchored the result at -22 - a capacity from two different declarations that NIBE
+        # never published, worth +0.8 kW of phantom compressor in exactly the runs that decide
+        # whether this machine saturates.
         #
-        # So capacity keeps RISING below -7 C, and the rate is not invented - it is whatever gets
-        # from the last measured point to the manufacturer's own declaration. Below the design
-        # temperature the curve is HELD, because that is where every published statement stops.
+        # So capacity keeps RISING below -7 C to the -10 C declaration, and is HELD below it,
+        # because that is where every published statement stops.
         #
         # The old model derated 2.5 %/C in the opposite direction and blamed EN 14511 for it.
-        pdesign = self.profile.design_heat_load_kw
+        pdesign_avg = self.profile.design_heat_load_average_kw
         psup = self.profile.supplementary_heat_kw
-        if source < temps[0] and pdesign > 0.0 and psup > 0.0:
-            at_design = pdesign - psup
-            if EN14825_COLD_DESIGN_C < temps[0]:
-                span = temps[0] - EN14825_COLD_DESIGN_C
+        if source < temps[0] and pdesign_avg > 0.0 and psup > 0.0:
+            at_design = pdesign_avg - psup
+            if EN14825_AVERAGE_DESIGN_C < temps[0]:
+                span = temps[0] - EN14825_AVERAGE_DESIGN_C
                 frac = min(1.0, (temps[0] - source) / span)
                 return caps[0] + (at_design - caps[0]) * frac
             return at_design
@@ -1216,7 +1223,7 @@ def simulate(
             WATER_LOOP_J_PER_K * (max_flow - flow) / (STEP_MIN * 60.0) + q_emit_w - q_comp_w
         )
         aux_w = 0.0
-        if dm <= house.dm_aux_limit:
+        if dm <= house.aux_start_dm:
             aux_w = min(house.immersion_heater_kw * 1000.0, max(0.0, aux_headroom_w))
 
         flow_unclamped = (

@@ -84,6 +84,10 @@ class NibeS1155Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "S-series GSHP"
 
+    # SOURCED: S1155 register 40680 "start diff additional heat" factory default 400, applied
+    # below the compressor start (-60): the controller engages additive heat at about -460.
+    aux_start_dm: float = -460.0
+
     # Mid-range variant (3-12 kW) - VERIFIED from NIBE website
     datasheet_points: tuple[RatingPoint, ...] = S1155_12_DATASHEET
     datasheet_source: str = S1155_12_SOURCE
