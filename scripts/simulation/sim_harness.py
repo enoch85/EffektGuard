@@ -210,7 +210,7 @@ class HouseConfig:
             return 0.0
         return self.design_heat_w * (excess / self.design_excess) ** self.emitter_exponent
 
-    def curve_flow_temp(self, outdoor: float) -> float:
+    def curve_flow_temp(self, outdoor: float, tuned: bool = False) -> float:
         """The supply temperature the pump's own heating curve calls for, at offset 0.
 
         A correctly tuned NIBE curve follows the emitter law, not a straight line. NIBE's
@@ -219,6 +219,20 @@ class HouseConfig:
         makes it under-supply everywhere between its endpoints, and the house cannot hold target
         even with the controller switched off.
         """
+        # A STOCK NIBE CURVE HAS NO INTERNAL-GAINS TERM, and that is not an oversight in this
+        # model - it is what the hardware does. The installer picks a curve number and the pump
+        # draws a line from the design point; nothing in it knows that the occupants and the
+        # fridge are supplying several hundred watts. So a stock curve OVER-SUPPLIES in mild
+        # weather, and the simulated baseline house duly sits at 22.5 C against a 22.0 C target.
+        #
+        # WHICH MEANS THE DEFAULT BASELINE IS A SOFT ONE, AND I WAS QUOTING SAVINGS AGAINST IT.
+        # A diligent owner trims the curve down until the house actually holds target, and against
+        # THAT baseline the optimiser's saving falls from 1.5-4.4 % to 0.5-1.4 %. Most of what I
+        # reported was the controller correcting a mis-tuned curve rather than optimising anything.
+        #
+        # Both yardsticks are real and they answer different questions, so the harness offers both:
+        # `--tuned-baseline` gives the pump a curve that knows about the gains, which is the honest
+        # question "what is this worth to someone whose pump is already set up properly?"
         return en442_flow_temp(
             indoor_setpoint=TARGET_INDOOR,
             outdoor_temp=outdoor,
@@ -226,6 +240,9 @@ class HouseConfig:
             design_flow_temp=self.design_flow,
             design_spread=DESIGN_SPREAD,
             emitter_exponent=self.emitter_exponent,
+            balance_point_temp=(
+                TARGET_INDOOR - INTERNAL_GAINS_W / self.hlc_w_per_k if tuned else None
+            ),
         )
 
     @property
@@ -630,6 +647,7 @@ def build_engine(
     mode: str = "balanced",
     enable_price: bool = True,
     enable_weather: bool = True,
+    tuned_curve: bool = False,
 ):
     """Build the real DecisionEngine for this house.
 
@@ -678,6 +696,7 @@ def simulate(
     battery: bool = False,
     enable_price: bool = True,
     enable_weather: bool = True,
+    tuned_curve: bool = False,
 ):
     engine, effect = build_engine(house, mode, enable_price, enable_weather)
 
@@ -732,7 +751,7 @@ def simulate(
         tout = outdoor_at(times, temps, now)
 
         # --- plant step ---
-        flow_target = house.curve_flow_temp(tout) + offset_applied
+        flow_target = house.curve_flow_temp(tout, tuned_curve) + offset_applied
 
         # The compressor's capacity now bounds the water node directly (see below), so the flow
         # saturates below target of its own accord when the pump runs out - which is what lets
@@ -1188,6 +1207,7 @@ def main() -> int:
     live_se4 = "--live-se4" in sys.argv
     no_price = "--no-price" in sys.argv
     no_weather = "--no-weather" in sys.argv
+    tuned_curve = "--tuned-baseline" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
@@ -1212,6 +1232,7 @@ def main() -> int:
             battery=battery,
             enable_price=not no_price,
             enable_weather=not no_weather,
+            tuned_curve=tuned_curve,
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -1229,6 +1250,8 @@ def main() -> int:
             tag += "-noprice"
         if no_weather:
             tag += "-noweather"
+        if tuned_curve:
+            tag += "-tuned"
 
         # The baseline run is a do-nothing controller used as a yardstick. It is
         # expected to breach comfort - that is the point of it - so it reports but
