@@ -87,6 +87,9 @@ class NibeS1155Profile(HeatPumpProfile):
     # Mid-range variant (3-12 kW) - VERIFIED from NIBE website
     datasheet_points: tuple[RatingPoint, ...] = S1155_12_DATASHEET
     datasheet_source: str = S1155_12_SOURCE
+    immersion_heater_kw: float = (
+        7.0  # datasheet: 7 kW integrated electric heater, seven automatic steps
+    )
     heating_capacity_range_kw: tuple[float, float] = (
         3.0,
         12.0,

@@ -97,6 +97,7 @@ class NibeF1155Profile(NibeS1155Profile):
     # Mid-range variant (4-12 kW)
     datasheet_points: tuple[RatingPoint, ...] = F1155_12_DATASHEET
     datasheet_source: str = F1155_12_SOURCE
+    immersion_heater_kw: float = 7.0  # datasheet: additional power 1/2/3/4/5/6/7 kW
     heating_capacity_range_kw: tuple[float, float] = (
         3.0,
         12.0,

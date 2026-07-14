@@ -88,7 +88,14 @@ GESPOT_UNIT_ORE = "öre/kWh"
 # Plant constants
 DM_START = -60.0
 DM_STOP = 0.0
-AUX_STEP_KW = 3.0  # one aux step
+# THE F2040 HAS NO IMMERSION HEATER. It is an outdoor monobloc; its electric addition lives in the
+# indoor module it is paired with (a VVM or SMO), which this package does not model. Every other
+# machine's heater is on its profile, from its datasheet. This is the fallback for the F2040 alone,
+# and it is an ASSUMPTION about that indoor module - not a NIBE figure - so it is named as one.
+#
+# It matters: the immersion burn is a headline number in the saturated-compressor finding, and the
+# simulator used to apply this one invented value to all five machines, matching none of them.
+ASSUMED_INDOOR_MODULE_HEATER_KW = 3.0
 STANDBY_KW = 0.1  # controller, pumps, standby losses
 J_PER_KWH = 3_600_000.0
 
@@ -255,6 +262,17 @@ class HouseConfig:
                 TARGET_INDOOR - INTERNAL_GAINS_W / self.hlc_w_per_k if tuned else None
             ),
         )
+
+    @property
+    def immersion_heater_kw(self) -> float:
+        """This machine's immersion heater, from its datasheet. The F2040 has none.
+
+        The plant used to give every house the same invented 3.0 kW, which is no machine's actual
+        setting. NIBE ships the F750 and F730 with a 6.5 kW heater set to 3.5 kW at delivery, and
+        the F1155-12/S1155-12 with a 7 kW heater in seven automatic steps.
+        """
+        published = float(getattr(self.profile, "immersion_heater_kw", 0.0))
+        return published if published > 0.0 else ASSUMED_INDOOR_MODULE_HEATER_KW
 
     @property
     def dm_aux_limit(self) -> float:
@@ -933,7 +951,7 @@ def simulate(
         )
         aux_w = 0.0
         if dm <= house.dm_aux_limit:
-            aux_w = min(AUX_STEP_KW * 1000.0, max(0.0, aux_headroom_w))
+            aux_w = min(house.immersion_heater_kw * 1000.0, max(0.0, aux_headroom_w))
 
         flow_unclamped = (
             flow + (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K

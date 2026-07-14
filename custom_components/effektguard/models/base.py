@@ -127,6 +127,16 @@ class HeatPumpProfile(ABC):
     # modulation envelope. An F1155-12 makes 5.06 kW at its 0/35 rating point and can reach 12.
     heating_capacity_range_kw: tuple[float, float] = (0.0, 0.0)
 
+    # The immersion heater's DELIVERY SETTING, from the datasheet. 0.0 means the machine has none.
+    #
+    # The simulator used a single AUX_STEP_KW = 3.0 for every house, which is no machine's actual
+    # setting - and the immersion burn is one of the headline numbers in the saturated-compressor
+    # finding. NIBE ships the F750 and F730 with a 6.5 kW heater set to 3.5 kW at delivery, and the
+    # F1155-12/S1155-12 with a 7 kW heater in seven automatic steps. The F2040 has NO heater at all:
+    # it is an outdoor monobloc, and the electric addition belongs to the indoor module it is paired
+    # with, which this package does not model.
+    immersion_heater_kw: float = 0.0
+
     @property
     def max_heat_output_kw(self) -> float:
         """The most heat this machine can make, from its own datasheet.

@@ -33,12 +33,17 @@ weather.
 
                             optimiser   do-nothing        optimiser   do-nothing
                               F750        F750              F2040       F2040
-    indoor_max                27.0 C      22.6 C            27.2 C      22.5 C
-    immersion heat           38.1 kWh    1.8 kWh          223.1 kWh    51.8 kWh
-    minutes above band          1090          0             12325           0
-    cost                     1730 SEK   1461 SEK          2952 SEK    2663 SEK
+    indoor_max                26.9 C      22.6 C            27.2 C      22.5 C
+    immersion heat           35.8 kWh    1.8 kWh          223.1 kWh    51.8 kWh
+    minutes above band          1020          0             12325           0
+    cost                     1748 SEK   1461 SEK          2952 SEK    2663 SEK
 
 A do-nothing controller is better on BOTH machines, on cost AND on comfort.
+
+(Those immersion figures are with each machine's OWN heater, from its datasheet - 3.5 kW at NIBE's
+delivery setting for the F750. The simulator used to give all five houses the same invented 3.0 kW,
+matching none of them. Correcting it moved the F750's burn from 38.1 to 35.8 kWh: the finding is
+robust to the heater size, which is worth knowing rather than assuming.)
 
 And the mechanism is identical on both, which is what makes it a mechanism rather than a mishap:
 

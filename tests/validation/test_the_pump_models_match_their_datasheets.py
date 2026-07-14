@@ -311,3 +311,56 @@ class TestCapacityComesFromTheDatasheetToo:
             f"and ramps UP as the weather cools. The old model derated it 2.5 %/C and blamed the "
             f"EN 14511 rating points, which say the opposite."
         )
+
+
+class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
+    """It was ONE invented number, applied to five machines, matching none of them.
+
+    The simulator gave every house the same `AUX_STEP_KW = 3.0`. NIBE ships the F750 and F730 with
+    a 6.5 kW heater set to 3.5 kW at delivery, the F1155-12 and S1155-12 with a 7 kW heater in
+    seven automatic steps, and the F2040 with NO HEATER AT ALL - it is an outdoor monobloc, and the
+    electric addition belongs to the indoor module it is paired with.
+
+    This matters because the immersion burn is a headline number in the saturated-compressor
+    finding. Correcting it moved the F750's cold-snap burn from 38.1 to 35.8 kWh - which is to say
+    the finding is robust to it, and that is worth knowing rather than assuming.
+    """
+
+    def test_each_machine_carries_its_own_published_heater(self, profile):
+        published = {
+            "F750": 3.5,  # "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
+            "F730": 3.5,
+            "F1155": 7.0,  # additional power 1/2/3/4/5/6/7 kW
+            "S1155": 7.0,
+            "F2040": 0.0,  # it has none
+        }
+
+        assert profile.immersion_heater_kw == published[profile.model_name], (
+            f"{profile.model_name}'s immersion heater is "
+            f"{profile.immersion_heater_kw} kW; its datasheet says "
+            f"{published[profile.model_name]} kW. One invented constant used to stand for all five."
+        )
+
+    def test_the_f2040_has_no_immersion_heater_at_all(self):
+        """Not "0 kW by default". The machine physically does not have one."""
+        f2040 = NibeF2040Profile()
+
+        assert f2040.immersion_heater_kw == 0.0 and not f2040.supports_aux_heating, (
+            "The F2040 is an outdoor monobloc. Its technical-specifications table has no "
+            "immersion-heater row. The profile used to claim 'True # Larger immersion heaters'."
+        )
+
+    def test_the_simulator_falls_back_only_for_the_machine_that_has_none(self):
+        """And it names that fallback an ASSUMPTION, because it is one."""
+        for house in sim.HOUSES:
+            published = house.profile.immersion_heater_kw
+            if published > 0:
+                assert house.immersion_heater_kw == published, (
+                    f"{house.name} is simulated with a {house.immersion_heater_kw} kW heater while "
+                    f"its datasheet publishes {published} kW."
+                )
+            else:
+                assert house.immersion_heater_kw == sim.ASSUMED_INDOOR_MODULE_HEATER_KW, (
+                    "the F2040's backup heat is an assumption about the paired indoor module, and "
+                    "the constant that supplies it must say so in its name"
+                )

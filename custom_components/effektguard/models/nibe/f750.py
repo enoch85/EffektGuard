@@ -81,6 +81,7 @@ class NibeF750Profile(HeatPumpProfile):
     datasheet_source: str = F750_SOURCE
 
     # Power characteristics - DERIVED from the rating points, not restated.
+    immersion_heater_kw: float = 3.5  # datasheet: "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
     heating_capacity_range_kw: tuple[float, float] = (
         1.144,
         4.994,

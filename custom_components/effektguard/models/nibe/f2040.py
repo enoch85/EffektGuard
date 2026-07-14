@@ -116,6 +116,8 @@ class NibeF2040Profile(HeatPumpProfile):
 
     # NO IMMERSION HEATER. The F2040 is an outdoor monobloc; its technical-specifications table has
     # no immersion-heater row. Electric addition belongs to the paired indoor module (VVM/SMO).
+    # NO IMMERSION HEATER. Not "0 kW as a default" - the machine physically does not have one.
+    immersion_heater_kw: float = 0.0
     supports_aux_heating: bool = False
     supports_modulation: bool = True
     supports_weather_compensation: bool = True

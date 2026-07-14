@@ -61,6 +61,7 @@ class NibeF730Profile(HeatPumpProfile):
     datasheet_points: tuple[RatingPoint, ...] = F730_DATASHEET
     datasheet_source: str = F730_SOURCE
 
+    immersion_heater_kw: float = 3.5  # datasheet: "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
     heating_capacity_range_kw: tuple[float, float] = (
         1.27,
         5.35,
