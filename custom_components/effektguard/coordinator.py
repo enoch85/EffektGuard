@@ -2285,7 +2285,28 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Get current timestamp for peak tracking
             now = dt_util.now()
             billing_period = get_current_billing_period(now)
-            period_start = now.replace(minute=0, second=0, microsecond=0)
+
+            # THE HOUR IS COUNTED ON THE ABSOLUTE TIME LINE. THE LABEL STAYS LOCAL.
+            #
+            # `period_start` used to be `now.replace(minute=0, ...)` - an aware LOCAL datetime - and
+            # the rollover below compares it against the stored one. On the last Sunday of October
+            # the wall clock puts 03:00 CEST back to 02:00 CET, so the hour "02" happens twice: two
+            # different, separately-metered, separately-billable hours that print the same digits.
+            #
+            # PEP 495: for two aware datetimes with the SAME tzinfo, `fold` is IGNORED in
+            # comparisons. So 02:00 CEST == 02:00 CET, the rollover never fired, and the two hours
+            # merged into one accumulator - where the sample deltas across the fold run BACKWARDS
+            # (02:05 CET minus 02:55 CEST is minus fifty minutes), subtracting the first hour's
+            # energy from the second. Driving the real coordinator with 9 kW through the first 02:00
+            # and 1 kW through the second recorded ONE hour, at 1.0 kW. The 9 kW hour was deleted -
+            # and 02:00 is exactly where this optimiser puts its load, because night power is cheap.
+            #
+            # Converting the local hour boundary to UTC is fold-aware, so the two 02:00s become two
+            # instants an hour apart and the hour rolls over. It keeps LOCAL hour semantics (right
+            # for zones whose offset is not a whole number of hours), and it makes every span below
+            # an absolute one - an hour is always 3600 seconds on the meter.
+            period_start = dt_util.as_utc(now.replace(minute=0, second=0, microsecond=0))
+            now_absolute = dt_util.as_utc(now)
 
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
@@ -2357,10 +2378,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # Stamp the event with the hour it measures, not the boundary-crossing time:
                     # at a month boundary "now" would attribute the old month's last hour to the
                     # new month.
+                    #
+                    # And stamp it in LOCAL time. The accumulator above runs on the absolute time
+                    # line so that a repeated DST hour is two hours, but the effect layer buckets
+                    # peaks by calendar month (`peak.timestamp.year, .month`) and that is a
+                    # local-clock fact: a peak at 00:30 on the 1st is 23:30 on the LAST OF THE
+                    # PREVIOUS MONTH in UTC, and handing it over as UTC would file it against a
+                    # month that has already been billed.
                     peak_event = await self.effect.record_period_measurement(
                         power_kw=period_mean,
                         period=self._period_power_number,
-                        timestamp=completed_start,
+                        timestamp=dt_util.as_local(completed_start),
                         source=power_source,
                     )
                 elif self._period_power_start is not None:
@@ -2373,15 +2401,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # started. Later hours anchor their first sample at the hour boundary - the reading
                 # backfills at most one update cycle, mirroring the forward extrapolation to the
                 # boundary at the end of the hour.
-                self._period_power_partial = self._period_power_start is None and bool(
-                    now.minute % BILLING_PERIOD_MINUTES
+                #
+                # "Did we start mid-hour" is now asked as "is this instant past the hour boundary",
+                # which needs no minute arithmetic and stays true in zones whose offset is not a
+                # whole number of hours.
+                self._period_power_partial = (
+                    self._period_power_start is None and now_absolute != period_start
                 )
                 self._period_power_start = period_start
                 self._period_power_number = billing_period
-                anchor = now if self._period_power_partial else period_start
-                self._period_power_samples = [(anchor, current_power)]
+                # Anchored at the hour boundary, always. This used to read
+                # `now_absolute if self._period_power_partial else period_start`, and a mutation
+                # test showed the first branch was unreachable in any observable way: `partial` is
+                # only ever True for the first hour after startup, and that hour is discarded
+                # unrecorded by the `not self._period_power_partial` guard above. The anchor of a
+                # discarded hour cannot reach a number anybody sees.
+                self._period_power_samples = [(period_start, current_power)]
             else:
-                self._period_power_samples.append((now, current_power))
+                self._period_power_samples.append((now_absolute, current_power))
 
             if (
                 peak_event
