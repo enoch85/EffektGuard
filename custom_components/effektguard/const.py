@@ -1699,6 +1699,14 @@ SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 81.25  # Ellevio, kr/kW/month
 # The difference is up to fourfold. A 15-minute hot-water cycle at 9 kW inside an otherwise idle
 # hour has an hourly mean of 3 kW - and EffektGuard recorded 9, then throttled the heat pump to
 # defend a peak that appears on no bill.
+# The outdoor temperatures the DISPLAY COP curve is tabulated at, and the span it interpolates over.
+# Nothing computes from that curve - the simulator takes COP from the datasheet rating points - it is
+# a dashboard proxy: in a colder month the house asks for hotter water, which costs efficiency. The
+# span runs from the warmest tabulated point (+7 C) to the coldest (-20 C), i.e. 27 K.
+DISPLAY_COP_CURVE_TEMPS: Final = (7, 5, 0, -5, -10, -15, -20)
+DISPLAY_COP_CURVE_COLD_C: Final = -20.0
+DISPLAY_COP_CURVE_SPAN_K: Final = 27.0
+
 BILLING_PERIOD_MINUTES: Final = 60
 BILLING_PERIODS_PER_DAY: Final = 24
 # The longest silence between two meter readings that still leaves a billing hour MEASURED.

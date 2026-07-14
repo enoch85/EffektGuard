@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass
 
-from ..base import HeatPumpProfile, RatingPoint, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
 
 # NIBE F730 product data sheet, "Output data according to EN 14511". VERBATIM.
@@ -103,12 +103,7 @@ class NibeF730Profile(HeatPumpProfile):
         # computes from it - see the note in f750.py, which shipped a byte-identical curve to this
         # one despite being a different machine with a different published output. That is what
         # gave the fiction away.
-        best = max(point.cop for point in self.datasheet_points)  # 5.32, min freq, W35
-        worst = min(point.cop for point in self.datasheet_points)  # 2.43, max freq, W45
-        self.cop_curve = {
-            temp: round(worst + (best - worst) * (temp + 20.0) / 27.0, 2)
-            for temp in (7, 5, 0, -5, -10, -15, -20)
-        }
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 
     def validate_power_consumption(
         self, current_power_kw: float, outdoor_temp: float, flow_temp: float

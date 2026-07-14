@@ -68,8 +68,10 @@ from ..const import (
     SPACE_HEATING_DEMAND_LOW_THRESHOLD,
     SPACE_HEATING_DEMAND_MODERATE_THRESHOLD,
 )
+from homeassistant.util import dt as dt_util
+
 from ..utils.price_math import price_savings_fraction
-from .thermal_layer import estimate_dm_recovery_time
+from .thermal_layer import estimate_dm_recovery_time, get_thermal_debt_status
 from .price_layer import PriceAnalyzer
 from ..utils.volatile_helpers import get_volatile_info
 
@@ -593,7 +595,6 @@ class IntelligentDHWScheduler:
         try:
             from homeassistant.components import recorder
             from homeassistant.components.recorder import history
-            import homeassistant.util.dt as dt_util
 
             # Get recorder instance
             if not recorder.is_entity_recorded(hass, bt7_entity_id):
@@ -2608,8 +2609,6 @@ class IntelligentDHWScheduler:
         availability_time = upcoming_demand["availability_time"] if upcoming_demand else None
 
         # Build detailed planning attributes
-        from .thermal_layer import get_thermal_debt_status
-
         planning_details = {
             "should_heat": decision.should_heat,
             "priority_reason": decision.priority_reason,

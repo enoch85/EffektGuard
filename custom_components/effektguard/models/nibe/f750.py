@@ -10,7 +10,7 @@ See RatingPoint in models/base.py.
 
 from dataclasses import dataclass, field
 
-from ..base import HeatPumpProfile, RatingPoint, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
 from ...const import DM_THRESHOLD_AUX_LIMIT
 
@@ -145,16 +145,7 @@ class NibeF750Profile(HeatPumpProfile):
         is anchored on the two published endpoints (COP 4.72 at min frequency / W35, COP 2.43 at
         max frequency / W45) instead of on invented numbers.
         """
-        best = max(point.cop for point in self.datasheet_points)  # 4.72, min freq, W35
-        worst = min(point.cop for point in self.datasheet_points)  # 2.43, max freq, W45
-
-        # A linear walk between the machine's own two published COPs across the Swedish range.
-        # It is a PROXY for load, not a measurement against outdoor temperature - the source air is
-        # 20 C whatever the weather - and no physics is computed from it.
-        self.cop_curve = {
-            temp: round(worst + (best - worst) * (temp + 20.0) / 27.0, 2)
-            for temp in (7, 5, 0, -5, -10, -15, -20)
-        }
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 
     def validate_power_consumption(
         self,

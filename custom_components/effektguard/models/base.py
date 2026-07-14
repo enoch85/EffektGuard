@@ -6,8 +6,15 @@ performance and validation.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from ..const import DM_THRESHOLD_AUX_LIMIT
+
+from ..const import (
+    DISPLAY_COP_CURVE_COLD_C,
+    DISPLAY_COP_CURVE_SPAN_K,
+    DISPLAY_COP_CURVE_TEMPS,
+    DM_THRESHOLD_AUX_LIMIT,
+)
 
 
 @dataclass
@@ -56,6 +63,38 @@ class RatingPoint:
     # appear to RISE with compressor load, which is backwards, and the resulting fit extrapolated
     # to COP 9.86 at full load. They have to be told apart, so the airflow is carried.
     airflow_m3h: float | None = None
+
+
+def seasonal_cop_proxy(
+    points: Sequence["RatingPoint"], source_temp_c: float | None = None
+) -> dict[int, float]:
+    """A DISPLAY-ONLY seasonal COP curve, interpolated between a machine's published extremes.
+
+    NOTHING COMPUTES FROM THIS. The simulator takes COP from `datasheet_points` via the
+    exergy-efficiency model, which needs the SOURCE and FLOW temperatures and never the weather.
+    Four of these five machines do not have the outdoor air as their heat source at all - an
+    exhaust-air pump breathes 20 C house air, a ground-source pump sits in 0 C brine - so an
+    outdoor-keyed curve is not a physical claim about them. It is a dashboard proxy: in a colder
+    month the house asks for hotter water and a higher compressor frequency, and both cost
+    efficiency.
+
+    `source_temp_c` filters to one source condition, which is how a brine machine is anchored on its
+    two published W35/W45 COPs at 0 C. Left None, every published point is used.
+
+    The four exhaust-air and ground-source profiles each carried their own copy of this arithmetic.
+    """
+    cops = [
+        point.cop
+        for point in points
+        if source_temp_c is None or point.source_temp_c == source_temp_c
+    ]
+    best, worst = max(cops), min(cops)
+    return {
+        temp: round(
+            worst + (best - worst) * (temp - DISPLAY_COP_CURVE_COLD_C) / DISPLAY_COP_CURVE_SPAN_K, 2
+        )
+        for temp in DISPLAY_COP_CURVE_TEMPS
+    }
 
 
 @dataclass

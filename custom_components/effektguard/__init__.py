@@ -12,25 +12,44 @@ effect tariff system.
 import logging
 from datetime import datetime, timedelta
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, SupportsResponse
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .adapters.gespot_adapter import GESpotAdapter
+from .adapters.nibe_adapter import NibeAdapter
+from .adapters.weather_adapter import WeatherAdapter
 from .const import (
-    DOMAIN,
-    HEATING_BOOST_COOLDOWN_MINUTES,
-    DHW_BOOST_COOLDOWN_MINUTES,
-    SERVICE_RATE_LIMIT_MINUTES,
+    ATTR_DURATION,
+    ATTR_OFFSET,
+    ATTR_TARGET_TEMP,
     CONF_NIBE_TEMP_LUX_ENTITY,
     DEFAULT_DHW_TARGET_TEMP,
+    DHW_BOOST_COOLDOWN_MINUTES,
+    DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
     DHW_MIN_TEMP,
-    DHW_MAX_TEMP,
+    DOMAIN,
+    HEATING_BOOST_COOLDOWN_MINUTES,
+    MAX_OFFSET,
+    MIN_OFFSET,
+    SERVICE_BOOST_DHW,
+    SERVICE_BOOST_HEATING,
+    SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+    SERVICE_FORCE_OFFSET,
+    SERVICE_RATE_LIMIT_MINUTES,
+    SERVICE_RESET_PEAK_TRACKING,
 )
 from .coordinator import EffektGuardCoordinator
+from .optimization.decision_engine import DecisionEngine
+from .optimization.effect_layer import EffectManager
+from .optimization.price_layer import PriceAnalyzer
+from .optimization.thermal_layer import ThermalModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,14 +187,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister integration services when last config entry is removed."""
-    from .const import (
-        SERVICE_BOOST_DHW,
-        SERVICE_BOOST_HEATING,
-        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
-        SERVICE_FORCE_OFFSET,
-        SERVICE_RESET_PEAK_TRACKING,
-    )
-
     services = [
         SERVICE_FORCE_OFFSET,
         SERVICE_RESET_PEAK_TRACKING,
@@ -241,14 +252,6 @@ async def _create_coordinator(
     This factory function creates all dependencies and injects them into
     the coordinator following clean architecture principles.
     """
-    from .adapters.gespot_adapter import GESpotAdapter
-    from .adapters.nibe_adapter import NibeAdapter
-    from .adapters.weather_adapter import WeatherAdapter
-    from .optimization.decision_engine import DecisionEngine
-    from .optimization.effect_layer import EffectManager
-    from .optimization.price_layer import PriceAnalyzer
-    from .optimization.thermal_layer import ThermalModel
-
     # Create data adapters
     nibe_adapter = NibeAdapter(hass, entry.data)
     gespot_adapter = GESpotAdapter(hass, entry.data)
@@ -324,22 +327,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     - boost_dhw: Manual DHW heating boost
     - calculate_optimal_schedule: Preview 24h optimization
     """
-    import voluptuous as vol
-    from homeassistant.exceptions import ServiceValidationError
-    from homeassistant.helpers import config_validation as cv
-
-    from .const import (
-        ATTR_DURATION,
-        ATTR_OFFSET,
-        ATTR_TARGET_TEMP,
-        MAX_OFFSET,
-        MIN_OFFSET,
-        SERVICE_BOOST_DHW,
-        SERVICE_BOOST_HEATING,
-        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
-        SERVICE_FORCE_OFFSET,
-        SERVICE_RESET_PEAK_TRACKING,
-    )
 
     def get_coordinator(hass: HomeAssistant) -> EffektGuardCoordinator | None:
         """Get first available coordinator from domain data."""

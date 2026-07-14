@@ -23,7 +23,7 @@ figures at every size, so "slightly below the S1155" was not merely unsourced - 
 
 from dataclasses import dataclass
 
-from ..base import HeatPumpProfile, RatingPoint, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
 
 # F1155-12. EN 14511 rating points, VERBATIM.
@@ -125,9 +125,4 @@ class NibeF1155Profile(NibeS1155Profile):
         #
         # What is left is a seasonal proxy for the dashboard, anchored on the two published W35/W45
         # COPs at 0 C brine, because in a colder month the house asks for hotter water.
-        warm = max(p.cop for p in self.datasheet_points if p.source_temp_c == 0.0)  # 0/35
-        cold = min(p.cop for p in self.datasheet_points if p.source_temp_c == 0.0)  # 0/45
-        self.cop_curve = {
-            temp: round(cold + (warm - cold) * (temp + 20.0) / 27.0, 2)
-            for temp in (7, 5, 0, -5, -10, -15, -20)
-        }
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points, source_temp_c=0.0)
