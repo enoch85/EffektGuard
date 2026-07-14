@@ -87,6 +87,8 @@ DM_START = -60.0
 DM_STOP = 0.0
 AUX_STEP_KW = 3.0  # one aux step
 STANDBY_KW = 0.1  # controller, pumps, standby losses
+# Float arithmetic only. Any real discrepancy is orders of magnitude bigger than this.
+COMPRESSOR_ENERGY_TOLERANCE_PCT = 0.1
 
 # Heat capacity of the water loop and the emitter metal it fills. Roughly 70 L of water
 # (0.081 kWh/K) plus the steel of the radiators. Without this the plant HANDS OUT the heat stored
@@ -709,6 +711,8 @@ def simulate(
         "sign_flips": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
+        "compressor_elec_metered_kwh": 0.0,
+        "compressor_elec_owed_kwh": 0.0,
     }
     last_offsets = []
     quarter_samples: list[float] = []
@@ -934,6 +938,15 @@ def simulate(
         stats["offset_max"] = max(stats["offset_max"], offset_applied)
         energy = power_kw * STEP_MIN / 60.0
         stats["energy_kwh"] += energy
+
+        # THE COMPRESSOR-SIDE AUDIT. What the meter recorded for the compressor, and - computed
+        # independently, from the heat it made and the COP it made it at - what that heat SHOULD
+        # have cost. These are two different expressions of the same joules, so they can disagree,
+        # which is the whole point: the room-side balance below CANNOT.
+        stats["compressor_elec_metered_kwh"] += (
+            max(0.0, power_kw - aux_kw - STANDBY_KW) * STEP_MIN / 60.0
+        )
+        stats["compressor_elec_owed_kwh"] += (q_comp_w / 1000.0) / cop * STEP_MIN / 60.0
         # First-law audit. Heat INTO the room, and heat OUT of it. Over a month these must balance
         # to within the change in the fabric's stored energy - otherwise the plant is inventing or
         # destroying energy and every cost number it produces is fiction.
@@ -1012,12 +1025,32 @@ def simulate(
     stats["indoor_mean"] = round(stats["indoor_sum"] / steps, 2)
     del stats["indoor_sum"]
 
-    # The first law. Heat delivered minus heat lost must equal the change in stored energy.
+    # THE ROOM-SIDE BALANCE IS AN IDENTITY, AND I SPENT SEVERAL COMMITS QUOTING IT AS EVIDENCE.
+    #
+    #     residual = heat_in - loss - stored
+    #     the ODE   d_indoor = (q_w + GAINS - HLC*(indoor - tout)) / C
+    #
+    # are the same terms rearranged, so the residual is zero by construction. It says the room ODE
+    # integrates consistently and NOTHING ELSE. Proved by making the compressor pay for only HALF
+    # the heat it produced: electricity fell from 912 to 487 kWh and the residual stayed at 0.00.
+    #
+    # And that is precisely where the original free-heat bug lived - the COMPRESSOR side. So the
+    # room balance could never have caught it, and I found it by reasoning rather than by the check
+    # I built to find it. It is kept because a non-zero value would still mean the ODE is broken,
+    # but it is no longer the thing being claimed.
     stored_kwh = house.capacity_j_per_k * (indoor - indoor_start) / 3_600_000.0
     residual = stats["heat_kwh"] - stats["loss_kwh"] - stored_kwh
     stats["heat_kwh"] = round(stats["heat_kwh"], 1)
     stats["loss_kwh"] = round(stats["loss_kwh"], 1)
     stats["energy_balance_residual_kwh"] = round(residual, 2)
+
+    # THE CHECK THAT CAN ACTUALLY FAIL. What the meter charged for the compressor, against what its
+    # heat owed at the COP it was made at. Two independent expressions of the same joules.
+    metered = stats["compressor_elec_metered_kwh"]
+    owed = stats["compressor_elec_owed_kwh"]
+    stats["compressor_elec_metered_kwh"] = round(metered, 1)
+    stats["compressor_elec_owed_kwh"] = round(owed, 1)
+    stats["compressor_energy_error_pct"] = round(100.0 * (metered - owed) / max(owed, 1e-9), 2)
     stats["mean_cop"] = round(
         stats["heat_kwh"] / max(stats["energy_kwh"] - STANDBY_KW * steps * STEP_MIN / 60.0, 1e-9), 2
     )
@@ -1104,6 +1137,17 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
 
     if stats["exceptions"]:
         failures.append(f"{stats['exceptions']} engine exception(s)")
+
+    # The plant is not allowed to invent or destroy energy on the compressor side. This is the
+    # check the room-side residual could never be: the meter's compressor electricity against what
+    # that heat owed at the COP it was made at, computed independently.
+    if abs(stats["compressor_energy_error_pct"]) > COMPRESSOR_ENERGY_TOLERANCE_PCT:
+        failures.append(
+            f"the compressor was metered {stats['compressor_elec_metered_kwh']:.1f} kWh but its "
+            f"heat owed {stats['compressor_elec_owed_kwh']:.1f} kWh at the COP it was made at "
+            f"({stats['compressor_energy_error_pct']:+.1f}%) - the plant is inventing or destroying "
+            f"energy, and every cost number it produces is fiction"
+        )
 
     # Tracked since the harness was written. Asserted for the first time here.
     aux_budget = AUX_BUDGET_KWH_COLDSNAP if "coldsnap" in tag else AUX_BUDGET_KWH_MILD
