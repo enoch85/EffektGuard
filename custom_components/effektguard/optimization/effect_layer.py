@@ -54,10 +54,11 @@ from ..const import (
     EFFECT_WEIGHT_PREDICTIVE,
     EFFECT_WEIGHT_WARNING_RISING,
     EFFECT_WEIGHT_WARNING_STABLE,
+    NIGHT_TARIFF_WEIGHT,
+    PEAK_RECORDING_MAXIMUM,
     PEAK_RECORDING_MINIMUM,
     POWER_MULTIPLIER_COLD,
     POWER_MULTIPLIER_MILD,
-    NIGHT_TARIFF_WEIGHT,
     POWER_MULTIPLIER_VERY_COLD,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NONE,
@@ -288,6 +289,23 @@ class EffectManager:
                 "Skipping peak recording: %.2f kW below %.1f kW threshold",
                 power_kw,
                 PEAK_RECORDING_MINIMUM,
+            )
+            return None
+
+        # And a plausibility CEILING, for the same reason the floor exists. This peak is persisted
+        # for a month and it is what every later quarter is judged against, so a single impossible
+        # reading does not merely produce one wrong number - it makes every real quarter look safe
+        # by comparison and takes peak protection offline until the month rolls over. A mis-scaled
+        # unit put 5 000 000 kW in here once. Nothing behind a domestic main fuse reaches
+        # PEAK_RECORDING_MAXIMUM, so no real house is ever refused.
+        if power_kw > PEAK_RECORDING_MAXIMUM:
+            _LOGGER.warning(
+                "Refusing to record %.0f kW as a tariff peak: no domestic supply can deliver it "
+                "(ceiling %.0f kW), so this is a sensor fault or a unit-scaling error. Recording "
+                "it would make every real quarter look safe against it and disable peak protection "
+                "for the rest of the month.",
+                power_kw,
+                PEAK_RECORDING_MAXIMUM,
             )
             return None
 

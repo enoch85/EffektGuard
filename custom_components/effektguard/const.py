@@ -997,6 +997,19 @@ TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 PEAK_RECORDING_MINIMUM: Final = 0.5  # kW - lowered from 1.0 for better learning
 # Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
 
+# And a CEILING, for the same reason the floor exists: a reading this far outside what a house can
+# physically draw is not a peak, it is a broken sensor.
+#
+# A Swedish domestic service is 16-25 A three-phase (11-17 kW); 35 A (24 kW) is a large villa with
+# an EV charger. 100 kW cannot happen behind a domestic main fuse, so nothing real is ever refused
+# here - but a mis-scaled reading is, and one of those got all the way into the tariff record:
+# `power_kw_from_state` case-folded its unit and read 5000 mW (five watts) as 5 000 000 kW. The
+# unit table is fixed, but a number that is persisted for a month and silently governs whether the
+# house is throttled deserves a plausibility bound of its own. An astronomical recorded peak does
+# not throttle the house - it makes every real quarter look safe against it, and peak protection
+# goes quiet for the rest of the month.
+PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a sensor fault
+
 # Update intervals
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval

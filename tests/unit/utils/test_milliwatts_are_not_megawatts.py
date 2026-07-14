@@ -5,9 +5,27 @@
 the same key - and the table mapped that key to MEGAWATTS.
 
 A sensor reporting 5000 mW (five watts) was therefore read as 5 000 000 kW. That number is
-classified billable, recorded as a quarter-hour mean, and persisted as the month's tariff peak. The
-effect layer then believes the house has already blown its billing peak and pins itself to CRITICAL
-for the rest of the month, throttling heat in January to protect a peak that never happened.
+classified billable, recorded as a quarter-hour mean, and persisted as the month's tariff peak.
+
+AND THE CONSEQUENCE IS THE OPPOSITE OF THE OBVIOUS ONE. I first wrote - in the commit message, the
+code comment and this docstring - that it "pins the effect layer to CRITICAL, throttling heat in
+January to protect a peak that never happened". That is wrong, and I never tested it. Driving the
+real EffectManager:
+
+    recorded peak: 5,000,000 kW
+    house draws a perfectly normal 6 kW in a January cold snap
+      -> severity OK, should_limit False, "Safe margin: 4999994.00 kW below peak"
+
+Every real quarter looks safe against an astronomical threshold, so PEAK PROTECTION IS SILENTLY
+DISABLED FOR THE REST OF THE MONTH - and the owner blows the actual tariff peak the feature exists
+to prevent. The effect tariff bills the top three quarters of the month, so it stands for weeks.
+
+The bug is the same size. The failure mode is the opposite one, and asserting a mechanism I had not
+executed is how the wrong one got written down three times.
+
+The unit table is fixed. A number that is persisted for a month and silently governs whether the
+house is throttled also gets a plausibility bound now - see TestTheSecondLineOfDefence, and note
+what the first version of that class did wrong.
 
 The module's own docstring says "There is no defensible default... An unrecognised unit is refused."
 It then silently guessed on the single genuinely ambiguous case in Home Assistant's whole unit enum.
@@ -19,11 +37,14 @@ electricity bill.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.const import UnitOfPower
 
+from custom_components.effektguard.const import POWER_SOURCE_EXTERNAL_METER
+from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.utils.power import (
     POWER_UNIT_FACTORS_KW,
     power_kw_from_state,
@@ -80,6 +101,97 @@ def test_a_megawatt_sensor_is_still_read_as_megawatts():
 def test_every_power_unit_converts_to_the_same_kilowatts(value, unit, expected_kw):
     """The same 1.5 kW, spelled four ways. All four must agree."""
     assert power_kw_from_state(_sensor(value, unit)) == pytest.approx(expected_kw)
+
+
+class TestTheSecondLineOfDefence:
+    """A number that governs a month of billing decisions gets a plausibility bound of its own.
+
+    THE FIRST VERSION OF THIS CLASS PINNED THE BUG AS AN INVARIANT. It asserted that an
+    astronomical recorded peak leaves `should_limit_power` at severity OK - which is TRUE, and is
+    precisely the damage, and is not a property anybody should be defending. It also could not fail
+    on the code it was named for: it reconstructed the mis-scaled number itself (`* 1e9`), so the
+    unit table could be re-broken underneath it and it would still pass. A test that locks in the
+    defect and cannot detect its own subject is worse than no test.
+
+    What the codebase actually wanted is the symmetric partner of a guard it already had. Peaks
+    below PEAK_RECORDING_MINIMUM are refused as standby noise. Peaks above what a domestic supply
+    can physically deliver are refused for the same reason, and the unit bug would have been
+    contained by it even before the table was fixed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_impossible_reading_never_becomes_a_tariff_peak(self):
+        """5 000 000 kW is not a peak. It is a broken sensor, and it costs a month of protection."""
+        manager = EffectManager(MagicMock())
+        manager._store = MagicMock()
+        manager._store.async_save = AsyncMock()
+        manager._monthly_peaks = []
+
+        what_the_old_code_produced = 5_000_000.0  # 5000 mW, read as megawatts
+
+        event = await manager.record_quarter_measurement(
+            power_kw=what_the_old_code_produced,
+            quarter=40,
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+            source=POWER_SOURCE_EXTERNAL_METER,
+        )
+
+        assert event is None and not manager._monthly_peaks, (
+            f"{what_the_old_code_produced:,.0f} kW was recorded as this month's tariff peak. No "
+            f"domestic main fuse can pass it. Once it is in the record, every real quarter looks "
+            f"safe against it - the effect layer reports 'Safe margin: 4999994 kW below peak' on a "
+            f"6 kW January cold snap - so peak protection goes quiet until the month rolls over "
+            f"and the owner blows the real peak the feature exists to prevent."
+        )
+
+    @pytest.mark.asyncio
+    async def test_peak_protection_still_works_after_the_refusal(self):
+        """The point of refusing it: the month is not written off."""
+        manager = EffectManager(MagicMock())
+        manager._store = MagicMock()
+        manager._store.async_save = AsyncMock()
+        manager._monthly_peaks = []
+
+        await manager.record_quarter_measurement(
+            power_kw=5_000_000.0,
+            quarter=40,
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+            source=POWER_SOURCE_EXTERNAL_METER,
+        )
+        # A real quarter, after the bad one.
+        await manager.record_quarter_measurement(
+            power_kw=6.0,
+            quarter=41,
+            timestamp=datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc),
+            source=POWER_SOURCE_EXTERNAL_METER,
+        )
+
+        assert manager.get_monthly_peak_summary()["highest"] == pytest.approx(6.0), (
+            "the real 6 kW quarter must be the month's peak - the impossible one was refused, so "
+            "it cannot be sitting above it making everything else look safe"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("power_kw", [6.0, 17.0, 24.0, 99.0])
+    async def test_every_power_a_real_house_can_draw_is_still_recorded(self, power_kw):
+        """The ceiling must never refuse a real house. 25 A three-phase is 17 kW; 35 A is 24 kW."""
+        manager = EffectManager(MagicMock())
+        manager._store = MagicMock()
+        manager._store.async_save = AsyncMock()
+        manager._monthly_peaks = []
+
+        event = await manager.record_quarter_measurement(
+            power_kw=power_kw,
+            quarter=40,
+            timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+            source=POWER_SOURCE_EXTERNAL_METER,
+        )
+
+        assert event is not None, (
+            f"{power_kw} kW was refused as implausible. A large Swedish villa on a 35 A service "
+            f"with an EV charging draws 24 kW, and the ceiling exists to catch unit errors, not "
+            f"customers."
+        )
 
 
 def test_the_canonical_units_are_keyed_case_sensitively():
