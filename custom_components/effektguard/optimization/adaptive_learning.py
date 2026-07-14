@@ -19,6 +19,8 @@ import numpy as np
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    DEFAULT_HEAT_LOSS_COEFFICIENT,
+    DEFAULT_THERMAL_DECAY_RATE,
     LEARNING_CONFIDENCE_THRESHOLD,
     LEARNING_MIN_HEATING_RATE,
     LEARNING_MIN_HEATING_SAMPLES,
@@ -600,15 +602,37 @@ class AdaptiveThermalModel:
             - Forum_Summary.md: stevedvo's thermal debt case study
             - Enhancement_Proposals.md: Thermal model mathematics
         """
-        # Get learned parameters or use defaults
+        # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING. Its own estimator says so:
+        #
+        #     "Estimate a RELATIVE cooling index (not a physical W/°C value)... It MUST NOT be used
+        #      as an absolute W/°C coefficient anywhere in the control path"
+        #
+        # and this is the control path. The line here used to be
+        #
+        #     heat_loss_coef = params.heat_loss_coefficient          # the relative index
+        #     ...
+        #     heat_loss_coef = 180.0  # W/°C typical house           # a physical coefficient
+        #
+        # - the same variable carrying two different UNITS on the two branches, fed straight into
+        # `heat_loss_coef / 1000.0` as if it were watts per kelvin.
+        #
+        # It never fired, and only by accident: `should_use_learned_parameters()` reads
+        # `learned_parameters["confidence"]`, and `update_learned_parameters()` returns the
+        # confidence on a dataclass without ever storing it in that dict. The gate is False
+        # forever. So a dead gate was the ONLY thing upholding the quarantine, and repairing it -
+        # which looks like an obvious one-line bug fix - would have silently armed the unit error.
+        # Two defects cancelling is not a working system; it is a trap for the next person.
+        #
+        # See test_learning_can_actually_learn.py: enabling learning at all is F-132b and is the
+        # owner's call. Making it SAFE to enable is not, and that is what this is.
         params = self.update_learned_parameters()
+
+        heat_loss_coef = DEFAULT_HEAT_LOSS_COEFFICIENT
+
         if params and self.should_use_learned_parameters():
-            heat_loss_coef = params.heat_loss_coefficient
             decay_rate = params.thermal_decay_rate
         else:
-            # Conservative defaults
-            heat_loss_coef = 180.0  # W/°C typical house
-            decay_rate = 0.15  # °C per hour per °C difference
+            decay_rate = DEFAULT_THERMAL_DECAY_RATE
 
         # Account for thermal decay during forecast period
         temp_diff = current_temp - forecast_min_temp

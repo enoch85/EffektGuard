@@ -993,6 +993,11 @@ WEATHER_COMP_MAX_OFFSET: Final = 3.0  # °C, absolute cap on the compensation of
 # Heat loss coefficient defaults (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
 
+# Fallback decay rate for the pre-heat sizing, used until learning is trusted. It was a bare 0.15
+# in adaptive_learning next to a bare 180.0 - and the 180.0 was a second copy of the constant
+# directly above this line.
+DEFAULT_THERMAL_DECAY_RATE: Final = 0.15  # °C per hour, per °C of indoor-outdoor difference
+
 # Power estimation defaults (kW)
 # Used when actual power sensor unavailable - fallback values
 DEFAULT_BASE_POWER: Final = 3.0  # kW typical NIBE heat pump average

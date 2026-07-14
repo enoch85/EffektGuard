@@ -231,3 +231,100 @@ def test_the_heat_loss_coefficient_is_never_used_as_a_control_input():
         params.heat_loss_coefficient in (100.0, 180.0, 300.0)
         or 100.0 <= params.heat_loss_coefficient <= 300.0
     )
+
+
+class TestTwoDefectsWereCancellingEachOther:
+    """The xfail above blames the confidence metric. That is ONE of two reasons learning is dead.
+
+    THE SECOND: `should_use_learned_parameters()` reads `learned_parameters["confidence"]`, and
+    `update_learned_parameters()` returns the confidence on a dataclass and NEVER stores it in that
+    dict. The only production writer of `learned_parameters` is the `insulation_quality` setter,
+    and it writes one key: `heat_loss_coefficient`. So the gate returns False forever, however well
+    the model learns and whatever the owner does to the confidence metric.
+
+    AND THE DEAD GATE WAS THE ONLY THING KEEPING THE CODE SAFE. `calculate_preheating_target` had:
+
+        if params and self.should_use_learned_parameters():
+            heat_loss_coef = params.heat_loss_coefficient      # a RELATIVE, DIMENSIONLESS INDEX
+        else:
+            heat_loss_coef = 180.0  # W/°C typical house       # a PHYSICAL COEFFICIENT
+        heat_loss_rate = (heat_loss_coef / 1000.0) * decay_rate * temp_diff / 10
+
+    Two different UNITS on the two branches of one variable, divided by 1000 as if it were watts.
+    And `_calculate_heat_loss_coefficient`'s own docstring forbids exactly this:
+
+        "It MUST NOT be used as an absolute W/°C coefficient anywhere in the control path"
+
+    So repairing the gate - which looks like an obvious one-line bug - would have silently armed a
+    unit error in the pre-heat path. Two defects cancelling is not a working system; it is a trap
+    for whoever fixes the first one.
+
+    The trap is disarmed: the coefficient comes from configuration, never from learning, exactly as
+    the estimator instructs. ENABLING learning is still F-132b and still the owner's call. Making
+    it safe to enable was not.
+    """
+
+    def test_the_gate_can_never_open_however_much_the_model_learns(self):
+        """The second, independent reason. Recorded, not fixed - opening it is F-132b."""
+        model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+        params = model.update_learned_parameters()
+
+        assert params is not None, "precondition: the model must have learned something at all"
+        assert "confidence" not in model.learned_parameters, (
+            f"`learned_parameters` now holds {sorted(model.learned_parameters)}. If a confidence "
+            f"has appeared there, someone has repaired the gate - check first that "
+            f"calculate_preheating_target still takes its heat-loss coefficient from CONFIGURATION "
+            f"and not from the quarantined relative index, or the pre-heat is now sized with a "
+            f"dimensionless number divided by 1000 as if it were watts."
+        )
+        assert not model.should_use_learned_parameters(), (
+            "the gate reads a confidence that nothing writes, so it is False forever - a SECOND "
+            "reason learning never engages, independent of the confidence metric that the xfail "
+            "above records"
+        )
+
+    def test_the_preheat_never_sizes_itself_with_the_quarantined_index(self):
+        """The trap, disarmed. The control path must not touch the learned coefficient at all.
+
+        The estimator's own docstring says its value is a relative cooling index and must never be
+        used as W/°C in the control path. So the pre-heat must size identically whether that index
+        reads 180 or 3000 - because production does not read it.
+
+        The decay rate is pinned to a realistic POSITIVE value here. Left to itself the model
+        learns a decay of -0.10 (it believes the house warms as it cools, which is its own
+        symptom of F-132b), and a negative decay zeroes the deficit for any coefficient at all -
+        so the first version of this test compared 21.0 against 21.0 and passed against a plant
+        with the trap fully re-armed. A test has to be in a regime where the thing it guards could
+        actually move the answer.
+        """
+        model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+        model.learned_parameters = {"confidence": 1.0}  # force the gate wide open
+        model._calculate_thermal_decay_rate = lambda: 0.15  # a house that actually cools
+
+        call = dict(
+            current_temp=21.0,
+            desired_temp=21.0,
+            hours_until_peak=6,
+            outdoor_temp=-5.0,
+            forecast_min_temp=-10.0,
+        )
+
+        model._calculate_heat_loss_coefficient = lambda: 180.0
+        baseline = model.calculate_preheating_target(**call)
+
+        assert baseline > call["desired_temp"], (
+            f"PRECONDITION: the pre-heat must actually be sizing something ({baseline:.2f} C vs a "
+            f"target of {call['desired_temp']:.2f}), or a change in the coefficient could not move "
+            f"it and this test would prove nothing."
+        )
+
+        model._calculate_heat_loss_coefficient = lambda: 3000.0  # an absurd relative index
+        with_absurd_index = model.calculate_preheating_target(**call)
+
+        assert with_absurd_index == pytest.approx(baseline), (
+            f"Multiplying the QUARANTINED relative cooling index by 17 moved the pre-heat target "
+            f"from {baseline:.2f} C to {with_absurd_index:.2f} C. That index is dimensionless - "
+            f"its own estimator says it 'MUST NOT be used as an absolute W/°C coefficient anywhere "
+            f"in the control path' - and this is the control path, dividing it by 1000 as if it "
+            f"were watts."
+        )
