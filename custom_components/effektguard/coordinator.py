@@ -58,7 +58,7 @@ from .const import (
     POWER_SOURCE_NIBE_CURRENTS,
     POWER_SOURCE_NONE,
     STORAGE_KEY_LEARNING,
-    STORAGE_VERSION,
+    LEARNING_STORAGE_VERSION,
     TOLERANCE_RANGE_MULTIPLIER,
     STARTUP_GRACE_MIN_INTERVAL,
     STARTUP_MAX_GRACE_ATTEMPTS,
@@ -287,7 +287,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Could not format DHW periods: %s", err)
 
         # Learning storage
-        self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
+        self.learning_store = Store(hass, LEARNING_STORAGE_VERSION, STORAGE_KEY_LEARNING)
 
         # State tracking
         self.current_offset: float = 0.0
@@ -2816,7 +2816,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         try:
             learned_data = {
-                "version": STORAGE_VERSION,
+                "version": LEARNING_STORAGE_VERSION,
                 "last_updated": dt_util.utcnow().isoformat(),
             }
 
@@ -2914,7 +2914,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self.thermal_predictor:
                 existing_data["thermal_predictor"] = self.thermal_predictor.to_dict()
                 existing_data["last_updated"] = now.isoformat()
-                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+                existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
                 await self.learning_store.async_save(existing_data)
                 self._last_predictor_save = now
@@ -2947,7 +2947,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
                 }
                 existing_data["last_updated"] = dt_util.utcnow().isoformat()
-                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+                existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
                 await self.learning_store.async_save(existing_data)
 

@@ -27,7 +27,7 @@ throttling a house in January on the strength of a guess is worse than not throt
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from unittest.mock import MagicMock
@@ -78,12 +78,12 @@ async def test_peak_protection_actually_fires_for_a_house_with_no_meter():
     """The regression, end to end: record from phase currents, then demand a limit."""
     manager = _manager()
 
-    # A cold January morning. The pump pulls hard for three quarters; phase currents see it.
-    for kw in (6.0, 5.5, 5.0):
+    # A cold January stretch. One counted hour per day - the tariff's own rule - fills the top 3.
+    for day_offset, kw in enumerate((6.0, 5.5, 5.0)):
         await manager.record_period_measurement(
             power_kw=kw,
             period=MIDDAY_HOUR,
-            timestamp=JANUARY,
+            timestamp=JANUARY + timedelta(days=day_offset),
             source=POWER_SOURCE_NIBE_CURRENTS,
         )
 
@@ -136,7 +136,10 @@ async def test_one_unmetered_quarter_taints_the_whole_billing_figure():
         power_kw=6.0, period=MIDDAY_HOUR, timestamp=JANUARY, source=POWER_SOURCE_EXTERNAL_METER
     )
     await manager.record_period_measurement(
-        power_kw=5.0, period=MIDDAY_HOUR, timestamp=JANUARY, source=POWER_SOURCE_NIBE_CURRENTS
+        power_kw=5.0,
+        period=MIDDAY_HOUR,
+        timestamp=JANUARY + timedelta(days=1),
+        source=POWER_SOURCE_NIBE_CURRENTS,
     )
 
     summary = manager.get_monthly_peak_summary()

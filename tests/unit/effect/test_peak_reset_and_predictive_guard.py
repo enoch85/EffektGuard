@@ -26,7 +26,7 @@ got a -1.5 C vote at weight 0.85 - which outranks BOTH T1 (0.65) and T2 (0.81) t
 recovery. Missing input must produce abstention, not a heat-reducing vote.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -91,9 +91,11 @@ class TestMonthlyPeakIsTheHighest:
         effect = EffectManager(hass)
 
         await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
-        event = await effect.record_period_measurement(2.0, DAYTIME_HOUR + 4, OCTOBER)
+        event = await effect.record_period_measurement(
+            2.0, DAYTIME_HOUR + 4, OCTOBER + timedelta(days=1)
+        )
 
-        # The second, SMALLER quarter still returns a PeakEvent (top-3 is not full yet).
+        # The second, SMALLER hour (on its own day) still returns a PeakEvent (top-3 not full).
         assert event is not None
         assert event.effective_power == pytest.approx(2.0)
 

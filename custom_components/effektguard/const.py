@@ -1137,8 +1137,12 @@ LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before co
 #
 # Import is done at runtime to avoid circular dependencies - use the climate_zones module directly.
 
-# Storage
-STORAGE_VERSION: Final = 1
+# Storage. Two stores, two schemas, two lifecycles - so two versions.
+# Effect store v1 recorded 15-minute quarter peaks (`quarter_of_day`). The tariff bills the
+# HOURLY mean (see effect_layer.py), and a quarter-hour mean is not convertible to one, so
+# migration to v2 discards v1 records and the month's top-3 restarts from live measurement.
+EFFECT_STORAGE_VERSION: Final = 2
+LEARNING_STORAGE_VERSION: Final = 1
 STORAGE_KEY: Final = f"{DOMAIN}_state"
 STORAGE_KEY_LEARNING: Final = f"{DOMAIN}_learned_data"
 

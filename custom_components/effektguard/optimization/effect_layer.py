@@ -54,6 +54,7 @@ from ..const import (
     EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE,
     EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD,
     EFFECT_PREDICTIVE_WARMING_DECREASE,
+    EFFECT_STORAGE_VERSION,
     EFFECT_WEIGHT_CRITICAL,
     EFFECT_WEIGHT_PREDICTIVE,
     EFFECT_WEIGHT_WARNING_RISING,
@@ -70,7 +71,6 @@ from ..const import (
     POWER_TEMP_COLD_THRESHOLD,
     POWER_TEMP_VERY_COLD_THRESHOLD,
     STORAGE_KEY,
-    STORAGE_VERSION,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
 )
@@ -173,20 +173,15 @@ class PeakEvent:
 
     @classmethod
     def from_dict(cls, data: PeakEventDict) -> "PeakEvent":
-        """Create from dictionary.
-
-        Peaks stored before provenance was recorded could have come from a meter OR from phase
-        currents - the version that wrote them allowed both - so their source is genuinely unknown
-        and is recorded as such rather than guessed into one or the other. Monthly peaks are
-        discarded at the month boundary, so this can only apply for the remainder of one month.
-        """
+        """Create from dictionary. Records older than this schema never reach here: the store
+        migration (EffectStore) discards them, so every field is present."""
         return cls(
             timestamp=dt_util.parse_datetime(data["timestamp"]),
             period_of_day=data["period_of_day"],
             actual_power=data["actual_power"],
             effective_power=data["effective_power"],
             is_daytime=data["is_daytime"],
-            source=data.get("source", POWER_SOURCE_NONE),
+            source=data["source"],
         )
 
 
@@ -213,8 +208,38 @@ class EffectLayerDecision:
     reason: str  # Human-readable explanation
 
 
+class EffectStore(Store):
+    """Peak-history storage, with migration from the quarter-hour era.
+
+    Version 1 recorded 15-minute quarter peaks (``quarter_of_day``). The effect tariff bills
+    the HOURLY mean, so a quarter-hour record is not a billable quantity and cannot be
+    converted into one - migration discards them and the month's top-3 restarts from live
+    measurement. Parsing them instead is what broke setup for every upgrading install:
+    ``PeakEvent.from_dict`` raised ``KeyError: 'period_of_day'`` inside ``async_setup_entry``.
+    """
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: dict | None,
+    ) -> dict:
+        """Migrate stored peak history to the current schema."""
+        if old_major_version < EFFECT_STORAGE_VERSION:
+            discarded = len(old_data.get("peaks", [])) if isinstance(old_data, dict) else 0
+            if discarded:
+                _LOGGER.warning(
+                    "Discarding %d peak record(s) written by the 15-minute tariff model: the "
+                    "effect tariff bills the hourly mean, and a quarter-hour mean is not "
+                    "convertible to one. Peak tracking restarts from live measurement.",
+                    discarded,
+                )
+            return {"peaks": []}
+        return old_data if isinstance(old_data, dict) else {"peaks": []}
+
+
 class EffectManager:
-    """Manage effect tariff optimization with 15-minute granularity."""
+    """Manage effect tariff optimization on hourly billing periods."""
 
     def __init__(self, hass: HomeAssistant):
         """Initialize effect manager.
@@ -223,7 +248,7 @@ class EffectManager:
             hass: Home Assistant instance for storage
         """
         self.hass = hass
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store = EffectStore(hass, EFFECT_STORAGE_VERSION, STORAGE_KEY)
         self._monthly_peaks: list[PeakEvent] = []  # Top 3 peaks this month
         self._current_peak: float = 0.0
 
@@ -318,9 +343,25 @@ class EffectManager:
         is_daytime = is_daytime_hour(period)
         effective_power = effective_tariff_power_kw(power_kw, period)
 
+        # AT MOST ONE PEAK PER DAY. Ellevio: the monthly charge is the mean of the three highest
+        # hourly peaks, and "the three peaks must come from three different days" - only a day's
+        # highest hour counts. Date-blind top-3 let one cold Saturday fill all three slots, which
+        # overstates the bill and understates the margin the pump is then throttled against.
+        # https://www.ellevio.se/abonnemang/elnatspriser/ny-prismodell-baserad-pa-effekt/
+        same_day = next(
+            (p for p in self._monthly_peaks if p.timestamp.date() == timestamp.date()),
+            None,
+        )
+        if same_day is not None and effective_power <= same_day.effective_power:
+            return None
+
         # Check if this is a new peak
         is_new_peak = False
-        if len(self._monthly_peaks) < 3:
+        if same_day is not None:
+            # The day's counted peak is its highest hour; this hour outbills it.
+            self._monthly_peaks.remove(same_day)
+            is_new_peak = True
+        elif len(self._monthly_peaks) < 3:
             # Haven't filled top 3 yet
             is_new_peak = True
         else:

@@ -13,6 +13,7 @@ import pytest_asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from custom_components.effektguard.const import POWER_SOURCE_EXTERNAL_METER
 from custom_components.effektguard.optimization.effect_layer import (
     is_daytime_hour,
     EffectManager,
@@ -67,15 +68,16 @@ class TestPeakEvent:
         timestamp = datetime(2025, 10, 14, 12, 30)
         data = {
             "timestamp": timestamp.isoformat(),
-            "period_of_day": 50,
+            "period_of_day": 12,
             "actual_power": 5.5,
             "effective_power": 5.5,
             "is_daytime": True,
+            "source": POWER_SOURCE_EXTERNAL_METER,
         }
 
         peak = PeakEvent.from_dict(data)
 
-        assert peak.period_of_day == 50
+        assert peak.period_of_day == 12
         assert peak.actual_power == 5.5
         assert peak.effective_power == 5.5
         assert peak.is_daytime is True
@@ -163,12 +165,10 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_fills_top_three_peaks(self, effect_manager):
         """Test filling top 3 peaks."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
-
-        # Add 3 peaks with different powers
-        await effect_manager.record_period_measurement(5.0, 12, timestamp)
-        await effect_manager.record_period_measurement(6.0, 12, timestamp)
-        await effect_manager.record_period_measurement(7.0, 12, timestamp)
+        # The tariff counts at most one peak per day, so the top 3 come from three days.
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
         assert len(effect_manager._monthly_peaks) == 3
         # Should be sorted highest first
@@ -179,15 +179,15 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_replaces_lowest_peak(self, effect_manager):
         """Test replacing lowest peak when exceeding top 3."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
+        # Fill top 3 from three days - the tariff counts at most one peak per day
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
-        # Fill top 3
-        await effect_manager.record_period_measurement(5.0, 12, timestamp)
-        await effect_manager.record_period_measurement(6.0, 12, timestamp)
-        await effect_manager.record_period_measurement(7.0, 12, timestamp)
-
-        # Add higher peak - should replace 5.0
-        peak = await effect_manager.record_period_measurement(8.0, 12, timestamp)
+        # A fourth day beats the lowest counted day - should replace 5.0
+        peak = await effect_manager.record_period_measurement(
+            8.0, 12, datetime(2025, 10, 17, 12, 0)
+        )
 
         assert peak is not None
         assert len(effect_manager._monthly_peaks) == 3
@@ -200,15 +200,15 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_ignores_lower_peak(self, effect_manager):
         """Test ignoring peak lower than top 3."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
+        # Fill top 3 from three days - the tariff counts at most one peak per day
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
-        # Fill top 3
-        await effect_manager.record_period_measurement(5.0, 12, timestamp)
-        await effect_manager.record_period_measurement(6.0, 12, timestamp)
-        await effect_manager.record_period_measurement(7.0, 12, timestamp)
-
-        # Try to add lower peak
-        peak = await effect_manager.record_period_measurement(4.0, 12, timestamp)
+        # A fourth day below all three counted days changes nothing
+        peak = await effect_manager.record_period_measurement(
+            4.0, 12, datetime(2025, 10, 17, 12, 0)
+        )
 
         assert peak is None  # Should not create new peak
         assert len(effect_manager._monthly_peaks) == 3
@@ -383,10 +383,11 @@ class TestPersistentState:
             "peaks": [
                 {
                     "timestamp": timestamp.isoformat(),
-                    "period_of_day": 48,
+                    "period_of_day": 12,
                     "actual_power": 5.0,
                     "effective_power": 5.0,
                     "is_daytime": True,
+                    "source": POWER_SOURCE_EXTERNAL_METER,
                 }
             ]
         }
@@ -414,9 +415,8 @@ class TestMonthlySummary:
     @pytest.mark.asyncio
     async def test_summary_with_peaks(self, effect_manager):
         """Test summary with peaks."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_period_measurement(5.0, 12, timestamp)
-        await effect_manager.record_period_measurement(6.0, 12, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
 
         summary = effect_manager.get_monthly_peak_summary()
 
