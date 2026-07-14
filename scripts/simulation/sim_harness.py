@@ -70,6 +70,7 @@ from custom_components.effektguard.models.nibe import (
     NibeF2040Profile,
     NibeS1155Profile,
 )
+from custom_components.effektguard.optimization.billing_period import BillingPeriodAccumulator
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
@@ -1111,10 +1112,11 @@ def simulate(
     }
     best_published_cop = max(p.cop for p in house.profile.datasheet_points)
     last_offsets = []
-    period_samples: list[float] = []
-    period_id = None
+    # The REAL one, from the integration. Not a copy of it.
+    billing = BillingPeriodAccumulator()
     daily_peaks: dict = {}  # date -> max HOURLY-mean kW (the billed quantity)
-    # date -> the set of DISTINCT billing hours seen on it. A day is not always 24 hours long,
+    # date -> how many billing hours the PRODUCTION accumulator actually billed on it. A day is not
+    # always 24 hours long,
     # and the tariff bills every hour the meter recorded: the fall-back day has 25 and the
     # spring-forward day 23. Counting them is how this harness proves it is actually TRAVERSING
     # the transition rather than merely surviving it - a flat night load is priced identically
@@ -1493,24 +1495,41 @@ def simulate(
         # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
         # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
         # 9 - so every tariff figure it produced was up to fourfold too high.
-        # (local date, local hour, ABSOLUTE hour). The first two are what the readers below want -
-        # "one peak per day" is a calendar rule and the night discount is a wall-clock one, and both
-        # calendars are local. The third is what makes the key UNIQUE: `(date, hour)` alone is
-        # ambiguous on the night the clocks go back, when the two 02:00 hours are separately metered
-        # and separately billable and share those digits. That ambiguity is the exact bug this
-        # harness failed to catch in the coordinator.
-        this_period = (
-            now.date(),
-            now.hour,
-            now.astimezone(zoneinfo.ZoneInfo("UTC")).replace(minute=0, second=0, microsecond=0),
-        )
-        billing_hours.setdefault(now.date(), set()).add(this_period[2])
+        # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
+        #
+        # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
+        # keyed on its own idea of an hour. The coordinator has always used a TIME-WEIGHTED mean over
+        # an absolute hour. Two implementations of the single most consequential number this
+        # integration computes - and the harness was validating the one nobody runs.
+        #
+        # They agreed only because this loop steps a perfectly uniform five minutes, which Home
+        # Assistant does not. And they were both wrong on the night the clocks go back, INDEPENDENTLY,
+        # so neither could see the other's bug: the coordinator merged the repeated hour and deleted a
+        # 9 kW billing peak. An instrument that re-implements the thing it measures cannot measure it.
+        #
+        # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
+        # and --dst fails here as well as in the unit tests.
+        completed = billing.add(now, power_kw)
+        if completed is not None:
+            # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
+            #
+            # The first version of this counter re-derived the hour key here, from `now`, and so it
+            # kept reporting 25 hours on the fall-back day even when the production accumulator was
+            # merging the two 02:00s into one. It was measuring the harness, not the code under test
+            # - the exact vacuity this whole commit exists to remove, reintroduced one line below the
+            # comment complaining about it. Verified by mutation: reinstate the DST bug in
+            # billing_period.py and this now reports 24 hours and fails the run.
+            # COUNTED, not collected in a set: on the fall-back day both 02:00 hours carry the SAME
+            # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
+            # equal), so a set would silently merge them back into one and report 24 again - passing
+            # the check by making the same mistake it exists to catch.
+            billing_hours[completed.started_at.date()] = (
+                billing_hours.get(completed.started_at.date(), 0) + 1
+            )
 
-        if period_id is not None and this_period != period_id:
-            q_mean = sum(period_samples) / len(period_samples)
-            day = period_id[0]
-            daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
-            running_peak_kw = max(running_peak_kw, q_mean)
+            day = completed.started_at.date()
+            daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
+            running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
 
             # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
             # `running_peak_kw` and handed it to the engine, but never called
@@ -1526,15 +1545,12 @@ def simulate(
             # houses; this is the same hole, in the instrument that was supposed to catch it.)
             asyncio.run(
                 effect.record_period_measurement(
-                    power_kw=q_mean,
-                    period=period_id[1],
-                    timestamp=now,
+                    power_kw=completed.mean_power_kw,
+                    period=completed.billing_hour,
+                    timestamp=completed.started_at,
                     source=POWER_SOURCE_EXTERNAL_METER,
                 )
             )
-            period_samples = []
-        period_id = this_period
-        period_samples.append(power_kw)
 
         if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
             stats["comfort_minutes_below"] += STEP_MIN
@@ -1557,16 +1573,20 @@ def simulate(
                 }
             )
 
-    if period_samples and period_id is not None:
-        q_mean = sum(period_samples) / len(period_samples)
-        day = period_id[0]
-        daily_peaks[day] = max(daily_peaks.get(day, 0.0), q_mean)
+    # The run ends on an hour boundary, and that final hour is complete in sim-time. Production
+    # never flushes - Home Assistant keeps running, and an hour cut short by a shutdown was never
+    # measured and is not a bill.
+    final = billing.flush()
+    if final is not None:
+        day = final.started_at.date()
+        daily_peaks[day] = max(daily_peaks.get(day, 0.0), final.mean_power_kw)
+        billing_hours[day] = billing_hours.get(day, 0) + 1
     top3 = sorted(daily_peaks.values(), reverse=True)[:3]
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
     stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)
     stats["billing_hours_by_day"] = {
-        day.isoformat(): len(hours) for day, hours in sorted(billing_hours.items())
+        day.isoformat(): count for day, count in sorted(billing_hours.items())
     }
     stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
     stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)
