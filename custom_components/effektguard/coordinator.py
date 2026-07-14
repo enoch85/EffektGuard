@@ -676,9 +676,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         switch on, through its own `switch.turn_on` call, and never set it. So the cleanup looked at a
         boost EffektGuard had started through its own service, concluded the household must have
         started it, and left it running - to NIBE's own temporary-lux timeout, on the immersion heater
-        at COP 1.0, with nothing left that would ever switch it off. An option change is enough to
-        get there: Home Assistant reloads the entry, and the coordinator that knew about the boost is
-        gone.
+        at COP 1.0, with nothing left that would ever switch it off.
+
+        Reached by anything that unloads the entry: the RECONFIGURE flow (swapping the power meter or
+        the weather entity), a manual reload, removal, or a Home Assistant restart. NOT by an ordinary
+        options change - that hot-reloads and the entry stays loaded. This docstring used to say an
+        option change was enough, which is false, and see
+        tests/unit/test_which_things_actually_unload_the_entry.py for what was actually measured.
 
         Starting a boost from a shut-down coordinator is refused for the same reason the curve offset
         and the fan are. STOPPING one is not - that IS the cleanup, and it runs during shutdown.
@@ -2414,10 +2418,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         refresh that is mid-flight when the entry unloads - and it is mid-flight for seconds, awaiting
         the weather forecast service call over the network - carried on to the end and drove the pump.
 
-        Which matters most on a RELOAD, and Home Assistant reloads the entry every time an option is
-        changed. The old coordinator's write can land after the new one's, leaving the pump holding a
-        decision computed from the configuration the user has just changed away from. On a REMOVAL it
-        is the deleted integration getting the last word on somebody's heating.
+        WHAT ACTUALLY UNLOADS THE ENTRY - and an earlier version of this docstring got it wrong, so
+        it is written down here having been executed rather than assumed:
+
+            the RECONFIGURE flow  - changing the entity selections: the power meter, the weather
+                                    entity, the pump model. It ends in
+                                    `async_update_reload_and_abort`, a FULL reload. Measured against
+                                    a running Home Assistant: 1 unload, 1 setup.
+            a manual reload       - the Reload button / `homeassistant.reload_config_entry`.
+            removing the integration
+            restarting Home Assistant
+
+        Changing an OPTION does NOT: this integration's update listener hot-reloads the runtime
+        settings and leaves the entry loaded (measured: 0 unloads). This docstring used to claim the
+        opposite, and reason from it.
+
+        The reconfigure case is the sharp one. The user swaps the power meter, the entry tears down,
+        and the OLD coordinator - built on the OLD adapter - can still land a write afterwards, after
+        the new one has already written. On a REMOVAL it is a deleted integration getting the last
+        word on somebody's heating.
         """
         if self._shutdown_requested:
             _LOGGER.debug(

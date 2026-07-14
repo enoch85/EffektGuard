@@ -501,9 +501,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # This used to call `switch.turn_on` here, directly. It worked - and `_lux_boost_is_ours`,
         # which is the ONLY thing that tells the unload cleanup whether a running boost is ours to
         # cancel, stayed False. So EffektGuard started a hot-water boost through its own service, and
-        # then, on the next reload - which is what Home Assistant does whenever an option changes -
-        # decided the household must have started it and left it running to NIBE's own temporary-lux
-        # timeout, on the immersion heater, with nothing left that would ever switch it off.
+        # then, the next time the entry unloaded, decided the household must have started it and left
+        # it running to NIBE's own temporary-lux timeout, on the immersion heater, with nothing left
+        # that would ever switch it off. (An entry unloads on the reconfigure flow, a manual reload,
+        # removal, or a restart - NOT on an ordinary options change, which hot-reloads. An earlier
+        # version of this comment claimed otherwise; see
+        # tests/unit/test_which_things_actually_unload_the_entry.py.)
         _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
         if not await coordinator._set_temporary_lux(True):
             raise ServiceValidationError(

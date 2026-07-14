@@ -28,10 +28,17 @@ WHAT THAT COSTS, and the reload case is the one that bites:
   * REMOVING the integration ends with it commanding the heat pump one last time. The user deleted
     it. It should stop touching the pump, and instead it gets the last word.
 
-  * RELOADING it - which is what Home Assistant does every time an OPTION IS CHANGED - unloads the
-    old entry and sets up a new one. The old coordinator's write can land AFTER the new one's, so the
-    pump is left holding a decision computed from the configuration the user just changed away from.
-    Change the target temperature, and the pump may end up on the old target.
+  * The RECONFIGURE flow - swapping the power meter, the weather entity or the pump model - ends in
+    `async_update_reload_and_abort`, a FULL reload: the old entry unloads and a new one is set up.
+    The old coordinator's write can land AFTER the new one's, so the pump is left holding a decision
+    computed by a coordinator built on the entities the user has just replaced.
+
+    (An earlier version of this docstring said "which is what Home Assistant does every time an
+    OPTION IS CHANGED". That is FALSE, and I wrote it four times without executing it: this
+    integration's update listener HOT-RELOADS, and an options change leaves the entry loaded. What
+    unloads it is the reconfigure flow, a manual reload, a removal, or a restart - each of which a
+    real user does. See tests/unit/test_which_things_actually_unload_the_entry.py, which measures
+    both.)
 
 The integration's stated invariant is that the control loop is the sole owner of the write path -
 "Writes belong to the control loop, and the control loop is `_do_aligned_refresh`: one writer at a
@@ -101,7 +108,7 @@ async def test_a_refresh_in_flight_when_the_entry_unloads_does_not_write():
         refresh = asyncio.create_task(coordinator._do_aligned_refresh())
         await reached_the_awaits.wait()
 
-        # The user changes an option. Home Assistant unloads the entry.
+        # The user swaps the power meter in the reconfigure flow. The entry unloads.
         await coordinator.async_shutdown()
         assert coordinator._shutdown_requested is True
 
@@ -112,11 +119,11 @@ async def test_a_refresh_in_flight_when_the_entry_unloads_does_not_write():
     assert coordinator.nibe.set_curve_offset.await_count == 0, (
         f"the coordinator wrote to the heat pump {coordinator.nibe.set_curve_offset.await_count} "
         f"time(s) AFTER the entry was unloaded: "
-        f"{coordinator.nibe.set_curve_offset.await_args_list}. On a reload - which is what Home "
-        f"Assistant does whenever an option changes - this write can land after the NEW "
-        f"coordinator's, leaving the pump on a decision computed from the configuration the user "
-        f"just changed away from. On a removal, it is the deleted integration getting the last word "
-        f"on the heat pump."
+        f"{coordinator.nibe.set_curve_offset.await_args_list}. The entry unloads on the reconfigure "
+        f"flow, a manual reload, a removal or a restart - and this write can land after the NEW "
+        f"coordinator's, leaving the pump on a decision computed by a coordinator built from the "
+        f"entities the user has just replaced. On a removal, it is the deleted integration getting "
+        f"the last word on the heat pump."
     )
 
 

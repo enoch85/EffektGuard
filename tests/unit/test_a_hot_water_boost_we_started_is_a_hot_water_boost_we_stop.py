@@ -24,9 +24,14 @@ Driving the real service handler and the real coordinator:
     _lux_boost_is_ours: False          <- the cleanup reads THIS
     switch.turn_off on unload: 0       <- the boost we started, left running
 
-And an option change is enough to trigger it: Home Assistant reloads the entry, the coordinator that
-knew about the boost is gone, and nothing is left that will stop it. It runs to NIBE's own temporary-
-lux timeout - which is the immersion heater, at COP 1.0, for as long as the pump decides.
+It is reached by anything that unloads the entry: the RECONFIGURE flow (swapping the power meter or
+the weather entity), a manual reload, a removal, or a restart. The coordinator that knew about the
+boost is gone, and nothing is left that will stop it: it runs to NIBE's own temporary-lux timeout -
+the immersion heater, at COP 1.0, for as long as the pump decides.
+
+(NOT an ordinary options change. This docstring used to say it was, which is false - the update
+listener hot-reloads and the entry stays loaded. See
+tests/unit/test_which_things_actually_unload_the_entry.py, which measures both.)
 
 The bug is the same shape as the one before it: the guard exists, and one of the paths into it does
 not set the flag it reads. So the switch now has ONE door, like the curve offset and the fan, and
@@ -108,7 +113,7 @@ async def test_a_boost_our_own_service_started_is_cancelled_on_unload():
     )
 
     hass.services.async_call.reset_mock()
-    await coordinator.async_shutdown()  # the user reloads (any option change) or removes the entry
+    await coordinator.async_shutdown()  # reconfigure / manual reload / removal / restart
 
     assert len(_turn_offs(hass)) == 1, (
         f"the integration unloaded and left a hot-water boost running that IT had started "
