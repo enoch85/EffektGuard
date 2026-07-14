@@ -599,8 +599,9 @@ class AdaptiveThermalModel:
             Target indoor temperature for pre-heating phase (°C)
 
         References:
-            - Forum_Summary.md: stevedvo's thermal debt case study
-            - Enhancement_Proposals.md: Thermal model mathematics
+            docs/research/01_degree_minutes.md - and note what it marks UNSOURCED: the
+            forum case studies this method's tuning descends from are anecdote, not
+            documents in this repository.
         """
         # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING. Its own estimator says so:
         #

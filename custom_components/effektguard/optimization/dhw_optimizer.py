@@ -2712,7 +2712,8 @@ class IntelligentDHWScheduler:
         closest_hours = float("inf")
 
         for period in self.demand_periods:
-            # Calculate next availability time
+            # Calculate next availability time (a wall-clock hour - tomorrow's 06:00 is
+            # tomorrow's 06:00 whatever the clocks did overnight).
             availability_time = current_time.replace(
                 hour=period.availability_hour, minute=0, second=0, microsecond=0
             )
@@ -2720,7 +2721,12 @@ class IntelligentDHWScheduler:
             if availability_time < current_time:
                 availability_time += timedelta(days=1)
 
-            hours_until = (availability_time - current_time).total_seconds() / 3600
+            # But the DISTANCE to it is real hours, on the absolute time line: subtracting
+            # aware local datetimes directly is wall-clock arithmetic, which loses the
+            # repeated hour on the fall-back night and plans the heating an hour short.
+            hours_until = (
+                dt_util.as_utc(availability_time) - dt_util.as_utc(current_time)
+            ).total_seconds() / 3600
 
             # Check if within 24h window and is closer than previous closest
             if hours_until <= DHW_SCHEDULING_WINDOW_MAX and hours_until < closest_hours:
