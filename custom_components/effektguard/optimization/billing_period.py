@@ -24,7 +24,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from ..const import BILLING_PERIOD_MINUTES, MAX_BILLING_OBSERVATION_GAP_MINUTES
+from ..const import (
+    BILLING_PERIOD_MINUTES,
+    MAX_BILLING_OBSERVATION_GAP_MINUTES,
+    PEAK_CONTROL_POWER_SOURCES,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NIBE_CURRENTS,
+    POWER_SOURCE_NONE,
+)
 
 BILLING_PERIOD = timedelta(minutes=BILLING_PERIOD_MINUTES)
 MAX_BILLING_OBSERVATION_GAP_SECONDS = MAX_BILLING_OBSERVATION_GAP_MINUTES * 60
@@ -37,6 +44,22 @@ class CompletedBillingPeriod:
     mean_power_kw: float
     billing_hour: int  # the LOCAL hour of the day, 0-23 - what the night discount reads
     started_at: datetime  # LOCAL and aware - what the calendar month is taken from
+    sample_sources: frozenset[str]  # every source that contributed a sample to this hour
+
+    @property
+    def source(self) -> str:
+        """What this hour may be recorded AS - decided by every sample, not the closing one.
+
+        The coordinator used to stamp the hour with the CURRENT cycle's source, so an hour
+        whose middle was measured at the pump's phase currents became a billable meter hour
+        the moment the meter answered again at the boundary. The tariff bills whole-house
+        grid import; an hour is a meter measurement only if the meter measured all of it.
+        """
+        if self.sample_sources == {POWER_SOURCE_EXTERNAL_METER}:
+            return POWER_SOURCE_EXTERNAL_METER
+        if self.sample_sources <= PEAK_CONTROL_POWER_SOURCES:
+            return POWER_SOURCE_NIBE_CURRENTS
+        return POWER_SOURCE_NONE
 
 
 class BillingPeriodAccumulator:
@@ -50,12 +73,14 @@ class BillingPeriodAccumulator:
         # it is not a bill. Only the first hour after startup can be partial.
         self._partial: bool = False
         self._samples: list[tuple[datetime, float]] = []
+        self._sources: set[str] = set()
 
-    def add(self, now: datetime, power_kw: float) -> CompletedBillingPeriod | None:
+    def add(self, now: datetime, power_kw: float, source: str) -> CompletedBillingPeriod | None:
         """Record a sample. Returns the previous hour if this sample closed it.
 
         `now` is local and aware, as `dt_util.now()` gives it - `fold` included, which is the only
-        thing distinguishing the two 02:00s on the night the clocks go back.
+        thing distinguishing the two 02:00s on the night the clocks go back. `source` is where the
+        reading came from; the completed hour's provenance is the set of them.
         """
         local_start = now.replace(minute=0, second=0, microsecond=0)
         # Converting the local hour boundary to UTC IS fold-aware, so the two 02:00s resolve to two
@@ -65,6 +90,7 @@ class BillingPeriodAccumulator:
 
         if absolute_start == self._absolute_start:
             self._samples.append((absolute_now, power_kw))
+            self._sources.add(source)
             return None
 
         completed = self._close()
@@ -75,6 +101,7 @@ class BillingPeriodAccumulator:
         self._local_start = local_start
         self._billing_hour = now.hour
         self._samples = [(absolute_start, power_kw)]
+        self._sources = {source}
         return completed
 
     def flush(self) -> CompletedBillingPeriod | None:
@@ -87,6 +114,7 @@ class BillingPeriodAccumulator:
         self._absolute_start = None
         self._local_start = None
         self._samples = []
+        self._sources = set()
         return completed
 
     def _close(self) -> CompletedBillingPeriod | None:
@@ -122,4 +150,5 @@ class BillingPeriodAccumulator:
             mean_power_kw=weighted / (period_end - self._absolute_start).total_seconds(),
             billing_hour=self._billing_hour,
             started_at=self._local_start,
+            sample_sources=frozenset(self._sources),
         )

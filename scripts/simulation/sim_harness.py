@@ -71,6 +71,7 @@ from custom_components.effektguard.models.nibe import (
     NibeS1155Profile,
 )
 from custom_components.effektguard.optimization.billing_period import BillingPeriodAccumulator
+from custom_components.effektguard.optimization.effect_layer import effective_tariff_power_kw
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
@@ -1114,7 +1115,8 @@ def simulate(
     last_offsets = []
     # The REAL one, from the integration. Not a copy of it.
     billing = BillingPeriodAccumulator()
-    daily_peaks: dict = {}  # date -> max HOURLY-mean kW (the billed quantity)
+    daily_peaks: dict = {}  # date -> max HOURLY-mean kW (physical, for peak_kw_hourly_mean)
+    daily_billed: dict = {}  # date -> max EFFECTIVE kW: what the tariff counts, night hours half
     # date -> how many billing hours the PRODUCTION accumulator actually billed on it. A day is not
     # always 24 hours long,
     # and the tariff bills every hour the meter recorded: the fall-back day has 25 and the
@@ -1509,7 +1511,7 @@ def simulate(
         #
         # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
         # and --dst fails here as well as in the unit tests.
-        completed = billing.add(now, power_kw)
+        completed = billing.add(now, power_kw, POWER_SOURCE_EXTERNAL_METER)
         if completed is not None:
             # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
             #
@@ -1529,6 +1531,13 @@ def simulate(
 
             day = completed.started_at.date()
             daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
+            # What the tariff COUNTS is the effective power - Ellevio halves 22:00-06:00.
+            # The harness used to skip the night weighting, overstating every tariff figure
+            # with night-shifted load - which is exactly where this optimiser puts load.
+            daily_billed[day] = max(
+                daily_billed.get(day, 0.0),
+                effective_tariff_power_kw(completed.mean_power_kw, completed.billing_hour),
+            )
             running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
 
             # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
@@ -1580,8 +1589,12 @@ def simulate(
     if final is not None:
         day = final.started_at.date()
         daily_peaks[day] = max(daily_peaks.get(day, 0.0), final.mean_power_kw)
+        daily_billed[day] = max(
+            daily_billed.get(day, 0.0),
+            effective_tariff_power_kw(final.mean_power_kw, final.billing_hour),
+        )
         billing_hours[day] = billing_hours.get(day, 0) + 1
-    top3 = sorted(daily_peaks.values(), reverse=True)[:3]
+    top3 = sorted(daily_billed.values(), reverse=True)[:3]
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
     stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)

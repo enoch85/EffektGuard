@@ -46,7 +46,6 @@ from .const import (
     DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
-    BILLABLE_POWER_SOURCES,
     MAX_BILLING_OBSERVATION_GAP_MINUTES,
     PEAK_CONTROL_POWER_SOURCES,
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
@@ -2390,7 +2389,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # see the other's bug: the coordinator merged the repeated hour and deleted a 9 kW
             # billing peak. Now there is one definition, in billing_period.py, and the harness runs
             # THAT - so breaking it fails the simulation too, which is the property that was missing.
-            completed = self._billing_period.add(now, current_power)
+            completed = self._billing_period.add(now, current_power, power_source)
 
             peak_event = None
             if completed is not None:
@@ -2398,13 +2397,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     power_kw=completed.mean_power_kw,
                     period=completed.billing_hour,
                     timestamp=completed.started_at,
-                    source=power_source,
+                    # The hour's OWN provenance - every sample votes, not the closing cycle.
+                    source=completed.source,
                 )
 
             if (
                 peak_event
                 and not self.entry.data.get("enable_optimization", True)
-                and power_source in BILLABLE_POWER_SOURCES
+                and peak_event.is_billable
             ):
                 # THE UNOPTIMISED BASELINE, MEASURED RATHER THAN ASSUMED.
                 #
