@@ -87,8 +87,18 @@ DM_START = -60.0
 DM_STOP = 0.0
 AUX_STEP_KW = 3.0  # one aux step
 STANDBY_KW = 0.1  # controller, pumps, standby losses
-# Float arithmetic only. Any real discrepancy is orders of magnitude bigger than this.
-COMPRESSOR_ENERGY_TOLERANCE_PCT = 0.1
+J_PER_KWH = 3_600_000.0
+
+# Float arithmetic only. A real leak is orders of magnitude bigger: the one this replaced a fake
+# audit to catch was 183 kWh.
+WATER_NODE_LEAK_BUDGET_KWH = 0.5
+
+# How far the run's seasonal COP may exceed the datasheet's own figure for the weather it saw.
+# The healthy range, measured across all five houses and all four scenarios, is 0.72 to 1.03; the
+# margin is for the mild hours when the curve runs water below the W35 rating point and the pump
+# legitimately beats its rating. Doubling the plant's COP lands at 1.5 to 2.1 and is caught on
+# every house - which is the whole point, because the identity this replaced called that PASS.
+COP_ENVELOPE_TOLERANCE = 1.15
 
 # Heat capacity of the water loop and the emitter metal it fills. Roughly 70 L of water
 # (0.081 kWh/K) plus the steel of the radiators. Without this the plant HANDS OUT the heat stored
@@ -320,15 +330,24 @@ class HouseConfig:
         air-source machines and sits inside that range - which is the check, rather than a target
         to be hit by tuning an exponent.
         """
-        source = self.source_temp_c(outdoor_temp)
         rated = float(self.profile.get_cop_at_temperature(outdoor_temp))
+        scale = self.carnot_cop(outdoor_temp, flow_temp) / self.carnot_cop(
+            outdoor_temp, COP_RATING_FLOW_C
+        )
+        return max(1.0, rated * scale)
 
-        def carnot(flow: float) -> float:
-            t_cond = flow + CONDENSER_APPROACH_K + KELVIN
-            t_evap = source - EVAPORATOR_APPROACH_K + KELVIN
-            return t_cond / max(t_cond - t_evap, MIN_LIFT_K)
+    def carnot_cop(self, outdoor_temp: float, flow_temp: float) -> float:
+        """The thermodynamic ceiling: no machine can beat this between these two temperatures.
 
-        return max(1.0, rated * carnot(flow_temp) / carnot(COP_RATING_FLOW_C))
+        `cop_at` is anchored on real manufacturer data and scaled by the RATIO of two of these, so
+        it lands far below the bound in normal operation. The harness asserts against the bound
+        itself every step, which is the one statement about the plant's efficiency that is not a
+        rearrangement of its own energy bookkeeping.
+        """
+        source = self.source_temp_c(outdoor_temp)
+        t_cond = flow_temp + CONDENSER_APPROACH_K + KELVIN
+        t_evap = source - EVAPORATOR_APPROACH_K + KELVIN
+        return t_cond / max(t_cond - t_evap, MIN_LIFT_K)
 
     def capacity_kw_at(self, outdoor_temp: float) -> float:
         """Compressor heat output the pump can actually deliver right now."""
@@ -731,8 +750,10 @@ def simulate(
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
         "layer_votes": {},
-        "compressor_elec_metered_kwh": 0.0,
-        "compressor_elec_owed_kwh": 0.0,
+        "water_node_leak_kwh": 0.0,
+        "flow_target_max": -999.0,
+        "compressor_heat_kwh": 0.0,
+        "datasheet_cop_x_heat": 0.0,
     }
     last_offsets = []
     quarter_samples: list[float] = []
@@ -752,7 +773,20 @@ def simulate(
         tout = outdoor_at(times, temps, now)
 
         # --- plant step ---
-        flow_target = house.curve_flow_temp(tout, tuned_curve) + offset_applied
+        # S1 IS CLAMPED TO THE PUMP'S MAXIMUM SUPPLY TEMPERATURE, as it is on the real hardware.
+        #
+        # This clamp was missing while `flow` (BT25) was clamped, twelve lines below. Degree
+        # minutes are the integral of (BT25 - S1), so the plant was integrating against a setpoint
+        # the pump was physically forbidden to reach: in the F2040 cold snap the curve asked for up
+        # to 4.1 C above max_flow_temp for 513 samples, and DM therefore fell at up to 4.1 per
+        # minute NO MATTER WHAT ANY CONTROLLER DID. Degree minutes ran to the integrator floor on
+        # their own, and the harness reported it as a control failure. It was a plant artefact.
+        #
+        # A NIBE limits the calculated supply temperature to the configured maximum; it does not
+        # chase a setpoint it cannot make. Removing this artefact is what makes the residual trap
+        # underneath it (F-124) measurable at its true size rather than at an inflated one.
+        max_flow = float(house.profile.max_flow_temp)
+        flow_target = min(house.curve_flow_temp(tout, tuned_curve) + offset_applied, max_flow)
 
         # The compressor's capacity now bounds the water node directly (see below), so the flow
         # saturates below target of its own accord when the pump runs out - which is what lets
@@ -784,12 +818,54 @@ def simulate(
         else:
             q_comp_w = 0.0
 
+        # THE IMMERSION HEATER IS THERMOSTATIC, because every real one is.
+        #
+        # It used to dump a flat 3 kW into the water node whenever degree minutes passed the aux
+        # limit - including when the node was already at its ceiling. In a five-minute step that is
+        # 900 kJ into a 350 kJ/K loop: 2.6 K of overshoot per step, which the clamp below then
+        # deleted. The heater was metered, paid for, and its heat thrown away, 183 kWh of it in the
+        # F2040 cold snap, while every energy "audit" in the harness reported 0.00 % error.
+        #
+        # A real immersion heater has a high-limit thermostat and cycles on the water temperature.
+        # So it injects at most what fits under the ceiling: the heat the emitters are taking out,
+        # less what the compressor is already putting in, plus whatever headroom the node has left.
+        aux_headroom_w = (
+            WATER_LOOP_J_PER_K * (max_flow - flow) / (STEP_MIN * 60.0) + q_emit_w - q_comp_w
+        )
         aux_w = 0.0
         if dm <= house.dm_aux_limit:
-            aux_w = AUX_STEP_KW * 1000.0
+            aux_w = min(AUX_STEP_KW * 1000.0, max(0.0, aux_headroom_w))
 
-        flow += (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
-        flow = max(indoor, min(flow, float(house.profile.max_flow_temp)))
+        flow_unclamped = (
+            flow + (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
+        )
+        flow = max(indoor, min(flow_unclamped, max_flow))
+
+        # THE ONLY ENERGY STATEMENT IN THIS PLANT THAT CAN ACTUALLY FAIL.
+        #
+        # Everything downstream of here - the room ODE, the "first law residual", the compressor
+        # audit - is an algebraic rearrangement of the same two lines and CANNOT disagree with
+        # itself. This clamp is different: it overwrites a state variable AFTER the ODE has
+        # integrated it, so every joule it removes is energy the meter charged for and the room
+        # never received. Nothing else in the harness can see that, and it measured 0.00 % error
+        # while 183 kWh vanished in the F2040 cold snap.
+        #
+        # In a healthy plant the clamp never binds and this stays at zero. It is an assertion, not
+        # a statistic.
+        stats["water_node_leak_kwh"] += WATER_LOOP_J_PER_K * (flow - flow_unclamped) / J_PER_KWH
+
+        # THE DATASHEET, AT THE WEATHER THIS RUN ACTUALLY SAW. Accumulated here, asserted in
+        # check_invariants. The plant's COP is the manufacturer's rated figure scaled by the Carnot
+        # ratio between the flow it is making and the W35 rating point, so whenever the water is
+        # HOTTER than W35 the scale is below one and the realised COP cannot exceed the datasheet.
+        # That is a bound the energy bookkeeping does not determine, which is exactly why it can
+        # fail - and a doubled COP, the bug the deleted identity waved through, breaks it on every
+        # house.
+        heat_kwh_this_step = q_comp_w / 1000.0 * STEP_MIN / 60.0
+        stats["compressor_heat_kwh"] += heat_kwh_this_step
+        stats["datasheet_cop_x_heat"] += (
+            float(house.profile.get_cop_at_temperature(tout)) * heat_kwh_this_step
+        )
 
         q_w = q_emit_w
 
@@ -820,6 +896,24 @@ def simulate(
             compressor_on = False
 
         cop = house.cop_at(tout, flow)
+
+        # THE SECOND LAW. No machine can beat Carnot between the temperatures it is working across.
+        #
+        # Unlike the energy "audits" this replaces, this one is not derived from the plant's own
+        # bookkeeping - it is an external physical bound on the COP MODEL, so it can disagree with
+        # it. It catches a wrong anchor, a flipped exponent or bad approach temperatures. It does
+        # NOT catch a COP that is merely too generous but still sub-Carnot; the datasheet envelope
+        # in check_invariants is what covers that, and between them they bracket the model from
+        # both sides.
+        if cop > house.carnot_cop(tout, flow):
+            violations.append(
+                {
+                    "t": now.isoformat(),
+                    "type": "cop_beats_carnot",
+                    "detail": f"COP {cop:.2f} > Carnot {house.carnot_cop(tout, flow):.2f}",
+                }
+            )
+
         power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
         hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
 
@@ -964,19 +1058,16 @@ def simulate(
         stats["indoor_max"] = max(stats["indoor_max"], indoor)
         stats["indoor_sum"] += indoor
         stats["dm_min"] = min(stats["dm_min"], dm)
+        # What the plant actually ASKED the pump for. Degree minutes integrate (BT25 - S1), so if
+        # S1 can exceed what the pump may make, DM falls forever regardless of the controller. The
+        # number is published so a test can check the plant rather than recompute the clamp and
+        # assert on its own arithmetic - which is what the first version of that test did.
+        stats["flow_target_max"] = max(stats["flow_target_max"], flow_target)
         stats["offset_min"] = min(stats["offset_min"], offset_applied)
         stats["offset_max"] = max(stats["offset_max"], offset_applied)
         energy = power_kw * STEP_MIN / 60.0
         stats["energy_kwh"] += energy
 
-        # THE COMPRESSOR-SIDE AUDIT. What the meter recorded for the compressor, and - computed
-        # independently, from the heat it made and the COP it made it at - what that heat SHOULD
-        # have cost. These are two different expressions of the same joules, so they can disagree,
-        # which is the whole point: the room-side balance below CANNOT.
-        stats["compressor_elec_metered_kwh"] += (
-            max(0.0, power_kw - aux_kw - STANDBY_KW) * STEP_MIN / 60.0
-        )
-        stats["compressor_elec_owed_kwh"] += (q_comp_w / 1000.0) / cop * STEP_MIN / 60.0
         # First-law audit. Heat INTO the room, and heat OUT of it. Over a month these must balance
         # to within the change in the fabric's stored energy - otherwise the plant is inventing or
         # destroying energy and every cost number it produces is fiction.
@@ -1068,19 +1159,39 @@ def simulate(
     # room balance could never have caught it, and I found it by reasoning rather than by the check
     # I built to find it. It is kept because a non-zero value would still mean the ODE is broken,
     # but it is no longer the thing being claimed.
-    stored_kwh = house.capacity_j_per_k * (indoor - indoor_start) / 3_600_000.0
+    stored_kwh = house.capacity_j_per_k * (indoor - indoor_start) / J_PER_KWH
     residual = stats["heat_kwh"] - stats["loss_kwh"] - stored_kwh
     stats["heat_kwh"] = round(stats["heat_kwh"], 1)
     stats["loss_kwh"] = round(stats["loss_kwh"], 1)
     stats["energy_balance_residual_kwh"] = round(residual, 2)
 
-    # THE CHECK THAT CAN ACTUALLY FAIL. What the meter charged for the compressor, against what its
-    # heat owed at the COP it was made at. Two independent expressions of the same joules.
-    metered = stats["compressor_elec_metered_kwh"]
-    owed = stats["compressor_elec_owed_kwh"]
-    stats["compressor_elec_metered_kwh"] = round(metered, 1)
-    stats["compressor_elec_owed_kwh"] = round(owed, 1)
-    stats["compressor_energy_error_pct"] = round(100.0 * (metered - owed) / max(owed, 1e-9), 2)
+    # AND SO WAS THE COMPRESSOR-SIDE "AUDIT" I ADDED TO REPLACE IT. It is deleted here.
+    #
+    #     power_kw = q_comp/cop + aux + standby          (the plant)
+    #     metered  = power_kw - aux - standby            (the "meter")
+    #     owed     = q_comp/cop                          (the "independent" figure)
+    #
+    # Substitute the first into the second and you get the third, exactly: x - y + y = x. Two
+    # symbols, one line, and I called them "two independent expressions of the same joules" in the
+    # code and in a test docstring. Doubling the compressor's COP - which halves the bill, a
+    # catastrophic plant bug - left it reporting 0.00 % error and PASS.
+    #
+    # There is no exact energy audit to be had inside a closed ODE plant: every residual you can
+    # write is a rearrangement of the equations that produced it. What CAN fail is a statement
+    # about something the bookkeeping does not determine, and there are exactly two of those:
+    #
+    #   * water_node_leak_kwh - the flow clamp overwrites a state variable AFTER the ODE has
+    #     integrated it, so it can destroy metered joules. It measured 183 kWh in the F2040 cold
+    #     snap while every "audit" above read 0.00 %.
+    #   * the second law (per step, above) and the datasheet envelope (in check_invariants), which
+    #     bracket the COP model from above and below using data the plant's energy accounting does
+    #     not reference.
+    stats["water_node_leak_kwh"] = round(stats["water_node_leak_kwh"], 1)
+    stats["datasheet_cop"] = round(
+        stats["datasheet_cop_x_heat"] / max(stats["compressor_heat_kwh"], 1e-9), 2
+    )
+    del stats["datasheet_cop_x_heat"]
+    del stats["compressor_heat_kwh"]
     stats["mean_cop"] = round(
         stats["heat_kwh"] / max(stats["energy_kwh"] - STANDBY_KW * steps * STEP_MIN / 60.0, 1e-9), 2
     )
@@ -1101,6 +1212,7 @@ FATAL_VIOLATIONS = frozenset(
         "exception",  # engine raised while controlling a heat pump
         "dm_runaway",  # the deficit outran the curve offset AND the aux heater
         "no_price_for_instant",  # adapter could not price a moment that exists
+        "cop_beats_carnot",  # the PLANT broke the second law: every cost it reports is fiction
     }
 )
 
@@ -1168,16 +1280,39 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     if stats["exceptions"]:
         failures.append(f"{stats['exceptions']} engine exception(s)")
 
-    # The plant is not allowed to invent or destroy energy on the compressor side. This is the
-    # check the room-side residual could never be: the meter's compressor electricity against what
-    # that heat owed at the COP it was made at, computed independently.
-    if abs(stats["compressor_energy_error_pct"]) > COMPRESSOR_ENERGY_TOLERANCE_PCT:
+    # THE PLANT MAY NOT DESTROY ENERGY THE METER CHARGED FOR. The flow clamp overwrites the water
+    # node's temperature after the ODE has integrated it, so it is the one place in the harness
+    # where joules can go missing without any residual noticing - and 183 kWh did, in the F2040
+    # cold snap, while the "audits" that preceded this reported 0.00 % error.
+    if abs(stats["water_node_leak_kwh"]) > WATER_NODE_LEAK_BUDGET_KWH:
         failures.append(
-            f"the compressor was metered {stats['compressor_elec_metered_kwh']:.1f} kWh but its "
-            f"heat owed {stats['compressor_elec_owed_kwh']:.1f} kWh at the COP it was made at "
-            f"({stats['compressor_energy_error_pct']:+.1f}%) - the plant is inventing or destroying "
-            f"energy, and every cost number it produces is fiction"
+            f"the flow clamp destroyed {abs(stats['water_node_leak_kwh']):.1f} kWh that the meter "
+            f"charged for and the room never received - the plant is deleting energy, and every "
+            f"cost number it produces is fiction by that much"
         )
+
+    # THE COP MODEL, BOUNDED BY DATA IT DOES NOT USE. The second law bounds it from above every
+    # step (see run_sim); this bounds it against the manufacturer's published curve, evaluated at
+    # the outdoor temperatures this run actually visited and weighted by the heat made at each.
+    #
+    # THE FIRST VERSION OF THIS BOUND WAS THE CURVE'S GLOBAL MAXIMUM, and it was useless: an F750
+    # publishes 5.0 at +7 C outdoor, so a doubled COP of 5.67 sat comfortably under it and PASSED.
+    # A bound has to be evaluated where the run actually lived, not at the flattering end of the
+    # datasheet.
+    #
+    # Measured across every scenario and every house, the healthy ratio is 0.72 to 1.03. The values
+    # above 1.0 are the two ground-source houses, and they are not a fudge - they are the physics:
+    # both run water BELOW the W35 rating point in mild weather (29 and 31 C), where a heat pump
+    # genuinely does beat its own rating. COP_ENVELOPE_TOLERANCE is the headroom over that.
+    if house is not None and stats["datasheet_cop"] > 0:
+        ratio = stats["mean_cop"] / stats["datasheet_cop"]
+        if ratio > COP_ENVELOPE_TOLERANCE:
+            failures.append(
+                f"the run's seasonal COP was {stats['mean_cop']:.2f}, but this pump's published "
+                f"curve gives {stats['datasheet_cop']:.2f} at the weather it actually saw "
+                f"({ratio:.2f}x) - the plant is buying heat more cheaply than the machine can make "
+                f"it, so every cost number in this run is too low"
+            )
 
     # Tracked since the harness was written. Asserted for the first time here.
     aux_budget = AUX_BUDGET_KWH_COLDSNAP if "coldsnap" in tag else AUX_BUDGET_KWH_MILD
