@@ -4,48 +4,24 @@
 BT25 (the water the pump actually makes) can only follow if the compressor has headroom left.
 
 When the compressor is SATURATED it has none. So raising the offset widens the gap it is measuring,
-and degree minutes fall FASTER. The emergency layer sees them falling and raises the offset again.
-That is a positive feedback loop, and the owner named it before this simulation ever ran:
+degree minutes fall FASTER, the emergency layer sees them falling and raises the offset again. A
+positive feedback loop, and the owner named it before this simulation ever ran:
 
     "if you keep raising the DM during stress, it will never be able to get itself out of that
      spinning loop downwards, it will worsen."
 
-REPRODUCED - AND EVERY NUMBER I FIRST PUBLISHED FOR IT WAS WRONG, TWICE OVER.
+REPRODUCED, on pump models and houses now sourced to NIBE's own datasheets (see
+tests/validation/test_the_pump_models_match_their_datasheets.py). The sizing convention moves the
+answer - NIBE publishes Pdesignh at two reference climates - so the finding is reported under both.
 
-The first time, my own PLANT was inflating it: it integrated degree minutes against a setpoint the
-pump was forbidden to reach, and its immersion heater had no thermostat. I corrected that and
-reported 27.6 C and 73.8 kWh.
-
-The second time, the PUMP MODELS themselves turned out to be invented. The owner said so plainly -
-"your sim models aren't even based on real data, yet you claim it" - and he was right. The profiles
-carried an 8.0 kW compressor for a machine NIBE publishes at 4.994 kW, a COP curve keyed on outdoor
-temperature for machines whose heat source is 20 C house air or 0 C brine, and a capacity derating
-that ran BACKWARDS to the EN 14511 rating points it cited. See
-tests/validation/test_the_pump_models_match_their_datasheets.py.
-
-AND THE THIRD TIME, THE HOUSES WERE INVENTED TOO.
-
-Every house carried a heat-loss coefficient that came from nowhere, and three of the five paired a
-pump with a house it was twice too big for. That decided what the simulation was ABLE to find: a
-pump with double the capacity its house needs cannot saturate, cannot fall behind, and can never
-exercise the recovery ladder at all. I reported "the ground-source houses never engage the emergency
-ladder" as a fact about the controller. It was a fact about my sizing.
-
-Houses are now sized from their pump's own Pdesignh - NIBE's declared design heat load - at the
-EN 14825 reference design temperature. And that exposed the last trap: THE SIZING CONVENTION MOVED
-THE ANSWER. NIBE publishes Pdesignh at both reference climates, and the choice between them moves
-the F750 between "saturates in a cold snap" and "does not". So the finding is not allowed to rest on
-one house, and it does not.
-
-    SWEDISH SIZING (cold climate, -22 C) - the honest default for a Swedish integration.
-    Only the F2040 saturates, and it does so BY DESIGN: NIBE declares Tbiv = -9 C and
-    Psup = 1.1 kW, so below -9 C its supplementary heater is SUPPOSED to run.
+    SWEDISH SIZING (cold climate, -22 C). Only the F2040 saturates, and BY DESIGN: NIBE declares
+    Tbiv = -9 C and Psup = 1.1 kW, so below -9 C its supplementary heater is SUPPOSED to run.
 
         airsource_f2040   239 kWh of resistive heat where the capacity deficit forced 85 (2.8x),
                           house cooked to 31.5 C
 
-    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter) - the commonest
-    installation fault there is, and both figures come from NIBE's own datasheet.
+    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter) - the commonest installation
+    fault there is. Both figures come from NIBE's own datasheet.
 
                           optimiser   physics forced   do-nothing      optimiser   do-nothing
                              aux                          aux           indoor       indoor
@@ -55,43 +31,26 @@ one house, and it does not.
         airsource_f2040   2184 kWh      2113 kWh       1066 kWh         29.1 C       23.0 C
         apartment_f730       0 kWh         0 kWh          0 kWh         22.9 C       22.8 C
 
-EVERY MACHINE THAT SATURATES IS MADE WORSE BY THE OPTIMISER, under BOTH sizing conventions. It
-burns two to five times the resistive heat of a do-nothing controller and cooks the house to about
-30 C, while doing nothing holds it at 22. The only system that escapes is the apartment - the one
-where the pump has 1.8x more capacity than the house needs, and where saturation cannot happen.
+EVERY MACHINE THAT SATURATES IS MADE WORSE BY THE OPTIMISER, under both sizing conventions: two to
+five times the resistive heat of a do-nothing controller, and the house cooked to ~30 C while doing
+nothing holds 22. The only escape is the apartment, whose pump has 1.8x the capacity its house needs
+and cannot saturate. The immersion heat is measured against what the capacity deficit PHYSICALLY
+FORCES, computed step by step in the plant, so "2.8x more resistive heat than it had to" is a
+statement about the controller, not the weather.
 
-THAT is the finding, and it no longer depends on a house I made up. The immersion heat is now
-measured against what the pump's capacity deficit PHYSICALLY FORCES, computed step by step in the
-plant, so "burned 2.8x more resistive heat than it had to" is a statement about the controller and
-not about the weather.
+AND THE RECOVERY LADDER IS STILL UNVALIDATED BY SIMULATION. The three houses that pass never touch
+it - only the proactive Z-tiers fire, and T1/T2/T3 and the anti-windup never run at all. The only
+runs in which the ladder engages are the two above, and both FAIL. There is no run anywhere in which
+it engages and RECOVERS. Nobody should claim a green simulation validates the degree-minute recovery
+tiers.
 
-AND THE RECOVERY LADDER IS STILL UNVALIDATED BY SIMULATION - THE SAME CONCLUSION, ON BETTER DATA.
+WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup written for
+exactly this failure mode, and that bypass is documented twice, in the owner's own code, as
+intentional. Changing it means deciding what a heat pump should do when it physically cannot meet its
+own curve - a heat-pump decision, not a code cleanup. BLOCKED-ON-OWNER, and it stays that way.
 
-I used to write here that "four of the five houses pass the cold snap and never engage the ladder
-at all". That was true of the invented models. On the real ones it is THREE of five: the two
-ground-source houses and the small exhaust-air flat sail through with the ladder silent, and both
-saturating machines engage it and FAIL.
-
-The point survives intact, and it is the uncomfortable one:
-
-  * the three houses that pass never touch the emergency ladder. Only the proactive Z-tiers fire.
-    The thermal-debt tiers T1/T2/T3 and the anti-windup never run at all.
-  * the ONLY runs in which the ladder engages are the two above - and both of them FAIL.
-
-So there is still no run anywhere in which the recovery ladder engages and RECOVERS. The simulator
-cannot tell anyone whether it works; it can only show that when it fires, it makes things worse.
-Nobody should claim a green simulation validates the degree-minute recovery tiers, and I nearly
-did - twice, on models that were not real.
-
-WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup that the owner
-wrote for exactly this failure mode - and that bypass is documented twice, in his own code, as
-intentional. Changing it means deciding what a heat pump should do when it physically cannot meet
-its own curve, and that is a heat-pump decision, not a code-cleanup one. It is marked
-BLOCKED-ON-OWNER and it stays that way.
-
-The `xfail` is STRICT on purpose: if someone fixes this, the test stops failing, the suite goes RED,
-and they are forced to come here and delete the marker. A known defect that nobody trips over is a
-defect that gets forgotten.
+The `xfail` is STRICT on purpose: if someone fixes this, the suite goes RED and they are forced to
+come here and delete the marker. A known defect nobody trips over is a defect that gets forgotten.
 """
 
 from __future__ import annotations

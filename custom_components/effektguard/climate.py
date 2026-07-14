@@ -59,10 +59,8 @@ async def async_setup_entry(
     async_add_entities([EffektGuardClimate(coordinator, entry)])
 
 
-# RestoreEntity is gone, deliberately. Its only job here was restoring `_attr_hvac_mode` from the
-# entity's own last state - a copy of a copy, which restored an OFF display perfectly while the
-# optimiser, whose gate had never been told anything, carried on driving the pump. The mode now
-# lives in the config entry, which survives a restart on its own and is what the coordinator reads.
+# No RestoreEntity: the mode lives in the config entry, which survives a restart on its own and is
+# what the coordinator actually reads. Restoring the entity's own last state restored a copy of a copy.
 class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntity):
     """Climate entity for EffektGuard.
 
@@ -114,23 +112,12 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
     def hvac_mode(self) -> HVACMode:
         """HEAT when the optimiser is running, OFF when it is not. A VIEW, not a second copy.
 
-        This used to be `self._attr_hvac_mode`, a private attribute the entity kept for itself, and
-        `async_set_hvac_mode(OFF)` set it and called `set_optimization_enabled(False)` - which resets
-        the curve offset to 0.0 once and writes no flag anywhere.
+        The coordinator's master gate is `entry.data["enable_optimization"]`. This used to be a
+        private `_attr_hvac_mode` instead, so OFF reset the offset once and the optimiser resumed at
+        the next tick while the thermostat still displayed OFF - and RestoreEntity carried that across
+        reboots. The switch entity writes the same key; both are views of it now.
 
-        The coordinator's master gate reads something else entirely:
-
-            if not self.entry.data.get("enable_optimization", True):
-                decision = OptimizationDecision(offset=0.0, reasoning="Optimization disabled ...")
-
-        Nothing set that key but the `enable_optimization` SWITCH. So the thermostat's OFF silenced
-        the optimiser for exactly one cycle, and five minutes later the next aligned refresh decided
-        an offset and wrote it to the pump - with the thermostat still displaying OFF. RestoreEntity
-        then carried that display faithfully across restarts, so the lie survived a reboot.
-
-        And the switch and the thermostat could simply disagree: one fact, two answers.
-
-        There is one piece of state now, the entry, and both controls read and write it.
+        tests/unit/test_the_thermostat_off_switch_actually_turns_it_off.py
         """
         enabled = self._entry.data.get(CONF_ENABLE_OPTIMIZATION, True)
         return HVACMode.HEAT if enabled else HVACMode.OFF
@@ -209,12 +196,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         _LOGGER.info("Setting HVAC mode to %s", hvac_mode)
         enabled = hvac_mode != HVACMode.OFF
 
-        # WRITE THE MASTER GATE, which is the only thing the coordinator's decision actually reads.
-        #
-        # This is the same key, in the same place, by the same mechanism the `enable_optimization`
-        # switch entity uses. It used to set a private `_attr_hvac_mode` instead, so OFF reset the
-        # offset once and the optimiser resumed at the next aligned tick, five minutes later, while
-        # the thermostat still read OFF.
+        # The master gate - the only thing the coordinator's decision reads. Same key, same mechanism
+        # the `enable_optimization` switch uses.
         new_data = dict(self._entry.data)
         new_data[CONF_ENABLE_OPTIMIZATION] = enabled
         self.hass.config_entries.async_update_entry(self._entry, data=new_data)

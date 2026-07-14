@@ -29,16 +29,13 @@ EVERY QUARTER OF THE DAY IS NORMAL. The price layer goes completely blind on a d
 spread: it will not pre-heat on free electricity, and it will not back off at 80 ore. The one thing
 this integration exists to do, and it declines to do it.
 
-Exactly-zero and negative prices are not exotic. price_math's own docstring puts them at "roughly a
-hundred hours a year per SE bidding zone", and they arrive in long contiguous runs - which is
-precisely the shape that makes the plateau the median.
+Exactly-zero and negative prices are not exotic - roughly a hundred hours a year per SE bidding zone,
+arriving in long contiguous runs, which is exactly the shape that makes the plateau the median.
 
-THE FIX IS TO ASK THE QUESTION THE GUARD WAS STANDING IN FOR: is there anything meaningfully dearer
-today? That is `price < p90`, and it belongs on exactly ONE band.
-
-I had put the median on all four, and mutating them one at a time shows three of those guards were
-doing nothing at all - they only ever broke the free day. The spread check upstream already
-guarantees p90 > p10, so:
+THE FIX ASKS THE QUESTION THE GUARD WAS STANDING IN FOR: is anything meaningfully dearer today? That
+is `price < p90`, and it belongs on exactly ONE band. I had put the median on all four; mutating them
+one at a time shows three were doing nothing but breaking the free day. The upstream spread check
+already guarantees p90 > p10, so:
 
     VERY_CHEAP   `price <= p10` already implies `price < p90`.               Redundant.
     PEAK         `price > p90`, and p90 >= p10, implies `price > p10`.       Redundant.

@@ -1703,23 +1703,14 @@ BILLING_PERIOD_MINUTES: Final = 60
 BILLING_PERIODS_PER_DAY: Final = 24
 # The longest silence between two meter readings that still leaves a billing hour MEASURED.
 #
-# The hourly mean weights each reading by how long it stood, so a reading is implicitly extrapolated
-# forward until the next one arrives. That is correct for the ordinary five-minute cadence and absurd
-# across a blackout: a meter that read 9 kW at 10:00, went `unavailable`, and came back at 10:55
-# reading 1 kW had that 9 kW stretched over fifty unwatched minutes and the hour was billed at
-# 8.33 kW. The effect tariff bills the mean of the month's three highest hours, and this integration
-# throttles the pump to defend that record - so a fabricated peak holds the heat back for weeks to
-# protect a number that happened in no hour.
+# The hourly mean extrapolates each reading forward until the next one arrives - right at the
+# five-minute cadence, absurd across a blackout (a 9 kW reading stretched over 50 unwatched minutes
+# billed an 8.33 kW hour from two samples).
 #
-# A JUDGEMENT, NOT A CITATION. No standard says how much of an hour must be seen; what is defensible
-# is the DIRECTION. Refusing an under-observed hour can miss a real peak, which costs some protection.
-# Billing an invented one costs a month of throttling to defend a fiction - and the utility bills from
-# ITS meter, not from ours, so our record only decides whether to hold the pump back. Missing an hour
-# is recoverable; inventing one is not.
-#
-# Three update intervals: one or two missed cycles is jitter, which Home Assistant does routinely, and
-# the reading either side of a brief blink is the same reading. Fifteen consecutive minutes of silence
-# from a sensor that polls every five is an outage, and an hour containing one was not measured.
+# A JUDGEMENT, NOT A CITATION. No standard says how much of an hour must be seen. What is defensible
+# is the direction: missing a real peak costs some protection, inventing one costs a month of
+# throttling to defend a fiction - and the utility bills from ITS meter, not ours. Three update
+# intervals: one or two missed cycles is jitter; fifteen minutes of silence is an outage.
 MAX_BILLING_OBSERVATION_GAP_MINUTES: Final = 15
 
 # BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the

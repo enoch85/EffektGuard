@@ -9,13 +9,8 @@ and into the effect layer's own docstring:
     Swedish effect tariff rules:
     - Measured in 15-minute windows (quarterly periods)
 
-AND I MADE IT WORSE. When I rebuilt the peak tracking I wrote, in the coordinator:
-
-    # Swedish effect tariffs bill the 15-minute MEAN power. Recording each instantaneous sample
-    # would register a short spike as a full quarter peak.
-
-The first sentence is a citation I invented. The correction to instantaneous sampling was right; the
-quantity I corrected it TO is wrong.
+When I rebuilt the peak tracking I wrote "Swedish effect tariffs bill the 15-minute MEAN power" -
+a citation I invented.
 
 WHAT THE SOURCES ACTUALLY SAY.
 
@@ -32,11 +27,9 @@ Energimarknadsinspektionen, the regulator:
     "elnatsforetagen mater din elanvandning PER TIMME."
     (ei.se/konsument/anvand-el-smartare/elnatsavtal-med-effektavgift)
 
-Hours. Not quarter-hours. And the difference is not academic - it is up to fourfold, because a
-quarter-hour mean is bounded below by nothing while an hourly mean averages the quiet 45 minutes
-around it. A single hot-water cycle is exactly that shape.
-
-MEASURED, on the real EffectManager:
+Hours. Not quarter-hours - and the difference is up to fourfold, because an hourly mean averages the
+quiet 45 minutes around a spike. A hot-water cycle is exactly that shape. MEASURED, on the real
+EffectManager:
 
     10:00-10:15   9.0 kW      the hot-water cycle
     10:15-11:00   1.0 kW      the house idling
@@ -44,15 +37,12 @@ MEASURED, on the real EffectManager:
     the hour's mean power       3.00 kW     <- what Ellevio bills
     what EffektGuard records    9.00 kW     <- the quarter-hour mean
 
-Three times over. At 81.25 SEK/kW that is a phantom 488 SEK a month, and worse than the phantom: the
-effect layer THROTTLES THE HEAT PUMP to defend it. The owner's house is kept cooler to protect a
-peak that does not exist on any bill.
+Three times over. At 81.25 SEK/kW that is a phantom 488 SEK a month - and the effect layer THROTTLES
+THE HEAT PUMP to defend it, keeping the house cooler to protect a peak on no bill.
 
-A NOTE ON WHY THIS STILL MATTERS. On 13 March 2026 the government instructed Ei to repeal the
-requirement that grid companies levy effect charges at all; the regulation (EIFS 2022:1) was
-repealed in June 2026, and Ellevio dropped its effect charge on 1 June. Ei must propose a new,
-uniform model by 12 April 2027. Effect charges are not prohibited, and several DSOs still levy them
-- so the feature is not dead, but the model it implements should at least be one a real company uses.
+(The effect-charge requirement was repealed in June 2026 and Ellevio dropped its charge on 1 June;
+Ei must propose a new model by 12 April 2027. Charges are not prohibited and several DSOs still levy
+them, so the feature is not dead - but the model it implements should be one a real company uses.)
 """
 
 from __future__ import annotations

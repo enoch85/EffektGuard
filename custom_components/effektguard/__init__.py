@@ -226,20 +226,9 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.info("Options updated, applying changes (no restart)")
     await coordinator.async_update_config(merged_config)
 
-    # AND TELL THE ENTITIES, because several of them are VIEWS of this entry.
-    #
-    # Every switch reads `entry.data` in its `is_on`, and the thermostat's `hvac_mode` reads the same
-    # `enable_optimization` key. A view only updates when something asks it to, and hot-reloading told
-    # nobody: setting the thermostat to OFF wrote the key immediately, and the master switch went on
-    # displaying "on" for the next FIVE MINUTES, until the coordinator's aligned refresh happened to
-    # re-render it. Measured, on a running Home Assistant:
-    #
-    #     switch: on   14:14:19
-    #     switch: on   14:14:59
-    #     switch: off  14:15:19      <- the next refresh, not the change
-    #
-    # The truth was never in doubt - they read the same key - but the user was looking at a thermostat
-    # that said OFF and a master switch that said ON.
+    # Tell the entities: the switches and the thermostat are VIEWS of this entry, and a view only
+    # updates when asked. Without this the master switch kept displaying "on" for five minutes after
+    # the thermostat wrote OFF, until the next coordinator refresh happened to re-render it.
     coordinator.async_update_listeners()
 
 
@@ -514,15 +503,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         # Through the coordinator's door, not straight at the switch.
         #
-        # This used to call `switch.turn_on` here, directly. It worked - and `_lux_boost_is_ours`,
-        # which is the ONLY thing that tells the unload cleanup whether a running boost is ours to
-        # cancel, stayed False. So EffektGuard started a hot-water boost through its own service, and
-        # then, the next time the entry unloaded, decided the household must have started it and left
-        # it running to NIBE's own temporary-lux timeout, on the immersion heater, with nothing left
-        # that would ever switch it off. (An entry unloads on the reconfigure flow, a manual reload,
-        # removal, or a restart - NOT on an ordinary options change, which hot-reloads. An earlier
-        # version of this comment claimed otherwise; see
-        # tests/unit/test_which_things_actually_unload_the_entry.py.)
+        # This used to call `switch.turn_on` directly, leaving `_lux_boost_is_ours` False - so the
+        # unload cleanup disowned a boost this very service had started, and left it running to NIBE's
+        # lux timeout on the immersion heater.
         _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
         if not await coordinator._set_temporary_lux(True):
             raise ServiceValidationError(
@@ -536,17 +519,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # Update last called timestamp
         _update_service_timestamp("boost_dhw")
 
-        # NIBE'S TEMPORARY LUX OWNS THE BOOST, AND IT DOES NOT TAKE ORDERS.
-        #
-        # `target_temp` and `duration` are accepted by this service, validated (target_temp against
-        # the scald ceiling, which is worth keeping), and then reach NOTHING: the switch is a switch.
-        # The pump heats to its own lux temperature for its own lux duration. This log used to read
-        # "DHW boost activated via temporary lux: 65.0°C target for 30 minutes", asserting two things
-        # that were not true, and the request was also filed in `coordinator.data["dhw_boost"]`, which
-        # nothing ever read.
-        #
-        # Removing the two parameters would break anybody's automation that passes them, so it is the
-        # owner's call, not mine. What is fixed here is the integration claiming to have done it.
+        # NIBE's temporary lux owns the boost and does not take orders: `target_temp` and `duration`
+        # are validated and then reach nothing - the switch is a switch. The log used to assert both
+        # anyway. Removing the two arguments would break automations that pass them, so that is the
+        # owner's call; what is fixed here is the claim.
         _LOGGER.info(
             "DHW boost activated via NIBE temporary lux on %s. NOTE: the pump's own lux cycle "
             "decides the temperature and the duration - the target_temp (%s°C) and duration (%s min) "

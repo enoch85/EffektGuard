@@ -666,26 +666,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
     async def _set_temporary_lux(self, on: bool) -> bool:
-        """The ONE way this integration commands the hot-water boost. Returns whether it wrote.
+        """The ONE way this integration commands the hot-water boost, and the only place that records
+        WHO STARTED IT - which is what lets `_cancel_our_dhw_boost` tell ours from the household's.
 
-        AND THE ONLY PLACE THAT RECORDS WHO STARTED THE BOOST, which is the whole point.
+        Three call sites used to reach the switch directly and only one set `_lux_boost_is_ours`, so a
+        boost our own service started was disowned on unload and left running to NIBE's lux timeout on
+        the immersion heater.
 
-        `_cancel_our_dhw_boost` cleans up on unload, and it decides what to clean up by reading
-        `_lux_boost_is_ours` - "a boost the OWNER started is left alone". That flag used to be set in
-        exactly one place, the DHW optimizer. The `effektguard.boost_dhw` SERVICE turned the very same
-        switch on, through its own `switch.turn_on` call, and never set it. So the cleanup looked at a
-        boost EffektGuard had started through its own service, concluded the household must have
-        started it, and left it running - to NIBE's own temporary-lux timeout, on the immersion heater
-        at COP 1.0, with nothing left that would ever switch it off.
+        Starting from a shut-down coordinator is refused, as for the curve offset and the fan.
+        STOPPING is not - that IS the cleanup, and it runs during shutdown.
 
-        Reached by anything that unloads the entry: the RECONFIGURE flow (swapping the power meter or
-        the weather entity), a manual reload, removal, or a Home Assistant restart. NOT by an ordinary
-        options change - that hot-reloads and the entry stays loaded. This docstring used to say an
-        option change was enough, which is false, and see
-        tests/unit/test_which_things_actually_unload_the_entry.py for what was actually measured.
-
-        Starting a boost from a shut-down coordinator is refused for the same reason the curve offset
-        and the fan are. STOPPING one is not - that IS the cleanup, and it runs during shutdown.
+        tests/unit/test_a_hot_water_boost_we_started_is_a_hot_water_boost_we_stop.py
         """
         if not self.temp_lux_entity:
             return False
@@ -2406,37 +2397,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _write_curve_offset(self, offset: float) -> bool:
         """The ONE way this integration reaches the heat pump. Returns whether it wrote.
 
-        A COORDINATOR THAT HAS BEEN SHUT DOWN IS NOT A WRITER.
+        A coordinator that has been shut down is not a writer. `_do_aligned_refresh` runs on
+        `hass.async_create_task`, NOT `entry.async_create_task`, so HA cannot cancel it on unload -
+        and it is mid-flight for seconds, awaiting the weather forecast over the network. It used to
+        run to the end and drive the pump anyway: the shutdown flag guarded the timer re-arm, and
+        nothing consulted it here.
 
-        `_shutdown_requested` used to be consulted in exactly two places: the code that re-arms the
-        aligned timer, and the code that sets the flag. In neither of the two places that drive the
-        pump. The bug was not a wrong value - it was a value nobody asked for.
+        The entry unloads on the reconfigure flow (swapping the power meter), a manual reload, a
+        removal, or a restart - NOT on an options change, which hot-reloads.
 
-        And the coordinator's own comment already knew the task survives: `_do_aligned_refresh` runs
-        on `hass.async_create_task`, NOT `entry.async_create_task`, so Home Assistant cannot cancel
-        it on unload. It guarded the re-arm and not the write, and those are different things. A
-        refresh that is mid-flight when the entry unloads - and it is mid-flight for seconds, awaiting
-        the weather forecast service call over the network - carried on to the end and drove the pump.
-
-        WHAT ACTUALLY UNLOADS THE ENTRY - and an earlier version of this docstring got it wrong, so
-        it is written down here having been executed rather than assumed:
-
-            the RECONFIGURE flow  - changing the entity selections: the power meter, the weather
-                                    entity, the pump model. It ends in
-                                    `async_update_reload_and_abort`, a FULL reload. Measured against
-                                    a running Home Assistant: 1 unload, 1 setup.
-            a manual reload       - the Reload button / `homeassistant.reload_config_entry`.
-            removing the integration
-            restarting Home Assistant
-
-        Changing an OPTION does NOT: this integration's update listener hot-reloads the runtime
-        settings and leaves the entry loaded (measured: 0 unloads). This docstring used to claim the
-        opposite, and reason from it.
-
-        The reconfigure case is the sharp one. The user swaps the power meter, the entry tears down,
-        and the OLD coordinator - built on the OLD adapter - can still land a write afterwards, after
-        the new one has already written. On a REMOVAL it is a deleted integration getting the last
-        word on somebody's heating.
+        tests/unit/coordinator/test_an_unloaded_integration_does_not_drive_the_heat_pump.py
+        tests/unit/test_which_things_actually_unload_the_entry.py
         """
         if self._shutdown_requested:
             _LOGGER.debug(
@@ -2451,14 +2422,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _write_enhanced_ventilation(self, enabled: bool) -> bool:
         """The ONE way this integration commands the exhaust fan. Returns whether it wrote.
 
-        The heating curve is not the only thing that reaches the pump, and the first version of the
-        shutdown guard quietly assumed it was. `set_enhanced_ventilation` is written from the control
-        loop too (`_apply_airflow_decision`, reached from `_read_and_decide`), so it rides the same
-        in-flight refresh and the same race.
-
-        On a reload it is worse than a stray write: the dead coordinator can switch the fan ON while
-        the new one starts up believing it is off - and then nothing is left that will ever turn it
-        off again.
+        Same race as the curve offset: written from the control loop, so it rides the same in-flight
+        refresh. Worse on a reload - the dead coordinator can switch the fan ON while the new one
+        starts up believing it is off, and nothing is left that will ever turn it off again.
         """
         if self._shutdown_requested:
             _LOGGER.debug(
