@@ -45,9 +45,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from ..const import BILLING_PERIOD_MINUTES
+from ..const import BILLING_PERIOD_MINUTES, MAX_BILLING_OBSERVATION_GAP_MINUTES
 
 BILLING_PERIOD = timedelta(minutes=BILLING_PERIOD_MINUTES)
+MAX_BILLING_OBSERVATION_GAP_SECONDS = MAX_BILLING_OBSERVATION_GAP_MINUTES * 60
 
 
 @dataclass(frozen=True)
@@ -121,13 +122,35 @@ class BillingPeriodAccumulator:
         period_end = self._absolute_start + BILLING_PERIOD
         previous_time, previous_power = self._samples[0]
         weighted = 0.0
+        longest_gap = 0.0
         for sample_time, sample_power in self._samples[1:]:
-            weighted += previous_power * (sample_time - previous_time).total_seconds()
+            span = (sample_time - previous_time).total_seconds()
+            longest_gap = max(longest_gap, span)
+            weighted += previous_power * span
             previous_time = sample_time
             previous_power = sample_power
         # The last reading stands until the boundary, mirroring the way the first one is anchored to
-        # it. Both spans are absolute, so a repeated DST hour is 3600 seconds like any other.
-        weighted += previous_power * (period_end - previous_time).total_seconds()
+        # it. Both spans are absolute, so a repeated DST hour is 3600 seconds like any other. This
+        # span counts as a gap too: a meter that dies at 10:05 and never returns leaves 55 minutes of
+        # the hour resting on one reading, and that is exactly as unmeasured as a gap in the middle.
+        final_span = (period_end - previous_time).total_seconds()
+        longest_gap = max(longest_gap, final_span)
+        weighted += previous_power * final_span
+
+        # AN HOUR THE METER SLEPT THROUGH IS NOT A MEASUREMENT OF AN HOUR.
+        #
+        # Weighting a reading by how long it stood silently extrapolates it forward, which is right
+        # at the five-minute cadence and absurd across a blackout. A meter reading 9 kW at 10:00,
+        # going `unavailable`, and returning at 10:55 reading 1 kW had that 9 kW stretched over fifty
+        # unwatched minutes: the hour was billed at 8.33 kW, from two samples, while the log said
+        # "Peak billing is suspended until it does" ten times over. It was not suspended.
+        #
+        # The tariff bills the mean of the month's three highest hours and this integration throttles
+        # the pump to defend that record, so an invented peak holds the heat back for weeks. The rule
+        # already existed for the first hour after startup - "it began before we could watch it" -
+        # and simply was not applied to an hour whose middle nobody watched either.
+        if longest_gap > MAX_BILLING_OBSERVATION_GAP_SECONDS:
+            return None
 
         return CompletedBillingPeriod(
             mean_power_kw=weighted / (period_end - self._absolute_start).total_seconds(),

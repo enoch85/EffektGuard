@@ -68,27 +68,35 @@ def test_a_flat_hour_is_billed_at_its_flat_power():
 def test_the_mean_is_time_weighted_not_sample_counted():
     """THE DIVERGENCE. This is the test the simulator's own formula could not pass.
 
-    Home Assistant's update cycle is not a metronome: it jitters, it is delayed under load, and a
-    restart drops samples entirely. Here 1 kW stands for 55 minutes and 9 kW for the last 5.
+    Home Assistant's update cycle is not a metronome: it jitters and it is delayed under load, so the
+    samples in an hour are not evenly spaced and their arithmetic mean is not the hour's mean power.
 
-        time-weighted (what the grid bills):  (1*55 + 9*5) / 60  = 1.67 kW
-        arithmetic mean of the samples:       (1 + 9) / 2        = 5.00 kW
+        readings   1 kW at :00, :15, :30, then 9 kW at :45 and :55
+        spans      15, 15, 15, 10, and 5 minutes to the boundary
 
-    Three times the truth, and it would be persisted as the month's peak and defended for weeks. The
-    harness computed the second number. It only ever agreed with the first because the harness's own
-    clock ticks a perfectly uniform five minutes - which Home Assistant does not.
+        time-weighted (what the grid bills):  (1*45 + 9*15) / 60  = 3.0 kW
+        arithmetic mean of the samples:       (1+1+1+9+9) / 5     = 4.2 kW
+
+    The second number is 40% high, and it would be persisted as the month's peak and defended for
+    weeks. The harness computed the second number. It only ever agreed with the first because the
+    harness's clock ticks a perfectly uniform five minutes - which Home Assistant's does not.
+
+    NOTE the gaps here are all within MAX_BILLING_OBSERVATION_GAP_MINUTES. An earlier version of this
+    test made the point with a single 55-minute gap, which is a far more vivid illustration and also
+    an hour the meter slept through - the accumulator now refuses to bill those at all, and rightly.
+    The arithmetic has to be demonstrable on an hour that was actually observed.
     """
     accumulator = BillingPeriodAccumulator()
 
-    accumulator.add(_local(2026, 1, 15, 10, 0), 1.0)
-    accumulator.add(_local(2026, 1, 15, 10, 55), 9.0)  # a single late sample
+    for minute, power in ((0, 1.0), (15, 1.0), (30, 1.0), (45, 9.0), (55, 9.0)):
+        accumulator.add(_local(2026, 1, 15, 10, minute), power)
     completed = accumulator.add(_local(2026, 1, 15, 11, 0), 1.0)
 
     assert completed is not None
-    assert completed.mean_power_kw == pytest.approx((1.0 * 55 + 9.0 * 5) / 60), (
-        f"the hour was billed at {completed.mean_power_kw:.2f} kW. 1 kW stood for 55 minutes and "
-        f"9 kW for five; the grid bills the time-weighted mean, 1.67 kW. Counting samples instead "
-        f"gives 5.00 kW - three times the truth, persisted as the month's peak."
+    assert completed.mean_power_kw == pytest.approx((1.0 * 45 + 9.0 * 15) / 60), (
+        f"the hour was billed at {completed.mean_power_kw:.2f} kW. 1 kW stood for 45 minutes and "
+        f"9 kW for fifteen; the grid bills the time-weighted mean, 3.0 kW. Counting samples instead "
+        f"gives 4.2 kW - 40% high, persisted as the month's peak."
     )
 
 

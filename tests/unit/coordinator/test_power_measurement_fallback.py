@@ -658,7 +658,22 @@ class TestTheBillingPeriodMeanIsAnHour:
     async def test_irregular_samples_use_a_time_weighted_mean(
         self, coordinator_with_external_meter, monkeypatch
     ):
-        """A sample that stands for 50 minutes must not weigh the same as one standing for 5."""
+        """A sample that stands for 15 minutes must not weigh the same as one standing for 5.
+
+        The claim - the hour's mean is time-weighted, not sample-counted - is unchanged. The SCENARIO
+        had to change. It used to read 1 kW at :00, 9 kW at :01 and 1 kW at :59, which is a
+        FIFTY-EIGHT MINUTE gap between two readings. That is not an irregular sample, it is a meter
+        that stopped answering: the coordinator now refuses to bill an hour containing a silence
+        longer than MAX_BILLING_OBSERVATION_GAP_MINUTES, because stretching one reading across most
+        of an hour invents a peak rather than measuring one (see
+        test_an_hour_the_meter_slept_through_is_not_a_bill.py).
+
+        So the arithmetic is demonstrated on an hour that was actually OBSERVED. Every gap below is
+        within the limit, and the two formulas still disagree by 40%:
+
+            time-weighted:   (1*45 + 9*15) / 60  = 3.0 kW   <- what the grid bills
+            sample-counted:  (1+1+1+9+9) / 5     = 4.2 kW
+        """
         from datetime import datetime, timezone
 
         from homeassistant.util import dt as dt_util
@@ -667,8 +682,8 @@ class TestTheBillingPeriodMeanIsAnHour:
         coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
         nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
 
-        # 1 kW for 1 minute, then 9 kW for 58, then 1 kW for the last minute.
-        for watts, minute in (("1000", 0), ("9000", 1), ("1000", 59)):
+        # 1 kW standing for 45 minutes, then 9 kW for the last 15.
+        for watts, minute in (("1000", 0), ("1000", 15), ("1000", 30), ("9000", 45), ("9000", 55)):
             state = MagicMock()
             state.state = watts
             state.attributes = {"unit_of_measurement": "W"}
@@ -688,5 +703,7 @@ class TestTheBillingPeriodMeanIsAnHour:
         await coordinator._update_peak_tracking(nibe_data)
 
         recorded = coordinator.effect.record_period_measurement.await_args.kwargs
-        # 1 kW for 1 min + 9 kW for 58 min + 1 kW for 1 min = (1 + 522 + 1) / 60
-        assert recorded["power_kw"] == pytest.approx((1 + 9 * 58 + 1) / 60)
+        assert recorded["power_kw"] == pytest.approx((1 * 45 + 9 * 15) / 60), (
+            f"billed {recorded['power_kw']:.2f} kW. 1 kW stood for 45 minutes and 9 kW for fifteen: "
+            f"the hour's mean power is 3.0 kW. Counting the samples instead gives 4.2."
+        )

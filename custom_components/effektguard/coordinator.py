@@ -46,6 +46,7 @@ from .const import (
     DM_THRESHOLD_START,
     DOMAIN,
     BILLABLE_POWER_SOURCES,
+    MAX_BILLING_OBSERVATION_GAP_MINUTES,
     PEAK_CONTROL_POWER_SOURCES,
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MIN_DHW_TARGET_TEMP,
@@ -2187,11 +2188,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # It has answered before and is not answering now. Everything below still runs -
                     # the decision layers need SOME power figure - but the source stays unbillable,
                     # so nothing invented here reaches the tariff record.
+                    # This used to say "Peak billing is suspended until it does", and it was not: no
+                    # sample is taken from an estimate, which is what that sentence was guarding, but
+                    # the billing hour carried on regardless and was billed when it closed, using
+                    # whatever the meter last said before it went quiet, stretched across the whole
+                    # silence. Now the hour is genuinely refused if the silence is long enough - see
+                    # MAX_BILLING_OBSERVATION_GAP_MINUTES - so the log can say what the code does.
                     _LOGGER.warning(
-                        "External power meter %s did not yield a reading (state: %s). Peak billing "
-                        "is suspended until it does - estimates are not billable.",
+                        "External power meter %s did not yield a reading (state: %s). This cycle is "
+                        "not billable, and if the silence exceeds %d minutes the whole hour is "
+                        "refused rather than billed on a stale reading.",
                         power_entity_id,
                         power_state.state if power_state else "None",
+                        MAX_BILLING_OBSERVATION_GAP_MINUTES,
                     )
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
