@@ -730,6 +730,7 @@ def simulate(
         "sign_flips": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
+        "layer_votes": {},
         "compressor_elec_metered_kwh": 0.0,
         "compressor_elec_owed_kwh": 0.0,
     }
@@ -881,6 +882,16 @@ def simulate(
                     current_power=power_kw,
                 )
                 calc_offset = decision.offset
+                # WHICH LAYERS ACTUALLY VOTED. "5/5 PASS" says nothing about a layer that never
+                # fired - and this harness has already shipped a run where the Peak layer voted
+                # weight 0.00 in all 8928 steps of every run ever made, while reporting PASS. A
+                # green run over silent code is not evidence, and the only way to know which it is
+                # is to count.
+                for layer in decision.layers:
+                    if layer.weight > 0.0:
+                        stats["layer_votes"][layer.name] = (
+                            stats["layer_votes"].get(layer.name, 0) + 1
+                        )
             except Exception as err:  # noqa: BLE001 - we are hunting bugs
                 stats["exceptions"] += 1
                 violations.append(
@@ -1270,7 +1281,13 @@ def main() -> int:
             indent=1,
         )
         json.dump(trace, open(OUT_DIR / f"trace-{tag}.json", "w"))
+        votes = stats.pop("layer_votes", {})
         print(f"[{tag}] {json.dumps(stats)}")
+        if votes:
+            ranked = sorted(votes.items(), key=lambda kv: -kv[1])
+            total = max(days * 24 * 60 // STEP_MIN, 1)
+            share = ", ".join(f"{n} {100 * h / total:.0f}%" for n, h in ranked)
+            print(f"[{tag}] layers that voted: {share}")
         if violations:
             print(f"[{tag}] first violations: {violations[:5]}")
         if failures:
