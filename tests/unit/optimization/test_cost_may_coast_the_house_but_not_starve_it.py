@@ -30,6 +30,8 @@ layer that can see the problem at all.
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from custom_components.effektguard.const import (
@@ -85,7 +87,7 @@ class TestInsideTheBandCostIsFree:
             LayerDecision(name=COMFORT_LAYER_NAME, offset=0.0, weight=0.0, reason="At target"),
         ]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=False)
+        offset = engine._aggregate_layers(layers, starvation=0.0)
 
         assert offset == pytest.approx(PRICE_OFFSET_PEAK), (
             f"A PEAK quarter with the house at target commanded {offset:+.2f} instead of "
@@ -98,7 +100,7 @@ class TestInsideTheBandCostIsFree:
         engine = _engine()
         layers = [_price_at_peak(), _comfort_wanting_heat(offset=0.2)]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=False)
+        offset = engine._aggregate_layers(layers, starvation=0.0)
 
         assert offset == pytest.approx(PRICE_OFFSET_PEAK)
 
@@ -111,7 +113,7 @@ class TestOutsideTheBandCostMustYield:
         comfort = _comfort_wanting_heat(offset=0.9)
         layers = [_price_at_peak(), comfort]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=True)
+        offset = engine._aggregate_layers(layers, starvation=1.0)
 
         assert offset >= comfort.offset, (
             f"The house is below its comfort band and the price layer commanded {offset:+.2f} C - "
@@ -127,7 +129,7 @@ class TestOutsideTheBandCostMustYield:
         engine = _engine()
         layers = [_price_at_peak(), _comfort_wanting_heat(offset=comfort_demand)]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=True)
+        offset = engine._aggregate_layers(layers, starvation=1.0)
 
         assert offset == pytest.approx(comfort_demand)
 
@@ -138,7 +140,7 @@ class TestOutsideTheBandCostMustYield:
         engine = _engine()
         layers = [_price_at_peak(), _comfort_wanting_heat(offset=0.9)]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=True)
+        offset = engine._aggregate_layers(layers, starvation=1.0)
 
         assert offset <= 0.9, "the floor must not become a heat SOURCE"
 
@@ -159,7 +161,7 @@ class TestTheFloorNeverWeakensSafety:
             _comfort_wanting_heat(offset=0.9),
         ]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=True)
+        offset = engine._aggregate_layers(layers, starvation=1.0)
 
         assert offset == pytest.approx(SAFETY_EMERGENCY_OFFSET)
 
@@ -177,7 +179,7 @@ class TestTheFloorNeverWeakensSafety:
             _comfort_wanting_heat(offset=0.9),
         ]
 
-        offset = engine._aggregate_layers(layers, below_comfort_band=True)
+        offset = engine._aggregate_layers(layers, starvation=1.0)
 
         assert offset == pytest.approx(SAFETY_EMERGENCY_OFFSET), (
             "With a non-cost layer also voting at critical weight, the tie-break already had a "
@@ -201,3 +203,98 @@ class TestTheFloorNeverWeakensSafety:
             )
             is False
         )
+
+
+class TestTheFloorIsRampedNotSwitched:
+    """A boolean on a temperature threshold is a bang-bang controller, and I shipped one.
+
+    The first version of this floor was `below_comfort_band: bool`, evaluated at
+    `target - tolerance_range`. AT that boundary the comfort layer is asking for nothing, so
+    "floor at comfort" meant "jump to zero", and driving the real engine across it gave:
+
+        indoor 20.80 C  ->  offset -10.00      cost layer free
+        indoor 20.79 C  ->  offset  +0.01      floored at comfort
+
+    A hundredth of a degree flipping the command by ten degrees. Real indoor sensors dither by more
+    than that, so the house would sit on the boundary flipping the curve between its extremes -
+    and every flip is a Modbus write to a real heat pump.
+
+    The ramp fixes it by construction: at the boundary the floor IS the cost layer's own vote, so
+    nothing moves, and it climbs to the comfort layer's demand as the house leaves the band the
+    owner actually asked for.
+    """
+
+    def _sweep(self, engine, comfort_offset: float = 0.2):
+        """The final offset as the house cools through the band, driving the real engine."""
+        results = []
+        for indoor in [21.00 - i * 0.01 for i in range(0, 61)]:
+            nibe = MagicMock()
+            nibe.indoor_temp = indoor
+            nibe.indoor_temp_valid = True
+            layers = [_price_at_peak(), _comfort_wanting_heat(offset=comfort_offset)]
+            starvation = engine._starvation_fraction(nibe)
+            results.append((indoor, engine._aggregate_layers(layers, starvation=starvation)))
+        return results
+
+    def test_no_hundredth_of_a_degree_moves_the_command_by_more_than_a_degree(self):
+        """The defect, stated as the invariant it violates. It moved it by ten."""
+        engine = _engine()
+        sweep = self._sweep(engine)
+
+        jumps = [
+            (a_temp, b_temp, abs(b_off - a_off))
+            for (a_temp, a_off), (b_temp, b_off) in zip(sweep, sweep[1:])
+            if abs(b_off - a_off) > 1.0
+        ]
+
+        assert not jumps, (
+            "The control law is discontinuous. A 0.01 C step in indoor temperature moves the "
+            "commanded curve offset by: "
+            + ", ".join(f"{d:.2f} C between {a:.2f} and {b:.2f}" for a, b, d in jumps)
+            + ". A real indoor sensor dithers by more than 0.01 C, so the house sits on that "
+            "boundary flipping the curve between its extremes, writing to the pump every cycle."
+        )
+
+    def test_at_the_inner_edge_the_cost_layer_is_still_free(self):
+        """The thermal battery must not be narrowed by the ramp. Above the inner band, nothing."""
+        engine = _engine()
+        nibe = MagicMock()
+        nibe.indoor_temp = engine.target_temp - engine.tolerance_range  # exactly the inner edge
+        nibe.indoor_temp_valid = True
+
+        assert engine._starvation_fraction(nibe) == 0.0
+        assert engine._aggregate_layers(
+            [_price_at_peak(), _comfort_wanting_heat(offset=0.2)],
+            starvation=engine._starvation_fraction(nibe),
+        ) == pytest.approx(PRICE_OFFSET_PEAK)
+
+    def test_at_the_band_the_owner_asked_for_the_comfort_layer_has_the_floor(self):
+        """The other end of the ramp. `tolerance` is the owner's own limit and it is honoured."""
+        engine = _engine()
+        nibe = MagicMock()
+        nibe.indoor_temp = engine.target_temp - engine.tolerance  # 20.5 at the defaults
+        nibe.indoor_temp_valid = True
+
+        assert engine._starvation_fraction(nibe) == 1.0
+        assert engine._aggregate_layers(
+            [_price_at_peak(), _comfort_wanting_heat(offset=0.4)],
+            starvation=engine._starvation_fraction(nibe),
+        ) == pytest.approx(0.4)
+
+    def test_the_ramp_is_monotone(self):
+        """Colder house, higher floor. Never the reverse."""
+        offsets = [offset for _, offset in self._sweep(_engine())]
+
+        assert offsets == sorted(offsets), (
+            "The floor must rise monotonically as the house cools. It does not: "
+            f"{[round(o, 2) for o in offsets]}"
+        )
+
+    def test_an_invalid_indoor_reading_abstains(self):
+        """Without a reading this cannot be measured, and nothing else can see it either."""
+        engine = _engine()
+        nibe = MagicMock()
+        nibe.indoor_temp = 15.0  # would be deeply starved, if it were believable
+        nibe.indoor_temp_valid = False
+
+        assert engine._starvation_fraction(nibe) == 0.0

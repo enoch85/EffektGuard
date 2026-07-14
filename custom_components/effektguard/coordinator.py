@@ -58,6 +58,7 @@ from .const import (
     QUARTER_INTERVAL_MINUTES,
     STORAGE_KEY_LEARNING,
     STORAGE_VERSION,
+    TOLERANCE_RANGE_MULTIPLIER,
     STARTUP_GRACE_MIN_INTERVAL,
     STARTUP_MAX_GRACE_ATTEMPTS,
     STARTUP_GRACE_UPDATES,
@@ -2472,7 +2473,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         if "tolerance" in options:
             self.engine.tolerance = float(options["tolerance"])
-            self.engine.tolerance_range = self.engine.tolerance * 0.4  # Recalculate range
+            # The constant, not a second copy of 0.4. A number that lives in two places is a
+            # number that will eventually disagree with itself.
+            self.engine.tolerance_range = self.engine.tolerance * TOLERANCE_RANGE_MULTIPLIER
             _LOGGER.debug(
                 "Updated tolerance: %.1f (range: %.1f°C)",
                 self.engine.tolerance,

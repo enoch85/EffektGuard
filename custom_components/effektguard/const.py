@@ -549,9 +549,19 @@ THERMAL_MASS_CONCRETE_UFH_THRESHOLD: Final = 1.5  # >= 1.5 = concrete underfloor
 THERMAL_MASS_TIMBER_UFH_THRESHOLD: Final = 1.2  # >= 1.2 = timber underfloor heating
 # Below 1.2 defaults to radiator heating
 
-# Tolerance range multiplier (Oct 19, 2025)
-# Scales user tolerance setting (1-10) to actual temperature range
-TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # Scale: 1-10 -> 0.4-4.0°C
+# THE INNER BAND: how much of the owner's tolerance a cost layer may spend freely.
+#
+# The comment here used to read "Scales user tolerance setting (1-10) to actual temperature range;
+# Scale: 1-10 -> 0.4-4.0°C". There is no 1-10 setting. `tolerance` is DEGREES and always has been -
+# DEFAULT_TOLERANCE is 0.5, and MIN_TARGET_TEMP below is computed as MIN_TEMP_LIMIT + tolerance,
+# which only makes sense in degrees. The comment described a design that never shipped, and it hid
+# what the number actually does.
+#
+# What it does: an owner who asks for +/-0.5 C gets an INNER band of +/-0.2 C inside which the spot
+# and effect layers may coast the house around for free - the thermal battery - and a ramp from
+# there out to the +/-0.5 C they actually asked for, across which the comfort layer progressively
+# takes the floor back. See DecisionEngine._starvation_fraction.
+TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # of the owner's tolerance: 0.5 C -> a 0.2 C free band
 
 # Safety layer emergency offsets (Oct 19, 2025)
 # Used for extreme temperature deviations and absolute DM maximum

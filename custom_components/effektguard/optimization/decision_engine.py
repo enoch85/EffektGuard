@@ -721,16 +721,13 @@ class DecisionEngine:
             comfort_decision,
         ]
 
-        # Is the house actually outside the band the owner asked for? A cost layer is allowed to
-        # coast it around inside that band - that is the thermal battery - but not out of it, and
-        # degree minutes cannot tell the difference (see _aggregate_layers step 4).
-        below_comfort_band = (
-            getattr(nibe_state, "indoor_temp_valid", True)
-            and nibe_state.indoor_temp < self.target_temp - self.tolerance_range
-        )
+        # HOW FAR OUT OF ITS COMFORT BAND IS THE HOUSE? A cost layer is allowed to coast it around
+        # inside that band - that is the thermal battery - but not out of it, and degree minutes
+        # cannot tell the difference (see _aggregate_layers step 4).
+        starvation = self._starvation_fraction(nibe_state)
 
         # Aggregate layers with priority weighting
-        raw_offset = self._aggregate_layers(layers, below_comfort_band=below_comfort_band)
+        raw_offset = self._aggregate_layers(layers, starvation=starvation)
 
         # NEW: Trend-aware damping to prevent overshoot/undershoot
         thermal_trend = self._get_thermal_trend()
@@ -936,9 +933,7 @@ class DecisionEngine:
         """
         return max(MIN_OFFSET, min(offset, MAX_OFFSET))
 
-    def _aggregate_layers(
-        self, layers: list[LayerDecision], below_comfort_band: bool = False
-    ) -> float:
+    def _aggregate_layers(self, layers: list[LayerDecision], starvation: float = 0.0) -> float:
         """Aggregate layer decisions into the final offset.
 
         SAFETY CONTRACT - the invariant this method exists to enforce:
@@ -1035,26 +1030,83 @@ class DecisionEngine:
             # houses the optimiser spent between 4 000 and 33 000 minutes below the comfort band,
             # and a do-nothing controller held target on every one of them.
             #
-            # So a cost layer's heat reduction is floored once the house is outside the band. The
-            # comfort layer's own demand is the floor: it is already graduated by how far out the
-            # house is, and it is the only layer that can see the problem at all.
-            if chosen < 0 and below_comfort_band and self._all_critical_are_cost(critical_layers):
+            # So a cost layer's heat reduction is floored as the house leaves the band. The comfort
+            # layer's own demand is the floor: it is already graduated by how far out the house is,
+            # and it is the only layer that can see the problem at all.
+            #
+            # AND THE FLOOR IS RAMPED IN, NOT SWITCHED ON. The first version of this was a boolean,
+            # and a boolean on a temperature threshold is a bang-bang controller:
+            #
+            #     indoor 20.80 C  ->  offset -10.00      (cost layer free)
+            #     indoor 20.79 C  ->  offset  +0.01      (floored at comfort, which is ~0 there)
+            #
+            # A hundredth of a degree flipped the command by ten degrees. Real indoor sensors
+            # dither by more than that, so the house would sit on the boundary chattering the curve
+            # between its extremes, and every flip is a Modbus write to the pump.
+            #
+            # The discontinuity is inherent to the switch: AT the boundary the comfort layer is
+            # asking for nothing, so "floor at comfort" means "jump to zero". Ramping fixes it by
+            # construction - at the boundary the floor IS the cost layer's own vote, so nothing
+            # moves, and it climbs to the comfort layer's demand as the house actually leaves the
+            # band the owner asked for.
+            if chosen < 0 and starvation > 0.0 and self._all_critical_are_cost(critical_layers):
                 comfort = next(
                     (layer for layer in layers if layer.name == COMFORT_LAYER_NAME), None
                 )
                 if comfort is not None and comfort.offset > chosen:
+                    # `min` states the invariant AND keeps it exact: the floor stops the cut, it
+                    # never becomes a heat source of its own. Without it, the blend at starvation
+                    # 1.0 lands on 0.9000000000000004 rather than comfort's 0.9.
+                    floored = min(comfort.offset, chosen + (comfort.offset - chosen) * starvation)
                     _LOGGER.debug(
-                        "Cost layer asked for %.2f°C with the house outside its comfort band; "
-                        "floored at the comfort layer's %.2f°C",
+                        "Cost layer asked for %.2f°C with the house %.0f%% of the way out of its "
+                        "comfort band; floored at %.2f°C (comfort wants %.2f°C)",
                         chosen,
+                        starvation * 100.0,
+                        floored,
                         comfort.offset,
                     )
-                    chosen = comfort.offset
+                    chosen = floored
 
             return self._clamp_offset(chosen)
 
         # 5. Weighted average of everything else.
         return self._clamp_offset(self._weighted_average(layers))
+
+    def _starvation_fraction(self, nibe_state) -> float:
+        """How far the house has been coasted out of its comfort band, from 0.0 to 1.0.
+
+        THERE ARE TWO BANDS HERE, AND THE DIFFERENCE BETWEEN THEM IS THE RAMP.
+
+            inner = target - tolerance_range     the cost layers' playground. Above this the
+                                                 thermal battery runs free, which is the entire
+                                                 point of the integration.
+            outer = target - tolerance           the band the OWNER actually asked for. At this
+                                                 point a cost layer has spent everything it was
+                                                 lent and the comfort layer's demand is the floor.
+
+        Between them the floor is blended, so the control law is continuous. It used to be a
+        boolean at `inner`, and a boolean on a temperature threshold is a bang-bang controller:
+        indoor 20.80 C gave -10.00 and indoor 20.79 C gave +0.01. A real indoor sensor dithers by
+        more than a hundredth of a degree, so the house sat on that boundary flipping the curve
+        between its extremes, and every flip is a write to the pump.
+
+        Abstains (0.0) when there is no valid indoor reading: without one this cannot be measured,
+        and degree minutes are structurally blind to it - DM = integral(BT25 - S1), so lowering the
+        curve lowers S1 and DM *improves* as the house gets colder.
+        """
+        if not getattr(nibe_state, "indoor_temp_valid", True):
+            return 0.0
+
+        inner = self.target_temp - self.tolerance_range
+        outer = self.target_temp - self.tolerance
+
+        if nibe_state.indoor_temp >= inner:
+            return 0.0
+        if nibe_state.indoor_temp <= outer or inner <= outer:
+            return 1.0
+
+        return (inner - nibe_state.indoor_temp) / (inner - outer)
 
     @staticmethod
     def _all_critical_are_cost(critical_layers: list[LayerDecision]) -> bool:
