@@ -49,6 +49,7 @@ NOT_A_PHYSICAL_CLAIM = frozenset(
     {
         "STEP_MIN",
         "SIM_DAYS",
+        "DST_SIM_DAYS",
         "QUARTER_MINUTES",
         "J_PER_KWH",
         "KELVIN",

@@ -129,6 +129,12 @@ INDOOR_CEILING = 26.0
 TOMORROW_VISIBLE_HOUR = 13  # Nordpool day-ahead published ~12:45 CET
 QUARTER_MINUTES = 15
 SIM_DAYS = 31
+# The --dst run: Sat 24 Oct through Mon 26 Oct 2026, spanning the fall-back night.
+DST_SIM_DAYS = 3
+# 2026-10-25: at 03:00 CEST the clock goes back to 02:00 CET, so the day is 25 hours long and
+# the wall-clock hour 02 is metered twice. From the tz database, not from an assumption.
+DST_FALL_BACK_DAY = "2026-10-25"
+DST_FALL_BACK_HOURS = 25
 
 # CAPACITY AND COP NOW COME FROM THE DATASHEET. See HouseConfig.capacity_kw_at / cop_at.
 #
@@ -586,6 +592,14 @@ PROVENANCE: dict[str, str] = {
         "SOURCED: the F1155 and S1155 are rated at B0 - 0 C incoming brine. Their capacity chart's "
         "x-axis is labelled 'Incoming brine temp, C'. F1155 installer manual IHB EN 2008-5/331379."
     ),
+    "DST_FALL_BACK_HOURS": (
+        "SOURCED: the IANA time zone database (https://www.iana.org/time-zones), zone "
+        "Europe/Stockholm. On 2026-10-25 the offset goes from +02:00 to +01:00 at 03:00 local, so "
+        "the wall-clock hour 02 is metered twice and the day is 25 hours long. EU Directive "
+        "2000/84/EC fixes the transition to the last Sunday of October across the union. Verified "
+        "by stepping the absolute time line through the zone rather than by assuming it: the "
+        "harness counts 25 distinct billing hours on that date and fails the run if it does not."
+    ),
     "EN14825_COLD_DESIGN_C": (
         "SOURCED: EN 14825 cold-climate reference design temperature. NIBE declares a Pdesignh at "
         "this reference for every machine, and the houses are sized from it."
@@ -737,6 +751,7 @@ def _to_gespot_shape(days: dict, ore_per_unit: float) -> dict[str, list[dict[str
     expanded to four identical quarters, which is what an hourly market genuinely
     means for a quarter-hour tariff.
     """
+    utc = zoneinfo.ZoneInfo("UTC")
     out: dict[str, list[dict[str, Any]]] = {}
     for day, raw in days.items():
         entries: list[dict[str, Any]] = []
@@ -745,14 +760,26 @@ def _to_gespot_shape(days: dict, ore_per_unit: float) -> dict[str, list[dict[str
             start = datetime.fromisoformat(item["start"])
             if start.tzinfo is None:
                 start = start.replace(tzinfo=TZ)
-            start = start.astimezone(TZ)
+
+            # THE QUARTERS ARE STEPPED ON THE ABSOLUTE LINE, AND THE FOLD IS WHY.
+            #
+            # This used to convert to Europe/Stockholm and then do
+            # `(start + timedelta(minutes=15 * q)).isoformat()`. Adding a timedelta to an AWARE
+            # datetime is wall-clock arithmetic, and - this is the part that is easy to miss -
+            # `datetime.__add__` RESETS `fold` TO 0. Even at q = 0, where the timedelta is zero.
+            #
+            # So on the night the clocks go back, the second 02:00 (CET, fold=1) came back out of
+            # here stamped +02:00: an exact duplicate of the first 02:00 (CEST), and the CET hour's
+            # prices vanished. The harness then reported that the integration could not price the
+            # repeated hour - a defect in the INSTRUMENT, presented as a defect in the code it was
+            # measuring. The real adapter parses GE-Spot's own timestamps, which carry the right
+            # offset, and compares them interzone (i.e. in UTC); it prices that hour correctly.
+            #
+            # Stepping UTC and converting back keeps each quarter the instant it actually is.
+            base = start.astimezone(utc)
             for q in range(expand):
-                entries.append(
-                    {
-                        "time": (start + timedelta(minutes=QUARTER_MINUTES * q)).isoformat(),
-                        "value": item["price"] * ore_per_unit,
-                    }
-                )
+                moment = (base + timedelta(minutes=QUARTER_MINUTES * q)).astimezone(TZ)
+                entries.append({"time": moment.isoformat(), "value": item["price"] * ore_per_unit})
         out[day] = entries
     return out
 
@@ -773,24 +800,47 @@ def load_live_se4() -> tuple[dict[str, list[dict[str, Any]]], str]:
     return days, attrs["unit_of_measurement"]
 
 
-def load_data(selftest: bool, live_se4: bool = False):
-    """Load real weather + prices, or synthetic 2-day data for --selftest."""
+def _synthetic_days(start: datetime, days: int):
+    """Synthetic weather + quarter-hourly prices, generated on the ABSOLUTE time line.
+
+    Everything here steps UTC and converts back, because the wall clock is not a uniform ruler. The
+    day the clocks go back is 25 hours long and carries 100 quarter-hour prices, not 96 - and a
+    generator that assumes 96 would quietly manufacture a day that no market ever published, which
+    is the opposite of what a harness is for.
+    """
+    start_absolute = start.astimezone(zoneinfo.ZoneInfo("UTC"))
+    end_absolute = (start + timedelta(days=days)).astimezone(zoneinfo.ZoneInfo("UTC"))
+
+    hours = int((end_absolute - start_absolute).total_seconds() // 3600)
+    times = [(start_absolute + timedelta(hours=h)).astimezone(TZ) for h in range(hours)]
+    temps = [-5.0 + 4.0 * ((t.hour % 24) / 24.0) for t in times]
+
+    raw: dict = {}
+    quarters = int((end_absolute - start_absolute).total_seconds() // (60 * QUARTER_MINUTES))
+    for q in range(quarters):
+        moment = (start_absolute + timedelta(minutes=QUARTER_MINUTES * q)).astimezone(TZ)
+        # The expensive blocks are wall-clock ones (morning and evening peaks), so they are keyed
+        # off the LOCAL quarter-of-day - which is what a price area actually does.
+        local_quarter = moment.hour * 4 + moment.minute // QUARTER_MINUTES
+        price = 500.0 + 400.0 * (1 if 28 <= local_quarter <= 40 or 68 <= local_quarter <= 80 else 0)
+        raw.setdefault(moment.date().isoformat(), []).append(
+            {"start": moment.isoformat(), "price": price}
+        )
+    return times, temps, _to_gespot_shape(raw, ORE_PER_KWH_FROM_SEK_PER_MWH), GESPOT_UNIT_ORE
+
+
+def load_data(selftest: bool, live_se4: bool = False, dst: bool = False):
+    """Load real weather + prices, or synthetic data for --selftest / --dst."""
+    if dst:
+        # The last Sunday of October 2026: at 03:00 CEST the clock goes back to 02:00 CET, so the
+        # wall-clock hour 02 happens TWICE and the day is 25 hours long. This is the day on which
+        # the coordinator used to DELETE a billing hour - see
+        # tests/unit/coordinator/test_the_billing_hour_survives_the_clocks_going_back.py - and the
+        # harness could not see it, because its own clock advanced by wall time and its tariff
+        # periods were keyed on (date, hour), which those two hours share.
+        return _synthetic_days(datetime(2026, 10, 24, tzinfo=TZ), 3)
     if selftest:
-        start = datetime(2026, 1, 1, tzinfo=TZ)
-        hours = 48
-        temps = [-5.0 + 4.0 * ((h % 24) / 24.0) for h in range(hours)]
-        times = [start + timedelta(hours=h) for h in range(hours)]
-        raw = {}
-        for d in range(2):
-            day = (start + timedelta(days=d)).date().isoformat()
-            raw[day] = [
-                {
-                    "start": (start + timedelta(days=d, minutes=15 * q)).isoformat(),
-                    "price": 500.0 + 400.0 * (1 if 28 <= q <= 40 or 68 <= q <= 80 else 0),
-                }
-                for q in range(96)
-            ]
-        return times, temps, _to_gespot_shape(raw, ORE_PER_KWH_FROM_SEK_PER_MWH), GESPOT_UNIT_ORE
+        return _synthetic_days(datetime(2026, 1, 1, tzinfo=TZ), 2)
 
     weather = json.load(open(DATA_DIR / "weather_jan2026.json"))
     times = [
@@ -1064,13 +1114,32 @@ def simulate(
     period_samples: list[float] = []
     period_id = None
     daily_peaks: dict = {}  # date -> max HOURLY-mean kW (the billed quantity)
+    # date -> the set of DISTINCT billing hours seen on it. A day is not always 24 hours long,
+    # and the tariff bills every hour the meter recorded: the fall-back day has 25 and the
+    # spring-forward day 23. Counting them is how this harness proves it is actually TRAVERSING
+    # the transition rather than merely surviving it - a flat night load is priced identically
+    # whether the repeated hour is billed once or twice, so the tariff figure alone cannot tell.
+    billing_hours: dict = {}
     # Highest completed quarter-hour MEAN so far: what the coordinator publishes as
     # peak_this_month, and therefore what the effect layer is defending. Starts at
     # zero, as it does on a fresh install.
     running_peak_kw = 0.0
 
+    # THE CLOCK ADVANCES ON THE ABSOLUTE TIME LINE, NOT THE WALL CLOCK.
+    #
+    # This was `now = start + timedelta(minutes=STEP_MIN * step)`, and `start` is aware
+    # (Europe/Stockholm). Adding a timedelta to an AWARE datetime is WALL-CLOCK arithmetic: the
+    # digits advance uniformly and the UTC offset is recomputed from wherever they land. Real time
+    # does not work that way. Across a spring-forward that clock walks through a wall time that never
+    # happened; across a fall-back it passes the repeated hour once instead of twice.
+    #
+    # So the harness could not have experienced a DST transition honestly even if pointed straight
+    # at one - and the coordinator bug that deleted a billing hour on the fall-back night (a peak of
+    # 9 kW recorded as 1) would have been invisible to it. Step UTC; derive local from it.
+    start_absolute = start.astimezone(zoneinfo.ZoneInfo("UTC"))
+
     for step in range(steps):
-        now = start + timedelta(minutes=STEP_MIN * step)
+        now = (start_absolute + timedelta(minutes=STEP_MIN * step)).astimezone(TZ)
         # Freeze engine wall clock to sim time
         dt_util.now = lambda tz=None, _n=now: _n
         dt_util.utcnow = lambda _n=now: _n.astimezone(zoneinfo.ZoneInfo("UTC"))
@@ -1424,7 +1493,19 @@ def simulate(
         # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
         # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
         # 9 - so every tariff figure it produced was up to fourfold too high.
-        this_period = (now.date(), now.hour)
+        # (local date, local hour, ABSOLUTE hour). The first two are what the readers below want -
+        # "one peak per day" is a calendar rule and the night discount is a wall-clock one, and both
+        # calendars are local. The third is what makes the key UNIQUE: `(date, hour)` alone is
+        # ambiguous on the night the clocks go back, when the two 02:00 hours are separately metered
+        # and separately billable and share those digits. That ambiguity is the exact bug this
+        # harness failed to catch in the coordinator.
+        this_period = (
+            now.date(),
+            now.hour,
+            now.astimezone(zoneinfo.ZoneInfo("UTC")).replace(minute=0, second=0, microsecond=0),
+        )
+        billing_hours.setdefault(now.date(), set()).add(this_period[2])
+
         if period_id is not None and this_period != period_id:
             q_mean = sum(period_samples) / len(period_samples)
             day = period_id[0]
@@ -1484,6 +1565,9 @@ def simulate(
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
     stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)
+    stats["billing_hours_by_day"] = {
+        day.isoformat(): len(hours) for day, hours in sorted(billing_hours.items())
+    }
     stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
     stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)
 
@@ -1710,11 +1794,13 @@ def main() -> int:
     tuned_curve = "--tuned-baseline" in sys.argv
     undersized = "--undersized" in sys.argv
     no_forecast = "--no-forecast" in sys.argv
+    dst = "--dst" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
-    days = 2 if selftest else SIM_DAYS
-    times, temps, price_days, unit = load_data(selftest, live_se4)
+    # --dst spans the fall-back weekend: 3 days, one of them 25 hours long.
+    days = DST_SIM_DAYS if dst else (2 if selftest else SIM_DAYS)
+    times, temps, price_days, unit = load_data(selftest, live_se4, dst)
     if coldsnap:
         temps = apply_coldsnap(times, temps)
     OUT_DIR.mkdir(exist_ok=True)
@@ -1770,6 +1856,8 @@ def main() -> int:
             tag += "-noweather"
         if no_forecast:
             tag += "-noforecast"
+        if dst:
+            tag += "-dst"
         if tuned_curve:
             tag += "-tuned"
 
@@ -1777,6 +1865,25 @@ def main() -> int:
         # expected to breach comfort - that is the point of it - so it reports but
         # does not gate.
         failures = [] if (baseline or battery) else check_invariants(tag, stats, violations, house)
+
+        if dst:
+            # THE DST RUN MUST BE ABLE TO FAIL, OR IT IS DECORATION.
+            #
+            # A green --dst run proves very little on its own: the October night load is flat and
+            # low, so merging the two 02:00 hours into one two-hour period produces the SAME mean,
+            # the same tariff figure, and the same PASS. I checked - reverting the harness's period
+            # key to the ambiguous `(date, hour)` moved not one of the reported numbers.
+            #
+            # What the merge DOES change is how many billable hours the day contains. A fall-back
+            # day has 25. Count them, and the run can fail for the reason it exists.
+            hours_on_the_long_day = stats["billing_hours_by_day"].get(DST_FALL_BACK_DAY)
+            if hours_on_the_long_day != DST_FALL_BACK_HOURS:
+                failures.append(
+                    f"{DST_FALL_BACK_DAY} was billed as {hours_on_the_long_day} hours. The clocks "
+                    f"go back that night, so it is {DST_FALL_BACK_HOURS} hours long and every one "
+                    f"of them is separately metered. Billing 24 means the two 02:00 hours - which "
+                    f"print the same digits and are an hour apart - were merged into one."
+                )
 
         json.dump(
             {
