@@ -29,6 +29,21 @@ pinned at maximum and BT25 can never catch it.
 A DO-NOTHING CONTROLLER IS BETTER THAN THIS. It spends seven samples past the aux limit; the
 optimiser spends 178.
 
+AND THE RECOVERY LADDER IS OTHERWISE UNVALIDATED BY SIMULATION. The harness now reports which
+layers actually voted in each run, and the picture is stark:
+
+  * four of the five houses pass the cold snap and NEVER engage the emergency ladder at all - only
+    the proactive Z-tiers fire. The thermal-debt tiers, T1/T2/T3 and the anti-windup never run.
+  * give the F2040 a correctly SIZED house (160 W/K instead of 220) and it passes the same cold
+    snap with the ladder still silent.
+  * the ONLY scenario in which the ladder fires is the one above - the saturated pump - and that
+    scenario FAILS.
+
+So there is no run anywhere in which the recovery ladder engages and RECOVERS. The simulator cannot
+currently tell anyone whether it works; it can only show that when it does fire, it makes things
+worse. Nobody should claim a green simulation validates the degree-minute recovery tiers, and I
+nearly did.
+
 WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup that the owner
 wrote for exactly this failure mode - and that bypass is documented twice, in his own code, as
 intentional. Changing it means deciding what a heat pump should do when it physically cannot meet
