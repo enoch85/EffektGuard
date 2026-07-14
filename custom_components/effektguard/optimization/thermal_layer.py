@@ -108,7 +108,7 @@ from ..const import (
     DM_RECOVERY_RATE_MILD,
     DM_RECOVERY_RATE_VERY_COLD,
 )
-from .climate_zones import ClimateZoneDetector
+from .climate_zones import ClimateZoneDetector, keep_triggers_clear_of_the_compressor_band
 from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
@@ -339,6 +339,13 @@ def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
     over and the emergency layer picking up there was a band of degree minutes in which NEITHER
     responded. A threshold is a property of the house, not of the layer that happens to read it.
 
+    THE DIVIDE CAN UNDO THE WARM-SIDE CEILING, so the ceiling is re-applied here rather than only
+    in `get_expected_dm_range`. In July the base warning is already at the ceiling (-110), and
+    -110 / 1.3 = -85 is back inside the band the compressor cycles through on its own - so a
+    concrete-slab house a fraction under target on a warm morning was told it was in thermal debt
+    and given +4.0 C of curve offset. Clamping the number BEFORE the last thing that changes it is
+    no clamp at all; the invariant has to hold on the value the layers actually read.
+
     Args:
         base_thresholds: Climate-aware thresholds from ClimateZoneDetector
         heating_type: "radiator", "concrete_ufh", "concrete_slab", "timber", "timber_ufh"
@@ -353,13 +360,15 @@ def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
     else:
         multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR
 
-    return {
-        "normal_min": base_thresholds["normal_min"] / multiplier,
-        "normal_max": base_thresholds["normal_max"] / multiplier,
-        "warning": base_thresholds["warning"] / multiplier,
-        # The auxiliary-heat limit is hardware. It is the same for every emitter.
-        "critical": base_thresholds["critical"],
-    }
+    return keep_triggers_clear_of_the_compressor_band(
+        {
+            "normal_min": base_thresholds["normal_min"] / multiplier,
+            "normal_max": base_thresholds["normal_max"] / multiplier,
+            "warning": base_thresholds["warning"] / multiplier,
+            # The auxiliary-heat limit is hardware. It is the same for every emitter.
+            "critical": base_thresholds["critical"],
+        }
+    )
 
 
 class EmergencyLayer:
