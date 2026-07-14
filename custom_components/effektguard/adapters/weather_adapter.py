@@ -21,7 +21,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
-from ..const import CONF_WEATHER_ENTITY
+from ..const import CONF_WEATHER_ENTITY, WEATHER_FORECAST_PERIOD_HOURS
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -278,8 +278,28 @@ class WeatherAdapter:
                 _LOGGER.debug("Skipping invalid forecast entry: %s", err)
                 continue
 
+        # FUTURE ONLY, AND IN ORDER. Every layer slices this list positionally - `[:3]` for the
+        # cold-snap trigger, `[:24]` for unusual weather - and reads index N as "N hours from now".
+        # The entries the weather entity publishes are not necessarily future, or sorted: many
+        # integrations put the current period first, and one that has stalled holds a forecast whose
+        # every hour is in the past while its entity stays perfectly "available". See const.py.
+        cutoff = dt_util.utcnow() - timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS)
+        stale = len(forecast_hours)
+        forecast_hours = sorted(
+            (hour for hour in forecast_hours if hour.datetime > cutoff),
+            key=lambda hour: hour.datetime,
+        )
+        dropped = stale - len(forecast_hours)
+        if dropped:
+            _LOGGER.debug("Dropped %d forecast hours that had already passed", dropped)
+
         if not forecast_hours:
-            _LOGGER.warning("No valid forecast hours parsed")
+            _LOGGER.warning(
+                "Weather entity %s has no forecast hours left in the future - every period it "
+                "published has already passed. Treating it as no forecast at all rather than "
+                "pre-heating on weather from hours ago.",
+                self._weather_entity,
+            )
             return None
 
         # Validate forecast length

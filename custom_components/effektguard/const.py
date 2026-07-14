@@ -707,6 +707,26 @@ PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
+
+# THE FORECAST WAS NEVER FILTERED TO THE FUTURE, AND EVERY LAYER SLICES IT POSITIONALLY.
+#
+# `WeatherData.forecast_hours` is documented as "Next 24-48 hours", and every consumer reads it that
+# way - `forecast_hours[:3]` for the cold-snap trigger, `[:24]` for unusual-weather detection,
+# `[:horizon]` for the pre-heat. But the adapter appended EVERY entry the weather entity published,
+# including the ones already in the past. Many integrations publish the current period first, and a
+# weather integration that has stalled holds its last forecast for as long as it stays "available".
+#
+# So with a forecast that starts six hours ago, `forecast_hours[:3]` is the weather from six hours
+# AGO - and a cold snap an hour away sits outside every horizon anyone looks at. That is precisely
+# the case the pre-heat exists for: "we need to pre-heat super early if we know a cold snap is
+# coming, I mean like DAYS ahead."
+#
+# Entries whose hour has already ENDED are dropped. The current hour is kept - a period that began
+# 40 minutes ago is still the weather now - and `WeatherData.current_temp` carries the present
+# reading separately in any case. A forecast entirely in the past becomes an EMPTY one, which is
+# exactly right: the layers already abstain when there is no forecast, and a frozen forecast is not
+# a forecast.
+WEATHER_FORECAST_PERIOD_HOURS: Final = 1.0  # each forecast entry covers one hour
 WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
 LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)

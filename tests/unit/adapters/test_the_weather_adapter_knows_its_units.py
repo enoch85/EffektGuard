@@ -19,16 +19,21 @@ an imperial HA install gets this.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from unittest.mock import MagicMock
 
 import pytest
 from homeassistant.const import UnitOfTemperature
+from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.const import CONF_WEATHER_ENTITY
 
-NOW = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+# The adapter now drops forecast hours that have already passed - a stalled weather integration
+# holds a forecast whose every hour is in the past while its entity stays perfectly "available",
+# and every layer reads this list positionally as "the next N hours". So a fixture must build its
+# forecast relative to the REAL now; a hardcoded date is not a forecast, it is a memory.
+NOW = dt_util.utcnow()
 
 # -5 C, -10 C, -15 C: a Nordic cold snap, spelled in each unit system.
 COLD_SNAP_C = [-5.0, -10.0, -15.0]
