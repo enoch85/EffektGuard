@@ -1101,7 +1101,7 @@ ATTR_TARGET_TEMP: Final = "target_temp"
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 #
 # Temperature hierarchy:
-# - 20°C (DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
+# - 20°C (DHW_SAFETY_CRITICAL): below this, price is no longer a reason to wait
 # - 30°C (DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
 # - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
 # - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
@@ -1336,7 +1336,26 @@ NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 15  # Minimum minutes to run enh
 # the oscillation rather than preventing it.
 NIBE_VENTILATION_MIN_REST_DURATION: Final = 15  # Minimum minutes at normal before re-enhancing
 
-DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
+# "HARD FLOOR, ALWAYS HEAT BELOW THIS" IS WHAT THIS SAID, AND IT IS NOT TRUE.
+#
+# Below 20 C the optimizer stops WAITING FOR A CHEAPER PRICE. It does not heat unconditionally, and
+# it must not: two things still outrank the hot water, and both are deliberate.
+#
+#   * CRITICAL THERMAL DEBT. Running a DHW cycle takes the compressor away from space heating, and
+#     doing that while the house is already in deep degree-minute debt is how a recoverable debt
+#     becomes an immersion-heater one.
+#   * THE HOUSE ITSELF BEING BELOW ITS SAFETY FLOOR. The owner's rule, in his own words: "DHW wins,
+#     but never below safety."
+#
+# Verified by driving the real scheduler at 15 C - five degrees under this "hard floor":
+#
+#     DHW 15 C, DM  -150, indoor 21.0  ->  heats            (DHW_SAFETY_MINIMUM)
+#     DHW 15 C, DM -1400, indoor 21.0  ->  does NOT heat    (CRITICAL_THERMAL_DEBT)
+#     DHW 15 C, DM  -150, indoor 17.0  ->  does NOT heat    (SPACE_HEATING_EMERGENCY)
+#
+# The code is right. The comment was the lie, and it is the kind of lie that gets a safety rule
+# "restored" by the next reader who trusts it.
+DHW_SAFETY_CRITICAL: Final = 20.0  # °C - below this, price stops being a reason to defer
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
