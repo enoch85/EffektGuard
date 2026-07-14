@@ -10,9 +10,14 @@ That is a positive feedback loop, and the owner named it before this simulation 
     "if you keep raising the DM during stress, it will never be able to get itself out of that
      spinning loop downwards, it will worsen."
 
-REPRODUCED, on a plant whose first law audits to a residual of 0.00 kWh. The F2040 is the only
-shipped profile whose source is OUTDOOR AIR, so it is the only one whose capacity collapses as the
-weather does - and in a cold snap it saturates:
+REPRODUCED. The plant is not flattering the controller here: the compressor-side energy audit -
+what the meter charged against what the heat owed at the COP it was made at, computed independently
+- comes out at 0.0 % error on every house. (The ROOM-side "first law" residual is NOT evidence of
+that and I once quoted it as if it were; it is an algebraic identity of the room ODE and cannot
+fail. See the harness.)
+
+The F2040 is the only shipped profile whose source is OUTDOOR AIR, so it is the only one whose
+capacity collapses as the weather does - and in a cold snap it saturates:
 
                             optimiser   do-nothing
     indoor_max                 28.4 C       22.5 C     <- the house is COOKED
