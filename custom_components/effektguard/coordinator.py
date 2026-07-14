@@ -31,6 +31,7 @@ from .const import (
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_DHW_MIN_AMOUNT,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    CONF_ENABLE_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     CONF_NIBE_TEMP_LUX_ENTITY,
     DEFAULT_DHW_EVENING_HOUR,
@@ -818,17 +819,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         return await self._read_and_decide(apply=False)
 
-    async def async_refresh_and_apply(self) -> None:
+    async def async_refresh_and_apply(self, *, explicit_command: bool = False) -> None:
         """Read, decide, and DRIVE THE PUMP. For services that genuinely command it.
 
         force_offset and boost_heating mean what they say and must land immediately, not at the
         next aligned tick. Bookkeeping services must NOT use this - they call
         `async_request_refresh()`, which reads and decides but writes nothing.
         """
-        self.data = await self._drive_the_pump()
+        self.data = await self._drive_the_pump(explicit_command=explicit_command)
         self.async_set_updated_data(self.data)
 
-    async def _drive_the_pump(self) -> dict[str, object]:
+    async def _drive_the_pump(self, *, explicit_command: bool = False) -> dict[str, object]:
         """The write path. Its sole owner, and the only place `apply=True` is passed.
 
         Two callers reach the pump - the aligned control loop every five minutes, and a service
@@ -848,7 +849,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Assistant's refresh hook behind a write in progress would stall the entities for nothing.
         """
         async with self._control_lock:
-            return await self._read_and_decide(apply=True)
+            return await self._read_and_decide(
+                apply=True,
+                explicit_command=explicit_command,
+            )
 
     def _report_no_price_source(self, reason: str) -> None:
         """Tell the user, in the UI, that price optimisation is not running.
@@ -921,12 +925,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         async_delete_issue(self.hass, DOMAIN, PRICE_SOURCE_ISSUE_ID)
         self._price_issue_active = False
 
-    async def _read_and_decide(self, apply: bool) -> dict[str, object]:
+    async def _read_and_decide(
+        self,
+        apply: bool,
+        explicit_command: bool = False,
+    ) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
 
         Args:
             apply: Whether to drive the heat pump with the resulting decision. Only the control
                 loop and the services that explicitly command the pump may pass True.
+            explicit_command: A user command that bypasses startup observation and ordinary write
+                cooldown. The decision engine's absolute safety floor still applies.
 
         This method:
         1. Gathers data from all sources (with graceful degradation)
@@ -948,6 +958,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Gather core data (NIBE - required, but allow startup grace period)
         try:
             nibe_data = await self.nibe.get_current_state()
+            self.current_offset = float(nibe_data.current_offset)
             _LOGGER.debug(
                 "NIBE data retrieved: indoor %.1f°C, outdoor %.1f°C, flow %.1f°C, DM %.0f",
                 nibe_data.indoor_temp,
@@ -1113,7 +1124,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         is_grace_period = False
 
         # Check if optimization is enabled (master switch)
-        if not self.entry.data.get("enable_optimization", True):
+        optimization_enabled = self.entry.data.get("enable_optimization", True)
+        if not optimization_enabled:
             _LOGGER.info("Optimization disabled by user - maintaining neutral offset")
             decision = OptimizationDecision(
                 offset=0.0,
@@ -1184,7 +1196,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Startup grace period: lockout + observation cycles
                 now = dt_util.now()
 
-                if now < self._startup_grace_timeout:
+                if explicit_command and decision.is_manual_override:
+                    _LOGGER.info("Explicit user command bypasses startup observation")
+                elif now < self._startup_grace_timeout:
                     # Phase 1: Time-based lockout
                     secs_left = int((self._startup_grace_timeout - now).total_seconds())
                     is_grace_period = True
@@ -1301,8 +1315,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Record the new offset for volatility tracking
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
 
-        # Update current state
-        self.current_offset = decision.offset
         self.last_decision_time = dt_util.utcnow()
 
         # Apply offset to the NIBE heating curve offset number entity
@@ -1317,35 +1329,41 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Read-only refresh: decided %.2f°C, not applying", decision.offset)
         elif is_grace_period:
             _LOGGER.info("Skipping offset application during startup grace period")
-        elif self.last_applied_offset is not None and int(decision.offset) == int(
-            self.last_applied_offset
-        ):
-            _LOGGER.debug(
-                "Offset %.2f°C → int(%d°C) matches last "
-                "applied int(%d°C), skipping adapter call",
-                decision.offset,
-                int(decision.offset),
-                int(self.last_applied_offset),
-            )
         else:
             try:
                 # Through the one guarded door: a coordinator whose entry has unloaded mid-refresh
                 # must not get the last word on the pump. See _write_curve_offset.
-                was_applied = await self._write_curve_offset(decision.offset)
-                if was_applied:
-                    _LOGGER.info("Applied offset %.2f°C to NIBE", decision.offset)
-                    # Track what NIBE actually has (integer) - synced from entity on restart
-                    self.last_applied_offset = float(int(decision.offset))
+                applied_offset = await self._write_curve_offset(
+                    decision.offset,
+                    force_write=explicit_command,
+                )
+                if applied_offset is not None:
+                    _LOGGER.info(
+                        "Applied offset %.2f°C as %d°C on NIBE",
+                        decision.offset,
+                        applied_offset,
+                    )
+                    self.last_applied_offset = float(applied_offset)
+                    self.current_offset = float(applied_offset)
+                    nibe_data.current_offset = float(applied_offset)
                     self.last_offset_timestamp = dt_util.utcnow()
                     self._learned_data_changed = True  # Trigger save on shutdown
+                    if decision.is_manual_override:
+                        self.engine.consume_manual_override()
                 else:
                     _LOGGER.debug(
                         "Offset %.2f°C unchanged (NIBE offset not changed)",
                         decision.offset,
                     )
+                    if explicit_command:
+                        raise HomeAssistantError(
+                            "The explicit heating offset did not reach the NIBE register"
+                        )
             except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
-                # Continue anyway - next cycle will retry
+                if explicit_command:
+                    raise
+                # Automatic control retries on the next aligned cycle.
 
         self._accumulate_spot_savings(nibe_data, price_data)
 
@@ -1398,7 +1416,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         await self._update_peak_tracking(nibe_data)
 
         # Record observations for learning (Phase 6)
-        await self._record_learning_observations(nibe_data, weather_data, decision.offset)
+        await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
 
         # Save state periodically
         await self.effect.async_save()
@@ -1548,7 +1566,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
             if (
-                self.entry.data.get("enable_hot_water_optimization", False)
+                optimization_enabled
+                and self.entry.data.get("enable_hot_water_optimization", False)
                 and dhw_result is not None
                 and dhw_result.decision is not None
             ):
@@ -1617,7 +1636,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Apply control only if airflow optimization is enabled (like DHW)
                 airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
                 if airflow_enabled:
-                    if not apply:
+                    if not optimization_enabled:
+                        _LOGGER.debug("Optimization disabled - not applying airflow control")
+                    elif not apply:
                         _LOGGER.debug("Read-only refresh: not applying airflow control")
                     elif is_grace_period:
                         _LOGGER.info("Skipping airflow control during startup grace period")
@@ -1643,7 +1664,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "thermal_trend": temperature_trend_data,  # Temperature trend from predictor
             "outdoor_trend": outdoor_trend_data,  # Outdoor temperature trend
             "decision": decision,
-            "offset": decision.offset,
+            "offset": self.current_offset,
             "peak_today": self.peak_today,
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
@@ -2394,8 +2415,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to update peak tracking: %s", err)
 
-    async def _write_curve_offset(self, offset: float) -> bool:
-        """The ONE way this integration reaches the heat pump. Returns whether it wrote.
+    async def _write_curve_offset(self, offset: float, *, force_write: bool = False) -> int | None:
+        """The ONE way this integration reaches the heat pump. Return the applied integer.
 
         A coordinator that has been shut down is not a writer. `_do_aligned_refresh` runs on
         `hass.async_create_task`, NOT `entry.async_create_task`, so HA cannot cancel it on unload -
@@ -2415,11 +2436,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 "is unloaded; an in-flight refresh does not get the last word.",
                 offset,
             )
-            return False
+            return None
 
+        if force_write:
+            return await self.nibe.set_curve_offset(offset, force_write=True)
         return await self.nibe.set_curve_offset(offset)
 
-    async def _write_enhanced_ventilation(self, enabled: bool) -> bool:
+    async def _write_enhanced_ventilation(
+        self, enabled: bool, *, force_write: bool = False
+    ) -> bool:
         """The ONE way this integration commands the exhaust fan. Returns whether it wrote.
 
         Same race as the curve offset: written from the control loop, so it rides the same in-flight
@@ -2434,22 +2459,30 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             return False
 
+        if force_write:
+            return await self.nibe.set_enhanced_ventilation(enabled, force_write=True)
         return await self.nibe.set_enhanced_ventilation(enabled)
 
-    async def async_set_offset(self, offset: float) -> None:
+    async def async_set_offset(self, offset: float, *, force_write: bool = False) -> int | None:
         """Apply heating curve offset to NIBE system.
 
         Args:
             offset: Offset value in °C (-10 to +10)
+            force_write: Bypass ordinary write suppression for a safety transition.
+
+        Returns:
+            Integer applied to NIBE, or None when no write reached the pump.
         """
         try:
-            if not await self._write_curve_offset(offset):
-                return
-            self.current_offset = offset
-            self.last_applied_offset = offset
+            applied_offset = await self._write_curve_offset(offset, force_write=force_write)
+            if applied_offset is None:
+                return None
+            self.current_offset = float(applied_offset)
+            self.last_applied_offset = float(applied_offset)
             self.last_offset_timestamp = dt_util.utcnow()
             self._learned_data_changed = True  # Trigger save on shutdown
-            _LOGGER.info("Applied offset: %.2f°C", offset)
+            _LOGGER.info("Applied offset: %d°C", applied_offset)
+            return applied_offset
         except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset: %s", err)
             raise
@@ -2460,18 +2493,58 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Args:
             enabled: True to enable optimization, False to disable
         """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator is shut down - ignoring optimization mode change")
+            return
+
         if enabled:
             _LOGGER.info("Optimization enabled")
-            # Resume normal optimization - and mean it. Turning optimization back on is a command
-            # to control the pump, so it applies now rather than waiting for the next aligned tick.
-            await self.async_refresh_and_apply()
+            previous_data = dict(self.entry.data)
+            enabled_data = dict(previous_data)
+            enabled_data[CONF_ENABLE_OPTIMIZATION] = True
+            self.hass.config_entries.async_update_entry(self.entry, data=enabled_data)
+            try:
+                # Resume normal optimization now rather than waiting for the next aligned tick.
+                await self.async_refresh_and_apply()
+            except Exception:
+                self.hass.config_entries.async_update_entry(self.entry, data=previous_data)
+                raise
         else:
             _LOGGER.info("Optimization disabled - resetting offset to neutral")
-            # Reset offset to neutral (0.0)
-            try:
-                await self.async_set_offset(0.0)
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to reset offset: %s", err)
+            async with self._control_lock:
+                applied_offset = await self.async_set_offset(0.0, force_write=True)
+                await self._cancel_our_dhw_boost()
+                if await self.nibe.is_enhanced_ventilation_active():
+                    ventilation_stopped = await self._write_enhanced_ventilation(
+                        False,
+                        force_write=True,
+                    )
+                    if not ventilation_stopped:
+                        raise HomeAssistantError(
+                            "Could not return NIBE ventilation to its normal setting"
+                        )
+                    self._airflow_enhance_start = None
+                    self._airflow_normal_since = dt_util.utcnow()
+            if applied_offset != 0:
+                raise HomeAssistantError("Could not reset the NIBE heating offset to neutral")
+
+            disabled_data = dict(self.entry.data)
+            disabled_data[CONF_ENABLE_OPTIMIZATION] = False
+            self.hass.config_entries.async_update_entry(self.entry, data=disabled_data)
+
+    async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
+        """Apply one explicit user heating command through the locked control path."""
+        if not self.entry.data.get("enable_optimization", True):
+            raise HomeAssistantError(
+                "EffektGuard is OFF. Turn optimization on before commanding a heating offset."
+            )
+
+        self.engine.set_manual_override(offset, duration_minutes)
+        try:
+            await self.async_refresh_and_apply(explicit_command=True)
+        except Exception:
+            self.engine.clear_manual_override()
+            raise
 
     async def async_update_config(self, options: "EffektGuardConfigDict") -> None:
         """Update configuration without full reload.
@@ -2634,6 +2707,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             Monthly peak power in kW
         """
         return self.peak_this_month
+
+    @property
+    def optimization_enabled(self) -> bool:
+        """Whether the master control gate permits explicit and automatic writes."""
+        return self.entry.data.get(CONF_ENABLE_OPTIMIZATION, True)
 
     @property
     def model_profile(self):

@@ -84,11 +84,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE_DELTA,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda coordinator: (
-            coordinator.data["decision"].offset
-            if coordinator.data and coordinator.data.get("decision")
-            else 0.0
-        ),
+        value_fn=lambda coordinator: coordinator.current_offset,
     ),
     EffektGuardSensorEntityDescription(
         key="degree_minutes",

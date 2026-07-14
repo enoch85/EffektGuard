@@ -89,8 +89,8 @@ class TestTheWriteRateLimitActuallyRefuses:
         first = await adapter.set_curve_offset(-3.0)
         immediately_after = await adapter.set_curve_offset(3.0)
 
-        assert first is True, "precondition: the first write must land"
-        assert immediately_after is False, (
+        assert first == -3, "precondition: the first write must land"
+        assert immediately_after is None, (
             f"A second write was accepted immediately after the first. The cooldown is "
             f"SERVICE_RATE_LIMIT_MINUTES ({SERVICE_RATE_LIMIT_MINUTES} min), and it exists to stop "
             f"the NIBE controller being rewritten every cycle. The test that used to guard this "
@@ -102,13 +102,13 @@ class TestTheWriteRateLimitActuallyRefuses:
         """The regression guard on the guard: the rate limit must not become a permanent block."""
         adapter = _adapter()
 
-        assert await adapter.set_curve_offset(-3.0) is True
+        assert await adapter.set_curve_offset(-3.0) == -3
 
         adapter._last_write = adapter._last_write - timedelta(
             minutes=SERVICE_RATE_LIMIT_MINUTES + 1
         )
 
-        assert await adapter.set_curve_offset(3.0) is True
+        assert await adapter.set_curve_offset(3.0) == 3
 
     def test_the_cooldown_is_at_least_one_update_cycle(self):
         """A cooldown shorter than the update interval would not rate-limit anything."""

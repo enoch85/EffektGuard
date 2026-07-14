@@ -316,6 +316,7 @@ class DecisionEngine:
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
+        self._manual_override_one_shot = False
 
     def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
@@ -345,6 +346,7 @@ class DecisionEngine:
         self._manual_override_offset = offset
 
         if duration_minutes > 0:
+            self._manual_override_one_shot = False
             self._manual_override_until = dt_util.now() + timedelta(minutes=duration_minutes)
             _LOGGER.info(
                 "Manual override set: %s°C until %s",
@@ -352,6 +354,7 @@ class DecisionEngine:
                 self._manual_override_until.strftime("%Y-%m-%d %H:%M"),
             )
         else:
+            self._manual_override_one_shot = True
             self._manual_override_until = None
             _LOGGER.info("Manual override set: %s°C until next cycle", offset)
 
@@ -359,7 +362,17 @@ class DecisionEngine:
         """Clear manual override, return to automatic optimization."""
         self._manual_override_offset = None
         self._manual_override_until = None
+        self._manual_override_one_shot = False
         _LOGGER.info("Manual override cleared")
+
+    def consume_manual_override(self) -> None:
+        """Consume an override whose public duration was zero.
+
+        A zero-duration override means one applied control cycle, not forever. Reads and startup
+        observation do not consume it because neither reaches the pump.
+        """
+        if self._manual_override_one_shot:
+            self.clear_manual_override()
 
     def _check_manual_override(self) -> float | None:
         """Check if manual override is active and still valid.

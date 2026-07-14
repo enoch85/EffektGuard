@@ -57,7 +57,13 @@ def _climate(optimization_enabled: bool = True) -> tuple[EffektGuardClimate, Mag
     entry.options = {}
 
     coordinator = MagicMock()
-    coordinator.set_optimization_enabled = AsyncMock()
+
+    async def _set_optimization_enabled(enabled: bool) -> None:
+        new_data = dict(entry.data)
+        new_data[CONF_ENABLE_OPTIMIZATION] = enabled
+        entry.data = new_data
+
+    coordinator.set_optimization_enabled = AsyncMock(side_effect=_set_optimization_enabled)
     coordinator.data = {}
 
     climate = EffektGuardClimate(coordinator, entry)

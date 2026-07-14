@@ -64,7 +64,7 @@ def _make_coordinator(decision: OptimizationDecision) -> EffektGuardCoordinator:
     )
     nibe = MagicMock()
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
-    nibe.set_curve_offset = AsyncMock(return_value=True)
+    nibe.set_curve_offset = AsyncMock(side_effect=lambda offset, **_: round(offset))
     nibe.power_sensor_entity = None
     nibe._power_sensor_entity = None
 

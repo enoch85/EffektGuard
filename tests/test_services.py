@@ -46,6 +46,7 @@ def mock_coordinator(mock_hass):
 
     coordinator = MagicMock(spec=EffektGuardCoordinator)
     coordinator.hass = mock_hass
+    coordinator.optimization_enabled = True
 
     # Mock decision engine
     coordinator.engine = MagicMock(spec=DecisionEngine)
@@ -60,6 +61,7 @@ def mock_coordinator(mock_hass):
     # and decides but writes nothing; async_refresh_and_apply drives the heat pump.
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_refresh_and_apply = AsyncMock()
+    coordinator.async_apply_manual_override = AsyncMock()
 
     # Mock data for calculate_optimal_schedule
     coordinator.data = {
@@ -123,12 +125,12 @@ async def test_force_offset_sets_override(mock_hass, mock_coordinator):
     await handler(call)
 
     # Verify override was set
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(2.5, 60)
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(2.5, 60)
 
     # And that it reaches the pump NOW. A plain refresh reads and decides but writes nothing, so
     # the override would sit in the engine until the next aligned tick - up to five minutes of a
     # user-commanded offset doing nothing at all.
-    mock_coordinator.async_refresh_and_apply.assert_called_once()
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
@@ -153,7 +155,7 @@ async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
 
     await handler(call)
 
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(-3.0, 0)
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(-3.0, 0)
 
 
 async def test_force_offset_validates_range(mock_hass, mock_coordinator):
@@ -253,8 +255,8 @@ async def test_boost_heating_sets_max_offset(mock_hass, mock_coordinator):
     await handler(call)
 
     # Should set MAX_OFFSET (+10°C) and drive the pump with it immediately.
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(MAX_OFFSET, 120)
-    mock_coordinator.async_refresh_and_apply.assert_called_once()
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(MAX_OFFSET, 120)
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
@@ -280,7 +282,7 @@ async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
     await handler(call)
 
     # Should use default duration (120 minutes)
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(MAX_OFFSET, 120)
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(MAX_OFFSET, 120)
 
 
 # ============================================================================

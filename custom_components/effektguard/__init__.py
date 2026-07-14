@@ -366,12 +366,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 f"Offset {offset} outside valid range [{MIN_OFFSET}, {MAX_OFFSET}]"
             )
 
-        # Set override in decision engine
-        coordinator.engine.set_manual_override(offset, duration)
+        if not coordinator.optimization_enabled:
+            raise ServiceValidationError(
+                "EffektGuard is OFF. Turn optimization on before forcing an offset."
+            )
 
-        # This service exists to DRIVE the pump, so it says so. A plain refresh reads and decides
-        # but writes nothing - the read path is not a control path.
-        await coordinator.async_refresh_and_apply()
+        await coordinator.async_apply_manual_override(offset, duration)
 
         # Update last called timestamp
         _update_service_timestamp("force_offset")
@@ -427,13 +427,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         _LOGGER.info("Boost heating service called: duration=%s minutes", duration)
 
-        # Set maximum positive offset for boost duration
         boost_offset = MAX_OFFSET  # +10°C
-        coordinator.engine.set_manual_override(boost_offset, duration)
+        if not coordinator.optimization_enabled:
+            raise ServiceValidationError(
+                "EffektGuard is OFF. Turn optimization on before boosting heating."
+            )
 
-        # Drive the pump now. A plain refresh reads and decides but writes nothing, so the boost
-        # would sit in the engine doing nothing until the next aligned tick.
-        await coordinator.async_refresh_and_apply()
+        await coordinator.async_apply_manual_override(boost_offset, duration)
 
         # Update last called timestamp
         _update_service_timestamp("boost_heating")

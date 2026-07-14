@@ -64,9 +64,10 @@ def _coordinator() -> EffektGuardCoordinator:
     hass = MagicMock()
     hass.config.latitude = 59.33
     hass.config.longitude = 18.07
+    hass.config_entries.async_update_entry = MagicMock()
 
     nibe = MagicMock()
-    nibe.set_curve_offset = AsyncMock(return_value=True)
+    nibe.set_curve_offset = AsyncMock(return_value=2)
 
     entry = MagicMock()
     entry.data = {}
@@ -167,6 +168,20 @@ async def test_switching_optimization_off_after_unload_does_not_write():
 
 
 @pytest.mark.asyncio
+async def test_switching_optimization_off_forces_neutral_through_cooldown():
+    """OFF is a safety transition, not an ordinary rate-limited adjustment."""
+    coordinator = _coordinator()
+    coordinator.nibe.set_curve_offset = AsyncMock(return_value=0)
+
+    await coordinator.set_optimization_enabled(False)
+
+    coordinator.nibe.set_curve_offset.assert_awaited_once_with(0.0, force_write=True)
+    assert coordinator.last_applied_offset == 0.0
+    disabled_data = coordinator.hass.config_entries.async_update_entry.call_args.kwargs["data"]
+    assert disabled_data["enable_optimization"] is False
+
+
+@pytest.mark.asyncio
 async def test_an_unloaded_coordinator_does_not_command_the_fan_either():
     """The heating curve is not the only thing this integration writes to the pump.
 
@@ -251,5 +266,5 @@ async def test_the_shutdown_flag_is_actually_consulted_on_the_write_path():
 
     written = await coordinator._write_curve_offset(3.0)
 
-    assert written is False
+    assert written is None
     assert coordinator.nibe.set_curve_offset.await_count == 0

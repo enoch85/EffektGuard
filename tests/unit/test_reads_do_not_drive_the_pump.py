@@ -110,7 +110,7 @@ def test_the_services_that_command_the_pump_do_apply(marker):
     """force_offset and boost_heating mean what they say, and must land at once."""
     handler = _service_handler(marker)
 
-    assert "async_refresh_and_apply" in handler, (
+    assert "async_apply_manual_override" in handler, (
         f"{marker!r} exists to drive the heat pump. With the read path no longer writing, it must "
-        f"ask for an apply, or it does nothing at all until the next aligned tick."
+        f"use the shared explicit-command path, or it does nothing until the next aligned tick."
     )

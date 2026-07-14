@@ -326,11 +326,12 @@ class TestSensorValueFunctions:
     """Test sensor value functions with real data."""
 
     def test_current_offset_sensor(self, mock_coordinator_with_data, mock_config_entry):
-        """Test current_offset sensor reads decision offset."""
+        """Test current_offset sensor reads the offset applied to NIBE."""
         sensor_desc = next(s for s in SENSORS if s.key == "current_offset")
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
+        mock_coordinator_with_data.current_offset = 3.0
 
-        assert sensor.native_value == 2.0
+        assert sensor.native_value == 3.0
 
     def test_degree_minutes_sensor(self, mock_coordinator_with_data, mock_config_entry):
         """Test degree_minutes sensor reads NIBE data."""

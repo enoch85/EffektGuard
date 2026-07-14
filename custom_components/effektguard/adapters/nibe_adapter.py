@@ -458,7 +458,7 @@ class NibeAdapter:
             indoor_temp_valid=indoor_temp_valid,
         )
 
-    async def set_curve_offset(self, offset: float) -> bool:
+    async def set_curve_offset(self, offset: float, *, force_write: bool = False) -> int | None:
         """Set heating curve offset via NIBE entity with fractional accumulation.
 
         The NIBE offset register (47011 on F-series) is integer-only, but the
@@ -476,9 +476,10 @@ class NibeAdapter:
 
         Args:
             offset: Calculated offset value in °C (e.g., -1.24, +0.87)
+            force_write: Bypass cooldown and deadband for a safety transition such as OFF.
 
         Returns:
-            True if offset was written to NIBE, False if deferred/accumulated
+            Integer written to NIBE, or None if the write was skipped or failed.
 
         Note:
             The target must be a writable number entity: a MyUplink offset
@@ -488,17 +489,19 @@ class NibeAdapter:
         """
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if self._last_write and now - self._last_write < timedelta(
-            minutes=SERVICE_RATE_LIMIT_MINUTES
+        if (
+            not force_write
+            and self._last_write
+            and now - self._last_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
         ):
             _LOGGER.debug("Skipping offset write, too soon since last write")
-            return False
+            return None
 
         # Get offset entity
         offset_entity = self._entity_cache.get("offset")
         if not offset_entity:
             _LOGGER.error("No offset entity found")
-            return False
+            return None
 
         # Check entity is available
         state = self.hass.states.get(offset_entity)
@@ -508,7 +511,7 @@ class NibeAdapter:
                 offset_entity,
                 state.state if state else "None",
             )
-            return False
+            return None
 
         # Sync with the entity's actual value on first call, and re-sync when
         # the entity disagrees with our bookkeeping and we have not written
@@ -550,13 +553,13 @@ class NibeAdapter:
         )
 
         # Only write if integer part changed from last written value
-        if offset_to_apply == self._last_nibe_offset:
+        if not force_write and offset_to_apply == self._last_nibe_offset:
             _LOGGER.debug(
                 "Offset unchanged: engine asked for %.2f°C, register already holds %d°C",
                 offset,
                 self._last_nibe_offset,
             )
-            return False
+            return None
 
         # Respect the target entity's own limits when it exposes them
         # (a template number left at default min 0/max 100 would otherwise
@@ -580,8 +583,8 @@ class NibeAdapter:
                     clamped,
                 )
                 offset_to_apply = clamped
-                if offset_to_apply == self._last_nibe_offset:
-                    return False
+                if not force_write and offset_to_apply == self._last_nibe_offset:
+                    return None
 
         # Store old value for logging before updating
         old_offset = self._last_nibe_offset
@@ -608,13 +611,13 @@ class NibeAdapter:
                 offset_to_apply,
                 offset,
             )
-            return True
+            return offset_to_apply
 
         except (HomeAssistantError, AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
-            return False
+            return None
 
-    async def set_enhanced_ventilation(self, enabled: bool) -> bool:
+    async def set_enhanced_ventilation(self, enabled: bool, *, force_write: bool = False) -> bool:
         """Enable or disable enhanced ventilation for exhaust air heat pumps.
 
         NIBE F750/F730 "Increased Ventilation" is a switch entity that toggles
@@ -627,6 +630,7 @@ class NibeAdapter:
 
         Args:
             enabled: True to enable enhanced ventilation, False for normal
+            force_write: Bypass cooldown when disabling all EffektGuard control.
 
         Returns:
             True if ventilation was set, False if skipped/failed
@@ -658,12 +662,14 @@ class NibeAdapter:
                 "Ventilation already %s, skipping redundant call",
                 "ENHANCED" if enabled else "NORMAL",
             )
-            return False
+            return True
 
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if self._last_ventilation_write and now - self._last_ventilation_write < timedelta(
-            minutes=SERVICE_RATE_LIMIT_MINUTES
+        if (
+            not force_write
+            and self._last_ventilation_write
+            and now - self._last_ventilation_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
         ):
             remaining = (
                 timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES) - (now - self._last_ventilation_write)

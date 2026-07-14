@@ -23,6 +23,7 @@ One writer at a time. The read path is unaffected: reads are free to overlap, an
 from __future__ import annotations
 
 import asyncio
+import ast
 import inspect
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,7 +74,10 @@ async def test_the_control_loop_and_a_service_never_write_together(monkeypatch):
     in_flight = 0
     overlapped = False
 
-    async def slow_cycle(apply: bool) -> dict[str, object]:
+    async def slow_cycle(
+        apply: bool,
+        explicit_command: bool = False,
+    ) -> dict[str, object]:
         """Stand-in for the real read-decide-write cycle, which awaits at every step."""
         nonlocal in_flight, overlapped
         in_flight += 1
@@ -108,7 +112,10 @@ async def test_reads_are_still_free_to_overlap(monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def blocking_cycle(apply: bool) -> dict[str, object]:
+    async def blocking_cycle(
+        apply: bool,
+        explicit_command: bool = False,
+    ) -> dict[str, object]:
         started.set()
         await release.wait()
         return {}
@@ -137,8 +144,20 @@ def test_nothing_can_write_without_taking_the_lock():
     the race in a way no existing test would notice.
     """
     source = inspect.getsource(EffektGuardCoordinator)
-
-    writers = source.count("_read_and_decide(apply=True)")
+    tree = ast.parse(source)
+    writers = sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_read_and_decide"
+        and any(
+            keyword.arg == "apply"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in node.keywords
+        )
+    )
 
     assert writers == 1, (
         f"`_read_and_decide(apply=True)` is called from {writers} places. The write path must have "

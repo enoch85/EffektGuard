@@ -196,6 +196,11 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
 
         _LOGGER.info("Enabling %s", config_key)
 
+        if config_key == CONF_ENABLE_OPTIMIZATION:
+            await self.coordinator.set_optimization_enabled(True)
+            self.async_write_ha_state()
+            return
+
         # Update config entry data (triggers update listener)
         # This follows Home Assistant best practices for SwitchEntity
         new_data = dict(self._entry.data)
@@ -216,6 +221,11 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
             return
 
         _LOGGER.info("Disabling %s", config_key)
+
+        if config_key == CONF_ENABLE_OPTIMIZATION:
+            await self.coordinator.set_optimization_enabled(False)
+            self.async_write_ha_state()
+            return
 
         # Update config entry data (triggers update listener)
         # This follows Home Assistant best practices for SwitchEntity

@@ -196,14 +196,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         _LOGGER.info("Setting HVAC mode to %s", hvac_mode)
         enabled = hvac_mode != HVACMode.OFF
 
-        # The master gate - the only thing the coordinator's decision reads. Same key, same mechanism
-        # the `enable_optimization` switch uses.
-        new_data = dict(self._entry.data)
-        new_data[CONF_ENABLE_OPTIMIZATION] = enabled
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
-
-        # And act on it now rather than at the next tick: OFF returns the pump to a neutral offset,
-        # ON is a command to control the pump.
+        # The coordinator changes the persisted gate only after the hardware transition succeeds,
+        # so the entity cannot display OFF while NIBE still holds a non-neutral offset.
         await self.coordinator.set_optimization_enabled(enabled)
 
         self.async_write_ha_state()
@@ -289,7 +283,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
             # Current offset applied
             if "decision" in self.coordinator.data:
                 decision = self.coordinator.data["decision"]
-                attrs["current_offset"] = decision.offset
+                attrs["current_offset"] = self.coordinator.current_offset
                 attrs["optimization_reasoning"] = decision.reasoning
 
             # NIBE state
