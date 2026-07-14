@@ -23,41 +23,47 @@ temperature for machines whose heat source is 20 C house air or 0 C brine, and a
 that ran BACKWARDS to the EN 14511 rating points it cited. See
 tests/validation/test_the_pump_models_match_their_datasheets.py.
 
-CORRECTING THE MODELS DID NOT SHRINK THIS DEFECT. IT MADE IT BIGGER, AND IT FOUND A SECOND MACHINE.
+AND THE THIRD TIME, THE HOUSES WERE INVENTED TOO.
 
-The F750 could never saturate in the old simulator, because I had given it sixty per cent more
-compressor than it has. On its real 4.994 kW it saturates in a Swedish cold snap and falls into
-exactly the same trap - and THIS case rests on no extrapolation at all: 4.994 kW is a published
-maximum-compressor-frequency figure, and an exhaust-air pump's 20 C source does not move with the
-weather.
+Every house carried a heat-loss coefficient that came from nowhere, and three of the five paired a
+pump with a house it was twice too big for. That decided what the simulation was ABLE to find: a
+pump with double the capacity its house needs cannot saturate, cannot fall behind, and can never
+exercise the recovery ladder at all. I reported "the ground-source houses never engage the emergency
+ladder" as a fact about the controller. It was a fact about my sizing.
 
-                            optimiser   do-nothing        optimiser   do-nothing
-                              F750        F750              F2040       F2040
-    indoor_max                26.9 C      22.6 C            27.2 C      22.5 C
-    immersion heat           35.8 kWh    1.8 kWh          223.1 kWh    51.8 kWh
-    minutes above band          1020          0             12325           0
-    cost                     1748 SEK   1461 SEK          2952 SEK    2663 SEK
+Houses are now sized from their pump's own Pdesignh - NIBE's declared design heat load - at the
+EN 14825 reference design temperature. And that exposed the last trap: THE SIZING CONVENTION MOVED
+THE ANSWER. NIBE publishes Pdesignh at both reference climates, and the choice between them moves
+the F750 between "saturates in a cold snap" and "does not". So the finding is not allowed to rest on
+one house, and it does not.
 
-A do-nothing controller is better on BOTH machines, on cost AND on comfort.
+    SWEDISH SIZING (cold climate, -22 C) - the honest default for a Swedish integration.
+    Only the F2040 saturates, and it does so BY DESIGN: NIBE declares Tbiv = -9 C and
+    Psup = 1.1 kW, so below -9 C its supplementary heater is SUPPOSED to run.
 
-(Those immersion figures are with each machine's OWN heater, from its datasheet - 3.5 kW at NIBE's
-delivery setting for the F750. The simulator used to give all five houses the same invented 3.0 kW,
-matching none of them. Correcting it moved the F750's burn from 38.1 to 35.8 kWh: the finding is
-robust to the heater size, which is worth knowing rather than assuming.)
+        airsource_f2040   239 kWh of resistive heat where the capacity deficit forced 85 (2.8x),
+                          house cooked to 31.5 C
 
-And the mechanism is identical on both, which is what makes it a mechanism rather than a mishap:
+    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter) - the commonest
+    installation fault there is, and both figures come from NIBE's own datasheet.
 
-    F750:   of the  38 samples past the auxiliary limit, the commanded offset is +10 in ALL  38
-    F2040:  of the 459 samples past the auxiliary limit, the commanded offset is +10 in ALL 459
+                          optimiser   physics forced   do-nothing      optimiser   do-nothing
+                             aux                          aux           indoor       indoor
+        wooden_f750        221 kWh       104 kWh         61 kWh         29.3 C       22.6 C
+        concrete_f1155     685 kWh       277 kWh        135 kWh         29.8 C       22.2 C
+        villa_s1155        555 kWh       283 kWh        126 kWh         29.8 C       22.2 C
+        airsource_f2040   2184 kWh      2113 kWh       1066 kWh         29.1 C       23.0 C
+        apartment_f730       0 kWh         0 kWh          0 kWh         22.9 C       22.8 C
 
-It latches at maximum and never lets go. The house climbs to 27 C on immersion heat while degree
-minutes sit near the floor, because S1 is pinned at maximum and BT25 can never catch it.
+EVERY MACHINE THAT SATURATES IS MADE WORSE BY THE OPTIMISER, under BOTH sizing conventions. It
+burns two to five times the resistive heat of a do-nothing controller and cooks the house to about
+30 C, while doing nothing holds it at 22. The only system that escapes is the apartment - the one
+where the pump has 1.8x more capacity than the house needs, and where saturation cannot happen.
 
-ONE HONEST CAVEAT, on the F2040 only. NIBE tabulates its maximum output down to -7 C and no
-further - below that the manual gives a graph and no numbers - so the model HOLDS capacity at the
--7 C figure. That understates the machine, which means the F2040's saturation is an UPPER BOUND on
-the trap and not a measurement of it. The F750 case carries no such caveat, and it is the one to
-rely on.
+THAT is the finding, and it no longer depends on a house I made up. The immersion heat is now
+measured against what the pump's capacity deficit PHYSICALLY FORCES, computed step by step in the
+plant, so "burned 2.8x more resistive heat than it had to" is a statement about the controller and
+not about the weather.
 
 AND THE RECOVERY LADDER IS STILL UNVALIDATED BY SIMULATION - THE SAME CONCLUSION, ON BETTER DATA.
 
@@ -111,11 +117,12 @@ def test_the_emergency_tier_asks_for_maximum_heat_at_the_aux_limit():
     reason=(
         "F-124, BLOCKED-ON-OWNER. A saturated compressor cannot raise BT25, so raising S1 makes "
         "DM = integral(BT25 - S1) fall FASTER. The emergency layer answers by raising it again and "
-        "latches at +10 - in 38 of 38 samples past the aux limit on a real F750, and 459 of 459 on "
-        "an F2040. Both houses are cooked to 27 C on immersion heat, and a do-nothing controller "
-        "beats the optimiser on cost AND comfort on both. Fixing it means deciding what a pump "
-        "should do when it physically cannot meet its own curve - a heat-pump decision, not a "
-        "code-cleanup one."
+        "latches at +10. EVERY machine that saturates is made worse by it, under both of NIBE's "
+        "published sizing conventions: the optimiser burns 2-5x the resistive heat of a do-nothing "
+        "controller - and 1.2-2.8x what the capacity deficit physically forces - and cooks the "
+        "house to about 30 C while doing nothing holds 22. The only system that escapes is the one "
+        "whose pump has 1.8x spare capacity. Fixing it means deciding what a pump should do when it "
+        "physically cannot meet its own curve - a heat-pump decision, not a code-cleanup one."
     ),
 )
 def test_the_emergency_layer_does_not_keep_raising_a_pump_that_has_nothing_left():

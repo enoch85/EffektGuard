@@ -117,6 +117,17 @@ class NibeF2040Profile(HeatPumpProfile):
     # NO IMMERSION HEATER. The F2040 is an outdoor monobloc; its technical-specifications table has
     # no immersion-heater row. Electric addition belongs to the paired indoor module (VVM/SMO).
     # NO IMMERSION HEATER. Not "0 kW as a default" - the machine physically does not have one.
+    # ErP declaration, F2040-8: "Tbiv Bivalent temperature -9 C", "TOL Min. outdoor air
+    # temperature -10 C", "Psup Rated heat output 1.1 kW", "Pdh Tj = biv 6.6 kW".
+    # Below -9 C this machine is DESIGNED to need supplementary heat.
+    bivalent_temp_c: float = -9.0
+    supplementary_heat_kw: float = 1.1  # ErP: "Psup Rated heat output 1.1 kW"
+    # Pdesignh at the EN 14825 COLD climate, 35 C application (spec sheet): 9.0 kW. The
+    # average-climate figure is 8.2 kW. The harness sizes every house at the average-climate design point, which is
+    # the reference every NIBE datasheet declares Pdesignh at - so the average figure is the one
+    # that belongs here. Mixing the two conventions produced a house that was nobody's, and it moved
+    # a pump between saturating and not.
+    design_heat_load_kw: float = 9.0
     immersion_heater_kw: float = 0.0
     supports_aux_heating: bool = False
     supports_modulation: bool = True

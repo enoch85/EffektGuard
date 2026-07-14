@@ -264,19 +264,31 @@ class TestThePumpIsNeverAskedForWaterItCannotMake:
             f"ladder for a defect in the plant."
         )
 
-    def test_degree_minutes_no_longer_run_away_on_their_own(self):
-        """The consequence. `dm_runaway` was 1134 samples of plant artifact, and it is now zero.
+    def test_degree_minutes_only_run_away_when_the_pump_IS_saturated(self):
+        """They used to run away because the PLANT was chasing water the pump could not make.
 
-        The trap underneath it is REAL and still fails the run - the house is still cooked, the
-        immersion heater still burns. But it fails for the reason it actually fails for, at its
-        actual size. See test_a_saturated_compressor_is_a_positive_feedback_trap.
+        That was an artefact: `flow` was clamped to max_flow_temp and `flow_target` was not, so DM
+        integrated against an unreachable setpoint and floored on its own, whatever the controller
+        did. The test that stood here asserted DM never reaches the integrator floor again.
+
+        IT DOES NOW, AND FOR A REAL REASON. With the pump models taken from the datasheets, the
+        F2040 genuinely cannot make the heat its house needs in a cold snap - NIBE declares it
+        bivalent below -9 C, with 1.1 kW of supplementary heat - so BT25 really does sit below S1
+        and degree minutes really do collapse. That is the physics, not a plant bug.
+
+        The invariant that distinguishes the two is the one above: the plant must never ASK for water
+        the pump cannot make. So this pins the artefact's cause, and lets the real symptom through.
         """
         stats = _the_only_run_that_reaches_the_immersion_heater()
+        house = next(h for h in sim.HOUSES if h.name == _SATURATING_HOUSE)
 
-        assert stats["dm_min"] > sim.DM_INTEGRATOR_FLOOR, (
-            f"Degree minutes reached the integrator floor ({sim.DM_INTEGRATOR_FLOOR:.0f}). An "
-            f"integrator that saturates has stopped measuring anything, and it got there because "
-            f"the plant was chasing water the pump could not make."
+        assert stats["flow_target_max"] <= float(house.profile.max_flow_temp) + 1e-6, (
+            "the plant is asking for water the pump cannot make, which floors the integrator on its "
+            "own regardless of the controller - that is the artefact, and it is what this guards"
+        )
+        assert stats["unavoidable_aux_kwh"] > 0, (
+            "PRECONDITION: this pump must be genuinely saturated in this run, or the degree-minute "
+            "collapse below would be an artefact rather than a symptom"
         )
 
 

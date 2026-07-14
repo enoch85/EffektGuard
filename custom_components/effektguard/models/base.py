@@ -137,6 +137,36 @@ class HeatPumpProfile(ABC):
     # with, which this package does not model.
     immersion_heater_kw: float = 0.0
 
+    # Pdesignh - the DESIGN HEAT LOAD this machine is certified for, from its own ErP declaration.
+    #
+    # It is the manufacturer's statement of how big a house the pump is for, and it is the only
+    # sourced way to size a simulated building. Without it the simulator paired a 12 kW ground-source
+    # pump with a 6 kW house - twice the machine the building needs - and then reported that
+    # ground-source houses "never engage the emergency ladder". Of course they don't. A pump with
+    # twice the capacity it needs cannot saturate, and a simulation that cannot saturate cannot
+    # test what happens when one does.
+    design_heat_load_kw: float = 0.0
+
+    # Tbiv - the BIVALENT TEMPERATURE, from the ErP declaration. Below this outdoor temperature the
+    # heat pump cannot meet the design heat load on its own and supplementary heat is REQUIRED.
+    #
+    # This is not a defect. It is the design. A correctly-sized air-source system in Sweden is a
+    # bivalent system: NIBE declares Tbiv = -9 C for the F2040-8, with 1.1 kW of supplementary heat.
+    # The simulator used to assert that a healthy pump burns no resistive heat at all, which is a
+    # statement about a machine that does not exist. What can honestly be asked is whether the
+    # OPTIMISER burns more resistive heat than the pump's capacity deficit forces it to.
+    #
+    # 0.0 means "not declared" - the exhaust-air and ground-source machines are not bivalent in the
+    # same sense, because their heat source does not weaken with the weather.
+    bivalent_temp_c: float = 0.0
+
+    # Psup - the supplementary heat the ErP declaration says this machine needs at its design point.
+    # For the F2040-8 it closes the capacity model exactly: NIBE says Pdesignh 9.0 kW cold with
+    # Psup 1.1 kW, so the COMPRESSOR delivers 7.9 kW at the cold-climate design temperature. That
+    # is the only published statement about its capacity below -7 C, where the manual gives a graph
+    # and no numbers.
+    supplementary_heat_kw: float = 0.0
+
     @property
     def max_heat_output_kw(self) -> float:
         """The most heat this machine can make, from its own datasheet.
@@ -148,7 +178,15 @@ class HeatPumpProfile(ABC):
         """
         if self.heating_capacity_range_kw[1] > 0.0:
             return self.heating_capacity_range_kw[1]
-        return max(point.heat_output_kw for point in self.datasheet_points)
+
+        # The ErP declaration is also a published statement about the maximum. For the F2040-8 NIBE
+        # says Pdesignh 9.0 kW with Psup 1.1 kW, so the COMPRESSOR reaches 7.9 kW at the design
+        # temperature - above its coldest tabulated rating point (6.60 kW at -7 C), because capacity
+        # keeps rising as the weather cools. The rating points alone would understate it.
+        published = max(point.heat_output_kw for point in self.datasheet_points)
+        if self.design_heat_load_kw > 0.0 and self.supplementary_heat_kw > 0.0:
+            published = max(published, self.design_heat_load_kw - self.supplementary_heat_kw)
+        return published
 
     def rating_point_at(self, flow_temp_c: float) -> RatingPoint:
         """The published point closest to this flow temperature, at the highest output."""
