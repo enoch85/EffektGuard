@@ -238,26 +238,55 @@ class PriceAnalyzer:
 
         # Classify each period.
         #
-        # THE MEDIAN GUARDS EVERY BAND, AND IT IS NOT DECORATION. On a high-wind day - 83 quarters
-        # at 120 ore and 13 at MINUS 10, where the grid pays you to take the power - the middle of
-        # the distribution is a plateau, so p25 == p75 == p90 == 120. The old `p25 == p90` check
-        # caught that and classified the whole day NORMAL, so the free electricity was never
-        # bought. But simply DELETING that check is worse: the 83 quarters at the day's HIGHEST
-        # price all satisfy `price <= p25`, and would be classified CHEAP - commanding +4.0 C of
-        # extra heat at the most expensive moment of the day.
+        # A BAND MUST NOT MERELY BE A RANK. On a high-wind day the price distribution is not a
+        # curve, it is a step: 83 quarters at 120 ore and 13 at MINUS 10, where the grid pays you
+        # to take the power. The middle of that distribution is a plateau, so p25 == p75 == p90 ==
+        # 120, and the 83 quarters at the day's HIGHEST price all satisfy `price <= p25`. On rank
+        # alone they classify CHEAP, and the optimiser commands +4.0 C of extra heat at the most
+        # expensive moment of the day.
         #
-        # Requiring a band to sit on the correct SIDE of the median resolves both: the -10 ore
-        # quarters become VERY_CHEAP, and the 120 ore plateau becomes NORMAL.
+        # I GUARDED THAT WITH THE MEDIAN, AND THE MEDIAN BREAKS ON THE MIRROR IMAGE. Turn the step
+        # upside down - a long free stretch and a short expensive one, which is what a windy night
+        # into a calm evening looks like - and the plateau IS the median:
+        #
+        #     14 hours at exactly 0.00 ore, 10 hours at 80 ore
+        #     p10 = 0.0   p25 = 0.0   median = 0.0   p75 = 80.0   p90 = 80.0
+        #
+        #     the 56 free quarters   ->  NORMAL     because `0.0 < 0.0` is False
+        #     the 40 costly quarters ->  NORMAL     because `80.0 > 80.0` is False
+        #
+        # Every quarter of the day NORMAL, on a day with an 80 ore spread. The layer would not
+        # pre-heat on free electricity and would not coast at 80 ore. Exactly-zero prices are not
+        # exotic - price_math puts them at "roughly a hundred hours a year per SE bidding zone" -
+        # and they arrive in long contiguous runs, which is precisely the shape that does this.
+        #
+        # So ask the question the guard was standing in for: IS THERE ANYTHING MEANINGFULLY DEARER
+        # TODAY? That is `price < p90`, and it belongs on exactly one band.
+        #
+        # I had put the median on all four, and on three of them it was doing nothing whatever -
+        # it only ever broke the free day. Above, the spread check has already guaranteed
+        # p90 > p10, so:
+        #
+        #   VERY_CHEAP  `price <= p10` already implies `price < p90`.  Redundant.
+        #   PEAK        `price > p90` and p90 >= p10 implies price > p10.  Redundant.
+        #   EXPENSIVE   `price > p75` and p75 >= p10 implies price > p10.  Redundant.
+        #   CHEAP       p25 CAN equal p90 - that is exactly the dear plateau - so `price <= p25`
+        #               does NOT imply `price < p90`. This is the one guard that earns its place,
+        #               and the one that stops the 120 ore plateau being classified cheap.
+        #
+        # The dear side keeps its strict `>`. Loosening it to `>=` would make all 83 quarters of the
+        # high-wind day PEAK, telling the house to coast for twenty hours with three hours of cheap
+        # power to charge in. A plateau you cannot escape is not a peak; it is the price of the day.
         classifications = {}
         for index, period in enumerate(periods):
             price = period.price
-            if price <= p10 and price < median:
+            if price <= p10:
                 classification = QuarterClassification.VERY_CHEAP
-            elif price <= p25 and price < median:
+            elif price <= p25 and price < p90:
                 classification = QuarterClassification.CHEAP
-            elif price > p90 and price > median:
+            elif price > p90:
                 classification = QuarterClassification.PEAK
-            elif price > p75 and price > median:
+            elif price > p75:
                 classification = QuarterClassification.EXPENSIVE
             else:
                 classification = QuarterClassification.NORMAL
