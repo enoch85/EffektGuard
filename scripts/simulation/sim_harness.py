@@ -543,6 +543,108 @@ class HouseConfig:
 # DESIGN_OUTDOOR is the Swedish DVUT (dimensionerande vinterutetemperatur) for mid-Sweden; Boverket
 # puts Stockholm near -16 C. It is a stated convention of this harness, not a datasheet figure, and
 # every house is sized against it consistently, so the PAIRING is what is being asserted here.
+# WHERE EVERY NUMBER IN THIS PLANT MODEL CAME FROM.
+#
+# This table exists because the numbers that came from nowhere were the ones that decided what the
+# simulation was able to find, and nobody could tell them apart from measurements. The COP curves
+# were called "Real-world ... (tested and validated)" and sourced to "NIBE F750 datasheet, Swedish
+# NIBE forum validation"; they were in neither. The capacity derating cited EN 14511 and ran in the
+# opposite direction to it. The houses had heat-loss coefficients from nowhere at all.
+#
+# Each entry is exactly one of two things, and the difference is the point:
+#
+#   SOURCED  a document, quoted, that a reader can open.
+#   ASSUMED  no published source exists. Then the sensitivity is MEASURED and stated here, because
+#            an unsourced number that moves the answer is a finding about the modeller.
+#
+# tests/validation/test_every_simulator_constant_says_where_it_came_from.py enforces it: a new
+# physical constant cannot be added to this file without declaring one or the other.
+PROVENANCE: dict[str, str] = {
+    # ---- the pump, from NIBE ----
+    "DM_START": (
+        "SOURCED: NIBE starts the compressor at -60 degree minutes. docs/research/01_degree_"
+        "minutes.md, from the NIBE manual (menu 4.9.3)."
+    ),
+    "DM_STOP": "SOURCED: NIBE stops the compressor at 0 degree minutes. docs/research/01.",
+    "COP_RATING_FLOW_C": (
+        "SOURCED: EN 14511 rates heat pumps at W35. Every NIBE datasheet's rating points say so - "
+        "'A20(12)W35', '0/35 nominal', 'A7/W35'."
+    ),
+    "DESIGN_SPREAD": (
+        "SOURCED: EN 14511 dT5K - the 5 K water-side temperature difference the standard rates at. "
+        "The F2040 installer manual's table header says it verbatim: 'Output data according to "
+        "EN 14511 dT5K'. IHB EN 1848-8/231846 p.65."
+    ),
+    "RADIATOR_EXPONENT": "SOURCED: EN 442 panel radiators, n = 1.3. docs/research/02_emitter_law.md.",
+    "UFH_EXPONENT": "SOURCED: EN 1264 underfloor heating, n = 1.1. docs/research/02_emitter_law.md.",
+    "EXHAUST_AIR_SOURCE_C": (
+        "SOURCED: the F750 and F730 are rated at A20(12) - 20 C dry-bulb extract air. That IS their "
+        "heat source, and it does not change with the weather. NIBE F750 datasheet, part no. "
+        "066 063."
+    ),
+    "BRINE_SOURCE_C": (
+        "SOURCED: the F1155 and S1155 are rated at B0 - 0 C incoming brine. Their capacity chart's "
+        "x-axis is labelled 'Incoming brine temp, C'. F1155 installer manual IHB EN 2008-5/331379."
+    ),
+    "EN14825_COLD_DESIGN_C": (
+        "SOURCED: EN 14825 cold-climate reference design temperature. NIBE declares a Pdesignh at "
+        "this reference for every machine, and the houses are sized from it."
+    ),
+    "EN14825_AVERAGE_DESIGN_C": (
+        "SOURCED: EN 14825 average-climate reference. The F730's own ErP block confirms it by "
+        "declaring TOL = -10 C. Used by --undersized, which sizes a house here and fits it a pump "
+        "certified for the cold reference - the commonest installation fault there is."
+    ),
+    "STANDBY_KW": (
+        "SOURCED (as a range; the value is mid-band): the F750 datasheet, part no. 066 063, "
+        "publishes its running auxiliaries - 'Drive output heating medium pump 2: 5-45 W' and "
+        "'Driving power exhaust air fan: 25-140 W', so 30-185 W with the compressor running. "
+        "0.1 kW sits inside that. Swept "
+        "across the full published band the saturation findings do not move at all (2.1-2.2x vs "
+        "2.2x baseline)."
+    ),
+    "FLOW_EXERGY_PENALTY_PER_K": (
+        "SOURCED where the datasheets identify it, ASSUMED where they cannot, and the difference "
+        "is stated in HouseConfig.exergy_fit. Measured from the EN 14511 rating points of the "
+        "F1155/S1155 (IHB EN 2008-5/331379: -0.0055/K) and the F2040 (IHB EN 1848-8/231846: "
+        "-0.0028/K), which publish W35 and W45 at the same source and load. The F750/F730 confound "
+        "load with flow and cannot identify it, so they inherit the mean of the two."
+    ),
+    "ASSUMED_INDOOR_MODULE_HEATER_KW": (
+        "ASSUMED. The F2040 has NO immersion heater - it is an outdoor monobloc and its electric "
+        "addition lives in the paired indoor module (VVM/SMO), which this package does not model. "
+        "Every other machine's heater is on its profile, from its datasheet. Sensitivity: the F750's "
+        "cold-snap burn moved 38.1 -> 35.8 kWh when the heaters were sourced per machine, and the "
+        "saturation finding did not move."
+    ),
+    # ---- the plant, where NIBE publishes nothing ----
+    "CONDENSER_APPROACH_K": (
+        "ASSUMED. No datasheet publishes the refrigerant's approach temperatures. The exergy fit "
+        "ABSORBS them at the rating points - a different Carnot gives a different eta that "
+        "reproduces the same published COP - so the datasheet is matched whatever this is. Away "
+        "from the rating points it matters, by up to 42 % on an extrapolation to W55 full load. "
+        "Sensitivity, swept 3-7 K through the whole simulation: seasonal cost moves +/-2 %, and the "
+        "saturation finding does not move AT ALL, because saturation is a capacity constraint and "
+        "not an efficiency one."
+    ),
+    "EVAPORATOR_APPROACH_K": "ASSUMED. See CONDENSER_APPROACH_K - same assumption, same sensitivity.",
+    "WATER_LOOP_J_PER_K": (
+        "ASSUMED, and only half of it could be sourced. The F750 publishes its own buffer: 'Volume "
+        "boiler section (of which buffer vessel) litre 35 (25)' - 35 L of water is 146 kJ/K. The "
+        "EMITTER side is a property of the HOUSE, and NIBE publishes no system volume for it (the "
+        "manuals only say 'if the climate system volume is too small ... supplement with a buffer "
+        "vessel'). 350 kJ/K is about 84 L of water-equivalent: the pump's 35 L plus a radiator "
+        "circuit. Sensitivity, halved and doubled: the saturation finding holds throughout "
+        "(2.0-3.0x over what physics forces, houses cooked to 27.8-30.3 C, against 2.0-2.5x and "
+        "29.1-29.8 C at the committed value)."
+    ),
+    "COMPRESSOR_RESPONSE_S": (
+        "ASSUMED. How briskly the compressor closes on its flow target. No datasheet publishes it. "
+        "Sensitivity, swept 300-1800 s: the saturation finding holds throughout (1.9-2.4x, houses "
+        "at 29.1-29.4 C)."
+    ),
+}
+
 HOUSES = [
     HouseConfig(
         name="wooden_f750",  # exhaust air, radiators, light timber frame. ~130 m2.
