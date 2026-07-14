@@ -36,6 +36,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
+from .optimization.effect_layer import effective_tariff_power_kw
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -917,6 +918,19 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         attrs["baseline_cost"] = savings.baseline_cost
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
+                    if hasattr(savings, "effect_baseline_measured"):
+                        # ZERO MEANS TWO DIFFERENT THINGS and the owner cannot tell them apart from
+                        # the state alone: "we have never seen this house unoptimised, so we will
+                        # not invent a number", versus "we have, and we are saving you nothing".
+                        # The flag was computed and never surfaced - the same counted-and-ignored
+                        # habit that let the old fabricated figure go unnoticed for so long.
+                        attrs["effect_baseline_measured"] = savings.effect_baseline_measured
+                        if not savings.effect_baseline_measured:
+                            attrs["effect_savings_note"] = (
+                                "No effect-tariff saving is claimed: this house has never been "
+                                "observed with optimization switched off, so there is nothing to "
+                                "compare against. Turn optimization off for a while to measure it."
+                            )
 
         elif key == "peak_today":
             # Peak tracking metadata - when, how, and context
@@ -970,15 +984,28 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             # fact been recorded against the tariff.
             attrs["is_real_measurement"] = source in BILLABLE_POWER_SOURCES
 
+            # BOTH SIDES ARE WEIGHTED THE WAY THE TARIFF WEIGHTS THEM.
+            #
+            # `peak_this_month` is the EFFECTIVE peak - night quarters count half. `peak_today` is
+            # the raw kW the house drew. Comparing them directly told the owner that a 3.1 kW blip
+            # at 02:00 was about to set a new monthly peak against a 3.0 kW effective peak, when the
+            # tariff will bill that blip as 1.55 kW. The night weighting is not a peak.
+            today_as_billed = (
+                effective_tariff_power_kw(
+                    self.coordinator.peak_today, self.coordinator.peak_today_quarter
+                )
+                if self.coordinator.peak_today_quarter is not None
+                else self.coordinator.peak_today
+            )
             will_affect = (
                 source in BILLABLE_POWER_SOURCES
-                and self.coordinator.peak_today > self.coordinator.peak_this_month
+                and today_as_billed > self.coordinator.peak_this_month
             )
             attrs["will_affect_billing"] = will_affect
 
             if will_affect:
                 attrs["billing_impact"] = (
-                    f"New monthly peak: {self.coordinator.peak_today:.2f} kW "
+                    f"New monthly peak: {today_as_billed:.2f} kW "
                     f"(previous: {self.coordinator.peak_this_month:.2f} kW)"
                 )
             elif source not in BILLABLE_POWER_SOURCES:

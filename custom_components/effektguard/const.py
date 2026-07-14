@@ -69,6 +69,13 @@ DAYTIME_END_HOUR: Final = 22  # 22:00 - daytime ends (nighttime 22:00-06:00)
 DAYTIME_START_QUARTER: Final = 24  # Quarter 24 = 06:00
 DAYTIME_END_QUARTER: Final = 87  # Quarter 87 = 21:45 (last daytime quarter)
 
+# Swedish effect tariffs weight night quarters at half. This was a bare 0.5 in two places in
+# effect_layer, and the fact that it is a WEIGHTING rather than a power was easy to lose sight of:
+# the coordinator fed the savings baseline an unweighted peak and compared it against a weighted
+# one, so a single night quarter reported 150 SEK/month of "savings" that were nothing but this
+# number. Anything compared against a monthly peak has to be put through effective_tariff_power_kw.
+NIGHT_TARIFF_WEIGHT: Final = 0.5
+
 # Optimization modes for climate entity presets
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
 OPTIMIZATION_MODE_BALANCED: Final = "balanced"  # Balance comfort and savings

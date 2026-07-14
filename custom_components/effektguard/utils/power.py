@@ -23,9 +23,16 @@ _LOGGER = logging.getLogger(__name__)
 #
 # Case matters here, and it is not a style preference: HA ships both `UnitOfPower.MILLIWATT` ("mW")
 # and `UnitOfPower.MEGA_WATT` ("MW"), and they differ ONLY in case. Case-folding the unit collapses
-# them onto each other, and this table would then read a milliwatt sensor as MEGAWATTS - a factor
-# of 10^9, classified billable, persisted as a monthly tariff peak, and pinning the effect layer to
-# CRITICAL for the rest of the month. Anything else - no unit, kWh, Wh, a percentage - is refused.
+# them onto each other, and this table would then read a milliwatt sensor as MEGAWATTS - a factor of
+# 10^9, classified billable, and persisted as the month's tariff peak.
+#
+# And the consequence is the OPPOSITE of the obvious one. A 5 000 000 kW peak does not throttle the
+# house; it makes every real quarter look safe against it ("Safe margin: 4999994 kW below peak"), so
+# `should_limit_power` returns OK and PEAK PROTECTION IS SILENTLY DISABLED FOR THE REST OF THE
+# MONTH - and the owner blows the real tariff peak that the feature exists to prevent. The effect
+# tariff bills the top three quarters, so it stands for weeks.
+#
+# Anything else - no unit, kWh, Wh, a percentage - is refused.
 # kWh is the one worth naming: it is one entry away in an entity dropdown, it is cumulative, and
 # read as power it reports a house drawing its own lifetime consumption.
 POWER_UNIT_FACTORS_KW: dict[str, float] = {

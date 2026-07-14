@@ -57,6 +57,7 @@ from ..const import (
     PEAK_RECORDING_MINIMUM,
     POWER_MULTIPLIER_COLD,
     POWER_MULTIPLIER_MILD,
+    NIGHT_TARIFF_WEIGHT,
     POWER_MULTIPLIER_VERY_COLD,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NONE,
@@ -71,6 +72,27 @@ from ..const import (
 from ..utils.time_utils import get_current_quarter
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def is_daytime_quarter(quarter: int) -> bool:
+    """Whether this quarter of the day is billed at the full tariff rate (06:00-21:45)."""
+    return DAYTIME_START_QUARTER <= quarter <= DAYTIME_END_QUARTER
+
+
+def effective_tariff_power_kw(power_kw: float, quarter: int) -> float:
+    """What the effect tariff will BILL this power as. Night quarters count half.
+
+    THE ONE DEFINITION. This was open-coded in two places here and needed a third in the sensor,
+    and a fourth thing - the savings baseline in the coordinator - compared an UNWEIGHTED peak
+    against a weighted one. The result was that a single 6 kW quarter at 02:00, with the optimiser
+    doing nothing whatsoever, reported 150 SEK/month of savings: the whole figure was this
+    weighting, applied to one side of a subtraction and not the other, and it was flagged as
+    "measured".
+
+    A quantity that is sometimes weighted and sometimes not is a quantity waiting to be compared
+    against itself. Everything that goes near a monthly peak comes through here.
+    """
+    return power_kw if is_daytime_quarter(quarter) else power_kw * NIGHT_TARIFF_WEIGHT
 
 
 class PeakEventDict(TypedDict):
@@ -269,11 +291,8 @@ class EffectManager:
             )
             return None
 
-        # Determine if daytime (06:00-22:00)
-        is_daytime = DAYTIME_START_QUARTER <= quarter <= DAYTIME_END_QUARTER
-
-        # Calculate effective power (50% weight at night)
-        effective_power = power_kw if is_daytime else power_kw * 0.5
+        is_daytime = is_daytime_quarter(quarter)
+        effective_power = effective_tariff_power_kw(power_kw, quarter)
 
         # Check if this is a new peak
         is_new_peak = False
@@ -332,9 +351,7 @@ class EffectManager:
         Returns:
             Decision with limit recommendation and severity
         """
-        # Calculate effective power
-        is_daytime = DAYTIME_START_QUARTER <= current_quarter <= DAYTIME_END_QUARTER
-        effective_power = current_power if is_daytime else current_power * 0.5
+        effective_power = effective_tariff_power_kw(current_power, current_quarter)
 
         # If no peaks yet, no limit needed
         if not self._monthly_peaks:

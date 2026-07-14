@@ -2376,7 +2376,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             else:
                 self._quarter_power_samples.append((now, current_power))
 
-            if peak_event and not self.entry.data.get("enable_optimization", True):
+            if (
+                peak_event
+                and not self.entry.data.get("enable_optimization", True)
+                and power_source in BILLABLE_POWER_SOURCES
+            ):
                 # THE UNOPTIMISED BASELINE, MEASURED RATHER THAN ASSUMED.
                 #
                 # With optimization switched off the coordinator holds the curve offset at 0.0 and
@@ -2386,7 +2390,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # would have been without optimization"), and nothing had ever called it: the
                 # savings calculator fell back on `baseline = peak * 1.176` every single time, so a
                 # higher peak reported more "savings" and the sensor could never read zero.
-                self.savings_calculator.update_baseline_peak(peak_event.actual_power)
+                #
+                # IT MUST BE `effective_power`, NOT `actual_power`. The other side of the
+                # comparison is `peak_this_month`, which is get_monthly_peak_summary()["highest"],
+                # which is the EFFECTIVE (tariff-weighted) peak. Feeding the baseline the unweighted
+                # number compared the same quarter against itself: one 6.0 kW quarter at 02:00, with
+                # the optimiser doing nothing at all, reported 150 SEK/month of "savings" - all of
+                # it the night weighting - and flagged it as MEASURED. That is the very bug this
+                # block was written to kill, re-introduced by the block itself.
+                #
+                # AND IT MUST COME FROM A BILLABLE SOURCE. Peak RECORDING accepts nibe_currents,
+                # because the pump is the dominant controllable load and throttling against a
+                # NIBE-only history is coherent. But this figure is MONEY, and the effect tariff
+                # bills WHOLE-HOUSE grid import. A baseline built from a sensor that cannot see the
+                # oven, the EV or the water heater is not a baseline for anything the owner pays.
+                self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
                 # The HIGHEST of the tracked peaks, never peak_event.effective_power:
