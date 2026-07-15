@@ -104,6 +104,6 @@ async def test_the_f_series_pump_still_actually_controls_hot_water():
     turn_ons = [
         call
         for call in coordinator.hass.services.async_call.await_args_list
-        if call.args[:2] == ("switch", "turn_on")
+        if call.args[:2] == ("homeassistant", "turn_on")
     ]
     assert turn_ons, "an F-series pump with a cheap window must still get its hot-water boost"

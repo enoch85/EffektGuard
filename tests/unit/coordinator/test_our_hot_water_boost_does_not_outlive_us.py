@@ -61,7 +61,7 @@ def _turn_off_calls(coordinator) -> list:
     return [
         call
         for call in coordinator.hass.services.async_call.await_args_list
-        if call.args[:2] == ("switch", "turn_off")
+        if call.args[:2] == ("homeassistant", "turn_off")
     ]
 
 

@@ -64,7 +64,7 @@ def _turn_offs(hass) -> list:
     return [
         call
         for call in hass.services.async_call.await_args_list
-        if call.args[0] == "switch" and call.args[1] == "turn_off"
+        if call.args[0] == "homeassistant" and call.args[1] == "turn_off"
     ]
 
 
@@ -153,7 +153,7 @@ def test_there_is_exactly_one_door_to_the_hot_water_switch():
             and call.func.attr == "async_call"
             and len(call.args) >= 3
             and isinstance(call.args[0], ast.Constant)
-            and call.args[0].value == "switch"
+            and call.args[0].value == "homeassistant"
         ):
             return False
         return "temp_lux_entity" in ast.dump(call.args[2])

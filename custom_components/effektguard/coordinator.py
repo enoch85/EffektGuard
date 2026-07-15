@@ -669,8 +669,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return False
 
         try:
+            # The generic service, not switch.*: a nibe_heatpump/Modbus user has no lux
+            # switch - their bridge is an input_boolean helper - and homeassistant.turn_on
+            # drives both domains through this same one door (issue #18).
             await self.hass.services.async_call(
-                "switch",
+                "homeassistant",
                 "turn_on" if on else "turn_off",
                 {"entity_id": self.temp_lux_entity},
                 blocking=True,

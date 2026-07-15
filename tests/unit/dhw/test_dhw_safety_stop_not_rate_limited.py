@@ -84,7 +84,7 @@ def switch_calls(coordinator) -> list[str]:
     return [
         call.args[1]
         for call in coordinator.hass.services.async_call.call_args_list
-        if call.args and call.args[0] == "switch"
+        if call.args and call.args[0] == "homeassistant"
     ]
 
 
