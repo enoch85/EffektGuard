@@ -1,19 +1,14 @@
-"""The document a maintainer opens to ask "what DM is normal here?" must not lie to them.
+"""The document a maintainer opens to ask "what DM is normal here?" must match the code.
 
-`docs/CLIMATE_ZONES.md` is the reference for the most safety-critical question in the project.
-Every one of its seventeen degree-minute rows was wrong - not slightly, and not in one zone:
+`docs/CLIMATE_ZONES.md` is the reference for the most safety-critical question in the project: at a
+given zone and outdoor temperature, what degree-minute range is normal. Every one of its DM rows
+must be exactly what ClimateZoneDetector computes - a good number attached to the wrong outdoor
+temperature is still a wrong claim, and that is how the tables drifted (a Cold-zone winter average
+of -8.0 C, once quoted as -10.0, moves every threshold derived from it).
 
-    Stockholm at -10 C   doc said  -450 to -700, warning -700     code gives  -490 to -740, -740
-    Kiruna    at -30 C   doc said  -800 to -1200, warning -1200   code gives -1000 to -1400, -1400
-    Paris     at  +5 C   doc said  -200 to -350, warning -350     code gives  -100 to -250, -250
-
-The winter averages the tables are derived from had drifted (Cold -10 vs the code's -8.0, Standard
-+5 vs 0.0), and nothing anywhere noticed, because nothing anywhere looked. The whole reason the
-docs in this repository are largely wrong is that no test has ever read one.
-
-So this test reads one. It parses the DM tables straight out of the markdown and asks the real
-ClimateZoneDetector what it would actually say. A maintainer who tunes a threshold in const.py and
-leaves the document behind gets a failing test naming the row.
+So this parses the DM tables straight out of the markdown and asks the real detector what it would
+say. A maintainer who tunes a threshold in const.py and leaves the document behind gets a failing
+test naming the row.
 """
 
 from __future__ import annotations
@@ -93,12 +88,10 @@ def test_each_documented_dm_row_is_what_the_code_computes(zone, outdoor, low, hi
 
 
 def test_the_adjustment_formula_is_stated_with_the_right_sign():
-    """The document had the subtraction backwards, and fudged its example to hide it.
+    """The document must state the adjustment in the direction the code computes it.
 
-    It stated `(zone_avg_winter_low - outdoor_temp) × 20`, which yields the opposite sign to the
-    code's `outdoor_temp - self.zone_info.winter_avg_low`, and then simply wrote the correct
-    number underneath. Two documents in this repository disagreed on the sign of the core safety
-    maths, and the wrong one showed its working.
+    `adjustment = (outdoor_temp - zone_avg_winter_low) x 20`: colder than the zone average is a
+    NEGATIVE delta and a DEEPER threshold. The inverted form yields the opposite sign.
     """
     text = DOC.read_text(encoding="utf-8")
 

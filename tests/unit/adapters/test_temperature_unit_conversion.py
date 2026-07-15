@@ -1,21 +1,11 @@
-"""NIBE temperature readings must be normalised to °C.
+"""NIBE temperature readings must be normalised to °C (`_read_temperature`).
 
-`NibeState` documents every temperature as °C, and the whole optimization stack assumes it.
-But the unit was never checked. Two things made that dangerous rather than theoretical:
-
-  1. Discovery explicitly ACCEPTS an entity whose unit is °F
-     (`_consider_candidate`: `unit not in ["°C", "°F", "C", "F"]` -> skip).
-  2. Home Assistant presents a `temperature` device-class sensor in the USER'S preferred
-     unit. On an imperial install - or with a single entity overridden to °F in the entity
-     settings - the state value IS Fahrenheit.
-
-The read path then did a bare `float(state.state)` and passed it on as Celsius. So:
-
-    BT1  reading 32  (= 0 °C)  was taken as +32 °C outdoors
-    BT25 reading 95  (= 35 °C) was taken as a 95 °C flow temperature
-
-Weather compensation sees a warm day and an absurdly hot flow, and drives the offset to
-minimum - in the middle of winter.
+NibeState documents every temperature as °C and the optimization stack assumes it.
+Discovery accepts °F entities, and HA presents a temperature sensor in the user's
+preferred unit, so on an imperial install BT1 reading 32 (= 0 °C) and BT25 reading 95
+(= 35 °C) would be taken as +32 °C and a 95 °C flow if passed through as bare floats -
+driving weather compensation to minimum offset in winter. Conversion must happen after
+the unknown-value marker check, so a raw -32768 marker is dropped, not converted.
 """
 
 from unittest.mock import MagicMock

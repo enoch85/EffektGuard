@@ -1,35 +1,19 @@
-"""Every number in the plant model must say where it came from. That rule did not exist, and the
-numbers that came from nowhere were the ones that decided what the simulation could find.
+"""Every number in the plant model must say where it came from.
 
-THE HISTORY THIS FILE EXISTS TO PREVENT:
+The pump profiles once carried an outdoor-keyed COP curve labelled "Real-world COP curve (tested
+and validated)" and sourced to "NIBE F750 datasheet, Swedish NIBE forum validation" - a template
+with the digits nudged, whose numbers were in neither. A plain number with a confident comment is
+indistinguishable from a measurement until someone checks, and for a year nobody did.
 
-  * The pump profiles carried an outdoor-keyed COP curve called "Real-world COP curve (tested and
-    validated)" and sourced to "NIBE F750 datasheet, Swedish NIBE forum validation". The maximum
-    output was 8.0 kW against a published 4.994. The number 5.0, labelled "Best COP", appears in no
-    NIBE document. The F750 and the F730 shipped byte-identical curves.
-
-  * The simulator derated an air-source pump 2.5 %/C below +7 C and attributed it to "the EN 14511
-    rating points ... trace a near-linear decline". They trace a near-linear RISE. The citation was
-    invented AND the sign was backwards, and the headline finding was built on it.
-
-  * Every house carried a heat-loss coefficient that came from nowhere, and three of five paired a
-    pump with a house it was twice too big for - which is why the ground-source houses "never
-    engaged the emergency ladder".
-
-  * The effect tariff's measurement period was 15 minutes, in a constant that called itself
-    "Swedish Effektavgift measurement period". The tariff bills the HOUR.
-
-Each of those was a plain number with a confident comment. None had a source anybody could check.
-
-SO EVERY PHYSICAL CONSTANT IS NOW DECLARED, and it is declared as exactly one of two things:
+So every physical constant in the harness is declared as exactly one of two things:
 
     SOURCED   - a document, quoted, that a reader can go and open.
-    ASSUMED   - no published source exists. Then the sensitivity MUST be measured and stated: if
+    ASSUMED   - no published source exists; then the sensitivity MUST be measured and stated. If
                 the conclusions move when the number moves, the number is load-bearing and the
                 conclusions are not trustworthy.
 
-An ASSUMED constant is not a sin. An UNDECLARED one is, because it is indistinguishable from a
-measurement until somebody checks - and for a year, nobody did.
+An ASSUMED constant is not a sin. An UNDECLARED one is. Loop counters, unit conversions and the
+harness's own reporting budgets are not physical claims and are listed in NOT_A_PHYSICAL_CLAIM.
 """
 
 from __future__ import annotations
@@ -110,9 +94,8 @@ def _provenance() -> dict[str, str]:
     """The PROVENANCE table the harness declares."""
     tree = ast.parse(HARNESS.read_text(encoding="utf-8"))
     for node in tree.body:
-        # `PROVENANCE: dict[str, str] = {...}` is an AnnAssign, not an Assign. The first version of
-        # this walker looked only for Assign, found nothing, and reported every constant as
-        # undeclared - a guard that fails for the wrong reason is still a guard that lies.
+        # `PROVENANCE: dict[str, str] = {...}` is an AnnAssign, not an Assign - handle both, or a
+        # walker that looks only for Assign finds nothing and reports every constant as undeclared.
         if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "PROVENANCE":
             target = node.value
         elif isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "PROVENANCE":
@@ -169,12 +152,9 @@ def test_a_sourced_constant_quotes_a_document_and_an_assumed_one_admits_it(name)
         f"{name}'s provenance reads {claim!r}. It must begin with SOURCED (and quote the document) "
         f"or ASSUMED (and state the measured sensitivity). There is no third kind."
     )
-    # A SOURCED claim must name a REFERENCE, not merely use the word "datasheet".
-    #
-    # My first version accepted the bare words "datasheet" and "manual", and mutating an ASSUMED
-    # entry to SOURCED sailed through - because its text read "No datasheet publishes it". The guard
-    # was matching a word in a sentence that said the opposite. A reference is a URL, a numbered
-    # standard, a NIBE document code, a part number, or a file in this repo that carries one.
+    # A SOURCED claim must name a REFERENCE, not merely use the word "datasheet" - a bare word can
+    # sit in a sentence that says the opposite ("No datasheet publishes it"). A reference is a URL,
+    # a numbered standard, a NIBE document code, a part number, or a docs/research file.
     references = (
         r"https?://",
         r"\bEN \d{3,5}\b",  # EN 442, EN 1264, EN 14511, EN 14825

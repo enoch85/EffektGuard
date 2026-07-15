@@ -1,15 +1,10 @@
-"""A billing hour's provenance is decided by every sample in it, not by the closing one.
+"""A billing hour's provenance is decided by every sample in it, not by the closing cycle.
 
-The accumulator stored (timestamp, power) and nothing else; the coordinator stamped the
-completed hour with whatever source the BOUNDARY cycle happened to have. So an hour whose
-middle was measured at the pump's phase currents - because the grid meter dropped out -
-became a billable whole-house-meter hour the moment the meter answered again at the top of
-the next hour. The tariff bills whole-house grid import; fifty minutes of pump-only samples
-are not that.
-
-The rule: every sample from the grid meter -> billable meter hour. Meter and pump-current
-samples mixed (or pump-only) -> control-grade, never shown as a bill. Anything weaker in the
-mix -> not a measurement at all.
+The accumulator stamps a completed hour with the WEAKEST source among its samples. So an hour
+whose middle fell back to pump phase currents (the grid meter dropped out) is control-grade,
+even if the meter answered again at the hour boundary - the tariff bills whole-house grid
+import, and fifty minutes of pump-only samples are not that. A pure grid-meter hour stays
+billable; anything weaker in the mix degrades it.
 """
 
 from __future__ import annotations

@@ -1,42 +1,14 @@
-"""DHW is allowed to start at a degree-minute value that aborts it on the next tick.
+"""DHW must not be allowed to start at a degree-minute value that aborts it on the next tick.
 
-Two thresholds govern hot water under thermal debt:
+Two thresholds govern hot water under thermal debt: `block` (do not START below this DM) and `abort`
+(STOP a running cycle below this DM). Abort must be the DEEPER of the two: heating hot water steals
+the compressor from space heating, so degree minutes always sink during a cycle, and an abort
+shallower than block means every cycle that starts near the block threshold trips abort immediately -
+the pump starts, stops, starts, stops. The fallback constants have the relationship right
+(block -340, abort -500; abort 160 DM deeper).
 
-  * **block** - do not START a DHW cycle if degree minutes are already this bad;
-  * **abort** - STOP a running DHW cycle if degree minutes fall this far while it runs.
-
-Abort must be the DEEPER of the two. Heating hot water steals the compressor from space heating, so
-degree minutes always sink during a DHW cycle - and if abort sits shallower than block, every cycle
-that starts near the block threshold trips the abort immediately. The pump starts, stops, starts,
-stops.
-
-The fallback constants state the relationship correctly:
-
-    DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Never start DHW below this DM
-    DM_DHW_ABORT_FALLBACK: Final = -500.0  # Abort DHW if reached during run
-
-Abort is 160 DM deeper than block. That is the shape of it.
-
-The climate-aware path - the one that actually runs - inverts it:
-
-    dm_block_threshold = dm_thresholds["warning"]
-    # Abort threshold should be LESS strict (more negative) than block threshold
-    # to avoid immediate abort after starting. Use 80 DM buffer beyond warning.
-    dm_abort_threshold = dm_thresholds["warning"] - 80
-
-while the block that is actually enforced comes from `EmergencyLayer.should_block_dhw`, which blocks at
-`warning - DM_CRITICAL_T2_MARGIN`, i.e. **warning - 200**. So:
-
-    Stockholm at -10 C:   warning -740   BLOCK -940   ABORT -820
-
-**Abort is 120 DM SHALLOWER than block.** Every degree-minute value between -940 and -820 is one where
-DHW is permitted to start and is aborted on the next cycle. The comment three lines above the bug says
-the code exists "to prevent start-then-abort cycles when block passes but abort fails". It guarantees
-them, in every climate zone.
-
-There is a second defect in the same four lines. `dm_block_threshold` is set to `warning` (-740), but
-nothing blocks at -740 - the enforced block is -940. That number is published to the owner as
-`thermal_debt_threshold_block`, so the diagnostic reports a threshold the code does not use.
+Invariants: in every climate zone abort < block; the reported block equals what EmergencyLayer
+actually enforces (`warning - DM_CRITICAL_T2_MARGIN`); and abort never sinks past the absolute limit.
 """
 
 from __future__ import annotations
@@ -115,10 +87,9 @@ def test_the_block_threshold_is_the_one_that_is_actually_enforced(latitude, outd
 def test_abort_never_sinks_past_the_absolute_limit(latitude, outdoor):
     """The absolute limit is the floor. Below it the emergency layer owns the pump outright.
 
-    Clamping at the limit ITSELF is deliberate, and a first draft of the fix got it wrong: clamping
-    at `limit + buffer` pushed abort back ABOVE block in the coldest zone, where block already sits
-    at -1400, and re-created the inversion this file exists to prevent. Deep zones have less room,
-    and an abort exactly at the limit is the hardest possible stop, not a self-defeating one.
+    Clamping at the limit ITSELF is deliberate: clamping at `limit + buffer` would push abort back
+    ABOVE block in the coldest zone, where block already sits at -1400, re-creating the inversion
+    this file exists to prevent. An abort exactly at the limit is the hardest possible stop.
     """
     _, abort = _thresholds(latitude, outdoor)
 

@@ -1,14 +1,11 @@
 """The effect tariff counts at most ONE peak per day - the three must come from THREE days.
 
-Ellevio, "Så fungerar effektavgiften": the monthly charge is the mean of the three highest
-hourly peaks, and "only one power peak per day is counted, so the three peaks must come from
-three different days."
-https://www.ellevio.se/abonnemang/elnatspriser/ny-prismodell-baserad-pa-effekt/
+Ellevio, "Så fungerar effektavgiften": the monthly charge is the mean of the three highest hourly
+peaks, and "only one power peak per day is counted, so the three peaks must come from three
+different days." https://www.ellevio.se/abonnemang/elnatspriser/ny-prismodell-baserad-pa-effekt/
 
-The top-3 logic used to ignore the date entirely, so one bad day filled all three slots. That
-overstates the bill - and worse, it *understates the margin*: with 9/8/7 kW recorded from one
-cold Saturday, the layer throttles the pump against 8 kW when the tariff's real third-highest
-day may be 4 kW.
+Date-blind top-3 let one cold day fill all three slots. That overstates the bill and understates
+the margin the pump is then throttled against (9/8/7 from one Saturday vs a real third day of 4 kW).
 """
 
 from datetime import datetime

@@ -1,47 +1,14 @@
-"""I fixed the fabricated-savings bug and fabricated the savings again, the same afternoon.
+"""The effect-tariff saving must compare like with like, from a billable source.
 
-The original defect was that the effect-tariff saving was computed from the peak itself:
+The Swedish tariff halves night quarters, so the effect layer carries both `actual_power` (6.0 kW)
+and `effective_power` (3.0 kW at 02:00). `peak_this_month` is the effective figure, so the baseline
+the coordinator feeds must be weighted the same way; feeding it `actual_power` compares the same
+quarter against itself and reports the night weighting as a saving, flagged MEASURED.
 
-    baseline_peak_kw = current_peak_kw * 1.176      # nothing ever set a real baseline
-
-so `effect_savings` reduced to `0.176 * current_peak * tariff` - a higher peak reported MORE
-"savings", and the sensor could never read zero. Unfalsifiable. The fix was to measure the baseline
-from the quarters recorded while the optimisation switch is OFF, and to report zero until then.
-
-AND THE MEASUREMENT COMPARED TWO DIFFERENT QUANTITIES.
-
-The Swedish effect tariff weights night quarters at half, so the effect layer carries both numbers:
-
-    PeakEvent.actual_power       6.0 kW     what the house actually drew
-    PeakEvent.effective_power    3.0 kW     what the tariff will bill it as, at 02:00
-
-`peak_this_month` - the "current" side of the comparison - is `get_monthly_peak_summary()["highest"]`,
-which is `effective_power`. But the coordinator fed the baseline `peak_event.actual_power`. So the two
-sides of
-
-    peak_reduction = baseline - current
-
-were THE SAME QUARTER, once un-weighted and once weighted. One 6.0 kW quarter at 02:00, with the
-optimiser doing nothing whatsoever:
-
-    reported effect saving:   150 SEK/month
-    effect_baseline_measured: True          <- and flagged as MEASURED, not assumed
-
-Every krona of it is the night weighting compared against itself. Same class of bug as the one it
-replaced - a savings figure computed from the peak rather than from any saving - and worse, because
-this one is stamped "measured".
-
-AND THE BASELINE HAD NO SOURCE GATE. Peak RECORDING accepts nibe_currents (the pump's own current
-sensors), because the pump is the dominant controllable load and a NIBE-only history compared against
-NIBE-only quarters is a coherent basis for throttling. But the effect tariff bills WHOLE-HOUSE grid
-import, and the savings figure is MONEY. A baseline built from a sensor that cannot see the oven, the
-EV or the water heater produces a SEK figure from a quantity nobody is billed for. Money comes from
-BILLABLE_POWER_SOURCES - the external meter, and nothing else.
-
-THESE TESTS DRIVE THE COORDINATOR, not the savings calculator. The first draft of this file called
-`update_baseline_peak(event.effective_power)` in the test body and asserted the result was zero -
-which is a test of my own arithmetic, and passes with the production bug fully intact. The bug is in
-what the COORDINATOR passes. So that is what is exercised.
+Two invariants, driven through the coordinator: the baseline is the same quantity as
+peak_this_month, and it is built only from BILLABLE_POWER_SOURCES (the external meter) - a
+NIBE-currents peak may throttle the pump but must never become a figure in kronor. The dashboard
+sensors weight both sides the same way, and an unmeasured baseline says so rather than reading 0 SEK.
 """
 
 from __future__ import annotations
@@ -112,13 +79,12 @@ def _metered_house(hour: int, power_kw: float) -> NibeState:
 
 
 async def _observe_a_whole_quarter(coord, monkeypatch, hour: int, power_kw: float) -> None:
-    """Four samples across one quarter, so it completes and is recorded as a tariff peak.
+    """Drive a whole billing hour so it completes and is recorded as a tariff peak.
 
-    The meter has to actually READ. A bare MagicMock state is refused by `power_kw_from_state` -
-    correctly, since its unit is a MagicMock and this integration will not guess a power unit - so
-    the first draft of this helper recorded no peak at all, set no baseline, reported zero savings,
-    and passed with the bug fully intact. Vacuous green is the failure mode this whole audit keeps
-    finding, so the callers assert a precondition that the peak was really recorded.
+    The meter must actually READ: a bare MagicMock state is refused by `power_kw_from_state`
+    (its unit is a MagicMock and the integration will not guess a power unit), which records no
+    peak and sets no baseline. The callers assert a precondition that the peak was really recorded,
+    so a vacuously-green run cannot hide the bug.
     """
     state = MagicMock()
     state.entity_id = "sensor.house_power"
@@ -128,8 +94,7 @@ async def _observe_a_whole_quarter(coord, monkeypatch, hour: int, power_kw: floa
 
     nibe_data = _metered_house(hour, power_kw)
 
-    # A whole BILLING HOUR, because that is what the tariff bills. It used to run 15 minutes and
-    # call that a billing period.
+    # A whole BILLING HOUR, because that is what the tariff bills.
     for h, m in [(hour, mm) for mm in range(0, 60, 5)] + [(hour + 1, 0)]:
         monkeypatch.setattr(
             dt_util,

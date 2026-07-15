@@ -1,36 +1,12 @@
 """Unload must actually stop the coordinator. Two writers on one heat pump is unacceptable.
 
-EffektGuard disables the base scheduler (`update_interval=None`) and drives itself from a
-clock-aligned timer, re-armed in `_do_aligned_refresh`'s `finally` block so that a single
-bad cycle cannot kill the update loop.
-
-That `finally` created a second, subtler hazard, and this file pins it shut.
-
-THE ORPHAN-TIMER RACE
----------------------
-`_do_aligned_refresh` runs on a task created with `hass.async_create_task` - NOT
-`entry.async_create_task` - so Home Assistant cannot cancel it when the entry unloads:
-
-    T+0.00  timer fires -> hass.async_create_task(_do_aligned_refresh())
-    T+0.02  user hits Reload -> async_unload_entry -> coordinator.async_shutdown()
-    T+0.03  coordinator popped from hass.data; platforms unloaded
-    T+0.05  _do_aligned_refresh finishes -> finally -> _schedule_aligned_refresh()
-            ^^^ RE-ARMS A TIMER ON THE DEAD COORDINATOR
-    T+0.06  async_setup_entry runs again -> a SECOND coordinator, with its own timer
-    T+5min  BOTH fire -> both call nibe.set_curve_offset()
-
-Each coordinator has its own rate limiter and its own `last_applied_offset`, so they fight.
-Every reload would add another writer, permanently.
-
-The guard is `_shutdown_requested`, which only exists if `async_shutdown()` calls
-`super().async_shutdown()`. It previously did not - so the flag was never set, the base
-refresh handle was never cancelled, and the request debouncer was never shut down (a
-trailing 10 s debounced refresh queued by a service call could fire *after* unload and
-write an offset to the pump).
-
-The same missing `super()` call also meant shutdown ran TWICE per unload - the base
-registers `config_entry.async_on_unload(self.async_shutdown)` in its own __init__, and
-`async_unload_entry` calls it explicitly - double-saving learning data and effect peaks.
+EffektGuard drives itself from a clock-aligned timer, re-armed in `_do_aligned_refresh`'s
+`finally`. That refresh runs on `hass.async_create_task`, so HA cannot cancel it on unload - and
+if it re-arms after the entry unloads, the reload's new coordinator becomes a second writer, and
+every reload adds another. The guard is `_shutdown_requested`, which is only set if
+`async_shutdown()` calls `super().async_shutdown()` (which also cancels the refresh handle and the
+debouncer). That super() call also makes shutdown idempotent: it runs twice per unload (the base
+auto-registers it AND `async_unload_entry` calls it), and without the guard it double-saved state.
 """
 
 from unittest.mock import AsyncMock, MagicMock

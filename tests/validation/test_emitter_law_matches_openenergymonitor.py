@@ -1,57 +1,28 @@
 """Our flow-temperature curve is checked against OpenEnergyMonitor's, not against our own opinion.
 
-The emitter law is the one number the whole weather-compensation layer rests on. It decides how hot
-the water has to be, at every outdoor temperature, forever. If it is wrong, everything downstream is
-wrong in a way no amount of tuning will reveal - it will just quietly hold the house at the wrong
-temperature and call it optimisation.
+The emitter law decides how hot the water must be at every outdoor temperature, forever; if it is
+wrong, everything downstream quietly holds the house at the wrong temperature and calls it
+optimisation. So it is pinned to a published, independent implementation - OpenEnergyMonitor's
+weather-compensation tool (github.com/openenergymonitor/tools, www/tools/weathercomp/weathercomp.js):
 
-So it is pinned to a published, independent implementation: OpenEnergyMonitor's weather-compensation
-tool, whose source is public.
-
-    // github.com/openenergymonitor/tools : www/tools/weathercomp/weathercomp.js
     let HTC         = heat_loss / (room_temperature - design_outsideT);
     let heat_demand = HTC * (room_temperature - outsideT);
     let DT          = Math.pow((heat_demand / rated_emitter_output_dt50), 1 / 1.3) * 50;
-    let MWT         = room_temperature + DT;
-    let flowT       = MWT + (systemDT * 0.5);
+    let flowT       = room_temperature + DT + (systemDT * 0.5);
 
-Two things in that source are worth stating plainly, because this project got one of them wrong and
-worried unnecessarily about the other.
+Two facts the tests below pin, because this project got one wrong and worried needlessly about the
+other:
 
-**The spread is constant.** `systemDT * 0.5`, not `systemDT * phi * 0.5`. A fixed-speed circulator
-gives constant mass flow and a spread proportional to load - that is a wet boiler. A heat pump
-modulates its circulator to hold the commissioned spread and varies the flow rate. This file used to
-scale it, and the error pivoted exactly on the design point, so it was invisible there and grew in
-both directions: 1.63 C too cool at +12 C outdoor, 0.98 C too hot at -12 C.
+  * The spread is CONSTANT (`systemDT * 0.5`, never `* phi`). A heat pump modulates its circulator
+    to hold the commissioned spread; scaling it pivots the curve invisibly on the design point.
+  * Internal gains are WATTS over W/K, never fitted to a curve. WeatherComp has no gains term and is
+    the outlier - its authors' own SCOP tool carries the naive formula commented out. So WeatherComp
+    checks the EMITTER LAW only (the `^(1/1.3)` part), demand held identical on both sides, gains off.
 
-**WeatherComp has no internal-gains term, and it is the ODD ONE OUT.** An earlier draft of this file
-took that omission as gospel and wrote "heat demand is linear in (room - outdoor), full stop". It is
-not. OpenEnergyMonitor contradict themselves, and the rest of their work says so:
-
-  * their SCOP tool carries the naive formula COMMENTED OUT, with the note
-    "This approach would need to take into account gains, hence use of degree days approach",
-    and uses `baseTemp: 15.5` against `roomT: 19.3` - a 3.8 K base difference;
-  * their measured-heat-demand tool fits `base_DT` from real data, default 4 K;
-  * across 383 monitored systems on heatpumpmonitor.org the median fitted `base_DT` is 2.5 K, and
-    the median implied gains 583 W.
-
-So this file uses WeatherComp to check the EMITTER LAW - the `^(1/1.3)` part, which is what it is
-authoritative about - and holds the demand model identical on both sides to do it.
-
-**The gains term is NOT checked against a curve, because it cannot be.** An earlier draft fitted it
-to NIBE's published curve 9 and reported a triumphant RMS. Two separate tests below now show why
-that was worthless: the constant-spread and balance-point terms are the same basis function with
-opposite signs (so any assumed spread manufactures a matching "gains" figure, even from a curve
-with provably zero gains), AND curve 9 is a straight line to within 0.19 C, which cannot resolve
-curvature at all. Gains are WATTS over W/K. See const.py.
-
-And the Vaillant heat curve that this project ran for a year is the same law in different clothes:
-
-    TFlow = 2.55 * (HC * (Tset - Tout)) ** 0.78 + Tset          [Andre Kuhne]
-
-1/0.78 = 1.28, which is the radiator exponent 1.3. He fitted it to Vaillant's published curves and
-checked it against eBus readings from his own AroTherm to within 0.07 C. It is not a rival model. It
-is this one, with the design point folded into a single dimensionless curve number.
+The gains term is NOT checked against NIBE's curve 9, because it cannot be: the constant-spread and
+balance-point terms are the same basis function with opposite signs (any assumed spread manufactures
+a matching "gains" figure, even from a curve with zero gains), and curve 9 is a straight line to
+0.19 C, which cannot resolve curvature. Two tests below prove both.
 """
 
 from __future__ import annotations
@@ -87,13 +58,9 @@ OEM_DESIGN_FLOW = oem_weathercomp_flow_temp(OEM_DESIGN_OUTDOOR)
 
 
 def ours(outdoor: float) -> float:
-    """Our law with gains switched OFF, because WeatherComp has none - and OEM knows it.
+    """Our law with gains switched OFF, matching weathercomp.js, which has no gains term.
 
-    Their SCOP tool carries the naive formula COMMENTED OUT, with the note "This approach would need
-    to take into account gains, hence use of degree days approach", and uses a base temperature of
-    15.5 C against a 19.3 C room instead. Their measured-demand tool fits a base_DT from real data.
-    WeatherComp is the outlier, not the authority - so it is used here to check the EMITTER LAW only,
-    with the demand model held identical on both sides.
+    WeatherComp checks the EMITTER LAW only; the demand model is held identical on both sides.
     """
     return en442_flow_temp(
         indoor_setpoint=OEM_ROOM_TEMP,
@@ -207,23 +174,12 @@ def _rms_against_nibe(balance_point: float, spread: float) -> float:
 def test_nibes_published_curve_is_a_straight_line_and_validates_nothing():
     """NIBE's curve cannot be used as evidence for our law, and this is why.
 
-    An earlier version of this suite treated the six digitised points of NIBE's curve 9 as the
-    ground truth that "validates" the emitter law - and fitted the internal-gains constant to them.
-    Both were mistakes, and this test exists to make them impossible to repeat.
-
-    Fit a straight line to those six points and the residual is 0.19 C. They ARE a straight line.
-    Worse, their successive slopes wobble non-monotonically:
-
-        -0.800, -0.740, -0.780, -0.820, -0.880  C per C
-
-    A real emitter law steepens MONOTONICALLY toward cold. This steepens toward WARM in the middle
-    of the range. That is digitisation noise, and it is larger than the curvature anyone was trying
-    to detect.
-
-    Collinear points confirm every model fitted to them. Curve 9 cannot tell the emitter law from a
-    ruler, and it certainly cannot resolve a balance point - it will just fit one to its own noise.
-    NIBE's controller interpolates its curves linearly; ours follows EN 442. The gap between them
-    is not our error, it is THE TRIM - the whole reason this layer exists.
+    Fit a straight line to its six digitised points and the residual is 0.19 C: they ARE a straight
+    line. Their successive slopes even wobble non-monotonically, steepening toward WARM in the middle
+    of the range - digitisation noise, larger than the curvature anyone was trying to detect.
+    Collinear points confirm every model fitted to them, so curve 9 cannot tell the emitter law from
+    a ruler, nor resolve a balance point. NIBE interpolates its curves linearly; we follow EN 442,
+    and the gap between them is THE TRIM - the whole reason this layer exists.
     """
     ts = sorted(NIBE_CURVE_9)
     n = len(ts)
@@ -270,22 +226,16 @@ def test_our_curve_stays_within_sight_of_nibes():
 def test_a_curve_fit_cannot_measure_internal_gains():
     """The trap that produced the wrong constant, nailed down so nobody walks into it again.
 
-    A previous version of this suite fitted the balance point against NIBE's curve 9, got 4.0 K,
-    reported "RMS 0.31 C with gains vs 1.70 C without", and shipped that as evidence. It was not
-    evidence. The fit is DEGENERATE:
+    Fitting the balance point against a heating curve is DEGENERATE:
 
         a constant spread LIFTS the curve by   (spread / 2) * (1 - phi ** (1/n))
         a balance point   DROPS  the curve by  a term of the same shape, opposite sign
 
-    Both are zero at the design point and grow in mild weather. They are the same basis function.
-    So whatever spread you assume, the fit hands you a "gains" figure that absorbs it - and it will
-    do so even when the curve you are fitting contains no gains AT ALL.
-
-    Proof, run here rather than asserted: fit our law to Kuhne's Vaillant curve, which is a pure
-    power law with PROVABLY ZERO gains, and watch a balance point appear anyway, tracking the
-    spread we assumed.
-
-    The lesson is in const.py: gains are WATTS, divided by the house's W/K. Never degrees off a fit.
+    Both are zero at the design point and grow in mild weather - the same basis function - so
+    whatever spread you assume, the fit hands you a "gains" figure that absorbs it, even when the
+    curve contains no gains AT ALL. Proof, run here: fit our law to Kuhne's Vaillant curve (a pure
+    power law with PROVABLY ZERO gains) and a balance point appears anyway, tracking the assumed
+    spread. Gains are WATTS over the house's W/K, never degrees off a fit.
     """
     room, dut = 20.0, -15.0
     hc = 0.75  # Vaillant curve number, Protons for Breakfast's worked example

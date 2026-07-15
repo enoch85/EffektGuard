@@ -1,39 +1,20 @@
-"""The most safety-critical number in this project is defined four times.
+"""One definition of the most safety-critical number in the project.
 
-DM -1500 is the absolute degree-minute floor. It appears as:
+DM -1500 is the absolute degree-minute floor: the reading at which an absolute emergency is
+declared. It must have a SINGLE source, or its copies drift apart and disagree about when the
+house is in danger. This guard holds four things together:
 
-    const.py                DM_THRESHOLD_AUX_LIMIT   = -1500   <- the EMERGENCY tier tests this
-    climate_zones.py        DM_ABSOLUTE_MAXIMUM      = -1500   <- published as "critical" to every
-                                                                  consumer, and the clamp floor for
-                                                                  normal_min / normal_max / warning
-    models/base.py          dm_threshold_aux_swedish = -1500   <- the SIMULATOR reads this
-    models/nibe/f750.py     dm_threshold_aux_swedish = -1500   <- the SIMULATOR reads this
+  - const.py defines DM_THRESHOLD_AUX_LIMIT = -1500 exactly once (the only literal permitted);
+  - climate_zones publishes it as `critical`, and get_expected_dm_range()["critical"] must be the
+    SAME object as the emergency tier's DM_THRESHOLD_AUX_LIMIT, not merely equal to it;
+  - the simulator reads the aux limit from the pump profile, so the profile must REFERENCE the
+    constant, not restate a literal - else a change to the constant leaves the plant validating
+    against the old threshold;
+  - there is one latitude-to-climate classification, not two.
 
-Three separate sources for one physical quantity: the degree-minute reading at which an absolute
-emergency is declared. They are equal today by coincidence, not by construction, and nothing keeps
-them so.
-
-The timing is not academic. **F-112 is open with the owner precisely because this number may be
-wrong**: on an F750 the pump's own "start addition" fires at -700 and works DM back up, so -1500
-describes a régime a healthy pump never enters. If that decision lands and DM_THRESHOLD_AUX_LIMIT
-changes:
-
-  * the EMERGENCY tier moves,
-  * `get_expected_dm_range()["critical"]` does NOT - it still publishes -1500,
-  * and the SIMULATOR - the thing that would validate the change - would go on simulating against
-    the old threshold, and report the new behaviour safe against a plant that never sees it.
-
-The simulator says what it is trying to do, and cannot do it:
-
-    "Aux-heat threshold, taken from the pump profile rather than restated. ... Reading it from the
-     profile means the plant model tracks whatever the integration believes, instead of silently
-     diverging from it."                                  - sim_harness.py, and it is right to want that
-
-But the profile does not track what the integration believes. It RESTATES the number. Make the
-profile's default the constant, and that docstring becomes true.
-
-The rulebook has a section for this. It is called "Fix Duplicates", and its worked example is a
-degree-minute threshold.
+The number itself may yet change - F-112 is open with the owner: on an F750 the pump's own "start
+addition" fires at -700 and works DM back up, so -1500 describes a regime a healthy pump never
+enters. When it changes, everything above must move with it.
 """
 
 from __future__ import annotations

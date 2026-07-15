@@ -1,34 +1,13 @@
-"""The billed quantity had two definitions, and the simulator was validating the wrong one.
+"""One definition of the billed quantity: the time-weighted mean power over a billing hour.
 
-The effect tariff bills the MEAN POWER OVER A BILLING HOUR. That number decides whether the heat pump
-is throttled for the rest of the month, so it is the single most consequential figure the integration
-computes. It was computed twice, by two different pieces of code, using two different formulas:
-
-    coordinator.py      a TIME-WEIGHTED mean: each sample weighted by how long it stood, the last one
-                        extrapolated to the hour boundary, divided by 3600 seconds.
-
-    sim_harness.py      `sum(period_samples) / len(period_samples)` - a plain ARITHMETIC mean.
-
-They agree when the samples are evenly spaced, and the simulator steps a uniform 5 minutes, so its
-numbers were never WRONG. They were something worse: they were produced by code that ships to nobody.
-Every tariff figure the harness has ever printed - every SEK, every kW of peak, every claim about the
-feature this integration is NAMED for - was computed by an implementation no user runs.
-
-AND THAT IS NOT A THEORETICAL COMPLAINT. The daylight-saving defect (`37f2fef`) lived in the
-coordinator's accumulator: on the night the clocks go back it merged the repeated hour and deleted a
-9 kW billing peak, recording it as 1 kW. The simulator had the SAME BUG, INDEPENDENTLY, in its own
-copy - and so it could not see it. Two implementations of one quantity, both broken, each blind to the
-other. An instrument that re-implements the thing it is measuring cannot measure it.
-
-So there is now ONE definition, here, and both the coordinator and the harness call it. Break it and
-the simulator fails - which is the property that was missing, and is verified by mutation.
-
-These tests pin the arithmetic that the tariff actually pays for:
-  * the time-weighted mean, which is NOT the arithmetic mean when Home Assistant's update cycle
-    jitters or a restart drops samples - and it does, and they do;
-  * the hour counted on the absolute time line, so a repeated DST hour is two hours;
+That number decides whether the pump is throttled for the rest of the month, so `BillingPeriodAccumulator`
+must compute it exactly. These tests pin the arithmetic the tariff pays for:
+  * the time-weighted mean, which is NOT the arithmetic sample mean when Home Assistant's update
+    cycle jitters or a restart drops samples;
+  * the hour counted on the absolute time line, so the repeated DST fall-back hour is two hours;
   * the local hour label and local start stamp, because the night discount and the calendar month a
-    peak belongs to are both wall-clock facts.
+    peak belongs to are both wall-clock facts;
+  * an hour begun before observation, or cut short by shutdown, is not billed.
 """
 
 from __future__ import annotations
@@ -74,25 +53,14 @@ def test_a_flat_hour_is_billed_at_its_flat_power():
 
 
 def test_the_mean_is_time_weighted_not_sample_counted():
-    """THE DIVERGENCE. This is the test the simulator's own formula could not pass.
-
-    Home Assistant's update cycle is not a metronome: it jitters and it is delayed under load, so the
-    samples in an hour are not evenly spaced and their arithmetic mean is not the hour's mean power.
+    """The time-weighted mean is not the arithmetic sample mean when samples are unevenly spaced.
 
         readings   1 kW at :00, :15, :30, then 9 kW at :45 and :55
-        spans      15, 15, 15, 10, and 5 minutes to the boundary
-
         time-weighted (what the grid bills):  (1*45 + 9*15) / 60  = 3.0 kW
-        arithmetic mean of the samples:       (1+1+1+9+9) / 5     = 4.2 kW
+        arithmetic mean of the samples:       (1+1+1+9+9) / 5     = 4.2 kW  (40% high)
 
-    The second number is 40% high, and it would be persisted as the month's peak and defended for
-    weeks. The harness computed the second number. It only ever agreed with the first because the
-    harness's clock ticks a perfectly uniform five minutes - which Home Assistant's does not.
-
-    NOTE the gaps here are all within MAX_BILLING_OBSERVATION_GAP_MINUTES. An earlier version of this
-    test made the point with a single 55-minute gap, which is a far more vivid illustration and also
-    an hour the meter slept through - the accumulator now refuses to bill those at all, and rightly.
-    The arithmetic has to be demonstrable on an hour that was actually observed.
+    Home Assistant's update cycle jitters, so the samples in an hour are not evenly spaced. The gaps
+    here stay within MAX_BILLING_OBSERVATION_GAP_MINUTES, so the hour is actually observed and billed.
     """
     accumulator = BillingPeriodAccumulator()
 

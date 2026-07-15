@@ -1,43 +1,16 @@
-"""A scheduled shower outranks thermal debt. It does not outrank the safety floor.
+"""A scheduled shower outranks thermal debt and space-heating demand. It never outranks safety.
 
-Owner decision (2026-07-13): **"DHW wins, but never below safety."** A shower the owner scheduled is a
-shower the owner wants, so a scheduled window beats the thermal-debt block and beats space-heating
-demand. It does not beat the 18 C indoor floor or the absolute degree-minute limit. And - this is the
-half that was missing - **if it may start, it may run**: whatever permits the start must be the same
-thing that would stop it, or the cycle starts and aborts and starts again.
+Owner rule: "DHW wins, but never below safety." RULE 0 (two-lane scheduling) returns early, before
+the thermal-debt block (RULE 1) and space-heating emergency (RULE 2), so a scheduled window heats
+hot water through the debt block - but not below the MIN_TEMP_LIMIT indoor floor, and not at the
+DM_THRESHOLD_AUX_LIMIT degree-minute limit.
 
-What the code did before this file existed:
+And if it may start, it may run: the scheduled path's abort conditions are the SAME two safety
+thresholds, so a cycle permitted to begin cannot be aborted by the state it began in (it once
+started at DM -1400 while carrying `thermal_debt < -1100` as an abort, cycling once an hour forever).
 
-`should_start_dhw()` evaluates RULE 0 (two-lane scheduling) and RULE 0 **returns early**, before RULE 1
-(critical thermal debt - never start DHW) and before RULE 2 (space heating emergency - house too cold)
-are ever reached. So inside a scheduled window it heated hot water at any thermal debt and any indoor
-temperature. Measured:
-
-    DM -1400 (T3 emergency tier), indoor 17.0 C  - BELOW the 18 C absolute safety floor
-      should_block_dhw()  -> BLOCK: True
-      should_start_dhw()  -> heat=True,  reason=DHW_SCHEDULED_PRIORITY_1.0H
-
-The priority was real. But the same decision handed back:
-
-    abort_conditions -> ['thermal_debt < -1100', 'indoor_temp < 20.5', ...]
-
-Both conditions were **already true at the moment it started**. The coordinator evaluates them on the
-next cycle and switches the lux boost straight back off; starts are rate-limited to an hour, so the net
-behaviour in deep debt was a futile DHW start every hour, aborted five minutes later, heating no water
-and cycling the compressor. RULE 0 granted the priority and the abort conditions revoked it, forever.
-
-Note the second condition: `indoor_temp < 20.5` is target minus 0.5. That is a COMFORT threshold being
-used to abort a cycle that RULE 0 had just declared more important than comfort.
-
-So the rule now is one rule, stated once:
-
-  * A scheduled window may start DHW at any thermal debt, and at any indoor temperature down to the
-    safety floor.
-  * It may not start below the safety floor, or at the absolute degree-minute limit.
-  * Its abort conditions are those same two thresholds and nothing else - so a cycle that was allowed
-    to begin is allowed to finish, and only genuine danger stops it.
-  * A window refused for safety is not lost: it is resumed the moment the house is safe again, even
-    outside the window (owner decision: "retry as soon as it is safe").
+A window refused for safety is OWED, not cancelled: it resumes the moment the house is safe again,
+then clears once the water reaches target.
 """
 
 from __future__ import annotations

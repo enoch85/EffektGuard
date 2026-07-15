@@ -1,34 +1,13 @@
-"""The savings figure is money, and it was computed from a curve fit of two temperatures.
+"""A savings figure is money, and must not be computed from an estimated power reading.
 
-`NibeState.power_kw` is filled by `get_power_consumption()`, which tries the configured power sensor
-and, failing that, falls back to:
+`NibeState.power_kw` is filled by `get_power_consumption()`, which falls back to a temperature
+curve fit when no power sensor is configured - a guess in the same field as a measurement, clamped
+to never read below 1.0 kW even with the compressor off. The coordinator fed that into
+`_daily_spot_savings`, which the owner reads as kronor: a savings report every day derived from a
+formula that never saw a watt.
 
-    def _estimate_power_from_temps(self, supply_temp, outdoor_temp) -> float:
-        flow_factor = (supply_temp - 25.0) / 20.0
-        temp_factor = 1.0 + (7.0 - outdoor_temp) / 18.0
-        estimated = DEFAULT_BASE_POWER * flow_factor * temp_factor
-        return max(1.0, min(estimated, 12.0))
-
-A guess, in the same field as a measurement, with nothing to distinguish them. It never returns less
-than 1.0 kW - not even with the compressor off - because the clamp says so.
-
-The coordinator then does this:
-
-    # Calculate savings using ACTUAL power consumption
-    cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
-        actual_power_kw=nibe_data.power_kw, ...
-    )
-
-and adds the result to `_daily_spot_savings`, which the owner reads as kronor.
-
-The coordinator is otherwise careful about exactly this. It refuses to record an estimated peak for
-billing, and says so three times in capital letters. But `power_kw` walks past all of it, because it
-LOOKS measured. An owner with no power sensor gets a savings report every day, in money, derived from
-a formula that has never seen a watt.
-
-The estimate is not useless - layers that need a rough magnitude may have it, and the DHW optimiser
-uses it to decide whether space heating is busy. So the answer is not to delete it. It is to make it
-say what it is, and to make the things that report or bill money ask first.
+The estimate stays available to layers that want a rough magnitude, but it must now carry a
+`power_is_estimated` flag, and anything that reports or bills money must ask it first.
 """
 
 from __future__ import annotations

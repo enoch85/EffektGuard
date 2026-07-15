@@ -1,35 +1,17 @@
-"""The document every contributor is told to read first must not teach a removed model.
+"""The document every contributor is told to read first must not describe a codebase that is gone.
 
-`CLAUDE.md` sends every contributor - human or agent - to `.github/copilot-instructions.md`, and
-calls it "the single source of truth for this repository's rules, architecture, and implementation
-guidelines", to be read at the start of every session. So a false claim in that file is not a
-documentation nit. It is an instruction.
+`CLAUDE.md` sends every contributor to `.github/copilot-instructions.md` as "the single source of
+truth ... to be read at the start of every session", so a false claim there is an instruction, not
+a documentation nit. This test reads the rulebook and holds it to the code:
 
-The worst of them was in the section that teaches you how to write a good docstring:
+  - it must not teach the removed Kuhne flow-temperature formula (F-119/F-121), nor a second, linear
+    flow rule, as live models - both were replaced by the EN 442 emitter law;
+  - every climate DM table and UFH prediction horizon it prints must be what const.py computes (the
+    table appears more than once, and an earlier fix corrected only one copy);
+  - every module it tells you to import must exist, and every research document it cites must be in
+    the repository (`docs/research/`), not one of the gitignored, absent ones (F-106).
 
-    \"\"\"Calculate optimal flow temperature using André Kühne's formula.
-    ...
-    Formula: TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
-    \"\"\"
-
-**Kühne appears zero times in the codebase.** It was removed (audit F-119/F-121) and replaced by
-the EN 442 emitter law, because it was being fed a heat-loss coefficient where the derivation
-requires a dimensionless relative load - a dimensionally inconsistent input to a structurally
-correct law, which produces numbers that look plausible and are not. It drove the flow temperature
-of a real heat pump. The rulebook was still holding it up as the example to copy.
-
-The rest was the ordinary rot that nobody checks for, because nothing has ever checked:
-
-  * the SAME wrong climate table appeared TWICE, and an earlier fix corrected only one copy
-    (Stockholm -700 where the code gives -740; Kiruna -1200 vs -1400; Paris -350 vs -250);
-  * all three UFH prediction horizons were wrong (12/6/2 h against the constants' 24/12/6);
-  * the "verify your work" snippet imports `optimization.thermal_model`, which does not exist;
-  * "Always Check Research Before Implementing" points at four documents that are gitignored and
-    absent from the repository, while `docs/research/` - which exists, and holds the sourced
-    evidence - goes unmentioned.
-
-This test is the point. The docs in this repository drifted to ~55-65% wrong because no test ever
-read one. Now one does.
+The docs here drifted because no test ever read one. Now one does.
 """
 
 from __future__ import annotations
@@ -56,9 +38,8 @@ DENIALS = (
     "does not exist",
     "does not have",
     "not sourced",
-    # "used to X" - any past-tense correction. Enumerating the verbs ("used to show", "used to
-    # name") means the next correction says "used to offer" and trips its own test, which is
-    # precisely what happened, twice.
+    # "used to X" - any past-tense correction; matching the phrase "used to " covers every verb, so
+    # a new correction ("used to offer") does not trip its own test.
     "used to ",
     "Do not reintroduce",
     "no longer",
@@ -66,16 +47,11 @@ DENIALS = (
 
 
 def _claims() -> str:
-    """What the rulebook ASSERTS, with the paragraphs that warn you against something removed.
+    """What the rulebook ASSERTS, minus the paragraphs that warn you against something removed.
 
-    PARAGRAPH-wise, not line-wise. A warning spans several lines - "This example used to show X …
-    Do not reintroduce it." - and only one of them carries the marker, so a line filter keeps the
-    rest and the test trips on the very correction it is meant to protect.
-
-    That is not a hypothetical. Faced with exactly that, an earlier pass narrowed the Kühne check
-    to fenced code blocks so it would pass - and the narrowing let a live claim through: the
-    Project Context section went on crediting "Mathematical formulas from OEM research (André
-    Kühne…)" for another commit. The filter was the thing that was wrong, not the assertion.
+    PARAGRAPH-wise, not line-wise: a warning spans several lines ("This example used to show X ...
+    Do not reintroduce it.") and only one carries the marker, so a line filter would keep the rest
+    and trip the test on the very correction it is meant to protect.
     """
     kept = [p for p in DOC.split("\n\n") if not any(d in p for d in DENIALS)]
     return _strip_corrections("\n\n".join(kept))
@@ -91,10 +67,9 @@ def _strip_corrections(text: str) -> str:
 CLAIMS = _claims()
 
 # For NUMBERS. Nothing is dropped, because a number is never legitimately wrong - not even inside a
-# warning. Filtering these too was a real regression: the paragraph holding the SECOND copy of the
-# degree-minute table happened to contain the phrase "not sourced" (about DM -1500), so the whole
-# table vanished from the climate check - and a drifting second copy of that table is precisely
-# what F-133 was about. The filter that protects one test can blind another.
+# warning. Filtering denials here would hide a drifting second copy of the degree-minute table
+# whose paragraph happens to contain "not sourced" (about DM -1500): the filter that protects the
+# Kuhne check must not blind the climate check.
 EVERY_WORD = _strip_corrections(DOC)
 
 
@@ -120,20 +95,18 @@ def test_the_rulebook_does_not_teach_a_formula_that_was_removed():
 
 
 def test_the_rulebook_does_not_offer_a_second_flow_temperature_model():
-    """A straight line is the thing EN 442 was chosen over. It must not sit beside it as advice.
+    """A fixed "Flow = Outdoor + 27 °C" rule must not sit beside the emitter law as advice.
 
-    "Flow = Outdoor + 27 °C" is a LINEAR rule. The whole point of the emitter law is that the real
-    curve is not linear: against NIBE's own published curve 9, EN 442 lands 0.20 °C away and a
-    straight line is out by 2.37 °C - more than ten times worse. Offering the linear rule as "OEM
-    Research", in the document that tells contributors how to implement, invites someone to build
-    the model this project deliberately replaced. Its constants do not exist either.
+    It is offered in the rulebook as "OEM Research", in the document that tells contributors how to
+    implement - inviting someone to build a model this project does not have (there are no
+    OPTIMAL_FLOW_DELTA_SPF_* constants). The flow temperature comes from the EN 442 emitter law,
+    anchored on the house's own design point, not a fixed offset from the outdoor temperature.
     """
     assert "Flow = Outdoor +" not in CLAIMS, (
         "The rulebook offers a linear flow-temperature rule (Flow = Outdoor + 27 °C) as OEM "
-        "research. The flow temperature comes from the EN 442 emitter law - a CURVE - and a "
-        "straight line is out by 2.37 °C against NIBE's own curve 9 where the emitter law is out "
-        "by 0.20 °C. There are no OPTIMAL_FLOW_DELTA_SPF_* constants; this describes a model the "
-        "code does not have."
+        "research. The flow temperature comes from the EN 442 emitter law, anchored on the house's "
+        "own design point. There are no OPTIMAL_FLOW_DELTA_SPF_* constants; this describes a model "
+        "the code does not have."
     )
 
 

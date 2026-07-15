@@ -1,39 +1,15 @@
-"""The tariff bills what the grid delivered. Two things were recorded against it that did not.
+"""Only a whole-house meter reading can become a billing peak.
 
-**NIBE phase currents.** BE1/BE2/BE3 measure the heat pump, and nothing else. Not the oven, not the
-EV charger, not the kettle. They were nevertheless accepted as a whole-house billing measurement:
+Two things were once recorded against the tariff that the grid did not deliver:
 
-    has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
+- NIBE phase currents (BE1/BE2/BE3) measure the heat pump only - not the oven, EV charger or kettle
+  - yet were accepted as a whole-house billing measurement. They are now control-grade, not billable:
+  available to the decision layers (which want a magnitude), never reported as the month's bill.
 
-The peak sensor knew better and said so, in a comment, right next to a line that contradicted it:
-
-    # Only real measurements from external meter affect effect tariff billing
-    # NIBE currents measure only heat pump (missing other house loads)
-    will_affect = self.coordinator.peak_today_source == "external_meter" and ...
-
-So the owner was told "Not used for billing" about a peak the coordinator had just recorded against
-the tariff. Owner decision: **NIBE currents are not billable.** They remain available to the decision
-layers, which want a magnitude, not a bill.
-
-**The solar "smart fallback".** When a grid-import meter reads under 0.5 kW while the compressor runs
-above 20 Hz, the code concluded the meter was being masked by solar export and substituted an
-ESTIMATED compressor power - then recorded the estimate as a tariff peak:
-
-    if is_heating and compressor_hz > 20:
-        estimated_power = self.effect.estimate_power_from_compressor(...)
-        if estimated_power > 1.0:
-            current_power = estimated_power     # <- and this was billed
-
-But the grid operator bills grid IMPORT, and the import is precisely what the meter saw. If solar
-covers 4.7 kW of a 5.0 kW compressor, the house imported 0.3 kW and 0.3 kW is what is charged. The
-substitution recorded 5.5 kW - an order of magnitude above the truth, in the owner's disfavour, and it
-stood for the rest of the month, because effect tariffs bill the top three quarters.
-
-Owner decision: **"Math should be correct. So if solar covers everything but 0.5 kW, count 0.5 kW for
-that period."** The meter is the truth. The fallback is gone.
-
-What remains is a single rule, and it is the whole of it: only a whole-house meter reading can become
-a billing peak.
+- A solar "smart fallback" substituted an ESTIMATED compressor power when a grid-import meter read
+  under 0.5 kW while the compressor ran hard, then billed the estimate (~5.5 kW where the grid
+  imported 0.3 kW). The operator bills grid import, which is exactly what the meter saw. The fallback
+  is gone: the meter reading is the truth.
 """
 
 from __future__ import annotations
@@ -106,11 +82,7 @@ def _pump(compressor_hz: int = 0, currents: float | None = None) -> NibeState:
 
 
 async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
-    """Samples through a whole HOUR, because that is the tariff's billing period.
-
-    It used to run 10:00-10:15 and call that a billing period. Ellevio bills the HOURLY mean, so a
-    quarter-hour never completes one.
-    """
+    """Samples through a whole HOUR, because that is the tariff's billing period."""
     for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
         monkeypatch.setattr(
             dt_util,
@@ -132,21 +104,13 @@ def test_only_a_whole_house_meter_is_billable():
 
 @pytest.mark.asyncio
 async def test_nibe_phase_currents_still_drive_peak_protection(monkeypatch):
-    """NOT BILLABLE and NOT RECORDED are different things, and conflating them broke the feature.
+    """NOT BILLABLE and NOT RECORDED are different things; conflating them would break the feature.
 
-    The first version of this fix gated peak RECORDING on billability, so a house without a
-    whole-house meter never recorded a single peak - and `should_limit_power` returns
-    "OK - no peaks recorded yet" on an empty history. Peak protection, the integration's headline
-    feature, silently never fired at all for those users. The whole-house meter is OPTIONAL, and
-    `main` allowed phase currents here and ran a winter that way.
-
-    This test's own first draft said it: "They remain available to the decision layers, which want a
-    magnitude, not a bill." They were not.
-
-    The heat pump is the dominant CONTROLLABLE load, and `should_limit_power` compares this quarter
-    against the month's own recorded peaks - so a NIBE-only history compared against NIBE-only power
-    is self-consistent and still throttles the pump when the pump is the thing spiking. What must
-    never happen is that number being reported to the owner as the month's BILLING peak.
+    A house without a whole-house meter must still record NIBE-currents peaks - gating recording on
+    billability would leave `should_limit_power` with an empty history, and peak protection would
+    never fire. `should_limit_power` compares this quarter against the month's own recorded peaks, so
+    a NIBE-only history against NIBE-only power is self-consistent and still throttles the pump. That
+    number must never be reported to the owner as the month's BILLING peak.
     """
     coordinator = _coordinator(power_entity=None)  # no whole-house meter, only NIBE currents
 

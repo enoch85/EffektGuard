@@ -1,45 +1,12 @@
-"""Two readers of one power sensor, disagreeing by a factor of a thousand.
+"""One power sensor, one answer - the adapter and the coordinator must not disagree by a factor of a
+thousand over what a unit means.
 
-The same entity - the owner's whole-house meter - is read in two places, and they default differently
-when it has no unit:
-
-    nibe_adapter.get_power_consumption()
-        unit = state.attributes.get("unit_of_measurement", "").lower()
-        if unit == "w":
-            power = power / 1000.0                      # absent unit -> kept as kW
-
-    coordinator._update_peak_tracking()
-        power_unit = str(power_state.attributes.get("unit_of_measurement", "W")).lower()
-        if power_unit == "w":
-            current_power = current_power / WATTS_PER_KILOWATT    # absent unit -> divided by 1000
-
-A unit-less sensor reporting `6000` is therefore **6000 kW** to the adapter and **6.0 kW** to the
-coordinator, in the same process, in the same five-minute cycle. One of them feeds savings and model
-validation; the other feeds peak protection and the tariff record.
-
-The reverse case is the dangerous one, and the coordinator's own comment describes it exactly:
-
-    # Convert to kW only when the meter reports watts -
-    # a kW meter must not be divided a second time
-    # (a 6.0 kW whole-house meter would become 0.006 kW,
-    # invalidating peak protection and peak records)
-
-That comment was written for a real regression - there is a test class named
-`TestKilowattMeterNotDividedTwice`. But the fix only taught the code about an explicit "kW" unit, while
-leaving the *absent* unit defaulting to "W". So a unit-less meter already reporting kilowatts still
-becomes 0.006 kW, still invalidates peak protection, and still does it silently. **The comment
-describes the bug the code still has.**
-
-Neither reader knows about MW, and neither notices that a `kWh` *energy* sensor - an easy thing to pick
-from an entity dropdown, and cumulative, so it climbs forever - is not a power sensor at all.
-
-There is no defensible default here. Watts and kilowatts are a factor of a thousand apart, and this
-number decides whether the house is about to set a monthly billing peak. A power sensor with no unit is
-a misconfiguration, and the honest response is the one this codebase already uses for a missing price
-source: refuse to guess, withdraw the feature that depends on it, and raise a repair issue that tells
-the owner exactly what to fix.
-
-What must never happen again is that two places invent two different answers to the same question.
+Both read the owner's whole-house meter through the shared `power_kw_from_state` helper now: one
+feeds savings and model validation, the other feeds peak protection and the tariff record. A sensor
+with no declared unit must be refused by both (a unit-less 6000 is otherwise 6 MW to one reader and
+6 kW to the other; a unit-less 6.0 kW meter divided by 1000 becomes 0.006 kW and silently disables
+peak protection for the month). A cumulative kWh energy sensor - one dropdown entry away - must be
+refused too: read as power it reports the meter's lifetime total as an instantaneous peak.
 """
 
 from __future__ import annotations

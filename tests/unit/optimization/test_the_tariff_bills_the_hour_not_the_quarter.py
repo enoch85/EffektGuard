@@ -1,48 +1,13 @@
-"""EffektGuard defends a peak nobody is billed for. The Swedish effect tariff bills the HOUR.
+"""The Swedish effect tariff bills the mean power of a billing HOUR, not a 15-minute quarter.
 
-The integration's core claim, written into the constant itself:
+Ellevio (whose model this implements) bills the average of the three highest hourly peaks of the
+month, one per day, with 22:00-06:00 counted at half. An hourly mean averages the quiet 45 minutes
+around a spike, so a 15-minute hot-water cycle recorded as a quarter-hour peak reads at up to three
+times its billed value - and the effect layer throttles the pump to defend a peak on no bill.
 
-    MINUTES_PER_QUARTER: Final = 15  # Swedish Effektavgift measurement period
-
-and into the effect layer's own docstring:
-
-    Swedish effect tariff rules:
-    - Measured in 15-minute windows (quarterly periods)
-
-When I rebuilt the peak tracking I wrote "Swedish effect tariffs bill the 15-minute MEAN power" -
-a citation I invented.
-
-WHAT THE SOURCES ACTUALLY SAY.
-
-Ellevio - the DSO whose model this integration implements, and whose 81.25 SEK/kW is the number in
-the simulator - publishes it plainly:
-
-    "Genomsnittet av de tre hogsta effekttopparna under manaden." Only one peak per day, so the
-    three fall on three different days. "The measurement uses HOURLY AVERAGES, not instantaneous
-    power." Between 22:00 and 06:00 "raknas bara halva effekttoppen".
-    (ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/)
-
-Energimarknadsinspektionen, the regulator:
-
-    "elnatsforetagen mater din elanvandning PER TIMME."
-    (ei.se/konsument/anvand-el-smartare/elnatsavtal-med-effektavgift)
-
-Hours. Not quarter-hours - and the difference is up to fourfold, because an hourly mean averages the
-quiet 45 minutes around a spike. A hot-water cycle is exactly that shape. MEASURED, on the real
-EffectManager:
-
-    10:00-10:15   9.0 kW      the hot-water cycle
-    10:15-11:00   1.0 kW      the house idling
-
-    the hour's mean power       3.00 kW     <- what Ellevio bills
-    what EffektGuard records    9.00 kW     <- the quarter-hour mean
-
-Three times over. At 81.25 SEK/kW that is a phantom 488 SEK a month - and the effect layer THROTTLES
-THE HEAT PUMP to defend it, keeping the house cooler to protect a peak on no bill.
-
-(The effect-charge requirement was repealed in June 2026 and Ellevio dropped its charge on 1 June;
-Ei must propose a new model by 12 April 2027. Charges are not prohibited and several DSOs still levy
-them, so the feature is not dead - but the model it implements should be one a real company uses.)
+Invariants: BILLING_PERIOD_MINUTES is 60; the tariff rate and night weight match the published
+figures (SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH 81.25, NIGHT_TARIFF_WEIGHT 0.5); a full hour is
+billed at its mean, the night discount halves it, and only the top three hours are kept.
 """
 
 from __future__ import annotations
@@ -72,11 +37,10 @@ def _manager() -> EffectManager:
 
 
 def test_the_rate_is_the_one_a_real_company_publishes():
-    """It was 50.0 in production and 81.25 in the simulator, and neither was sourced.
+    """The tariff rate is Ellevio's published 81,25 kr/kW/month, and the night weight is a half.
 
-    The production comment attributed "Ellevio ~55, Vattenfall/E.ON ~50" to price lists that say no
-    such thing, and the simulator called its own number "fictional-but-typical". It is neither: it
-    is Ellevio's published rate, and the two copies now agree because there is only one.
+    Every SEK figure the owner is shown is denominated in this number, so it must be one somebody
+    actually charges.
     """
     assert SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH == 81.25, (
         f"The effect tariff is {SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH} SEK/kW/month. Ellevio "

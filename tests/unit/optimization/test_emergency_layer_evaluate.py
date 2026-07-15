@@ -255,13 +255,9 @@ class TestEmergencyLayerThermalMass:
     def test_concrete_slab_responds_before_a_radiator_system(self):
         """A concrete slab must respond to thermal debt SOONER than a radiator system.
 
-        At 0 C in Stockholm:
-        - Radiator warning: -540 (buffer 1.0, unadjusted)
-        - Concrete warning:  -415 (-540 / 1.3, reached sooner)
-
-        DM -450 is past concrete's threshold but not yet past a radiator's: the slab, which
-        needs six hours of notice, is already recovering while the radiator system - which can
-        recover in under an hour - has no need to act yet.
+        At 0 C in Stockholm the radiator warns at -540 (buffer 1.0) and concrete at -540/1.3 = -415.
+        DM -450 is past concrete's threshold but not a radiator's: the slab is already recovering
+        while the radiator system has no need to act yet.
         """
         layer_radiator = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),

@@ -1,32 +1,13 @@
 """A slow house must be allowed to look further ahead than a fast one.
 
-The pre-heat layer fires when the forecast shows a drop of at least
-WEATHER_FORECAST_DROP_THRESHOLD within WEATHER_FORECAST_HORIZON - a FIXED twelve hours, for every
-house, whatever it is built of.
+The pre-heat layer fires on a forecast drop of at least WEATHER_FORECAST_DROP_THRESHOLD within the
+prediction horizon. A concrete slab gets into thermal debt not from a sudden plunge (the pump's own
+curve catches that) but from a slow, deep, multi-day slide - and a fixed 12 h horizon cannot see one:
+a 15 C fall over two days shows only 3.8 C in any twelve hours, under the trigger, so the pre-heat
+never fires.
 
-A concrete slab does not get into thermal debt from a sudden plunge. The pump's own curve catches
-that: the curve is reactive, but it is fast. The slab gets into debt from a SLOW, DEEP slide that
-nothing notices, and a twelve-hour window cannot see one:
-
-    cold snap                     drop within 12 h   fires?
-    15 C over  6 h (plunge)            -15.0 C        yes
-    15 C over 24 h                      -7.5 C        yes
-    15 C over 48 h (two days)           -3.8 C        NO
-    20 C over 72 h (three days)         -3.3 C        NO
-
-Within any twelve hours of a two-day slide the temperature falls less than the four degrees needed
-to trigger. The pre-heat NEVER fires. The slab is drained slowly, over days, and nothing sees it
-coming - while the sudden plunge, which DOES trigger it, is the case that needed it least.
-
-The code already knows the answer and cannot reach it. UFH_CONCRETE_PREDICTION_HORIZON is 24 hours,
-commented "6+ hour lag, needs 24h for extreme cold (20C drops)". AdaptiveThermalModel returns it
-correctly - and the engine passes the STATIC ThermalModel, whose get_prediction_horizon() returns a
-hardcoded 12.0 for every thermal mass and says so in its own docstring. Every path to the concrete
-horizon is severed.
-
-Measured on the owner's slab (2-node transient, 100 mm ground slab + 60 mm screed): the room moves
-+1.0 C in 2.4-4.6 h, but the slab is only ~19% charged at 14 h and ~29% at 24 h (slow time
-constant ~70 h). Six hours is the lag; twenty-four is the MINIMUM horizon to plan over.
+Invariant: ThermalModel.get_prediction_horizon() must scale with thermal mass
+(UFH_CONCRETE > UFH_TIMBER > UFH_RADIATOR), not return a single fixed value for every house.
 """
 
 import pytest
@@ -60,8 +41,8 @@ def test_the_horizon_follows_the_thermal_mass(thermal_mass, expected, what):
 
     assert horizon == expected, (
         f"{what} (thermal mass {thermal_mass}) needs a {expected:.0f} h horizon and got "
-        f"{horizon:.0f} h. The static ThermalModel returns a hardcoded 12.0 whatever it is built "
-        f"of, and it is the model the engine actually uses."
+        f"{horizon:.0f} h. The horizon must scale with thermal mass, not collapse to one fixed "
+        f"value - this is the model the engine actually uses."
     )
 
 

@@ -1,16 +1,12 @@
-"""Critical scenario tests for EffektGuard.
+"""Critical scenario guards for EffektGuard.
 
-Tests addressing key operational questions:
-1. Peak calculation frequency and short-cycling prevention
-2. Power outage recovery with peak proximity
-3. Different preset modes (Comfort, Balanced/Auto, Eco, Away)
-4. Rate limiting and wear protection
-5. Quarter measurement timing
+Pins the effect-manager power-limit response after an outage, the update/rate-limit cadence,
+and the tolerance-to-tolerance_range mapping.
 """
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 
@@ -61,29 +57,11 @@ def create_nibe_state(
 
 
 class TestPeakCalculationFrequency:
-    """Test peak calculation frequency and short-cycling prevention.
-
-    Key Question: How often do we calculate peaks? Is 15 min too short to avoid short cycling?
-
-    Answer:
-    - Coordinator updates every 5 minutes
-    - Peak measurements recorded every 15 minutes (quarterly periods)
-    - Offset changes rate-limited to prevent cycling
-    - 5-min updates allow response within 15-min windows without excessive cycling
-    """
+    """Update cadence and rate limiting: safe for the compressor, aligned to 15-min windows."""
 
     def test_coordinator_update_interval_prevents_cycling(self):
-        """Test: 5-minute update interval is reasonable for cycling prevention.
-
-        Expected:
-        - Update interval: 5 minutes
-        - Max changes per hour: 12
-        - Max changes per 15-min period: 3
-
-        Analysis:
-        - 5 minutes is safe: NIBE compressors typically have 5-10 min minimum cycle
-        - Allows response within each 15-min Effektavgift window
-        - Not excessive (vs 1-min updates = 60 changes/hour)
+        """The 5-minute update interval bounds changes to 12/hour (3 per 15-min window), which
+        stays within a NIBE compressor's minimum cycle time.
         """
         update_interval = UPDATE_INTERVAL_MINUTES
 
@@ -150,16 +128,10 @@ class TestPeakCalculationFrequency:
 
 
 class TestPowerOutageRecovery:
-    """Test power outage recovery and peak proximity scenarios.
+    """should_limit_power response as current power approaches the recorded monthly peak.
 
-    Key Question: How close can we be to a high peak after a power outage
-                  and still make it without hitting any limits?
-
-    Answer:
-    - System uses 0.5 kW and 1.0 kW margins for safety
-    - Warning at 1.0 kW margin, critical at 0.5 kW
-    - After outage, system reads current peaks from storage
-    - Provides immediate protection against exceeding peaks
+    Margins: WARNING at 1.0 kW (offset -1.0), CRITICAL at 0.5 kW (-2.0), exceeding (-3.0).
+    Nighttime power is weighted 50% before comparison.
     """
 
     @pytest.mark.asyncio
@@ -256,26 +228,11 @@ class TestPowerOutageRecovery:
 
 
 class TestPresetModes:
-    """Test different preset modes (Comfort, Balanced, Eco, Away).
-
-    Key Question: Test the different modes (auto, eco, and so on)
-
-    Modes:
-    - COMFORT: Prioritize comfort, minimal temperature deviation, accept higher costs
-    - BALANCED (NONE): Balance comfort and savings (default)
-    - ECO: Maximize savings, wider temperature tolerance
-    - AWAY: Reduce temperature when away
-    """
+    """tolerance_range is tolerance * TOLERANCE_RANGE_MULTIPLIER (0.4) regardless of mode."""
 
     @pytest.mark.asyncio
     async def test_comfort_mode_tight_tolerance(self, hass_mock):
-        """Test: COMFORT mode uses tighter temperature tolerance.
-
-        Expected:
-        - Tolerance setting: 1-3 (tight)
-        - Less aggressive optimization
-        - Comfort prioritized over savings
-        """
+        """tolerance_range = tolerance * 0.4: a tolerance of 2.0 gives a 0.8 C band."""
         # Comfort mode configuration
         config = {
             "target_temperature": 21.0,
@@ -301,13 +258,7 @@ class TestPresetModes:
 
     @pytest.mark.asyncio
     async def test_balanced_mode_moderate_tolerance(self, hass_mock):
-        """Test: BALANCED mode uses moderate tolerance.
-
-        Expected:
-        - Tolerance setting: 4-6 (moderate)
-        - Balanced optimization
-        - Default mode
-        """
+        """A tolerance of 5.0 gives a 2.0 C band (5.0 * 0.4)."""
         config = {
             "target_temperature": 21.0,
             "tolerance": 5.0,  # Mid-range
@@ -330,13 +281,7 @@ class TestPresetModes:
 
     @pytest.mark.asyncio
     async def test_eco_mode_wide_tolerance(self, hass_mock):
-        """Test: ECO mode uses wider tolerance for maximum savings.
-
-        Expected:
-        - Tolerance setting: 8-10 (wide)
-        - Aggressive optimization
-        - Maximum cost savings
-        """
+        """A tolerance of 9.0 gives a 3.6 C band (9.0 * 0.4)."""
         config = {
             "target_temperature": 21.0,
             "tolerance": 9.0,  # High tolerance
@@ -356,110 +301,6 @@ class TestPresetModes:
 
         assert engine.tolerance == 9.0
         assert engine.tolerance_range == 3.6  # 9.0 * 0.4
-
-    @pytest.mark.asyncio
-    async def test_tolerance_affects_price_optimization(self, hass_mock):
-        """Test: Higher tolerance = more aggressive price optimization.
-
-        Expected:
-        - Comfort (tolerance 2): Less aggressive offsets
-        - Eco (tolerance 9): More aggressive offsets
-        - Tolerance factor scales price layer recommendations
-        """
-        # Create two engines with different tolerances
-        price_analyzer = PriceAnalyzer()
-        effect_manager = EffectManager(hass_mock)
-        thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
-
-        # Comfort mode
-        engine_comfort = DecisionEngine(
-            price_analyzer=price_analyzer,
-            effect_manager=effect_manager,
-            thermal_model=thermal_model,
-            config={"target_temperature": 21.0, "tolerance": 2.0},
-        )
-
-        # Eco mode
-        engine_eco = DecisionEngine(
-            price_analyzer=price_analyzer,
-            effect_manager=effect_manager,
-            thermal_model=thermal_model,
-            config={"target_temperature": 21.0, "tolerance": 9.0},
-        )
-
-        # Tolerance factor = tolerance / 5.0
-        # Comfort: 2.0 / 5.0 = 0.4 (less aggressive)
-        # Eco: 9.0 / 5.0 = 1.8 (more aggressive)
-
-        comfort_factor = engine_comfort.tolerance / 5.0
-        eco_factor = engine_eco.tolerance / 5.0
-
-        assert comfort_factor < 1.0  # Less than base
-        assert eco_factor > 1.0  # More than base
-        assert eco_factor > comfort_factor * 3  # Significantly more aggressive
-
-
-class TestQuarterMeasurementTiming:
-    """Test 15-minute billing_hour measurement timing and alignment."""
-
-    def test_quarter_calculation_is_correct(self):
-        """Test: Quarter of day calculation matches Effektavgift windows.
-
-        Expected:
-        - 96 quarters per day (24 hours × 4)
-        - Quarter 0 = 00:00-00:15
-        - Quarter 48 = 12:00-12:15
-        - Quarter 95 = 23:45-00:00
-        """
-        # Test specific times
-        test_cases = [
-            (0, 0, 0),  # 00:00 = Q0
-            (6, 0, 24),  # 06:00 = Q24 (day start)
-            (12, 0, 48),  # 12:00 = Q48
-            (12, 15, 49),  # 12:15 = Q49
-            (22, 0, 88),  # 22:00 = Q88 (night start)
-            (23, 45, 95),  # 23:45 = Q95 (last billing_hour)
-        ]
-
-        for hour, minute, expected_quarter in test_cases:
-            billing_hour = (hour * 4) + (minute // 15)
-            assert (
-                billing_hour == expected_quarter
-            ), f"{hour}:{minute:02d} should be Q{expected_quarter}"
-
-    def test_quarters_per_day(self):
-        """Test: Verify 96 quarters per day."""
-        quarters_per_day = 96
-        hours_per_day = 24
-        quarters_per_hour = 4
-
-        assert quarters_per_day == hours_per_day * quarters_per_hour
-
-    @pytest.mark.asyncio
-    async def test_multiple_measurements_same_quarter_handled(self, effect_manager):
-        """Test: Multiple measurements in same billing_hour don't cause issues.
-
-        Expected:
-        - Each measurement evaluated independently
-        - Only top 3 effective powers stored
-        - Same billing_hour can be measured multiple times (coordinator updates)
-        """
-        timestamp_base = datetime(2025, 10, 14, 12, 0)
-        billing_hour = 12  # 12:00-12:15
-
-        # Simulate 3 coordinator updates within same billing_hour
-        # (5-minute updates = 3 updates per 15-min billing_hour)
-        peak_1 = await effect_manager.record_period_measurement(4.0, billing_hour, timestamp_base)
-        peak_2 = await effect_manager.record_period_measurement(
-            4.5, billing_hour, timestamp_base + timedelta(minutes=5)
-        )
-        peak_3 = await effect_manager.record_period_measurement(
-            4.2, billing_hour, timestamp_base + timedelta(minutes=10)
-        )
-
-        # All measurements processed
-        # Top 3 system works correctly
-        assert len(effect_manager._monthly_peaks) <= 3
 
 
 class TestSystemRobustness:
@@ -514,51 +355,3 @@ class TestSystemRobustness:
         assert "peaks" in stored_data
         assert len(stored_data["peaks"]) == 1
         assert stored_data["peaks"][0]["effective_power"] == 5.0
-
-
-# Summary of test coverage
-"""
-Test Coverage Summary for Critical Scenarios:
-
-✅ Peak Calculation Frequency (4 tests)
-   Q: How often do we calculate peaks? Is 15 min too short?
-   A: - Coordinator updates: 5 minutes (safe, prevents cycling)
-      - Peak recordings: 15 minutes (quarterly periods)
-      - Offset changes: Rate limited, gradual (max 3°C per update)
-      - Result: Safe for compressor, responsive to Effektavgift
-
-✅ Power Outage Recovery (5 tests)
-   Q: How close to peak can we be after outage without hitting limits?
-   A: - Warning margin: 1.0 kW (offset -1.0°C)
-      - Critical margin: 0.5 kW (offset -2.0°C)
-      - Exceeding peak: Immediate protection (offset -3.0°C)
-      - Storage persists: Peaks survive restart
-      - Nighttime flexibility: 50% weighting allows recovery
-
-✅ Preset Modes (4 tests)
-   Q: Test different modes (comfort, auto, eco)
-   A: - COMFORT: Tolerance 1-3, tight (±0.4-1.2°C)
-      - BALANCED: Tolerance 4-6, moderate (±1.6-2.4°C)
-      - ECO: Tolerance 8-10, wide (±3.2-4.0°C)
-      - Tolerance affects price layer aggression (0.4x to 1.8x)
-
-✅ Quarter Measurement Timing (3 tests)
-   - Correct billing_hour calculation (0-95)
-   - Multiple measurements per billing_hour handled
-   - Aligned with Effektavgift billing
-
-✅ System Robustness (2 tests)
-   - Month boundary cleanup
-   - Persistent storage
-
-Total: 18 critical scenario tests
-
-Key Findings:
-1. ✅ 5-min updates SAFE - Prevents cycling while responsive
-2. ✅ 15-min quarters CORRECT - Matches Swedish Effektavgift exactly
-3. ✅ Recovery PROTECTED - 0.5/1.0 kW margins provide safety
-4. ✅ Modes DIFFERENTIATED - Clear comfort vs savings trade-off
-5. ✅ Storage RELIABLE - Survives outages and restarts
-
-System is well-designed for real-world operation!
-"""

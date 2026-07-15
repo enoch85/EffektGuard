@@ -1,21 +1,10 @@
-"""EffektGuard started a hot-water boost, then unloaded and left it running.
+"""A hot-water boost EffektGuard started must be cancelled on unload, not left running.
 
-EffektGuard drives DHW by turning NIBE's temporary-lux switch ON, and turns it OFF again on the
-tick that decides the cycle is done. Nothing turned it off on UNLOAD.
-
-So a reload, an options change, or a Home Assistant restart landing in the middle of an
-EffektGuard-initiated boost left the heat pump running that boost until NIBE's own timeout expired,
-with nothing left alive to stop it. A full high-temperature hot-water cycle - at the top of the
-tank, which is where the immersion heater does the work - that nobody asked for.
-
-Only OUR boost is cancelled. The owner may start one from the heat pump's own panel or from their
-own automation, and that one is none of our business. The DHW control path already says exactly
-this, about its own turn-off branch:
-
-    Stopping the lux boost cannot harm the pump - it only stops an EffektGuard-initiated boost.
-
-which is true of the turn-off it was written for, and was NOT true of unload, because unload did
-not turn anything off at all.
+EffektGuard drives DHW by turning NIBE's temporary-lux switch ON, and turns it OFF on the tick
+that decides the cycle is done - but nothing turned it off on UNLOAD. A reload or restart mid-boost
+left the pump running to NIBE's own timeout with nothing alive to stop it: a full high-temperature
+cycle nobody asked for. Only OUR boost is cancelled; one the owner started from the pump panel or
+their own automation is left alone.
 """
 
 from __future__ import annotations

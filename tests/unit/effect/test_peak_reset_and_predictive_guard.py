@@ -1,29 +1,14 @@
-"""Monthly peaks must reset, must track the HIGHEST, and must not act on no history.
+"""Three effect-tariff invariants, each a case of acting on a number that did not mean what it said.
 
-Three independent defects in the effect-tariff path, all of which made the layer act on a
-number that did not mean what the code thought it meant.
-
-F-108 - the monthly peak never reset in a running instance
-----------------------------------------------------------
-`_clean_old_peaks()` was reachable only from `EffectManager.async_load()`, i.e. only at Home
-Assistant startup. The coordinator's daily rollover reset `peak_today` but never the MONTH.
-An instance that stayed up across 1 November carried October's top-3 into November: the
-protection threshold, the `peak_this_month` sensor and the savings figure were all last
-month's. Only a restart or the manual `reset_peak_tracking` service cleared them.
-
-F-056 - `peak_this_month` tracked the LATEST peak, not the highest
-------------------------------------------------------------------
-`record_period_measurement()` returns a `PeakEvent` for ANY new entry while the top-3 list
-is still filling. The coordinator assigned `peak_event.effective_power` straight to
-`peak_this_month`, so a 6.0 kW peak followed by a 2.0 kW quarter left it at 2.0 - silently
-dropping the monthly peak by 4 kW.
-
-F-057 - the predictive branch fired with NO peak history
---------------------------------------------------------
-With an empty peak list, `current_peak` is 0.0, so
-`predicted_margin = 0.0 - predicted_power` is ALWAYS negative. On day one, any cooling house
-got a -1.5 C vote at weight 0.85 - which outranks BOTH T1 (0.65) and T2 (0.81) thermal-debt
-recovery. Missing input must produce abstention, not a heat-reducing vote.
+* Monthly peaks must reset on a month boundary, not only at startup: `_clean_old_peaks()` was
+  reachable only from `async_load()`, so an instance up across 1 November carried October's top-3
+  into November (protection threshold and sensors a month stale).
+* `peak_this_month` must track the HIGHEST peak, not the latest: `record_period_measurement()`
+  returns a PeakEvent for any entry while the top-3 fills, so assigning its power dropped a 6.0 kW
+  peak to a later 2.0 kW one.
+* The predictive branch must ABSTAIN with no peak history: current_peak 0.0 makes
+  `predicted_margin` always negative, which voted -1.5 C at weight 0.85 - above T1 (0.65) and
+  T2 (0.81) thermal-debt recovery.
 """
 
 from datetime import datetime, timedelta
@@ -50,7 +35,7 @@ COOLING_TREND = {"trend": "cooling", "rate_per_hour": -0.5, "confidence": 1.0}
 class TestMonthlyPeaksReset:
     @pytest.mark.asyncio
     async def test_last_months_peaks_do_not_survive_into_this_month(self, hass, monkeypatch):
-        """F-108: an instance up across a month boundary carried October into November."""
+        """An instance up across a month boundary carried October into November."""
         effect = EffectManager(hass)
         await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
         assert effect.get_monthly_peak_summary()["count"] == 1
@@ -87,7 +72,7 @@ class TestMonthlyPeaksReset:
 class TestMonthlyPeakIsTheHighest:
     @pytest.mark.asyncio
     async def test_summary_reports_the_highest_not_the_latest(self, hass):
-        """F-056: the coordinator must read `highest`, not the returned PeakEvent."""
+        """The coordinator must read `highest`, not the returned PeakEvent."""
         effect = EffectManager(hass)
 
         await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
@@ -119,7 +104,7 @@ class TestMonthlyPeakIsTheHighest:
 
 class TestPredictiveBranchNeedsAPeakHistory:
     def test_no_peak_history_means_no_heat_reducing_vote(self, hass):
-        """F-057: on a fresh install the layer must ABSTAIN, not vote -1.5 @ 0.85."""
+        """On a fresh install the layer must ABSTAIN, not vote -1.5 @ 0.85."""
         effect = EffectManager(hass)  # no peaks recorded at all
 
         decision = effect.evaluate_layer(

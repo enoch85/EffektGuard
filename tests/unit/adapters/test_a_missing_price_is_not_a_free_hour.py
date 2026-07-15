@@ -1,43 +1,14 @@
-"""A price entry with no price becomes the cheapest quarter of the day.
+"""A GE-Spot entry with no `value` must be dropped, never defaulted to a price.
 
-    price = float(item.get("value", 0.0))          # gespot_adapter
+`_parse_periods` reads `float(item["value"])`: a missing `value` raises KeyError and the
+interval is dropped. It must never become `.get("value", 0.0)` - 0.0 is the cheapest
+possible price, so a data-less quarter would rank best of the day, classify VERY_CHEAP
+(PRICE_OFFSET_VERY_CHEAP is +4.0 C, aggressive pre-heating), and drive the pump hardest
+in the interval nobody sent a price for. Zero is also a real Nordic price, so a fabricated
+0.0 is indistinguishable from a genuinely free quarter after the fact.
 
-A GE-Spot entry that arrives without its `value` key silently becomes **0.0 öre**. Zero is the
-cheapest possible price, so that quarter is ranked the best of the day and classified VERY_CHEAP -
-and `PRICE_OFFSET_VERY_CHEAP` is **+4.0 °C**, commented in const.py as *"exceptional prices,
-aggressive pre-heating!"*.
-
-**So a quarter with no data commands the most aggressive pre-heating the price layer can ask for.**
-
-Two lines above, the same function treats the TIMESTAMP with exactly the care the price is denied:
-
-    start_time = dt_util.parse_datetime(time_str)
-    if start_time is None:
-        # parse_datetime signals invalid input with None, not an exception; letting it
-        # through would break the whole day at sort time instead of one interval here
-        _LOGGER.warning("Skipping price period with invalid time: %s", time_str)
-        continue
-
-An unparseable time is skipped, loudly, with a comment explaining why. An absent price is invented.
-
-And there is already an exception handler that would do the right thing:
-
-    except (ValueError, TypeError, KeyError) as err:
-        _LOGGER.warning("Failed to parse price period: %s", err)
-        continue
-
-`item["value"]` would raise KeyError, be caught there, and the bad interval would be dropped. But
-`.get("value", 0.0)` supplies a default, so the KeyError never fires. **The handler that would have
-saved us can never run, because the default swallows the error before it reaches it.**
-
-The last twist is what makes this unrecoverable. **Zero is a real Nordic price** - exactly-zero
-quarters occur roughly a hundred hours a year per SE zone (audit F-040). So after the fact there is
-nothing to distinguish "electricity was free" from "we were never told". The fabrication is
-indistinguishable from the truth.
-
-Missing data has one honest representation, and it is not a number. Drop the interval: the period
-lookup is by timestamp, so a gap simply means that quarter has no price, and the price layer
-abstains for it - which is the same thing that happens when there is no price source at all (F-123).
+Dropped intervals are located by timestamp, so a gap means that quarter has no price and
+the price layer abstains; a wholly empty day trips the no-price-source path.
 """
 
 from __future__ import annotations

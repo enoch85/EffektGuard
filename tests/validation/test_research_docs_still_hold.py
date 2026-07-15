@@ -1,37 +1,15 @@
 """The research must stay true, or it becomes what it replaced.
 
-`docs/research/` exists because the code cited fifteen research documents as the authority for
-safety-critical thresholds, and every one of them was absent from the repository. The rulebook's
-binding rule - "never guess NIBE behaviour, verify against research" - could not be obeyed by
-anyone who cloned this repo.
+`docs/research/` exists because the code cited fifteen research documents that were all absent from
+the repository, so the binding rule "never guess NIBE behaviour, verify against research" could not
+be obeyed by anyone who cloned it. Sourced citations only help if they stay true: a research note
+that has drifted from the code is worse than none, because it looks settled.
 
-Replacing dangling citations with sourced ones only helps if the sourced ones stay true. A research
-note that has drifted from the code is worse than no note at all: it looks settled. So the numbers
-these documents quote are checked here, against the code they claim to justify.
-
-AND THE FIRST VERSION OF THIS FILE DID NOT READ THE DOCUMENTS. It carried a dict:
-
-    QUOTED = {
-        "DM_THRESHOLD_START": -60,        # 01: NIBE menu 4.9.3 "start compressor"
-        ...
-    }
-
-and compared THAT against const.py. Both sides were Python. The markdown was never opened, so the
-assertion "docs/research quotes X = Y" was a claim the test had no way to check. Replacing every
-digit in every file under docs/research/ with a 9 left seventeen of its eighteen tests green.
-
-It was not merely unable to detect drift; it had already drifted. It asserted that the research
-quotes AIRFLOW_COMPRESSOR_BASE_THRESHOLD = 61.0, and that constant appears NOWHERE in
-docs/research/ - nor does the number 61. I transcribed a citation that does not exist, and no test
-could tell me, because the test WAS the transcription.
-
-So the documents are now parsed. `NAME = value` in the prose, the net-gain table in 04, the worked
-example in 02 - all read out of the markdown and checked against the code that runs. A digit
-changed in either place now fails here, which is the only arrangement under which "the research
-still holds" means anything.
-
-These are not the derivations - those live in the documents, with their sources. This is the part a
-machine can hold you to.
+So the documents are PARSED, not remembered. `NAME = value` in the prose, the net-gain table in 04,
+the worked example in 02 - all read out of the markdown and checked against the code that runs. A
+digit changed in either place fails here, which is the only arrangement under which "the research
+still holds" means anything. These are not the derivations - those live in the documents, with
+their sources; this is the part a machine can hold you to.
 """
 
 from __future__ import annotations
@@ -77,11 +55,10 @@ def _constants_cited_in_the_research() -> list[tuple[str, str, float]]:
 def _constants_declared_in_code_fences() -> list[tuple[str, str, float]]:
     """Every `NAME = value` inside a fenced code block - a DECLARATION, not a mention.
 
-    Prose may lawfully name a constant that no longer exists ("DEFAULT_BALANCE_POINT_OFFSET
-    ... is gone"). A fenced ```python block reads as the code the document is deriving, so a
-    name there that const.py does not have is a promise the codebase is not keeping - which
-    is how a document declared WEATHER_PREHEAT_OFFSET = 2.0 for months while production
-    shipped WEATHER_GENTLE_OFFSET = 0.83, and the hasattr filter above silently skipped it.
+    Prose may lawfully name a constant that no longer exists ("DEFAULT_BALANCE_POINT_OFFSET ... is
+    gone"). A fenced ```python block reads as the code the document is deriving, so a name there
+    that const.py does not have is a promise the codebase is not keeping - and the hasattr filter
+    used elsewhere would silently skip it.
     """
     declared = []
     for filename, text in _all_research_text():
@@ -123,18 +100,14 @@ class TestTheDocumentsAreActuallyRead:
         assert len(cited) >= 6, (
             f"Only {len(cited)} constants were parsed out of docs/research/: "
             f"{[c[1] for c in cited]}. Every test below is parametrised over this list, so if the "
-            f"parser stops matching, the whole file silently passes - which is exactly how the "
-            f"version this replaced managed to stay green while asserting a citation that did not "
-            f"exist."
+            f"parser stops matching, the whole file silently passes and checks nothing."
         )
 
     def test_the_net_gain_table_is_really_parsed(self):
-        """It printed six rows and my first parser found four. That is the failure mode, exactly.
+        """The net-gain table uses a Unicode minus AND a leading `+` on positive rows.
 
-        The document uses a Unicode minus sign AND a leading `+` on its positive rows. A regex that
-        handles neither reads a subset and reports success on it - so the count is asserted, not
-        assumed. The two rows my regex silently dropped were both of the positive ones, which are
-        the only rows where the feature looks GOOD.
+        A regex that handles neither reads only a subset - and the rows it drops are the positive
+        ones, the only rows where the feature looks GOOD - so the row count is asserted, not assumed.
         """
         table = _net_gain_table()
 
@@ -218,16 +191,9 @@ def test_the_en442_worked_example_in_the_docs_reproduces():
     """02_emitter_law.md shows a code block and prints its result. Run it, against ITS number.
 
     This anchors the whole flow-temperature model: NIBE's published curve 9 reads 41.0 C at 0 C
-    outdoor. Our law lands 0.64 C above it - and that gap is the TRIM, not an error: NIBE
-    interpolates its curves linearly, we follow EN 442.
-
-    The doc used to claim the emitter law beat a straight line here (0.39 C against 2.37 C). It does
-    not. Curve 9 IS a straight line, to 0.19 C - so it cannot validate curvature, and the balance
-    point that was once fitted to it was fitted to digitisation noise through a degenerate basis.
-    See test_emitter_law_matches_openenergymonitor.py, which proves both.
-
-    This test pins only what the doc actually claims: the numbers in its comparison table are real.
-    The expected value is read OUT of that table rather than copied from it.
+    outdoor, our law lands ~0.64 C above it, and that gap is the TRIM, not an error - NIBE
+    interpolates its curves linearly, we follow EN 442. The expected value is read OUT of the doc's
+    comparison table rather than copied from it.
     """
     table = _text("02_emitter_law.md")
     row = re.search(r"\|\s*EN 442[^|]*\|\s*([0-9.]+)\s*°C\s*\|", table)

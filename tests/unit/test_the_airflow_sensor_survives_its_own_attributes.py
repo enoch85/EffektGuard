@@ -1,13 +1,8 @@
-"""The airflow_thermal_gain sensor must render its attributes against the REAL optimizer.
+"""The airflow_thermal_gain sensor must render its attributes against a REAL AirflowOptimizer.
 
-The branch deleted ``AirflowOptimizer.get_enhancement_stats()`` (decision-history bookkeeping
-nothing consumed) but left the sensor's attribute block calling it. Every state update of
-``sensor.effektguard_airflow_thermal_gain`` on an F750/F730 then raised ``AttributeError``.
-
-No existing test caught it because the fixtures' coordinator is a MagicMock, and a MagicMock
-answers ``get_enhancement_stats()`` cheerfully - the same trap that hid the removed
-``hass.components`` API (F-068). So this test builds the one object that matters for the
-failure - a REAL ``AirflowOptimizer`` - and renders the attributes through the real sensor.
+``get_enhancement_stats()`` was deleted (bookkeeping nothing consumed), but the attribute block once
+still called it, raising AttributeError on every update. A MagicMock coordinator answers any method
+cheerfully and hides that, so this test wires the real optimizer and renders the real sensor.
 """
 
 from unittest.mock import MagicMock, Mock

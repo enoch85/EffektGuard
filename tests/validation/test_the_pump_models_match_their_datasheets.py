@@ -1,52 +1,28 @@
-"""The heat-pump models were invented, and I published a month of kWh and SEK from them.
+"""The heat-pump models must come from the datasheets, not from an invented curve.
 
-The owner put it plainly: "your sim models aren't even based on real data, yet you claim it." He is
-right. Every profile in `models/nibe/` carried an outdoor-keyed `cop_curve` whose docstring called
-it "Real-world COP curve (tested and validated)" and sourced it to "NIBE F750 datasheet, Swedish
-NIBE forum validation". Here is what the actual datasheets say.
+Every profile in `models/nibe/` once carried an outdoor-keyed `cop_curve` whose docstring called it
+"Real-world COP curve (tested and validated)" and sourced it to "NIBE F750 datasheet, Swedish NIBE
+forum validation". It was neither: the F750 and F730 shipped BYTE-IDENTICAL curves despite different
+published outputs, and the F750's said COP 5.0 at +7 C outdoor - a figure in no NIBE document, at a
+condition an EXHAUST-AIR pump is never rated at (its points are A20(12), 20 C extract air; outdoor
+air never touches its evaporator).
+
+What the datasheets say, and what this file checks the model against:
 
     NIBE F750, "Output data according to EN 14 511", part no. 066 063:
-        1.144 kW / COP 4.20   A20(12)W35, 108 m3/h, MIN compressor frequency
-        1.498 kW / COP 4.72   A20(12)W35, 252 m3/h, MIN compressor frequency
         4.994 kW / COP 2.43   A20(12)W45, 252 m3/h, MAX compressor frequency
+    F2040 (air source): capacity RISES as it cools - 3.86 -> 6.60 kW from +7 to -7 C - because an
+        inverter throttles back at its mild rating point; the COP falls instead, 4.65 -> 2.68 at W35.
 
-    The profile said:  rated_power_kw = (2.0, 8.0),  "Best COP: 5.0 at 7 C outdoor".
-
-The maximum output is 4.994 kW, not 8. The number 5.0 appears nowhere. And "at 7 C outdoor" is not
-a condition this machine is measured at, because it is an EXHAUST-AIR pump - its rating points say
-A20(12), twenty-degree extract air from inside the house, and the outdoor air never touches its
-evaporator.
-
-THE TELL WAS THERE ALL ALONG: the F750 and the F730 shipped BYTE-IDENTICAL COP curves
-(5.0/4.5/4.0/3.5/3.0/2.7/2.3/2.0/1.8) despite being different machines with different published
-outputs. And f1155.py's own docstring said, in plain words, "COP curve SET SLIGHTLY BELOW the
-S1155". Set. Not measured. (It is also wrong: the F1155 and S1155 publish IDENTICAL EN 14511 data.)
-
-WHAT THE SIMULATOR DID WITH THEM.
-
-  * It gave the F750 a 8.0 kW compressor. The machine makes 4.994 kW. So the simulator has NEVER
-    ONCE saturated an exhaust-air pump - and my finding that "four of the five houses never engage
-    the emergency ladder" was an artefact of handing them 60 % more compressor than they have.
-
-  * It derated the F2040's capacity by 2.5 %/C below +7 C, citing "the EN 14511 rating points
-    (A7/W35, A2/W35, A-7/W35, A-15/W35)", which "trace a near-linear decline". They trace a
-    near-linear RISE: 3.86 -> 5.11 -> 6.60 kW from +7 to -7 C, because an inverter throttles back
-    at its mild rating point and ramps UP as the weather cools. What collapses is the COP, not the
-    capacity. I invented that citation and got the sign backwards, and F-124 - the headline finding
-    of the entire audit - was built on it.
-
-  * It dropped an F1155's COP from 5.3 to 3.3 because the air outside got cold. Its heat source is
-    0 C brine from a borehole. NIBE's own capacity chart for that machine plots output against an
-    x-axis labelled, verbatim, "Incoming brine temp, C". There is no air-temperature rating point
-    anywhere in its datasheet.
-
-WHAT REPLACES THEM. Each profile now carries its EN 14511 rating points VERBATIM, with the
-manufacturer's own condition strings and the document they came from. The simulator's COP is
+The old curve gave the F750 an 8 kW compressor (it makes 4.994), derated the F2040 the wrong way,
+and dropped a ground-source F1155's COP because the outdoor AIR got cold - though its heat source is
+0 C borehole brine. Each profile now carries its EN 14511 rating points VERBATIM, and the
+simulator's COP is
 
     COP = eta_exergy(load, flow) x Carnot(source, flow)
 
-with eta fitted to each machine's own published points. That is a claim that CAN be falsified,
-which the curve it replaces could not be - and this file falsifies it, or fails.
+with eta fitted to each machine's own published points - a claim that CAN be falsified, which the
+curve it replaced could not be, and this file falsifies it or fails.
 """
 
 from __future__ import annotations
@@ -193,19 +169,15 @@ class TestTheModelReproducesTheDatasheet:
 
 
 class TestThePhysicsIsTheRightWayUp:
-    """Both of my first two attempts at this model had a sign backwards. Both of them."""
+    """A sign error here is invisible to the Carnot guard, so it is pinned directly."""
 
     def test_efficiency_falls_as_the_compressor_is_pushed(self, profile):
-        """An inverter gets LESS efficient the harder it runs. My first fit said the opposite.
+        """An inverter gets LESS efficient the harder it runs.
 
-        Fitting all three of the F750's points gave a load coefficient of +0.586 - efficiency
-        RISING with load - which extrapolated to COP 9.86 at full load and 35 C flow, a condition
-        the simulator visits. Carnot's ceiling there is 12.5, so the second-law guard would have
-        waved it straight through.
-
-        The cause was in the datasheet: the F750's two minimum-frequency points differ by AIRFLOW
-        (108 vs 252 m3/h), not by load. They are not a load pair, and treating them as one is what
-        turned the physics upside down.
+        A fit with efficiency RISING with load extrapolates to COP 9.86 at full load and 35 C flow,
+        under Carnot's ceiling of 12.5 there - so the second-law guard cannot catch it. (The trap:
+        the F750's two minimum-frequency points differ by AIRFLOW, 108 vs 252 m3/h, not by load;
+        treating them as a load pair turns the physics upside down.)
         """
         _, load_slope, _ = _house_for(profile).exergy_fit
 
@@ -300,7 +272,7 @@ class TestCapacityComesFromTheDatasheetToo:
             )
 
     def test_the_air_source_pumps_capacity_rises_as_it_gets_colder(self):
-        """It does not derate. It ramps up. I had this backwards, and cited EN 14511 for it."""
+        """It does not derate. It ramps up - an inverter throttled back at its mild rating point."""
         house = next(h for h in sim.HOUSES if h.profile.model_name == "F2040")
 
         mild, cold = house.capacity_kw_at(7.0), house.capacity_kw_at(-7.0)
@@ -316,14 +288,10 @@ class TestCapacityComesFromTheDatasheetToo:
 class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
     """It was ONE invented number, applied to five machines, matching none of them.
 
-    The simulator gave every house the same `AUX_STEP_KW = 3.0`. NIBE ships the F750 and F730 with
-    a 6.5 kW heater set to 3.5 kW at delivery, the F1155-12 and S1155-12 with a 7 kW heater in
-    seven automatic steps, and the F2040 with NO HEATER AT ALL - it is an outdoor monobloc, and the
+    The simulator gave every house the same `AUX_STEP_KW = 3.0`. NIBE ships the F750 and F730 with a
+    6.5 kW heater set to 3.5 kW at delivery, the F1155-12 and S1155-12 with a 7 kW heater in seven
+    automatic steps, and the F2040 with NO HEATER AT ALL - it is an outdoor monobloc, and the
     electric addition belongs to the indoor module it is paired with.
-
-    This matters because the immersion burn is a headline number in the saturated-compressor
-    finding. Correcting it moved the F750's cold-snap burn from 38.1 to 35.8 kWh - which is to say
-    the finding is robust to it, and that is worth knowing rather than assuming.
     """
 
     def test_each_machine_carries_its_own_published_heater(self, profile):

@@ -1,36 +1,11 @@
-"""Five tests asserted a literal against itself and called no production code at all.
+"""The register bounds, the write rate limit, and the emergency exemption - the real limits.
 
-    max_offset_change_per_update = 3.0  # °C
-    assert max_offset_change_per_update <= 3.0
-
-    min_write_interval_seconds = 300  # 5 minutes minimum
-    assert min_write_interval_seconds >= 300
-
-    startup_delay_seconds = 10
-    assert startup_delay_seconds >= 10
-
-    required_forecast_hours = 12
-    assert required_forecast_hours >= 12
-
-    max_offset_change = 3.0
-    assert max_offset_change <= 3.0
-
-Every one of them binds a local to a number and then asserts that number against itself. They
-cannot fail. One of them even says so out loud - "This limit is enforced by decision engine
-aggregation" - and then tests nothing at all. They are named for real safety properties: thermal
-shock, compressor wear, NIBE controller wear, startup ordering.
-
-AND THE PROPERTY TWO OF THEM CLAIM IS FALSE. The engine does NOT bound its offset change to 3.0 °C
-per update. Measured across five houses and 31 days of real weather and real prices, the largest
-jump between consecutive decisions is 4.41 °C - and the trace is sampled every 30 minutes, so the
-true 5-minute jump is larger still.
-
-THAT IS NOT A BUG, AND IT MUST NOT BE "FIXED". A per-update magnitude limit would rate-limit the
-EMERGENCY response, which has to be able to go from 0 to +10 in a single cycle when degree minutes
-reach the auxiliary-heat limit. Deferring that for even one cycle is the death spiral the
-anti-windup work exists to prevent. So this file asserts what is ACTUALLY true and load-bearing -
-the register bounds, the write rate limit, and that the emergency path is deliberately exempt -
-rather than inventing a limit that would make the pump less safe.
+There is deliberately NO per-update magnitude limit on the offset. One would rate-limit the
+emergency response, which must go from 0 to +10 in a single cycle when degree minutes reach the
+auxiliary-heat limit - deferring that even one cycle is the death spiral the anti-windup work
+prevents. What bounds the offset is the NIBE register range [MIN_OFFSET, MAX_OFFSET]; what
+protects the controller from wear is the write rate limit, not a magnitude cap. These tests drive
+that production code directly.
 """
 
 from __future__ import annotations
@@ -80,7 +55,8 @@ def _engine() -> DecisionEngine:
 
 
 class TestTheWriteRateLimitActuallyRefuses:
-    """The old test asserted `300 >= 300` and never touched the adapter."""
+    """A second write inside the cooldown must be refused, so the NIBE controller is not
+    rewritten every cycle."""
 
     @pytest.mark.asyncio
     async def test_a_second_write_inside_the_cooldown_is_refused(self):
@@ -138,9 +114,8 @@ class TestTheRegisterBoundsAreTheRealLimit:
 class TestTheEmergencyPathIsDeliberatelyExemptFromSmoothing:
     """Why no per-update magnitude limit exists. Do not add one.
 
-    The two deleted tests asserted the engine never moves more than 3.0 °C in one update. It does -
-    4.41 °C measured over 31 days. Enforcing 3.0 would rate-limit the response below, and degree
-    minutes at the auxiliary-heat limit cannot wait three cycles for full heat.
+    A per-update magnitude limit would throttle the emergency response, and degree minutes at the
+    auxiliary-heat limit cannot wait several cycles for full heat.
     """
 
     def test_the_safety_layer_reaches_full_heat_in_a_single_update(self):
@@ -162,19 +137,9 @@ class TestTheEmergencyPathIsDeliberatelyExemptFromSmoothing:
             f"is below its absolute floor, and it cannot wait three cycles for full heat."
         )
 
-    def test_a_jump_from_zero_to_full_heat_is_more_than_the_deleted_tests_allowed(self):
-        """Stated explicitly so nobody 'restores' the 3.0 limit and breaks the emergency path."""
-        jump = abs(SAFETY_EMERGENCY_OFFSET - 0.0)
 
-        assert jump > 3.0, (
-            f"The emergency response is a {jump:.0f} °C jump in one update. The deleted tests "
-            f"asserted the engine never moves more than 3.0 °C per update. Both cannot be true, "
-            f"and it is the emergency response that has to win."
-        )
-
-
-def test_the_forecast_horizon_is_a_real_constant_not_a_number_in_a_test():
-    """The old test bound `required_forecast_hours = 12` and asserted `12 >= 12`."""
+def test_the_forecast_horizon_is_long_enough_to_see_the_cold_coming():
+    """Pre-heat decisions need at least 12 h of look-ahead."""
     assert WEATHER_FORECAST_HORIZON >= 12.0, (
         f"The forecast horizon is {WEATHER_FORECAST_HORIZON} h. Pre-heating decisions need at "
         f"least 12 h of look-ahead; below that the pre-heat cannot see the cold coming."

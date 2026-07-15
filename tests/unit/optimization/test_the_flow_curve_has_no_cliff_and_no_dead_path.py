@@ -1,20 +1,12 @@
-"""Three fixes to the emitter law that no test could see.
+"""Three invariants of the EN 442 emitter law, each guarding a real defect in the flow curve.
 
-Each of these was a real defect, each was fixed, and each mutation-survived a 793-test suite
-afterwards - which means the fix was worth nothing: the next refactor would have silently undone it
-and everything would still have been green.
-
-  1. A 2.5 C STEP in the flow curve at the balance point.
-  2. The balance point never reaching `calculate_rated_output_flow_temp` - the anchor the layer
-     PREFERS (confidence 0.95). The gains fix was a no-op for exactly the installers who had
-     configured their emitters properly.
-  3. Internal gains as a fixed offset in DEGREES rather than watts over the house's own W/K, which
-     credits a leaky house with more free heat than an insulated one from the same fridge.
-
-They are grouped here because they share a cause. The balance point was introduced as a constant
-fitted to a heating curve, and a fitted constant has no physical anchor to reason from - so nobody
-asked what it did at its own boundary, whether it reached both call sites, or what it was a
-proportion OF. Deriving it from watts answers all three questions at once.
+1. No STEP at the balance point: `return indoor_setpoint` above it leaves a 2.5 C jump (spread/2),
+   and the shoulder season crosses the balance point (~17 C) repeatedly.
+2. Both anchors see internal gains: `calculate_rated_output_flow_temp` is the PREFERRED anchor
+   (confidence 0.95), so wiring gains only into the design-point anchor is a no-op for installers
+   who configured their emitters, and the two anchors of one law then disagree.
+3. Internal gains are WATTS over the house's own W/K, not a fixed offset in degrees - the balance
+   point is derived (INTERNAL_GAINS_W / heat_loss_coefficient), bounded, and follows the setpoint.
 """
 
 from __future__ import annotations
@@ -38,13 +30,10 @@ TARGET = 21.0
 def test_the_flow_curve_has_no_step_at_the_balance_point():
     """Sweep the curve across its own discontinuity and demand that there isn't one.
 
-    Below the balance point the house heats itself and the emitters need no excess over the room.
-    The naive way to express that is `return indoor_setpoint` - and it puts a step of spread/2
-    (2.5 C on the defaults) right at the balance point, because the expression on the other side
-    tends to `indoor_setpoint + spread/2` as the load goes to zero, not to `indoor_setpoint`.
-
-    The balance point is around 17 C. Swedish autumn crosses 17 C back and forth all day. A step
-    there is not a rounding error, it is a control system chattering 2.5 C on a heat pump.
+    Below the balance point the emitters need no excess over the room. The naive `return
+    indoor_setpoint` puts a step of spread/2 (2.5 C on the defaults) right at the balance point
+    (~17-18 C), because the other side tends to `indoor_setpoint + spread/2` as load goes to zero.
+    The shoulder season crosses that boundary repeatedly, so a step there is the pump chattering.
     """
     calc = WeatherCompensationCalculator(heat_loss_coefficient=DEFAULT_HEAT_LOSS_COEFFICIENT)
     balance = calc.balance_point_temp(TARGET)
@@ -95,15 +84,11 @@ def test_the_curve_is_flat_and_continuous_above_the_balance_point():
 def test_the_preferred_anchor_is_not_left_out_of_the_gains_fix():
     """`calculate_rated_output_flow_temp` is chosen at confidence 0.95. It must see the gains too.
 
-    The layer prefers the rated-output anchor whenever an installer has supplied their emitters'
-    nameplate figure. When internal gains were added, they were wired into the design-point anchor
-    only - so the fix did nothing at all for those users, and the two anchors of what the code
-    calls "the same law" disagreed by up to 3.5 C.
-
-    A curve that ignores internal gains asks for heat right up to room temperature. One that models
-    them stops needing heat at the balance point. So: at an outdoor temperature ABOVE the balance
-    point but BELOW the setpoint, the two are unmistakably different - the gains-aware curve is
-    already flat.
+    The layer prefers the rated-output anchor whenever an installer supplies their emitters'
+    nameplate figure, so gains wired into the design-point anchor only would do nothing for them.
+    A gains-aware curve stops needing heat at the balance point, so at an outdoor temperature
+    above the balance point but below the setpoint it is already flat while a gains-blind one
+    still asks for heat.
     """
     calc = WeatherCompensationCalculator(
         heat_loss_coefficient=DEFAULT_HEAT_LOSS_COEFFICIENT,
@@ -129,10 +114,9 @@ def test_both_anchors_agree_when_the_house_is_described_consistently():
     """One law, two anchors - so given a self-consistent house they must give the SAME curve.
 
     The five inputs (heat loss, design flow, design outdoor, spread, rated output) are
-    over-determined: any four fix the fifth. Nothing in the config flow enforces that, and the
-    layer silently prefers the rated-output anchor - so an inconsistent set does not raise, it just
-    quietly runs the pump on a different curve. This pins the invariant that makes such a check
-    meaningful: when the inputs DO agree, the anchors agree exactly.
+    over-determined: any four fix the fifth, but nothing enforces consistency and the layer
+    silently prefers the rated-output anchor. This pins the invariant: when the inputs agree,
+    the anchors agree exactly.
     """
     room, dot, spread, hlc = TARGET, -15.0, DEFAULT_DESIGN_SPREAD, DEFAULT_HEAT_LOSS_COEFFICIENT
     design_flow = 50.0

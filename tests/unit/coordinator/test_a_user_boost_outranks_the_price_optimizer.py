@@ -1,14 +1,12 @@
 """A hot-water boost the USER commanded is not the price optimizer's to cancel.
 
-Live repro that motivated this: `boost_dhw` switched temporary lux ON, and the next applied
-refresh switched it OFF again because prices were high. The service did nothing but flash a
-switch. An explicit user command outranks cost optimization - only safety outranks the user.
-
-So a service boost now records HOW LONG the user asked for, and while that window is open:
+`boost_dhw` records HOW LONG the user asked for, and while that window is open:
 - the ordinary price-based stop path defers to it,
 - the thermal-debt SAFETY abort still stops it (and closes the window),
-- expiry stops it through the same owned door the cleanup uses,
+- expiry stops it through the same owned door the unload cleanup uses,
 - and `duration` therefore does something real, instead of being validated and discarded.
+
+Only safety outranks the user; cost optimization does not.
 """
 
 from datetime import datetime, timedelta, timezone

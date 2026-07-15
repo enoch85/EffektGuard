@@ -1,25 +1,10 @@
-"""This global is deliberate. Moving it onto the coordinator opens a one-click bypass.
+"""The `_service_last_called` cooldown dict is deliberately at MODULE scope, not on the coordinator.
 
-`_service_last_called` is a module-level dict, and the audit filed that as a defect: "cooldowns
-leak across reloads and config entries". Both halves of that are wrong, and acting on it would
-remove a guard that protects the heat pump.
-
-**Across config entries**: `manifest.json` sets `"single_config_entry": true`, so there is never
-more than one. Nothing to leak into.
-
-**Across reloads**: that is the point. The cooldowns rate-limit the two services that can actually
-hurt the machine —
-
-    boost_heating   commands MAX_OFFSET, +10.0 °C, for 45 minutes
-    boost_dhw       fires the immersion heater through NIBE's temporary lux, for 60 minutes
-
-Hold that state on the coordinator and it dies with the coordinator. **Reloading the integration —
-two clicks in the UI — would then reset the rate limiter**, and a user could drive the pump to +10 °C
-again immediately, and again after that. A cooldown you can clear by reloading is not a cooldown.
-
-So the global survives the reload on purpose, and this test exists to stop it being helpfully
-tidied away into per-entry state. If you need to reset a cooldown, do it explicitly and visibly -
-not as a side effect of a reload.
+It rate-limits the two services that can hurt the machine (boost_heating commands MAX_OFFSET;
+boost_dhw fires the immersion heater via temporary lux). On the coordinator it would die with the
+coordinator, so HA's reload button - which re-creates it - would reset the rate limiter: boost to
++10 °C, reload, boost again. `single_config_entry` is true, so a module global cannot leak across
+entries. This file pins that the state stays at module scope and no reload path clears it.
 """
 
 from __future__ import annotations
@@ -79,14 +64,10 @@ def test_the_cooldown_state_is_not_held_on_the_coordinator():
 def test_no_reload_path_clears_the_cooldown():
     """A config-entry reload must not forget that a boost just happened.
 
-    Home Assistant's reload does NOT re-import the module - it calls `async_unload_entry` and then
-    `async_setup_entry` on the module already in `sys.modules`, so anything at module scope simply
-    survives. The only way a reload could clear these cooldowns is if one of those paths went and
-    cleared them, so that is what is checked.
-
-    (`importlib.reload()` would be the wrong way to test this: it re-executes the module body and
-    resets the dict, which is the opposite of what a config-entry reload does. It would fail here
-    while the production behaviour was correct.)
+    HA's reload does not re-import the module; it calls `async_unload_entry` then `async_setup_entry`
+    on the module already in `sys.modules`, so module-scope state survives unless a path clears it.
+    That is what is checked (rather than importlib.reload, which re-executes the body and would reset
+    the dict - the opposite of a config-entry reload).
     """
     import custom_components.effektguard as integration
 

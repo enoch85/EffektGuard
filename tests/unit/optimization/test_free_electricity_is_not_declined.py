@@ -1,54 +1,14 @@
-"""The median guard I added to stop the optimiser buying at the day's highest price also
-stopped it buying at the day's lowest.
+"""Free electricity must be bought, and the dear plateau of a high-wind day must not be.
 
-THE PROBLEM IT WAS SOLVING IS REAL. On a high-wind Nordic day the price distribution is not a
-curve, it is a step: 83 quarters at 120 ore and 13 at MINUS 10, where the grid pays you to take
-the power. The middle of that distribution is a plateau, so p25 == p75 == p90 == 120, and the
-83 quarters at the day's HIGHEST price all satisfy `price <= p25`. Without a guard they classify
-CHEAP and the optimiser commands +4.0 C of extra heat at the most expensive moment of the day.
+On a high-wind day the distribution is a step, not a curve: 83 quarters at 120 ore and 13 at -10, so
+p25 == p75 == p90 == 120 and the 83 dearest quarters all satisfy `price <= p25`. Rank alone therefore
+calls them CHEAP and commands +4 C at the most expensive moment. The mirror image is more common - a
+long free run into a short expensive one - where the free plateau IS the median.
 
-The guard was to require each band to sit on the correct SIDE of the median:
-
-    if price <= p10 and price < median:   VERY_CHEAP
-    if price <= p25 and price < median:   CHEAP
-
-which works, because 120 is not < 120.
-
-AND IT BREAKS ON THE MIRROR IMAGE, WHICH IS THE MORE COMMON ONE. Turn the step upside down - a
-long free stretch and a short expensive one, which is what a windy night into a calm evening
-actually looks like - and the plateau IS the median:
-
-    14 hours at exactly 0.00 ore, 10 hours at 80 ore
-
-    p10 = 0.0   p25 = 0.0   median = 0.0   p75 = 80.0   p90 = 80.0
-
-    the 56 free quarters   ->  NORMAL      <- `0.0 < 0.0` is False
-    the 40 costly quarters ->  NORMAL      <- `80.0 > 80.0` is False
-
-EVERY QUARTER OF THE DAY IS NORMAL. The price layer goes completely blind on a day with an 80 ore
-spread: it will not pre-heat on free electricity, and it will not back off at 80 ore. The one thing
-this integration exists to do, and it declines to do it.
-
-Exactly-zero and negative prices are not exotic - roughly a hundred hours a year per SE bidding zone,
-arriving in long contiguous runs, which is exactly the shape that makes the plateau the median.
-
-THE FIX ASKS THE QUESTION THE GUARD WAS STANDING IN FOR: is anything meaningfully dearer today? That
-is `price < p90`, and it belongs on exactly ONE band. I had put the median on all four; mutating them
-one at a time shows three were doing nothing but breaking the free day. The upstream spread check
-already guarantees p90 > p10, so:
-
-    VERY_CHEAP   `price <= p10` already implies `price < p90`.               Redundant.
-    PEAK         `price > p90`, and p90 >= p10, implies `price > p10`.       Redundant.
-    EXPENSIVE    `price > p75`, and p75 >= p10, implies `price > p10`.       Redundant.
-    CHEAP        p25 CAN equal p90 - that IS the dear plateau - so
-                 `price <= p25` does NOT imply `price < p90`.                Earns its place.
-
-So one guard, on one band, and it is precisely the one that stops the 120 ore plateau being
-classified cheap. Everything else was noise that broke the mirror case.
-
-The dear side deliberately keeps its strict `>`. Loosening it to `>=` would make all 83 quarters of
-the high-wind day PEAK, telling the house to coast for twenty hours with only three hours of cheap
-power to charge in. A plateau you cannot escape is not a peak; it is just the price of the day.
+The fix is one guard on one band: `price <= p25 and price < p90` for CHEAP. `price < p90` earns its
+place only there (p25 can equal p90 - the dear plateau), and every other band is already implied by
+the upstream spread check that guarantees p90 > p10. The dear side keeps its strict `>`: an
+inescapable plateau is the price of the day, not a PEAK to coast through.
 """
 
 from __future__ import annotations
@@ -211,7 +171,7 @@ def test_free_power_is_bought_however_much_of_the_day_it_covers(free_fraction):
 
 
 class TestTheOneGuardThatEarnsItsPlace:
-    """`price < p90` on the CHEAP band. Everything else was redundant, and mutation proves it."""
+    """`price < p90` on the CHEAP band. Every other band is already implied by the spread check."""
 
     # Three levels, with the DEAR one spanning p25 through p90. This is the shape that needs the
     # guard: without it the 60 ore quarters - which are p25, p75 AND p90 - classify CHEAP.

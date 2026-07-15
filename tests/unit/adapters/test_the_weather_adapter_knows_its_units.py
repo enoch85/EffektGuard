@@ -1,20 +1,11 @@
-"""The weather adapter read Fahrenheit as Celsius. The NIBE adapter, reading the same weather, did not.
+"""The weather adapter must convert forecast temperatures to °C, like nibe_adapter.
 
-A Home Assistant weather entity reports its temperatures in the user's configured unit system and
-declares which one in `temperature_unit`. The weather adapter never looked. `nibe_adapter` does -
-it has used `TemperatureConverter` since F-016 was fixed - so on an imperial install the two
-primary temperature sources silently disagreed by about 28 degrees:
-
-    a -5 C cold snap arrives from the weather entity as "23"
-    nibe_adapter reports the outdoor sensor correctly as -5
-
-23 is what the weather, prediction and pre-heating layers were handed. So the pre-heat is withdrawn
-at precisely the moment it is needed, and the cold-snap detection - the feature the owner cares
-most about, because a concrete slab must start charging DAYS ahead - never fires.
-
-Sweden is metric, so the owner's own install was never affected. The integration nonetheless claims
-to adapt "from Arctic (-30C) to Mild (5C) climates without configuration", and a US or UK user on
-an imperial HA install gets this.
+A HA weather entity reports temperatures in the user's unit and declares it in
+`temperature_unit`; get_forecast() must convert via TemperatureConverter. Without it, on an
+imperial install a -5 C cold snap arrives as "23" (F) and is read as +23 C - a 28-degree
+error that withdraws the pre-heat exactly when it is needed and disagrees with nibe_adapter,
+which does convert. Both current_temp and every forecast hour must be converted; a missing
+unit is assumed Celsius (HA's default).
 """
 
 from __future__ import annotations
@@ -29,9 +20,8 @@ from homeassistant.util import dt as dt_util
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.const import CONF_WEATHER_ENTITY
 
-# The clock is read INSIDE each test, never at module import: a module-level `NOW` is captured at
-# COLLECTION time while the adapter reads the clock when the test RUNS, and the two only agree
-# while nothing moves the clock. Freeze it - or collect at 23:59:58 - and they diverge.
+# The clock is read INSIDE each test (fixture below), never at module import: a module-level NOW
+# captured at collection time would diverge from the adapter's run-time clock under a frozen clock.
 
 
 @pytest.fixture

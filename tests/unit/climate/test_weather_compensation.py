@@ -1,24 +1,14 @@
 """Tests for the EN 442 emitter law used by weather compensation.
 
-Replaces the tests for Andre Kuehne's formula, Timbones' method as a separate "method", and the
-UFH flow-temperature "adjustment" - all three are gone (audit F-119 / F-121). What remains is one
-law with two anchors, so these tests check the law, its anchors, and the properties any heating
-curve must have.
+The old Kuehne formula, Timbones "method" and UFH flow "adjustment" are gone (F-119 / F-121):
+weather compensation is now one law anchored on either the emitters' rated output or the system
+design point. These tests check the law, its anchors, and the properties any heating curve must
+have (monotonic, physically plausible slope, flat above the balance point, bounded offset).
 
-Two of the old tests are preserved deliberately, because they encode real external references:
-
-  * Timbones' published spreadsheet example (18 000 W of emitters, 260 W/K, 19 C target, 0 C
-    outdoor -> ~40 C flow). The rated-output anchor reproduces it to 0.01 C. It is now a
-    validation of the EN 442 law rather than of a separate method.
-
-  * The HeatpumpMonitor SPF-4.0 target (flow = outdoor + 27 C). This one was ENSHRINING THE BUG:
-    it asserted the model must return 24-35 C at 0 C outdoor for a 150 W/K house at 20 C, and the
-    emitter law says such a house needs 39.3 C. "Outdoor + 27" is an efficiency ASPIRATION,
-    achievable only if the emitters are large enough to deliver the load at that temperature. It
-    is not a temperature the house can be held at by decree. Asserting it as a requirement is
-    exactly the efficiency-over-adequacy error that made EffektGuard under-heat: a flow
-    temperature below what the emitter law demands does not save energy, it just fails to heat
-    the house. The test now asserts adequacy, and records the aspiration as the comment it is.
+Two external references are retained as validation of the law itself: Timbones' published
+spreadsheet example (18 kW emitters, 260 W/K, 19 C, 0 C outdoor -> ~40 C flow), and the adequacy
+a 150 W/K house needs at 0 C (39.3 C) - not the "outdoor + 27" efficiency aspiration that, asserted
+as a requirement, made EffektGuard under-heat.
 """
 
 import pytest
@@ -101,15 +91,10 @@ class TestEmitterLawAnchors:
         assert result.flow_temp == pytest.approx(40.0, abs=0.5)
 
     def test_internal_gains_are_what_move_us_off_the_uk_reference_tools(self):
-        """And the size of that move is the whole point, so it is pinned rather than left implicit.
+        """Modelling internal gains asks for cooler water than the gains-free UK tools.
 
-        The UK tools ask for heat right up to room temperature. We stop at the balance point. On
-        Timbones' own house that is worth about 1.8 C of flow at 0 C outdoor - and every degree of
-        excess flow costs 2.5-3 % of COP on OEM's measured fleet.
-
-        This is a DEPARTURE from the reference, made deliberately and on evidence (583 W median
-        gains across 383 monitored systems on heatpumpmonitor.org). If it ever shrinks to nothing,
-        the gains term has been switched off by accident.
+        The gains term must reach the (preferred) rated-output anchor; if these flows converge it
+        has been switched off. A deliberate, evidenced departure (heatpumpmonitor.org fleet gains).
         """
         house = dict(heat_loss_coefficient=260.0, radiator_rated_output=18000.0)
 
@@ -173,20 +158,13 @@ class TestHeatingCurveProperties:
         assert flow > DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
 
     def test_no_heat_needed_above_the_balance_point(self):
-        """Zero load means zero EXCESS over the room - but the spread term does not vanish.
+        """Above the balance point the flow is FLAT at room + spread/2, with no cliff.
 
-        This test used to assert a flat `flow == indoor_setpoint`, and that was a divergence from
-        the reference implementation, not a property. OpenEnergyMonitor's WeatherComp computes
-        `flowT = MWT + systemDT * 0.5` and its mean water temperature tends to the room temperature
-        as the load goes to zero - so at zero load it returns **room + spread/2**, not room.
-
-        Asserting a bare `indoor_setpoint` put a spread/2 CLIFF (2.5 C on the defaults) at the
-        boundary, and the balance point sits at ~17 C, in the middle of the Swedish shoulder season
-        where the outdoor temperature crosses it back and forth all day. Since the offset is
-        `(optimal - actual) / curve_sensitivity`, that step was 1.67 offset units of pure chatter.
-
-        What must hold: the flow never falls below the setpoint (water colder than the room would
-        cool it), and above the balance point it is FLAT - no heat is being demanded, and no step.
+        Zero load means zero excess over the room, but the spread term does not vanish: like OEM's
+        WeatherComp (flowT = MWT + systemDT/2), the curve converges to room + spread/2, not room.
+        The flow must never fall below the setpoint (colder water would cool the room), and must not
+        step at the boundary - a bare `indoor_setpoint` put a spread/2 cliff right in the shoulder
+        season where the outdoor temperature crosses the balance point back and forth all day.
         """
         calc = WeatherCompensationCalculator(heat_loss_coefficient=180.0)
         balance = calc.balance_point_temp(20.0)
@@ -311,14 +289,11 @@ class TestRealWorldScenarios:
     """Whole-system checks in real Swedish conditions."""
 
     def test_house_that_needs_hot_water_gets_it(self):
-        """Formerly `test_heatpumpmonitor_spf4_target`, which enshrined the bug.
+        """A 150 W/K house at 20 C, 0 C outdoor, needs 39.3 C - adequacy, not aspiration.
 
-        It asserted 24-35 C at 0 C outdoor for a 150 W/K house at 20 C indoor. The emitter law
-        says that house needs 39.3 C. "Flow = outdoor + 27 for SPF 4.0" is an ASPIRATION that
-        holds only when the emitters can deliver the load at that temperature; it is not a
-        temperature you can simply choose. Demanding it of a system that cannot deliver it does
-        not buy efficiency, it just leaves the house cold - which is precisely what EffektGuard
-        was doing for 92% of a simulated month.
+        The old test asserted 24-35 C here ("flow = outdoor + 27 for SPF 4.0"), an efficiency
+        aspiration that holds only when the emitters can deliver the load at that temperature.
+        Demanding it of a system that cannot just leaves the house cold.
         """
         calc = WeatherCompensationCalculator(heat_loss_coefficient=150.0)
 

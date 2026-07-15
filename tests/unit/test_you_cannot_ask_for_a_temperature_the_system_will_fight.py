@@ -1,32 +1,13 @@
-"""The thermostat offers 15 °C, and the safety layer calls 15 °C an emergency.
+"""The thermostat must not offer a setpoint the safety layer will fight.
 
-    const.py    MIN_INDOOR_TEMP = 15.0   # "minimum settable temperature"  -> climate._attr_min_temp
-    const.py    MIN_TEMP_LIMIT  = 18.0   # the absolute floor: below this, the safety layer fires
+MIN_TEMP_LIMIT (18.0 °C) is the absolute floor: below it the safety layer fires MAX_OFFSET as an
+emergency. A settable minimum below the floor produces a limit cycle - above 18 °C the comfort
+layer reads an overshoot and cuts to MIN_OFFSET, below it safety commands MAX_OFFSET, and every
+safety boost is is_emergency=True so it bypasses the volatility blocker.
 
-So Home Assistant's thermostat card lets the owner dial their target down to 15 °C, and the
-integration treats any indoor temperature below 18 °C as an absolute emergency and commands maximum
-heat. Those two facts cannot both be honoured, and the result is not a compromise - it is a hard
-limit cycle across the entire offset range:
-
-    indoor 19.0 °C   ->  -10.00   comfort: "Overshoot: 3.0 °C above target, reducing heat"
-    indoor 17.9 °C   ->  +10.00   SAFETY:  "Too cold (17.9 °C < 18.0 °C)"   <- EMERGENCY
-    indoor 16.0 °C   ->  +10.00   SAFETY
-    indoor 15.0 °C   ->  +10.00   SAFETY
-
-The house is driven up by an emergency, driven down by a comfort overshoot, and back again. MIN_OFFSET
-to MAX_OFFSET, on a real compressor, for as long as the setpoint stands. And every one of those
-emergency boosts is is_emergency=True, so it bypasses the offset-volatility blocker that exists to
-stop exactly this kind of thrashing.
-
-Nothing warns the user. The slider simply offers a number the system will spend the winter fighting.
-
-There is one honest number here: the lowest indoor temperature this system permits. It is the safety
-floor. A setpoint the integration will treat as an emergency is not a setpoint, and offering it is
-not a feature.
-
-(If 18 °C is the wrong floor - for an away mode, a holiday, an unheated room - then MIN_TEMP_LIMIT is
-the thing to change, deliberately, as a safety decision. Not a UI slider that quietly disagrees with
-it.)
+The floor is MIN_TARGET_TEMP (one default tolerance above the safety floor), and the engine clamps
+any stored target below it up to it - stored options, migration or a hand-edited entry alike. To
+move the floor, change MIN_TEMP_LIMIT, not the slider.
 """
 
 from __future__ import annotations
@@ -91,10 +72,8 @@ def _state(indoor: float) -> NibeState:
 def test_the_thermostat_does_not_offer_a_setpoint_below_the_safety_floor():
     """The slider and the safety layer must agree on the lowest permitted temperature.
 
-    Checked in the source. Home Assistant's CachedProperties metaclass rewrites `_attr_*` class
-    attributes into properties on the subclass, so reading EffektGuardClimate._attr_min_temp gives
-    the descriptor, not 18.0 - a class-level assertion here compares a property to a float and
-    raises TypeError rather than failing honestly.
+    Checked in the source: HA's CachedProperties metaclass turns `_attr_min_temp` into a descriptor,
+    so reading the class attribute would compare a property to a float, not fail honestly.
     """
     # The invariant, not the constant's name: the lowest target the thermostat offers must sit far
     # enough above the safety floor that the comfort band around it clears the floor entirely.
@@ -114,10 +93,7 @@ def test_the_thermostat_does_not_offer_a_setpoint_below_the_safety_floor():
 
 @pytest.mark.parametrize("indoor", [17.9, 16.0, 15.0])
 def test_a_setpoint_below_the_floor_is_answered_with_an_emergency(indoor):
-    """The precondition, so nobody has to take the docstring on trust.
-
-    This is what the system does TODAY to a user who set 15 °C. It is not a hypothetical.
-    """
+    """Below the safety floor the engine commands MAX_OFFSET, whatever the stored target."""
     decision = _engine(target=15.0).calculate_decision(
         nibe_state=_state(indoor),
         price_data=None,
@@ -134,15 +110,12 @@ def test_a_setpoint_below_the_floor_is_answered_with_an_emergency(indoor):
 
 
 def test_the_house_is_not_driven_between_the_two_extremes():
-    """The limit cycle, in one assertion - and the fix that actually protects existing owners.
+    """The limit cycle, in one assertion, exercised against a stored target of 15 °C.
 
-    Above the floor the comfort layer sees a 3 °C overshoot and cuts to MIN_OFFSET. Below it, safety
-    commands MAX_OFFSET. There is no equilibrium anywhere.
-
-    The slider no longer OFFERS 15 °C - and that does nothing for the owner who set 15 °C before
-    this landed, because Home Assistant keeps the stored value across the upgrade. So the ENGINE
-    refuses a target below the floor, wherever it came from: stored options, a migration, a
-    hand-edited entry. That is what this exercises - a config that still says 15.
+    With a 15 °C target the comfort layer read 19.0 °C as an overshoot and cut to MIN_OFFSET while
+    safety read 17.9 °C as an emergency and commanded MAX_OFFSET. HA keeps the stored value across
+    the upgrade, so the ENGINE must clamp the target - not just the slider - to protect existing
+    owners.
     """
     engine = _engine(target=15.0)
 
@@ -161,22 +134,9 @@ def test_the_house_is_not_driven_between_the_two_extremes():
         current_power=2.0,
     )
 
-    # The defect is the COMFORT end, not the span.
-    #
-    # An earlier version of this asserted `span < MAX_OFFSET`, which is a threshold that cannot
-    # hold and never meant anything: the safety layer legitimately commands +10 below 18 °C, so
-    # any span measured from a quiet baseline is ~10 whether the system is healthy or not. It
-    # passed only because of an unrelated change to the comfort layer, and failed the moment that
-    # change was reverted - which is the definition of a test measuring the wrong thing.
-    #
-    # What the defect actually was: with a 15 °C target the comfort layer read 19.0 °C as a 3 °C
-    # OVERSHOOT and cut to MIN_OFFSET (-10.00), while the safety layer read 17.9 °C as an
-    # emergency and commanded MAX_OFFSET (+10.00). MIN to MAX, on a real compressor, from a 1.1 °C
-    # change - and every one of those boosts carries is_emergency=True, so it bypasses the
-    # volatility blocker that exists to stop exactly this.
-    #
-    # So this asserts the thing that was broken: the engine must not be cutting the heat hard in a
-    # house that its own safety layer is about to call an emergency.
+    # The defect is the COMFORT end, not the span: safety legitimately commands +10 below 18 °C, so a
+    # span measured from a quiet baseline is ~10 whether healthy or not. Assert the thing that broke:
+    # the engine must not slam the heat off in a house its own safety layer is about to call cold.
     assert hot.offset > MIN_OFFSET / 2, (
         f"With a stored target of 15 °C and the house at 19.0 °C, the engine commands "
         f"{hot.offset:+.2f} - it reads the house as badly overheated and slams the heat off. One "

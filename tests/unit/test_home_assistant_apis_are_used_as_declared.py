@@ -1,24 +1,12 @@
-"""Two Home Assistant APIs are being passed things they do not take.
+"""Two Home Assistant APIs must be handed the exact types they check for.
 
-**`supports_response=True`.** `hass.services.async_register` expects a `SupportsResponse` enum, and
-Home Assistant compares it by IDENTITY:
+`calculate_optimal_schedule` must register with SupportsResponse.OPTIONAL, not a bare `True`: HA
+compares the value by identity, so `True` passes `is not SupportsResponse.NONE` but fails
+`is SupportsResponse.OPTIONAL`, advertising the service as response-REQUIRED.
 
-    response is not SupportsResponse.NONE     -> True  for a bare `True`
-    response is SupportsResponse.OPTIONAL     -> False for a bare `True`
-
-So `calculate_optimal_schedule` is advertised as response-**required** rather than
-response-optional. It works today only because the first check happens to pass; it breaks the moment
-Home Assistant tightens that to an isinstance check, and the "optional" half is already wrong.
-
-**`config_entry` on the coordinator.** `DataUpdateCoordinator.__init__` takes a `config_entry`
-keyword. Omitting it makes Home Assistant fall back to a deprecated ContextVar, and the deprecation
-carries `breaks_in_ha_version="2026.8"`. It works today only because the coordinator happens to be
-constructed inside `async_setup_entry`, where the ContextVar is set - and it means
-`coordinator.config_entry` is `None` for any coordinator built anywhere else, which several
-call sites read without checking.
-
-Neither is exotic. Both are cases of passing something that looks right, to an API that is
-checking for something else.
+`EffektGuardCoordinator` must pass `config_entry=` to DataUpdateCoordinator.__init__. Omitting it
+falls back to a ContextVar HA removes in 2026.8, leaving `coordinator.config_entry` None for any
+coordinator built outside async_setup_entry.
 """
 
 from __future__ import annotations
@@ -30,13 +18,6 @@ from homeassistant.core import SupportsResponse
 
 from custom_components.effektguard import _async_register_services
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
-
-
-def test_a_bare_true_is_not_a_supports_response():
-    """The premise, from Home Assistant itself."""
-    assert True is not SupportsResponse.NONE  # passes the "does it respond at all" check
-    assert True is not SupportsResponse.OPTIONAL  # fails the "is it optional" check
-    assert True is not SupportsResponse.ONLY
 
 
 async def test_the_service_declares_an_optional_response_not_a_required_one():

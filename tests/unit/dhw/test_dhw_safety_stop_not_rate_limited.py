@@ -1,23 +1,13 @@
 """A DHW stop must never be deferred by the rate limiter.
 
-The DHW rate limiter (DHW_CONTROL_MIN_INTERVAL_MINUTES = 60) used to guard BOTH
-directions, and its `return` sat above the turn-off branch in _apply_dhw_control.
+The rate limiter (DHW_CONTROL_MIN_INTERVAL_MINUTES = 60) once guarded BOTH directions, and its
+clock is stamped by the turn-ON - so a boost started at 03:00 could not be stopped until 04:00. If
+a cold front then crashes DM into the CRITICAL_THERMAL_DEBT block at 03:05, DHW keeps the compressor
+off space heating while thermal debt deepens ("DHW during heating demand"). The abort branch cannot
+rescue it either: every should_heat=False return carries an empty abort_conditions list.
 
-That produced a real safety hole:
-
-  1. Every `should_heat=False` return in should_start_dhw() carries an EMPTY
-     abort_conditions list, so the early-abort branch above the limiter is skipped.
-  2. `_last_dhw_control_time` is stamped by the turn-ON, so the 60-minute clock starts at
-     the beginning of the very cycle we later want to stop.
-
-Result: 03:00 lux ON in a cheap window. 03:05 a cold front arrives, DM crashes past the
-T2 block threshold, the decision flips to CRITICAL_THERMAL_DEBT - and DHW keeps the
-compressor away from space heating until 04:00 while thermal debt deepens. That is the
-exact "DHW during heating demand = thermal debt accumulation" failure the rulebook names.
-
-Stopping the lux boost cannot harm the pump: it only cancels an EffektGuard-initiated
-boost (NIBE's own DHW schedule is untouched). Throttling it has no safety benefit and a
-real safety cost. Starts remain rate limited, which is what bounds oscillation.
+Stopping an EffektGuard lux boost cannot harm the pump (NIBE's own schedule is untouched), so STARTS
+stay rate-limited to bound oscillation while STOPS are always allowed.
 """
 
 from dataclasses import dataclass, field
@@ -101,7 +91,7 @@ def switch_calls(coordinator) -> list[str]:
 class TestSafetyStopIsNotRateLimited:
     @pytest.mark.asyncio
     async def test_critical_thermal_debt_stops_dhw_inside_the_rate_limit_window(self):
-        """The F-029 scenario: stop must happen at 03:05, not wait until 04:00."""
+        """Stop must happen at 03:05, not be deferred to 04:00."""
         coordinator = make_coordinator(lux_is_on=True, last_control_time=STARTED_5_MIN_AGO)
 
         await apply(

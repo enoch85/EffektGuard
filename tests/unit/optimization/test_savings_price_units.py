@@ -28,13 +28,10 @@ def test_price_unit_factor(unit, factor):
 
 @pytest.mark.parametrize("unit", [None, "", "widgets/kWh"])
 def test_unknown_unit_refuses_to_guess(unit):
-    """An unrecognised unit must yield None, not the legacy öre assumption.
+    """An unrecognised or absent unit must yield None, not the legacy öre assumption.
 
-    Every price integration publishes `<currency>/kWh` by DEFAULT - Nord Pool (HA core) has
-    no cents option at all, and both custom-components/nordpool and GE-Spot emit SEK/kWh
-    unless the user opts into a subunit display. So the old öre fallback was 100x wrong
-    against all three, and it fired whenever `price_unit` was None - which it is until the
-    first successful price read.
+    Price integrations publish `<currency>/kWh` by default, so the old öre fallback was 100x wrong
+    and it fired whenever price_unit was None - which it is until the first successful price read.
     """
     calc = SavingsCalculator()
     calc.price_unit = unit

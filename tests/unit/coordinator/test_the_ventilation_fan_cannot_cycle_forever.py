@@ -1,25 +1,12 @@
-"""The guard against rapid fan cycling was five minutes long, and a tick is five minutes.
+"""The ventilation fan must not cycle every tick when a decision oscillates around its threshold.
 
-    NIBE_VENTILATION_MIN_ENHANCED_DURATION = 5   # Minimum minutes to run enhanced
-    UPDATE_INTERVAL_MINUTES               = 5
+The old anti-cycle guard was 5 minutes - exactly one coordinator tick - so a turn-off was permitted
+on the very next cycle and it prevented nothing. It also only guarded the turn-OFF, with no rest
+period before re-enhancing, so an oscillating decision (what a marginal COP gain produces) flipped
+the fan twelve times an hour, each flip perturbing the source air an exhaust-air F750 draws from.
 
-So a turn-off was permitted on the very next coordinator tick, and the guard prevented nothing.
-Worse, it only ever guarded the turn-OFF - there was no rest period before enhancing again at all.
-A decision that oscillates around its threshold, which is exactly what a marginal COP gain does,
-therefore produced:
-
-    t=  0 ON     t=  5 OFF     t= 10 ON     t= 15 OFF     t= 20 ON ...
-
-Twelve fan state changes an hour, indefinitely. On an exhaust-air F750 each one perturbs the source
-air the compressor is drawing from - which is the very thing the enhancement is trying to exploit.
-
-And the five minutes was shorter than the SHORTEST duration the airflow optimizer ever recommends
-(15 min for a small deficit, up to 60 for a large one). The optimizer computes `duration_minutes`
-on every decision, and the coordinator LOGGED it and threw it away:
-
-    _LOGGER.info("Ventilation ENHANCED: ON for %d min ...", decision.duration_minutes, ...)
-
-That number is now the minimum run time, and a minimum rest bounds the other direction.
+The optimizer's own `duration_minutes` (15-60 min by deficit), previously logged and discarded, is
+now the minimum run time, and NIBE_VENTILATION_MIN_REST_DURATION bounds the other direction.
 """
 
 from __future__ import annotations

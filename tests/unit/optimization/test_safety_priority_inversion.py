@@ -1,34 +1,15 @@
-"""Safety-priority regression tests: cost must never override thermal-debt safety.
+"""A cost layer must never reduce heating while the thermal-debt layer is recovering.
 
-These tests encode the single most important invariant in EffektGuard:
+The aggregator must select the emergency tier by reading the `tier` field, never by inferring it
+from layer weights or offset magnitudes. That inference broke in four ways, each letting cost win:
 
-    A cost layer (spot price, effect tariff) MUST NEVER be able to reduce heating
-    while the emergency thermal-debt layer is actively recovering.
+  1. the aux-limit EMERGENCY tier fell through to the peak-aware compromise or the tie-break;
+  2. the tie-break `abs(max) > abs(min)` returns `min` on the exact +10/-10 tie -> max heat cut;
+  3. the peak-aware gate hardcoded `weight >= 0.85`, but DM_CRITICAL_T2_WEIGHT is 0.81;
+  4. the tier was inferred from the POST-damping offset, so a damped T3 was misread as T1.
 
-Every test here was written to FAIL against the pre-fix implementation, where the
-decision aggregator reconstructed the emergency tier from layer *weights* and
-*offset magnitudes* instead of reading the `tier` field it already carries. That
-inference broke in four independent ways, each of which let cost win:
-
-  1. DM <= DM_THRESHOLD_AUX_LIMIT emitted +10.0 at weight 1.0, but the aggregator's
-     absolute-priority check only inspected the Safety layer, so the EMERGENCY tier
-     fell through to the peak-aware compromise (+1.0) or the critical tie-break.
-  2. The critical tie-break `abs(max) > abs(min)` returns `min` on an exact tie, and
-     SAFETY_EMERGENCY_OFFSET (+10.0) vs PRICE_OFFSET_PEAK (-10.0) tie by construction
-     -> maximum heat REDUCTION at the aux-heat limit.
-  3. The peak-aware gate required weight >= 0.85 while DM_CRITICAL_T2_WEIGHT is 0.81,
-     so a T2 recovery was crushed by a critical effect peak (-3.0).
-  4. The tier was inferred from the POST-damping offset, so a damped T3 (floored at
-     THERMAL_RECOVERY_T3_MIN_OFFSET) was misread as T1 and got T1's minimal offset.
-
-Also covered: the DM_THRESHOLD_AUX_LIMIT hard limit must be enforced *before* the
-anti-windup and "too warm" early returns in EmergencyLayer.evaluate_layer.
-
-Physical basis: DM_THRESHOLD_AUX_LIMIT (-1500) is the point at which NIBE engages the
-auxiliary immersion heater. Throttling recovery there does not stop DM falling - it
-guarantees the aux heater runs, which draws several kW and creates a LARGER power peak
-than the compressor would have. Cost-driven suppression at that threshold is both
-unsafe and self-defeating.
+Also: the DM_THRESHOLD_AUX_LIMIT hard limit must be enforced BEFORE the anti-windup and "too warm"
+early returns - past it NIBE engages the aux heater, so throttling recovery guarantees a larger peak.
 """
 
 from datetime import datetime, timedelta
@@ -327,14 +308,10 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
     def test_aux_limit_enforced_even_when_house_is_too_warm(self):
         """DM past the aux limit must fire EMERGENCY even if indoor is above tolerance.
 
-        Pre-fix: Case 1 ("too warm") returned offset 0.0 / weight 0.0 with NO aux-limit
-        guard, while the neighbouring Case 2 DID guard on `dm > DM_THRESHOLD_AUX_LIMIT`.
-        That asymmetry meant a solar-gain morning during a debt spiral silently disabled
-        the hard limit: the immersion heater engages while EffektGuard says "let cool
-        naturally".
-
-        With the production default tolerance (0.5 -> tolerance_range 0.2 C), an indoor
-        temp just 0.3 C over target is enough to trigger Case 1.
+        Pre-fix: Case 1 ("too warm") returned weight 0.0 with no aux-limit guard, while the
+        neighbouring Case 2 guarded on `dm > DM_THRESHOLD_AUX_LIMIT` - so a solar-gain morning
+        during a debt spiral silently disabled the hard limit. With the production default
+        tolerance (0.5 -> tolerance_range 0.2 C), 0.3 C over target triggers Case 1.
         """
         decision = self._layer().evaluate_layer(
             nibe_state=self._state(degree_minutes=DM_THRESHOLD_AUX_LIMIT - 50, indoor_temp=21.3),

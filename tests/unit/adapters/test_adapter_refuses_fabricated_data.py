@@ -1,29 +1,15 @@
 """The adapter must refuse to fabricate the inputs that drive heat-pump control.
 
-Every primary reading used to have a plausible hard-coded fallback:
+Two contracts are pinned:
 
-    outdoor_temp   -> 0.0
-    supply_temp    -> NIBE_DEFAULT_SUPPLY_TEMP (35.0)
-    indoor_temp    -> DEFAULT_INDOOR_TEMP (21.0)   <- exactly the usual target
-    degree_minutes -> _estimate_degree_minutes(), invented from six magic numbers
-
-Because get_current_state() never raised, a completely broken installation produced a
-fully-populated NibeState and was indistinguishable from a healthy one - and the offset
-write path ran on it. The coordinator's "NIBE required" guard was dead code.
-
-Two distinct contracts are pinned here:
-
-1. REQUIRED readings (outdoor, supply, degree minutes) -> raise UpdateFailed. The
-   coordinator already has the degrade path for this: startup_pending before the first
-   success, UpdateFailed after, entities unavailable, nothing written to the pump.
-
-2. OPTIONAL indoor reading -> a NIBE with no room sensor (no BT50) is a LEGITIMATE
-   configuration; it runs on degree minutes and the heating curve. So do not fail - but
-   mark the reading invalid so comfort layers abstain instead of trusting a placeholder
-   that happens to equal the target.
-
-Degree minutes is never estimated. It is the primary thermal-debt safety signal and every
-NIBE exposes it (register 40940 / 43005); guessing it drove the emergency layer on fiction.
+1. REQUIRED readings (outdoor, supply, degree minutes) missing/unavailable -> raise
+   UpdateFailed rather than substitute a plausible constant. A fabricated full NibeState
+   makes a broken install indistinguishable from a healthy one and still writes an offset.
+   Degree minutes is never estimated (no `_estimate_degree_minutes`): it is the primary
+   thermal-debt safety signal.
+2. OPTIONAL indoor reading missing -> a NIBE with no BT50 is legitimate, so do not fail,
+   but set indoor_temp_valid=False so comfort layers abstain instead of trusting the
+   DEFAULT_INDOOR_TEMP placeholder, which equals the target (deviation of exactly 0.0).
 """
 
 from unittest.mock import MagicMock

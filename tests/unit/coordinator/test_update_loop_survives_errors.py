@@ -1,28 +1,12 @@
-"""The coordinator's update loop must survive any single bad cycle.
+"""The coordinator's update loop must survive any single bad cycle and always re-arm.
 
-EffektGuard disables the base coordinator's scheduler (`update_interval=None`) and drives
-itself from a clock-aligned timer. `_do_aligned_refresh` is therefore the SOLE owner of
-that timer: if it returns without calling `_schedule_aligned_refresh()`, nothing else will
-ever re-arm it.
-
-The old implementation caught only
-`(UpdateFailed, OSError, ValueError, TypeError, KeyError, AttributeError)` and had no
-`finally`. That tuple is narrower than what the update path can actually raise:
-
-  - HomeAssistantError  - weather.get_forecasts, for an entity with no hourly forecast
-  - IndexError          - price lookup on a DST 92/100-quarter day
-  - ZeroDivisionError   - savings maths
-  - numpy / RuntimeError - learning modules
-
-Any one of those escaped, the asyncio task died, and the timer was never re-armed. The
-failure was SILENT and PERMANENT: `last_update_success` stayed True, so every entity kept
-serving its last value and looked healthy, while the pump sat on the last offset written -
-until Home Assistant was restarted.
-
-A second, independent hole fed the first: current HA weather entities no longer publish a
-`forecast` state attribute at all, so the `weather.get_forecasts` service call is made on
-EVERY update. Picking a daily-only weather entity therefore raised HomeAssistantError every
-cycle - and killed the coordinator on the first one.
+The base scheduler is disabled (`update_interval=None`), so `_do_aligned_refresh` is the sole
+owner of the timer: if it returns without calling `_schedule_aligned_refresh()`, nothing re-arms
+it and the coordinator is permanently dead - silently, since `last_update_success` stays True and
+entities keep serving stale values. So the refresh catches a broad `except Exception` and re-arms
+in a `finally`. The update path can raise HomeAssistantError (weather with no hourly forecast),
+IndexError (DST price lookup), ZeroDivisionError (savings), RuntimeError/numpy (learning) - and a
+daily-only weather entity raises on every cycle, so the first such raise must not kill the loop.
 """
 
 from unittest.mock import AsyncMock, MagicMock

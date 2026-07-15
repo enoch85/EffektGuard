@@ -1,30 +1,14 @@
-"""Every layer reads `forecast_hours[N]` as "N hours from now". Nothing made that true.
+"""forecast_hours[N] must mean "N hours from now"; the adapter must make that true.
 
-`WeatherData.forecast_hours` is documented as "Next 24-48 hours", and every consumer slices it
-positionally:
+Every consumer slices WeatherData.forecast_hours positionally (thermal_layer
+forecast_hours[:3] is the cold-snap trigger; weather_layer [:24]; prediction_layer
+[:horizon]). The adapter used to append every entry the weather entity published, in
+its published order, including hours already past - so a stalled-but-"available"
+integration (unavailable never trips) could hold stale weather at index 0 and push a
+real cold snap outside every horizon.
 
-    thermal_layer.py:1454   forecast_hours[:3]          the cold-snap trigger
-    weather_layer.py:895    forecast_hours[:24]         unusual-weather detection
-    prediction_layer.py:502 forecast_hours[:horizon]    the learned pre-heat
-
-But the adapter appended EVERY entry the weather entity published, in whatever order it published
-them, including the ones already in the past. Plenty of integrations publish the current period
-first - and a weather integration that has STALLED holds its last forecast indefinitely while its
-entity stays perfectly "available", so `unavailable` never trips the adapter's existing guard.
-
-Reproduced: a forecast that begins six hours ago, with a cold snap arriving in an hour.
-
-    published:  -6h:+5  -5h:+4  -4h:+3  -3h:+2  -2h:+1  -1h:0  +0h:-1  +1h:-8  +2h:-14  +3h:-18
-    stored:     forecast_hours[0] = +5.0 C  (six hours AGO)
-
-So the cold-snap trigger read +5, +4 and +3 C - the weather from this morning - while an -18 C snap
-sat at index 9, outside every horizon anyone looks at. That is exactly the case the pre-heat exists
-for, and the owner's words about it are unambiguous: "we need to pre-heat super early if we know a
-cold snap is coming, I mean like DAYS ahead."
-
-Hours that have already ended are dropped, and the rest sorted. A forecast entirely in the past
-becomes an EMPTY one - which is right: the layers already abstain when there is no forecast, and a
-frozen forecast is not a forecast.
+get_forecast() now drops hours that have already ended and sorts the rest. A forecast
+entirely in the past becomes empty, and the layers abstain when there is no forecast.
 """
 
 from __future__ import annotations
@@ -38,15 +22,8 @@ from homeassistant.util import dt as dt_util
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.const import CONF_WEATHER_ENTITY
 
-# The clock is read INSIDE each test, never at module import.
-#
-# A module-level `NOW = dt_util.utcnow()` is captured when pytest collects the file, while the
-# adapter reads the clock when the test RUNS. Today those agree, so the tests pass - but freeze the
-# clock (or collect at 23:59:58 on a slow machine) and they diverge, and the whole file goes red.
-# The test would then be measuring the gap between two clocks rather than the behaviour it names.
-#
-# Found by running the entire suite with the wall clock frozen at the DST transitions and at New
-# Year: ten tests failed, and every one of them was one of mine.
+# The clock is read INSIDE each test (fixture below), never at module import: a module-level NOW
+# captured at collection time would diverge from the adapter's run-time clock under a frozen clock.
 
 
 @pytest.fixture

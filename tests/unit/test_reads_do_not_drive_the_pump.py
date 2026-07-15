@@ -1,17 +1,10 @@
 """Reading the state of the world must not command the heat pump.
 
-`_async_update_data` is Home Assistant's READ hook. The coordinator wrote the curve offset, the
-hot-water control and the ventilation mode from inside it, so anything that asked the coordinator
-to refresh also drove the heat pump - and `async_request_refresh()` is public, debounced, and
-called from several places that have no business touching hardware.
-
-`reset_peak_tracking` is the clearest case: a service whose entire job is to clear a stored
-counter, which then wrote a curve offset to the pump. A Home Assistant reload and an options
-change reach the same code.
-
-Writes belong to the control loop, and the control loop is `_do_aligned_refresh`: one owner, on
-the clock. Services that genuinely mean to command the pump - force_offset, boost_heating - say so
-explicitly, and still take effect at once.
+`_async_update_data` is HA's READ hook, and `async_request_refresh()` is public, debounced, and
+called from reloads, options changes and bookkeeping services (reset_peak_tracking clears a
+counter). So the read path must contain no write. Writes belong to `_do_aligned_refresh`, the one
+scheduled owner of the control loop; services that genuinely command the pump (force_offset,
+boost_heating) go through the explicit `async_refresh_and_apply` path and take effect at once.
 """
 
 import inspect

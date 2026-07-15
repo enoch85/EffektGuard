@@ -1,27 +1,13 @@
-"""A NIBE room-temperature SETPOINT could be discovered as the indoor MEASUREMENT.
+"""A NIBE room-temperature SETPOINT must not be discovered as the indoor MEASUREMENT.
 
-Entity discovery bound a temperature key to any entity whose `device_class` is `temperature` or
-whose unit is °C. It never looked at the DOMAIN.
-
-A `number.` entity is, by definition, something the OWNER SETS. A NIBE room-temperature setpoint is
-a `number.` with `device_class: temperature` and a unit of °C - every attribute that gate checked -
-and its entity id can match the `room_temperature` discovery pattern.
-
-Bound as the indoor measurement it is catastrophic and completely silent:
-
-    the TARGET is read as the MEASUREMENT, and `indoor_temp_valid` is set to True,
-    so the deviation from target is EXACTLY 0.0 forever, whatever the house is actually doing
-
-The comfort layer therefore never corrects. And the 18 °C safety floor can never fire either,
-because the safety layer is reading the same setpoint. A house at 12 °C in January reports itself
-perfectly on target, and the flag built to prevent precisely this - `indoor_temp_valid` - is True.
-
-The `offset` key already applied the mirror-image rule (a write target must BE a `number.`), so the
-distinction is one this file already understood. And `NIBE_DISCOVERY_EXCLUDE` carries
-`control_room_sensor` - which is this same problem, being fought one entity id at a time.
-
-Manual entity overrides seed the cache directly and never reach discovery, so an installation that
-really does expose a reading as a `number.` can still say so explicitly.
+Discovery must reject `number.` entities for temperature keys (`_consider_candidate`
+requires `sensor.`). A `number.` is something the owner sets; a NIBE room setpoint is a
+`number.` with device_class temperature and unit C and can match the `room_temperature`
+pattern. Bound as the measurement it is silent and catastrophic: the target is read as
+the measurement with indoor_temp_valid=True, so the deviation from target is 0.0 forever,
+the comfort layer never corrects, and the 18 C safety floor (MIN_TEMP_LIMIT) never fires
+because it reads the same setpoint. Manual overrides bypass discovery, so a reading truly
+exposed as a `number.` can still be configured explicitly.
 """
 
 from __future__ import annotations

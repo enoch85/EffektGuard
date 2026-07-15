@@ -1,47 +1,13 @@
-"""Which user actions tear the entry down - because I asserted the wrong one, four times.
+"""Which user actions actually tear the entry down - the two facts the shutdown guards depend on.
 
-The two commits before this one fixed real defects: a coordinator whose entry had unloaded could
-still write a curve offset, command the fan, and start a hot-water boost that nothing would ever
-switch off. Those are real, and they are fixed.
+An options change calls the update listener, which HOT-RELOADS (`async_update_config`): the entry
+stays loaded, so the shutdown guards must NOT fire on it and the entities must be re-rendered
+(`async_update_listeners`) since they are views of the entry.
 
-But I described the TRIGGER as "a reload, which is what Home Assistant does every time an option is
-changed", and I wrote that in two commit messages, two pull-request comments and four code comments
-without ever executing it. IT IS FALSE.
-
-This integration installs an update listener that HOT-RELOADS:
-
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-
-    async def async_reload_entry(...):
-        \"\"\"Handle a config-entry update by hot-reloading the runtime settings.
-        Hot-reloading (rather than tearing the entry down) is what preserves ...\"\"\"
-        await coordinator.async_update_config(merged_config)
-
-The name says reload. The body does not reload. Changing an option calls that listener, and the entry
-stays loaded. Measured against a running Home Assistant, submitting the real options flow:
-
-    Unloading EffektGuard:                          0
-    Options updated, applying changes (no restart): 1
-    thermal mass: 1.80                                 (the change took effect)
-
-WHAT DOES UNLOAD THE ENTRY, and every one of these is a real thing a real user does:
-
-    the RECONFIGURE flow   - changing the entity selections: the power meter, the weather entity,
-                             the pump model. It ends in `async_update_reload_and_abort`, which
-                             schedules a FULL reload. Measured: 1 unload, 1 setup.
-    a manual reload        - the Reload button, or `homeassistant.reload_config_entry`. Measured.
-    removing the integration
-    restarting Home Assistant
-
-So the defects stand and the fixes stand - the reconfigure flow is exactly when somebody swaps the
-power meter, and a stray write from the old coordinator landing after that is precisely the bug - but
-the sentence I used to justify them was wrong, and a fix justified by a mechanism nobody ran is the
-thing this whole audit exists to catch.
-
-These tests pin the two facts, so the next person to reason about it reads something that was
-executed:
-  * the update listener hot-reloads and does NOT tear the entry down;
-  * the reconfigure flow DOES.
+What DOES unload the entry: the reconfigure flow (changing entity selections - power meter, weather,
+pump model), which ends in `async_update_reload_and_abort` and schedules a full reload; plus manual
+reload, removal, and restart. The reconfigure case is exactly when a stray write from the old
+coordinator would land, which is the defect the shutdown guards close.
 """
 
 from __future__ import annotations
@@ -91,20 +57,9 @@ async def test_changing_an_option_hot_reloads_and_does_not_unload():
 async def test_the_entities_are_told_when_the_entry_changes():
     """Hot-reloading the config must re-render the entities that are VIEWS of it.
 
-    Every switch reads `entry.data` in its `is_on`, and the thermostat's `hvac_mode` now reads the
-    same `enable_optimization` key. They are views of one fact, which is the point - but a view only
-    updates when something tells it to, and hot-reloading the entry told nobody.
-
-    Measured live: setting the thermostat to OFF wrote `enable_optimization = False` into the entry
-    immediately, and the `enable_optimization` SWITCH went on reading "on" for the next FIVE MINUTES,
-    until the coordinator's aligned refresh happened to re-render it:
-
-        switch: on   14:14:19
-        switch: on   14:14:59
-        switch: off  14:15:19      <- the next coordinator refresh, not the change
-
-    The truth was never in doubt - both read the same key - but for five minutes the user was looking
-    at a thermostat that said OFF and a master switch that said ON.
+    Switches read `entry.data` in `is_on` and the thermostat's `hvac_mode` reads the same
+    `enable_optimization` key, but a view only updates when told to. Without
+    `async_update_listeners`, the switch kept displaying its old value until the next aligned refresh.
     """
     hass = MagicMock()
     coordinator = MagicMock()
@@ -124,9 +79,9 @@ async def test_the_entities_are_told_when_the_entry_changes():
 def test_the_reconfigure_flow_is_the_one_that_reloads():
     """And it is a real user action: swapping the power meter or the weather entity.
 
-    Structural, because the whole point is that I reasoned about this instead of executing it. The
-    reconfigure step ends in `async_update_reload_and_abort`, which is Home Assistant's "apply these
-    entity selections and reload the entry" - the FULL teardown the shutdown guards exist for.
+    Checked structurally: the reconfigure step ends in `async_update_reload_and_abort`, Home
+    Assistant's "apply these entity selections and reload the entry" - the FULL teardown the
+    shutdown guards exist for.
     """
     source = pathlib.Path("custom_components/effektguard/config_flow.py").read_text()
     tree = ast.parse(source)

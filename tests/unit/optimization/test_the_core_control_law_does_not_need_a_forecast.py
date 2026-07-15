@@ -1,40 +1,14 @@
-"""The weather entity is optional. The weather-compensation CONTROL LAW is not.
+"""The weather entity is optional; the weather-compensation CONTROL LAW is not.
 
-`CONF_WEATHER_ENTITY` is `vol.Optional` in a config-flow step named, literally, "optional". With no
-entity chosen, `WeatherAdapter.get_forecast()` returns None and logs "Weather forecast disabled - no
-entity configured in setup". That is a supported install, and the word it uses is *forecast*.
+Math WC is the EN 442 emitter law: given the outdoor temperature and indoor setpoint, what flow
+temperature do the emitters need? Its inputs are the pump's OWN sensors (nibe_state.outdoor_temp and
+flow_temp), which are always present; it does not read the forecast. So `evaluate_layer` must NOT
+early-return when weather_data is None - a blank optional weather dropdown would otherwise silently
+switch off the layer that votes on every cycle.
 
-But `evaluate_layer` opened with
-
-    if not weather_data or not weather_data.forecast_hours:
-        return WeatherCompensationLayerDecision(name="Math WC", offset=0.0, weight=0.0,
-                                                reason="No weather data")
-
-and Math WC is not the forecast. It is the EN 442 emitter law: given the outdoor temperature and the
-indoor setpoint, what flow temperature do the radiators need? Its inputs are `nibe_state.outdoor_temp`
-and `nibe_state.flow_temp` - the HEAT PUMP'S OWN SENSORS, which are always there; a NIBE without an
-outdoor sensor cannot run its own heating curve, let alone ours. The forecast is used at exactly one
-place further down, for unusual-weather detection, behind its own guard.
-
-So the early return switched off the primary control law - the layer that votes on 100% of cycles -
-in defence of data that law never reads. Silently: "No weather data" is not surfaced anywhere a user
-would look, and the layer simply stops appearing in the decision.
-
-WHAT IT COSTS, from the simulator (90 days, real SE4 prices, datasheet pump models):
-
-    airsource_f2040, weather entity configured      PASS. no aux heat, no violations.
-    airsource_f2040, no weather entity              FAIL. 296 dm_runaway / indoor_above_ceiling,
-                                                    1265 minutes cooked above the comfort ceiling,
-                                                    and 72.5 kWh of immersion heat where the pump's
-                                                    capacity deficit forced only 5.6 kWh - 13x more
-                                                    resistive heat at COP 1.0 than physics required.
-
-Withholding the forecast produced a trajectory byte-identical to setting
-`enable_weather_compensation=False`. Leaving one dropdown blank silently did the same thing as
-turning the feature off.
-
-These tests drive the real layer, and they pass a `nibe_state` and nothing else - because that is all
-the emitter law has ever needed.
+Invariant: with weather_data=None the Math WC layer still votes (weight > 0) and computes the SAME
+offset it would with a forecast, keeping its sign across the whole winter; the pre-heat layer, which
+genuinely needs a forecast, still abstains without one.
 """
 
 from __future__ import annotations

@@ -1,20 +1,9 @@
 """Tests for the Thermal Airflow Optimizer.
 
-Tests thermodynamic calculations for exhaust air heat pump airflow optimization.
-
-Physics basis:
-- Net Benefit = (Extra heat extracted) + (COP improvement) - (Ventilation penalty)
-- Enhanced airflow helps when compressor is working hard and outdoor temp is moderate
-- Cold outdoor temps cause ventilation penalty to exceed gains
-
-Reference table (from documentation):
-| Outdoor °C | Min Compressor % | Expected Gain |
-|------------|-----------------|---------------|
-| +10        | 50%             | +1.3 kW       |
-| 0          | 50%             | +0.9 kW       |
-| -5         | 62%             | +0.7 kW       |
-| -10        | 75%             | +0.4 kW       |
-| < -15      | Don't enhance   | Negative      |
+Thermodynamic calculations for exhaust-air heat-pump airflow. Enhancing airflow only pays
+above break-even (about indoor minus the evaporator temperature drop, ~+9 C outdoor): below
+that the building must reheat every extra cubic metre from outdoor to indoor while the
+evaporator recovers only its own temperature drop, so the net thermal gain is negative.
 """
 
 from datetime import datetime
@@ -85,7 +74,7 @@ class TestCompressorThresholds:
     """Test compressor percentage threshold calculations."""
 
     def test_threshold_at_0c(self):
-        """At 0°C, threshold should be base (50%)."""
+        """At 0°C, threshold should be the base (AIRFLOW_COMPRESSOR_BASE_THRESHOLD)."""
         threshold = minimum_compressor_threshold(0.0)
         assert threshold == AIRFLOW_COMPRESSOR_BASE_THRESHOLD
 
@@ -249,7 +238,7 @@ class TestEvaluateAirflow:
             temp_outdoor=0.0,
             temp_indoor=20.0,
             temp_target=21.0,
-            compressor_pct=30.0,  # Below 50% threshold at 0°C
+            compressor_pct=30.0,  # Below the 61% threshold at 0°C
             trend_indoor=-0.1,  # Slightly cooling but above threshold - test focuses on compressor
         )
         decision = evaluate_airflow(state)

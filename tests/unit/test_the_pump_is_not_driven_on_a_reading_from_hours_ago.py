@@ -1,28 +1,12 @@
-"""An MQTT sensor that stops being published keeps its last value, and stays available forever.
+"""A required NIBE reading nobody has confirmed for hours is not a reading; it must not drive the pump.
 
-The adapter refuses `unavailable` and `unknown`, so an upstream integration that DIES is caught:
-MyUplink and nibe_heatpump use a DataUpdateCoordinator, so when their polling fails the entities go
-unavailable and EffektGuard raises UpdateFailed rather than control the pump on incomplete data.
-
-`manifest.json` also lists **mqtt** and **modbus** as NIBE sources, and they do not behave that way.
-An MQTT sensor holds its last retained value indefinitely. Nothing marks it unavailable. If the
-bridge publishing the pump's degree minutes stops - broker down, bridge crashed, topic renamed - the
-sensor goes on cheerfully reporting the number it was given hours ago, and every check this adapter
-makes passes.
-
-So the pump keeps being driven on it. Degree minutes could have fallen to -1400 while the sensor
-still reads -150, and the integration would go on trimming the curve offset for price, because as
-far as it can tell the house is comfortable and the pump is coping.
-
-Age is the only thing that distinguishes a reading from a memory. Home Assistant records
-`last_reported` on every state write - even when the value is unchanged - precisely so that "the
-pump has been steady at -150 for twenty minutes" can be told apart from "nothing has said anything
-about the pump for twenty minutes".
-
-A stale required reading is not a special case. It is the case the adapter already handles: it is a
-reading it does not have. It takes the same path - `None`, then UpdateFailed, then entities
-unavailable and the pump left on its last offset - which is the safe thing to do with a heat pump
-you have stopped being able to see.
+An MQTT/modbus sensor (both listed as NIBE sources in manifest.json) holds its last retained value
+indefinitely and is never marked unavailable, so if its publisher stops the adapter's other checks
+all pass while the number goes stale. Age is the only thing that separates a reading from a memory:
+`_read_entity_float` rejects a value older than NIBE_READING_MAX_AGE_MINUTES, and a required sensor
+that comes back None raises UpdateFailed - the pump is left on its last offset, the safe thing to do
+with a heat pump you can no longer see. The threshold stays generous enough not to break a slow but
+working NIBE integration.
 """
 
 from __future__ import annotations

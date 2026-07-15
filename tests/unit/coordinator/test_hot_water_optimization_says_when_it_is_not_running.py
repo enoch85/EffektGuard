@@ -1,25 +1,10 @@
-"""On an S-series pump, hot-water optimisation did nothing at all, and said so in a debug line.
+"""On an S-series pump, hot-water optimisation must raise a repair issue, not fail in a debug line.
 
-EffektGuard drives DHW by toggling NIBE's temporary-lux switch (register 50004). Home Assistant's
-own NIBE integration maps that register for the F-SERIES ONLY, so an S-series pump exposes no such
-entity - and the whole DHW half of EffektGuard silently does nothing.
-
-What it said about that:
-
-    _LOGGER.debug("DHW control disabled: No temporary lux entity configured (switch.temporary_lux_50004)")
-
-What the owner saw, meanwhile - captured from a live Home Assistant during this audit:
-
-    switch.effektguard_hot_water_optimization   on
-    sensor.effektguard_dhw_status               ready
-    sensor.effektguard_dhw_recommendation       Wait - Conditions not optimal
-    sensor.effektguard_dhw_scheduled_start      2026-07-14T01:45:00+00:00
-
-A scheduled hot-water boost, with a time on it, that can never fire.
-
-The integration already has the right pattern for this, and its docstring says why: "A
-_LOGGER.warning is not telling anyone." That was written for the missing price source (F-123). A
-_LOGGER.debug is less than a warning, and this is a whole advertised feature doing nothing.
+EffektGuard drives DHW via NIBE's temporary-lux switch (register 50004), which Home Assistant's
+NIBE integration maps for the F-SERIES ONLY. On an S-series pump no such entity exists, so the
+whole DHW feature silently does nothing while the UI still shows a hot-water status, a
+recommendation and a scheduled start time that can never fire. A _LOGGER.debug is not telling
+anyone - so this now raises the same kind of repair issue the missing price source does (F-123).
 """
 
 from __future__ import annotations

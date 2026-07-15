@@ -1,21 +1,10 @@
-"""Unit tests for config reload functionality.
+"""Unit tests for config reload (runtime option changes without full restart).
 
-Tests to verify that runtime configuration changes (temperature, thermal mass, etc.)
-trigger hot-reload without full integration restart, and that all components properly
-update their internal state.
-
-Critical behaviors tested:
-1. Select/Number entities update entry.options (not entry.data)
-2. Runtime option changes trigger async_update_config (not full reload)
-3. Critical option changes trigger full reload
-4. Decision engine cached values are properly updated
-5. Sensor state restoration works correctly
-6. Complete chain from user action to optimization is verified
-7. Learning data persists across restarts and reloads
-
-VERIFICATION STATUS: ✅ ALL 24 TESTS PASSING
-Date: October 18, 2025
-Analysis: FINAL_ANALYSIS_CONFIG_RELOAD.md
+Covers:
+- Runtime option changes trigger async_update_config, not a full reload
+- Critical option changes trigger full reload
+- Decision engine cached values (target_temp, tolerance) are updated on config change
+- Sensor state restoration and learning-data persistence across restarts/reloads
 """
 
 import pytest
@@ -111,7 +100,7 @@ def mock_coordinator(mock_hass, mock_config_entry):
 
 
 class TestUpdateListenerSmartReload:
-    """Test update listener's smart detection of runtime vs critical changes."""
+    """The update listener always hot-reloads runtime settings; it never tears the entry down."""
 
     @pytest.mark.asyncio
     async def test_runtime_option_triggers_hot_reload(
@@ -131,8 +120,7 @@ class TestUpdateListenerSmartReload:
         # Call update listener
         await async_reload_entry(mock_hass, mock_config_entry)
 
-        # Should call async_update_config (hot reload)
-        # FIX: Now passes merged config (entry.data + entry.options) for switch support
+        # Hot reload is called with the merged config (entry.data + entry.options).
         expected_config = dict(mock_config_entry.data)
         expected_config.update(mock_config_entry.options)
         mock_coordinator.async_update_config.assert_called_once_with(expected_config)
@@ -165,15 +153,10 @@ class TestUpdateListenerSmartReload:
     async def test_entity_in_options_still_hot_reloads(
         self, mock_hass, mock_config_entry, mock_coordinator
     ):
-        """Verify options always hot-reload since entity selections are in data, not options.
+        """Options always hot-reload; entity keys never legitimately appear here.
 
-        Entity selections (nibe_entity, gespot_entity, etc.) are set during initial
-        config flow and stored in entry.data. The options flow only exposes runtime
-        settings. Therefore, the update_listener will never see entity changes -
-        those only happen through reconfigure flow which triggers async_setup_entry.
-
-        Even if someone manually puts entity keys in options (shouldn't happen),
-        we still hot-reload because the options flow is designed for runtime changes.
+        Entity selections live in entry.data and change only via the reconfigure flow.
+        Even an entity-like key in options still hot-reloads, never a full reload.
         """
         mock_hass.data[DOMAIN][mock_config_entry.entry_id] = mock_coordinator
 
@@ -438,33 +421,6 @@ class TestSensorStateRestoration:
         assert mock_coordinator.peak_today == 5.75
 
 
-class TestRuntimeOptionsCompleteness:
-    """Verify all runtime options are properly handled."""
-
-    def test_runtime_options_defined(self):
-        """Verify runtime options set is defined and contains expected keys."""
-        # Runtime options from __init__.py
-        runtime_options = {
-            "target_indoor_temp",
-            "tolerance",
-            "optimization_mode",
-            "control_priority",
-            "thermal_mass",
-            "insulation_quality",
-            "dhw_morning_hour",
-            "dhw_morning_enabled",
-            "dhw_evening_hour",
-            "dhw_evening_enabled",
-            "dhw_target_temp",
-            "peak_protection_margin",
-        }
-
-        # These are the keys that can be changed without full reload
-        assert len(runtime_options) > 0
-        assert "target_indoor_temp" in runtime_options
-        assert "optimization_mode" in runtime_options
-
-
 class TestLearningDataPersistence:
     """Test that learning data persists across restarts and config changes."""
 
@@ -483,9 +439,8 @@ class TestLearningDataPersistence:
         coordinator.effect.async_save = AsyncMock()
         coordinator._power_sensor_listener = None
 
-        # State the BASE DataUpdateCoordinator.async_shutdown touches. async_shutdown now
-        # calls super() - it must, so that `_shutdown_requested` gets set and an in-flight
-        # refresh cannot re-arm a timer on a coordinator that has already been unloaded.
+        # State the base DataUpdateCoordinator.async_shutdown touches: it calls super(),
+        # which sets _shutdown_requested and shuts down the debouncer.
         coordinator._shutdown_requested = False
         coordinator._debounced_refresh = Mock()
 
@@ -589,19 +544,9 @@ class TestCompleteChainValidation:
         # Should NOT call async_reload (full reload)
         mock_hass.config_entries.async_reload.assert_not_called()
 
-        # CHAIN VERIFIED: Runtime changes → Hot-reload only ✓
-
 
 class TestStorageMechanismValidation:
-    """Validate all four independent storage mechanisms."""
-
-    def test_config_options_storage_location(self):
-        """Document: Config options stored in core.config_entries."""
-        # This is handled by Home Assistant core
-        # Storage location: .storage/core.config_entries
-        # Persistence: Automatic
-        # Restoration: Automatic on HA startup
-        assert True  # Documentation test
+    """Validate the independent persistence storage mechanisms are wired up."""
 
     def test_learning_data_storage_location(self):
         """Document: Learning data stored in effektguard_learning."""
@@ -842,15 +787,6 @@ class TestOffsetPersistence:
     """Test offset persistence to avoid redundant API calls on restart."""
 
     @pytest.mark.asyncio
-    async def test_offset_tracking_initialized(self):
-        """Verify coordinator initializes offset tracking attributes."""
-        from custom_components.effektguard.coordinator import EffektGuardCoordinator
-
-        # Check that tracking attributes exist in coordinator
-        assert hasattr(EffektGuardCoordinator, "__init__")
-        # Attributes will be set in __init__, can't test without full initialization
-
-    @pytest.mark.asyncio
     async def test_offset_saved_after_successful_application(self):
         """Verify offset is saved to learning data after successful application."""
         from custom_components.effektguard.optimization.prediction_layer import (
@@ -903,26 +839,6 @@ class TestOffsetPersistence:
         assert "2025-10-18" in restored_timestamp
 
     @pytest.mark.asyncio
-    async def test_redundant_offset_call_avoided(self):
-        """Verify redundant API call is skipped when offset matches last applied."""
-        # Test logic: if last_applied_offset == 2.5 and decision.offset == 2.5
-        # then API call should be skipped
-
-        last_applied = 2.5
-        decision_offset = 2.5
-
-        # Check if values match (within tolerance)
-        should_skip = abs(decision_offset - last_applied) < 0.01
-
-        assert should_skip is True
-
-        # Test with different offset
-        decision_offset = 3.0
-        should_skip = abs(decision_offset - last_applied) < 0.01
-
-        assert should_skip is False
-
-    @pytest.mark.asyncio
     async def test_offset_persistence_across_restart_cycle(self):
         """Integration test: Offset survives full save/restore cycle."""
         from custom_components.effektguard.optimization.prediction_layer import (
@@ -962,11 +878,7 @@ class TestOffsetPersistence:
 
 
 class TestTargetTemperaturePersistence:
-    """Tests for target temperature persistence across restarts (Dec 10, 2025).
-
-    Issue: Target temperature reset from 21.5°C to 21.0°C after restart.
-    Root cause: entry.options should override entry.data during initialization.
-    """
+    """Target temperature persists across restarts: entry.options overrides entry.data."""
 
     def test_decision_engine_uses_options_over_data(self):
         """Verify DecisionEngine reads target_temp from options first, then data."""

@@ -1,33 +1,14 @@
 """A projection is not a meter reading, and a price is not a sum of money.
 
-Two sensors carry `device_class=MONETARY`, and Home Assistant is strict about what that means:
+MONETARY permits exactly one state class - TOTAL - which makes the recorder keep a running SUM.
 
-    DEVICE_CLASS_STATE_CLASSES[SensorDeviceClass.MONETARY] == {SensorStateClass.TOTAL}
+`savings_estimate` must NOT be MONETARY: its value is a forward-looking monthly projection, and
+summing it in the Energy dashboard is meaningless. Its unit stays hardcoded "SEK" (the effect-tariff
+component is a Swedish tariff and the spot component is dropped unless already SEK-compatible, so the
+value really is kronor - deriving the label from the öre/kWh price feed would be a 100x error).
 
-TOTAL tells the recorder to keep a **sum** - it is the state class of a meter that accumulates.
-
-`savings_estimate` is `device_class=MONETARY`, `state_class=TOTAL`, unit hardcoded `"SEK"`. Its
-value is `savings.monthly_estimate`: a **forward-looking projection** that goes up and down as the
-forecast changes. So Home Assistant's long-term statistics **accumulate a projection as though it
-were a running total**, and the number that lands in the Energy dashboard is meaningless. The only
-state class MONETARY permits is the one that is semantically wrong for this quantity.
-
-The unit, though, is right, and that is worth recording because it is a trap. It looks like a
-Swedish-centric oversight, and the obvious "fix" - derive the currency from the user's spot-price
-entity - is a 100x error: that entity reports **öre/kWh**, while `monthly_estimate` is **kronor**
-(its tariff component is SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH, and the spot component is DROPPED
-when the price unit is not SEK-compatible rather than converted at a guessed rate). Showing a
-Norwegian a SEK figure computed from a Swedish grid tariff is a real problem - with the tariff
-MODEL, not the label. That is F-107, and it is open with the owner.
-
-`current_price` is `device_class=MONETARY` with **no state class** and a *dynamic* unit read off the
-spot-price entity - typically `"öre/kWh"`, which is not a currency at all. A price per kilowatt-hour
-is a **rate**, not an amount of money. The inline comment says "monetary device_class doesn't
-support state_class", which is simply untrue (it supports TOTAL), and the consequence of believing
-it is that the price sensor produces **no long-term statistics at all** - the one sensor a user most
-wants to plot.
-
-Neither sensor should be MONETARY. A projection is a number; a price is a measurement.
+`current_price` must NOT be MONETARY either: its unit is typically "öre/kWh", a rate, not currency.
+It is MEASUREMENT, which is what gives a price long-term statistics (min/max/mean) at all.
 """
 
 from __future__ import annotations
@@ -55,20 +36,10 @@ def test_a_projection_is_not_accumulated_into_the_energy_dashboard():
 
 
 def test_the_savings_label_matches_the_unit_the_value_is_computed_in():
-    """SEK is the RIGHT label here, and the reasoning matters more than the assertion.
-
-    It is tempting to call a hardcoded "SEK" a Swedish-centric oversight and derive the unit from
-    the user's spot-price entity instead. That entity reports **öre/kWh**. `monthly_estimate` is
-    **kronor** - its effect-tariff component is SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH, and
-    SavingsCalculator DROPS the spot component entirely when the price unit is not SEK-compatible
-    rather than guessing an exchange rate. Deriving the label from the price feed therefore prints
-    "öre" on a value denominated in SEK: a 100x error, dressed up as internationalisation.
-
-    (This was written, and caught on a live Home Assistant, which recorded unit='öre' against a
-    kronor value. The number a sensor shows and the unit it claims must be the same number.)
-
-    Showing a Norwegian a SEK figure derived from a Swedish grid tariff is a real problem. It is a
-    problem with the tariff MODEL, not with the label - audit F-107, open with the owner.
+    """SEK is the RIGHT label: `monthly_estimate` is kronor (a Swedish effect tariff plus a spot
+    component dropped unless already SEK-compatible). Deriving the unit from the öre/kWh price feed
+    would print "öre" on a SEK value - a 100x error. The Norwegian-user problem is the tariff MODEL,
+    not the label (F-107, open with the owner).
     """
     savings = _by_key("savings_estimate")
 

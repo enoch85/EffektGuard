@@ -1,13 +1,8 @@
 """Regression tests for import statements and module structure.
 
-This test suite validates:
-1. All Python files can be imported without errors
-2. All import statements are valid and resolve correctly
-3. No circular dependencies exist
-4. All required modules are accessible
-5. Constants and shared resources are properly defined
-
-Critical for catching regressions after major refactoring.
+Guards that every module imports cleanly, all absolute and relative imports resolve,
+there are no circular dependencies, and shared constants are defined and used. Catches
+import-level regressions after refactoring.
 """
 
 import ast
@@ -766,13 +761,10 @@ class TestConstantUsage:
             warnings.warn("\n".join(report_lines))
 
     def test_no_duplicate_constants_in_const_py(self, validator):
-        """Check that const.py has no duplicate constant definitions.
+        """const.py has no duplicate constant definitions.
 
-        Detects:
-        1. Same constant name defined multiple times at module level
-        2. Different constant names with the same value (potential semantic duplicates)
-
-        Skips enum class members (they can have same names like UNKNOWN in different enums).
+        Flags a name defined twice at module level, plus numeric semantic duplicates
+        (same value, different names). Skips enum members, which may repeat names.
         """
         const_file = COMPONENT_ROOT / "const.py"
         content = const_file.read_text()

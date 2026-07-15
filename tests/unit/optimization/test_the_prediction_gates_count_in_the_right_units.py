@@ -1,23 +1,11 @@
-"""The prediction gates counted SAMPLES and spoke in HOURS, and the two disagreed by 3x.
+"""The prediction gates must count in SAMPLES_PER_HOUR, not a remembered sample count.
 
-    if len(self.state_history) < 4:   # Need at least 1 hour of history
-    if len(self.state_history) < 96:  # Less than 24 hours of data
-    if len(self.state_history) < 8:   # Need 2+ hours
+The coordinator records one sample every UPDATE_INTERVAL_MINUTES - twelve an hour, not four. Gates
+that hardcoded 96 samples "for 24 hours" actually opened at 8 hours, so the learned pre-heat layer
+engaged on a third of the data it believed it had.
 
-The coordinator records one sample every UPDATE_INTERVAL_MINUTES - TWELVE an hour, not four. So
-those three gates were, in real time:
-
-    4 samples   ->  20 minutes   (the comment claimed 1 hour)
-    96 samples  ->   8 HOURS     (the comment claimed 24)
-    8 samples   ->  40 minutes   (the comment claimed 2+ hours)
-
-The learned pre-heating layer therefore engaged on a THIRD of the data it believed it had, and
-eight hours of a Swedish winter night is not a representative day.
-
-SAMPLES_PER_HOUR was already derived correctly from UPDATE_INTERVAL_MINUTES, and already used to
-size this very predictor's deque. The gates simply did not use it - and neither did the tests, which
-recorded their fixtures at a 15-minute cadence and said so out loud: "120 observations (30 hours at
-4 per hour)". That belief is the bug, written down.
+Invariant: every gate is `hours * SAMPLES_PER_HOUR` (24 h -> 288 samples), the predictor's deque can
+hold what the gate asks for, and the learning-progress reason string uses the same denominator.
 """
 
 from __future__ import annotations

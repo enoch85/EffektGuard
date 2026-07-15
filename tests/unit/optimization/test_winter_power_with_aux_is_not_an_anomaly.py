@@ -1,13 +1,10 @@
-"""A winter reading with the elpatron running is normal, not an every-cycle log line.
+"""A winter reading with the elpatron running is normal, not an every-cycle warning.
 
-The F750's typical_electrical_range_kw was corrected to its rating-point compressor draw
-(0.27-2.06 kW) - true, but the power validator compared the whole-machine reading against it
-and logged "exceeds max (auxiliary heating active?)" on EVERY cold-weather cycle where the
-immersion heater was doing exactly its job. A channel that cries wolf every five minutes all
-January is a channel nobody reads in February.
-
-The machine's plausible ceiling is compressor + immersion heater. Below it, aux-range draw is
-silent normality; above it, the reading is implausible for the hardware and worth a warning.
+typical_electrical_range_kw is the compressor draw alone (0.27-2.06 kW). The validator compared
+the whole-machine reading against it and flagged "exceeds max" on every cold cycle where the
+immersion heater was doing its job. The machine's plausible ceiling is compressor + immersion
+heater: below it, aux-range draw is normal; above it, the reading is implausible for the
+hardware and worth a warning.
 """
 
 from unittest.mock import MagicMock
@@ -34,7 +31,7 @@ def test_compressor_plus_elpatron_draw_is_valid_and_quiet():
 
 
 def test_a_draw_no_f750_can_produce_is_flagged():
-    # Compressor max 2.06 + immersion 6.5 = 8.56; 12 kW is not this machine.
+    # Ceiling is (compressor max 2.06 + immersion 3.5) x margin = 6.67 kW; 12 kW is not this machine.
     result = _engine()._validate_power_consumption(12.0, outdoor_temp=-10.0)
 
     assert result["valid"] is False

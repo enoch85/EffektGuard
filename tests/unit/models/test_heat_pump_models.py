@@ -94,13 +94,10 @@ class TestNibeF750Profile:
         assert f750.supports_modulation is True
 
     def test_power_characteristics(self, f750):
-        """The F750's published output. It used to be asserted as (2.0, 8.0) kW.
+        """The F750's published maximum output is 4.994 kW (EN 14511, part no. 066 063), not 8.0.
 
-        NIBE's datasheet, "Output data according to EN 14 511", part no. 066 063, publishes a
-        maximum specified heating output of 4.994 kW - at A20(12)W45, 252 m3/h, MAX compressor
-        frequency. There is no 8 kW anywhere in it. This machine is an exhaust-air pump: its
-        evaporator is fed by the house's own ventilation air, and what it can make is bounded by
-        the airflow, not by what the model is called.
+        It is an exhaust-air pump: output is bounded by the house's ventilation air, so the old
+        (2.0, 8.0) kW rating was invented.
         """
         assert f750.rated_power_kw == (1.144, 4.994)
         assert f750.max_heat_output_kw == 4.994
@@ -132,16 +129,11 @@ class TestNibeF750Profile:
         assert f750.typical_cop_range == (2.43, 4.72)
 
     def test_the_display_curve_is_labelled_as_a_proxy_not_a_measurement(self, f750):
-        """A table of eight (outdoor, COP) pairs used to be asserted here as measured fact:
+        """The outdoor-keyed COP curve is a dashboard proxy derived from the published endpoints.
 
-            (7, 5.0), (0, 4.0), (-5, 3.5), (-10, 3.0), (-15, 2.7), (-20, 2.3), (-25, 2.0), (-30, 1.8)
-
-        Not one of those numbers is in the datasheet, and the variable they are keyed on is not one
-        this machine responds to. The curve survives ONLY as a dashboard proxy - in a colder month
-        the house asks for hotter water and a higher compressor frequency, and both cost efficiency
-        - and it is now derived from the machine's own published endpoints instead of invented.
-
-        Nothing computes from it. The simulator's physics comes from `datasheet_points`.
+        It used to assert a fabricated 8-point table (COP 5.0 at 7 C down to 1.8 at -30 C) as fact,
+        keyed on a variable this exhaust-air machine does not respond to. Nothing computes from it -
+        the simulator's physics comes from `datasheet_points`.
         """
         curve = f750.cop_curve
 
@@ -192,11 +184,9 @@ class TestNibeF730Profile:
         return NibeF730Profile()
 
     def test_the_f730_is_not_a_smaller_f750(self, f730):
-        """This test used to assert `f730.rated_power_kw[1] < f750.rated_power_kw[1]`, as fact.
+        """At A20(12)W45 max frequency NIBE publishes 5.35 kW (F730) vs 4.994 kW (F750).
 
-        The datasheets say the opposite. At A20(12)W45 and maximum compressor frequency, NIBE
-        publishes 5.35 kW for the F730 and 4.994 kW for the F750. The F730 is the STRONGER machine
-        at full tilt. The ordering was invented, and then enforced.
+        The F730 is the stronger machine at full tilt; the old "F730 < F750" ordering was invented.
         """
         f750 = NibeF750Profile()
 
@@ -205,14 +195,10 @@ class TestNibeF730Profile:
         assert f730.max_heat_output_kw > f750.max_heat_output_kw
 
     def test_the_f730_does_not_share_the_f750s_cop_curve(self, f730):
-        """THE TELL, AND IT WAS ENSHRINED AS A REQUIREMENT.
+        """Two different machines must not carry byte-identical COP curves.
 
-        The test that stood here was called `test_cop_same_as_f750`, and its docstring read "Test
-        F730 has same COP curve as F750 (same technology)". Two different machines, with different
-        published outputs, carrying byte-identical COP curves - and a test demanding they stay that
-        way. That is what an invented number looks like when nobody checks it against a datasheet.
-
-        NIBE publishes COP 5.32 for the F730 at A20(12)W35 min frequency, and 4.72 for the F750.
+        The old `test_cop_same_as_f750` demanded they stay equal ("same technology"). NIBE publishes
+        COP 5.32 for the F730 at A20(12)W35 min frequency, and 4.72 for the F750.
         """
         f750 = NibeF750Profile()
 

@@ -1,30 +1,14 @@
 """Percentile RANK is scale-invariant, so on its own it cannot see a price at all.
 
-The price layer banded every quarter by where it ranked in the day. That is all it did, and it has
-two consequences that a ranking can never notice.
+Banding purely by rank has two consequences a ranking cannot notice, both pinned here:
 
-**A flat day earned the full banding.** A day that ran from 39.80 to 40.20 ore - a spread of four
-tenths of an ore - was classified VERY_CHEAP through PEAK, commanding offsets from +4.0 C to
--10.0 C. Fourteen degrees of swing on a heat pump, to chase four tenths of an ore.
-
-**Free electricity was classified NORMAL.** On a high-wind day - 83 quarters at 120 ore and 13 at
-MINUS 10, where the grid pays you to take the power - the MIDDLE of the distribution is a plateau,
-so p25 == p75 == p90 == 120. The old guard tested exactly that (`if p25 == p90`) and gave up,
-marking the whole day NORMAL. The cheapest power of the year went unbought.
-
-AND THE OBVIOUS FIX IS WORSE THAN THE BUG. Simply deleting that guard makes the 83 quarters at the
-day's HIGHEST price satisfy `price <= p25`, so they are classified CHEAP - commanding +4.0 C of
-extra heat at the most expensive moment of the day. That trap is why an earlier attempt at this was
-reverted, and it is pinned below.
-
-The fix is two rules, and neither of them needs to know what a price is worth:
-
-  * a band must sit on the correct SIDE of the median, which resolves the plateau;
-  * the day's spread must be material against the day's own price SCALE, which resolves the flat
-    day - and being relative, it survives the fact that NOTHING HERE KNOWS ITS UNIT. `PriceData`
-    carries none, and GE-Spot publishes whatever the owner configured. An absolute threshold in ore
-    would be a hundred times wrong for anyone reporting SEK/kWh, and it is precisely because
-    ranking is scale-invariant that nobody has ever noticed.
+  * a FLAT day (39.80-40.20 ore) earns the full VERY_CHEAP..PEAK banding - a 14 C swing to chase
+    four tenths of an ore. The fix requires the day's spread to be material against the day's own
+    price SCALE (PRICE_FLAT_DAY_SPREAD_FRACTION), which is relative and so survives the fact that
+    PriceData carries no unit (an absolute ore threshold would be 100x wrong in SEK/kWh);
+  * on a high-wind day the plateau IS the median (p25 == p75 == p90 == 120), so free electricity
+    went NORMAL while the dear plateau, if the guard is removed naively, goes CHEAP. Both must be
+    resolved without the naive fix that turned an ordinary day into PEAK quarters and was reverted.
 """
 
 from __future__ import annotations
@@ -130,8 +114,8 @@ class TestTheRegressionThatGotTheLastAttemptReverted:
     """An ordinary day must not suddenly sprout critical PEAK quarters."""
 
     def test_an_ordinary_day_produces_no_peak_quarters(self):
-        """A previous attempt flipped `> p90` to `>= p90` and turned a THIRD of an ordinary day
-        into PEAK quarters at weight 1.0 and PRICE_OFFSET_PEAK (-10.0). It had to be reverted.
+        """Flipping `> p90` to `>= p90` turns a THIRD of an ordinary day into PEAK quarters at
+        weight 1.0 and PRICE_OFFSET_PEAK (-10.0). The strict `>` must hold.
         """
         bands = _bands(ORDINARY)
 

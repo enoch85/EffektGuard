@@ -57,8 +57,8 @@ def mock_coordinator(mock_hass):
     coordinator.effect.reset_monthly_peaks = MagicMock()
     coordinator.effect.async_save = AsyncMock()
 
-    # Mock coordinator methods. The two refresh paths are DIFFERENT: async_request_refresh reads
-    # and decides but writes nothing; async_refresh_and_apply drives the heat pump.
+    # Two refresh paths: async_request_refresh reads/decides but writes nothing;
+    # async_refresh_and_apply drives the heat pump.
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_refresh_and_apply = AsyncMock()
     coordinator.async_apply_manual_override = AsyncMock()
@@ -73,7 +73,7 @@ def mock_coordinator(mock_hass):
             today=[
                 MagicMock(
                     price=1.0 + (i * 0.01),
-                    period_of_day=i,
+                    quarter_of_day=i,
                     is_daytime=(24 <= i <= 87),
                 )
                 for i in range(96)
@@ -127,9 +127,8 @@ async def test_force_offset_sets_override(mock_hass, mock_coordinator):
     # Verify override was set
     mock_coordinator.async_apply_manual_override.assert_awaited_once_with(2.5, 60)
 
-    # And that it reaches the pump NOW. A plain refresh reads and decides but writes nothing, so
-    # the override would sit in the engine until the next aligned tick - up to five minutes of a
-    # user-commanded offset doing nothing at all.
+    # Applied immediately via async_apply_manual_override; the handler does not call the write
+    # path directly, and does not settle for a plain refresh that would leave the override unwritten.
     mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
@@ -217,8 +216,8 @@ async def test_reset_peak_tracking_clears_peaks(mock_hass, mock_coordinator):
     mock_coordinator.effect.reset_monthly_peaks.assert_called_once()
     mock_coordinator.effect.async_save.assert_called_once()
 
-    # It refreshes so the entities catch up - and it must go no further. Clearing a stored counter
-    # is bookkeeping; it is not a reason to write a curve offset to a heat pump (audit F-063).
+    # A plain refresh so entities catch up - resetting a counter must not write a curve
+    # offset to the pump.
     mock_coordinator.async_request_refresh.assert_called_once()
     mock_coordinator.async_refresh_and_apply.assert_not_called()
 
@@ -296,8 +295,8 @@ async def test_calculate_optimal_schedule_service_registration(mock_hass):
 
     await _async_register_services(mock_hass)
 
-    # Should be registered with a SupportsResponse enum - NOT a bare True, which HA compares by
-    # identity and which therefore reads as response-REQUIRED rather than optional (audit F-072).
+    # Registered with the SupportsResponse enum, not a bare True: HA compares supports_response
+    # by identity, and True is neither SupportsResponse.NONE nor SupportsResponse.OPTIONAL.
     calls = mock_hass.services.async_register.call_args_list
     schedule_call = next(call for call in calls if call[0][1] == SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
 

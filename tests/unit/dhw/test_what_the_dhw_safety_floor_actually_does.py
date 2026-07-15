@@ -1,21 +1,13 @@
-"""`DHW_SAFETY_CRITICAL` was documented as "Hard floor, always heat below this (emergency)".
+"""What DHW_SAFETY_CRITICAL (20 C) actually does, versus its old "always heat below this" comment.
 
-It is not that. Below 20 °C the optimizer stops WAITING FOR A CHEAPER PRICE - it does not heat
-unconditionally, and it must not, because two things still outrank the hot water and both are
-deliberate:
+Below 20 C the optimizer stops WAITING FOR A CHEAPER PRICE. It does NOT heat unconditionally, and
+must not, because two things still outrank the hot water - both deliberate:
 
-  * CRITICAL THERMAL DEBT. A DHW cycle takes the compressor away from space heating, and doing that
-    while the house is already in deep degree-minute debt is how a recoverable debt becomes an
-    immersion-heater one.
-  * THE HOUSE ITSELF BEING BELOW ITS SAFETY FLOOR. The owner's rule, in his own words: "DHW wins,
-    but never below safety."
+  * CRITICAL THERMAL DEBT - a DHW cycle takes the compressor from space heating; doing that in deep
+    degree-minute debt turns a recoverable debt into an immersion-heater one.
+  * THE HOUSE BELOW ITS OWN SAFETY FLOOR (MIN_TEMP_LIMIT) - "DHW wins, but never below safety."
 
-THE CODE IS RIGHT. The comment was the lie - and it is exactly the kind of lie that gets a safety
-rule "restored" by the next reader who trusts it, since restoring it would mean heating hot water
-in preference to a freezing house.
-
-This file exists because a comment can lie and a test cannot. It pins what the scheduler actually
-does, so the three behaviours below have to survive on purpose rather than by accident.
+The code was right; the comment was the lie. These tests pin the real behaviour.
 """
 
 from __future__ import annotations

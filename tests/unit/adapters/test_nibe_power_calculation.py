@@ -3,19 +3,15 @@
 Tests the calculate_power_from_currents() method that reads BE1/BE2/BE3
 sensors and calculates real power consumption.
 
-Based on Swedish 3-phase electrical standards:
-- IEC 60038 / EN 50160: the European low-voltage supply is 230/400 V
+Based on European 3-phase electrical standards:
+- IEC 60038 / EN 50160: the low-voltage supply is 230/400 V
 - 400 V between phases, 230 V phase-to-neutral (400 / sqrt(3) = 230.94)
 - All NIBE heat pumps in Sweden are 3-phase
 - Power factor 0.95 (conservative for inverter compressor)
 
-This file used to assert 240.0 V, and to say so in as many words: "Should use
-NIBE_VOLTAGE_PER_PHASE (240V) not 230V or other". It named the correct value and rejected it.
-240 V is the legacy UK/US figure; the constant's own comment gave the reason it could not be right
-("400V between phases, 240V phase-to-neutral" - those two disagree by a factor of sqrt(3)).
-
-Every power figure derived from NIBE's BE1/BE2/BE3 phase currents was therefore 4.3 % HIGH, and
-those figures now feed the monthly peak history that drives peak protection.
+NIBE_VOLTAGE_PER_PHASE must stay 230 V, not the legacy 240 V: at 240 V every power figure
+derived from BE1/BE2/BE3 comes out ~4.3 % high, into the monthly peak history that drives
+peak protection.
 """
 
 import pytest
@@ -39,7 +35,7 @@ class TestNibePowerCalculationBasics:
         )
 
         # P = V × I × PF / 1000
-        # 240V × 1.0A × 0.95 = 228W = 0.228 kW
+        # 230V × 1.0A × 0.95 = 218.5W = 0.2185 kW
         expected = (NIBE_VOLTAGE_PER_PHASE * 1.0 * NIBE_POWER_FACTOR) / 1000
         assert power == pytest.approx(expected, rel=1e-3)
 
@@ -53,7 +49,7 @@ class TestNibePowerCalculationBasics:
         )
 
         # Total current: 10 + 8 + 9 = 27A
-        # P = 240V × 27A × 0.95 / 1000 = 6.156 kW
+        # P = 230V × 27A × 0.95 / 1000 = 5.900 kW
         total_amps = 10.0 + 8.0 + 9.0
         expected = (NIBE_VOLTAGE_PER_PHASE * total_amps * NIBE_POWER_FACTOR) / 1000
         assert power == pytest.approx(expected, rel=1e-3)
@@ -100,17 +96,6 @@ class TestNibePowerCalculationSwedishStandards:
             f"line-to-line system CANNOT have 240 V phase-to-neutral. 240 V is the legacy UK/US "
             f"figure, and at that value every power reading derived from BE1/BE2/BE3 comes out "
             f"4.3 % high, straight into the monthly peak history that drives peak protection."
-        )
-
-    def test_the_phase_voltage_is_consistent_with_the_line_voltage(self):
-        """The constant's own comment used to contradict itself. Pin the relation, not a number."""
-        import math
-
-        line_to_line = 400.0
-        assert NIBE_VOLTAGE_PER_PHASE == pytest.approx(line_to_line / math.sqrt(3), abs=1.0), (
-            f"A 400 V line-to-line 3-phase supply has {line_to_line / math.sqrt(3):.1f} V "
-            f"phase-to-neutral. The constant says {NIBE_VOLTAGE_PER_PHASE} V. One of the two is "
-            f"wrong, and the old comment asserted both at once."
         )
 
     def test_uses_conservative_power_factor(self, nibe_adapter):
@@ -246,7 +231,7 @@ class TestNibePowerCalculationCustomParameters:
 
     def test_custom_voltage_value(self, nibe_adapter):
         """Test power calculation with custom voltage."""
-        # Test with slightly different voltage (e.g., 230V instead of 240V)
+        # Test with an explicit custom voltage that overrides the default
         power = nibe_adapter.calculate_power_from_currents(
             phase1_amps=10.0,
             phase2_amps=10.0,
@@ -268,7 +253,7 @@ class TestNibePowerCalculationCustomParameters:
             power_factor=0.98,  # Custom power factor
         )
 
-        # P = 240V × 30A × 0.98 / 1000 = 7.056 kW
+        # P = 230V × 30A × 0.98 / 1000 = 6.762 kW
         expected = (NIBE_VOLTAGE_PER_PHASE * 30.0 * 0.98) / 1000
         assert power == pytest.approx(expected, rel=1e-3)
 

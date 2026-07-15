@@ -3,7 +3,7 @@
 `_check_upcoming_demand_period` measured the distance to the next scheduled shower with
 naive datetime subtraction. On the night the clocks go back, wall-clock arithmetic loses the
 repeated hour: 00:30 CEST to 06:00 CET is 5.5 wall-clock hours but 6.5 REAL hours - and the
-planner heats water against that figure. The last DST-fragile site in production (F-041).
+planner would heat water against that figure. Production now subtracts on the UTC timeline.
 """
 
 from datetime import datetime

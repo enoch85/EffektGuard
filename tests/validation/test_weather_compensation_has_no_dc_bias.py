@@ -1,18 +1,15 @@
 """Weather compensation must command ~zero on a curve that is already correct.
 
-A layer that adds a constant to every decision is not a controller, it is a bias. Kuehne's was
--1.2 C and it under-heated the house for 92% of a simulated month while presenting the shortfall
-as savings. The direction of the bias is not what made it a bug; being a bias is.
+A layer that adds a constant to every decision is not a controller, it is a bias - the removed
+Kuehne model carried a persistent negative one that under-heated the house while presenting the
+shortfall as savings. The direction is not what made it a bug; being a bias is.
 
-So this asserts the property that failure had in common with its replacement, rather than the
-particular sign it happened to have: with the house exactly on target, degree minutes healthy, a
-steady forecast, and the pump's own curve already delivering precisely what the emitter law asks
-for, there is nothing to correct. The offset must be ~0.
-
-The climate-zone safety margin is what breaks this. It exists so that a curve which is running
-COLD in a hard winter gets pulled up - a real safety purpose. But adding it to the setpoint
-unconditionally means a perfectly-tuned curve is also told to add heat, at every outdoor
-temperature, forever. A margin is permission to run warm, not an instruction to.
+So this asserts the property the failure shared with its replacement: with the house exactly on
+target, degree minutes healthy, a steady forecast, and the pump's own curve already delivering what
+the emitter law asks for, there is nothing to correct and the offset must be ~0. The climate-zone
+safety margin is what breaks this - it exists to pull up a curve running COLD in a hard winter, but
+adding it unconditionally tells a perfectly-tuned curve to add heat too. A margin is permission to
+run warm, not an instruction to.
 """
 
 from datetime import datetime, timedelta
@@ -48,20 +45,14 @@ NOW = datetime(2026, 1, 15, 12, 0)
 def _emitter_law_flow(outdoor: float) -> float:
     """The flow a PERFECTLY tuned curve delivers - taken from OpenEnergyMonitor, not from us.
 
-    This used to be hand-computed here, and the docstring said it was written out "independently of
-    the production model on purpose". The intent was right and the execution defeated it: the hand
-    copy reproduced the production model's own bug - it scaled the flow-return spread with load,
-    `DESIGN_SPREAD * phi / 2`, which models a fixed-speed circulator rather than a heat pump. So the
-    reference agreed with the code because it WAS the code, and this test confirmed a bias it existed
-    to detect.
-
-    A reference has to come from outside. This is OpenEnergyMonitor's weather-compensation tool
-    (github.com/openenergymonitor/tools, www/tools/weathercomp/weathercomp.js):
+    A reference has to come from outside, or it reproduces the code's own bug. This is
+    OpenEnergyMonitor's weather-compensation tool (weathercomp.js):
 
         DT    = (heat_demand / rated_emitter_output_dt50) ** (1/1.3) * 50
         flowT = room_temperature + DT + systemDT * 0.5        <- systemDT, NOT systemDT * phi
 
-    Anchored on our design point rather than theirs, which is the same equation rewritten.
+    The flow-return spread is CONSTANT (a heat pump modulates its circulator). Anchored on our
+    design point rather than theirs, which is the same equation rewritten.
     """
     balance = TARGET_INDOOR - INTERNAL_GAINS_W / DEFAULT_HEAT_LOSS_COEFFICIENT
     load = balance - outdoor
@@ -143,8 +134,8 @@ def test_no_dc_bias_when_the_curve_is_already_perfect(engine):
 def test_the_bias_does_not_merely_average_out(engine):
     """A bias that cancels across the range would be noise; one that does not is a setback.
 
-    Kuehne's mean was -1.205 C. The sign is irrelevant - a persistent +1.5 C would over-heat the
-    house and raise the bill just as reliably as -1.2 C under-heated it and lowered it.
+    The sign is irrelevant - a persistent +1.5 C over-heats the house and raises the bill just as
+    reliably as a negative bias under-heats it and lowers it.
     """
     walk = [10.0, 5.0, 0.0, -5.0, -10.0, -15.0, -20.0]
     offsets = [_offset_on_a_perfect_curve(engine, t) for t in walk]

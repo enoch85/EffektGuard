@@ -71,9 +71,9 @@ class TestMonthlySavingsEstimation:
         calc = SavingsCalculator()
 
         # Current peak: 8 kW, Baseline: 10 kW = 2 kW reduction
-        # Expected savings: 2 kW × 50 SEK/kW = 100 SEK from effect tariff
+        # Effect: 2 kW × SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH (81.25) ≈ 162 SEK
         # Spot savings: 5 SEK/day × 30 days = 150 SEK
-        # Total: 250 SEK
+        # Total: ≈ 312 SEK
         estimate = calc.estimate_monthly_savings(
             current_peak_kw=8.0,
             baseline_peak_kw=10.0,
@@ -95,16 +95,11 @@ class TestMonthlySavingsEstimation:
         )
 
     def test_without_a_measured_baseline_there_is_no_effect_saving(self):
-        """This test used to ENSHRINE the fabrication. It asserted the invented number.
+        """With no observed baseline the effect saving is zero, not a fabricated figure.
 
-        With no observed baseline the calculator assumed one - `baseline = peak * 1.176` - and
-        `update_baseline_peak`, the only thing that could ever set a real baseline, had no
-        production caller, so the assumption fired every time. The arithmetic collapses to
-
-            effect_savings = 0.176 * current_peak * tariff
-
-        so a HIGHER peak reported MORE "savings", and the sensor could never read zero however
-        badly the optimiser was doing. There is no measurement in there at all.
+        The old code assumed baseline = peak * 1.176 with no caller ever setting a real one, so
+        effect_savings collapsed to 0.176 * peak * tariff: a higher peak reported MORE saving and
+        the sensor could never read zero. That is no measurement at all.
         """
         calc = SavingsCalculator()
 
@@ -248,9 +243,7 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_during_cheap_period(self):
         """Test savings when using power during cheap period."""
         calc = SavingsCalculator()
-        # These assertions are ÖRE math. The unit used to be implicit (an unknown
-        # unit silently fell back to öre); it must now be stated, because every price
-        # integration actually publishes SEK/kWh by default.
+        # Öre math: the unit must be set explicitly now (unknown units report no savings).
         calc.price_unit = "öre/kWh"
 
         # 4 kW power for 5 minutes during cheap period (50 öre vs 100 öre average)
@@ -275,9 +268,7 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_during_expensive_period(self):
         """Test negative savings when using power during expensive period."""
         calc = SavingsCalculator()
-        # These assertions are ÖRE math. The unit used to be implicit (an unknown
-        # unit silently fell back to öre); it must now be stated, because every price
-        # integration actually publishes SEK/kWh by default.
+        # Öre math: the unit must be set explicitly now (unknown units report no savings).
         calc.price_unit = "öre/kWh"
 
         # 4 kW power for 5 minutes during expensive period (150 öre vs 100 öre)
@@ -303,9 +294,7 @@ class TestCycleSavingsEstimation:
     def test_cycle_savings_very_cheap_period(self):
         """Test larger savings during very cheap period."""
         calc = SavingsCalculator()
-        # These assertions are ÖRE math. The unit used to be implicit (an unknown
-        # unit silently fell back to öre); it must now be stated, because every price
-        # integration actually publishes SEK/kWh by default.
+        # Öre math: the unit must be set explicitly now (unknown units report no savings).
         calc.price_unit = "öre/kWh"
 
         # Very cheap: 20 öre vs 100 öre average
@@ -460,9 +449,7 @@ class TestConstantsUsage:
     def test_ore_to_sek_conversion_in_cycle_savings(self):
         """Test öre to SEK conversion uses constant."""
         calc = SavingsCalculator()
-        # These assertions are ÖRE math. The unit used to be implicit (an unknown
-        # unit silently fell back to öre); it must now be stated, because every price
-        # integration actually publishes SEK/kWh by default.
+        # Öre math: the unit must be set explicitly now (unknown units report no savings).
         calc.price_unit = "öre/kWh"
         # 4 kW for 60 minutes = 4 kWh, price diff of 50 öre
         savings = calc.calculate_spot_savings_per_cycle(
@@ -492,7 +479,7 @@ class TestEdgeCases:
         """Test handling of very large peak reduction."""
         calc = SavingsCalculator()
         estimate = calc.estimate_monthly_savings(current_peak_kw=5.0, baseline_peak_kw=20.0)
-        # 15 kW reduction × 50 SEK = 750 SEK
+        # 15 kW reduction × 81.25 SEK ≈ 1219 SEK
         assert estimate.effect_savings == pytest.approx(
             round(15.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
@@ -548,7 +535,7 @@ class TestIntegration:
         for _ in range(30):
             calc.record_spot_savings(5.0)  # 5 SEK per day
 
-        # Effect tariff savings: 10 kW * 85% = 8.5 kW reduced
+        # New peak = 10 kW * 0.85 = 8.5 kW, i.e. a 1.5 kW reduction from the 10 kW baseline
         current_peak = 10.0 * 0.85  # 1.5 kW reduction
 
         # Monthly estimate - pass the average daily spot savings

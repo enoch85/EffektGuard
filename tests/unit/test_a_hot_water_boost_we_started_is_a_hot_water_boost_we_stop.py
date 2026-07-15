@@ -1,41 +1,13 @@
-"""EffektGuard cleans up the hot-water boosts it started - except the ones its own service started.
+"""A hot-water boost EffektGuard's own service started must be recognised as ours on unload.
 
-The coordinator has a cleanup for exactly this, and it says why:
+`_cancel_our_dhw_boost` turns off, on unload, only a temporary-lux boost EffektGuard started - told
+apart from the owner's by `_lux_boost_is_ours`, which is set in exactly one place:
+`_set_temporary_lux`. The `boost_dhw` service must reach the switch through that method (via the
+coordinator), or the flag is never set and the boost it started is left running to NIBE's lux
+timeout on the immersion heater after the entry unloads (reconfigure, reload, removal, restart).
 
-    async def _cancel_our_dhw_boost(self) -> None:
-        \"\"\"Turn off a temporary-lux boost that EffektGuard started, if one is still running.
-
-        Called on unload. A boost the OWNER started is left alone.
-        \"\"\"
-        if not (self._lux_boost_is_ours and self.temp_lux_entity):
-            return
-        ...
-        "Cancelling the EffektGuard hot-water boost on %s before unload - it would otherwise
-         run to NIBE's own timeout with nothing left to stop it"
-
-`_lux_boost_is_ours` is set in exactly one place: the DHW optimizer, when IT turns the switch on. The
-`effektguard.boost_dhw` SERVICE turns the very same switch on - by calling `switch.turn_on` on the
-NIBE temporary-lux entity - and never sets the flag. So the cleanup looks at a boost that EffektGuard
-started through its own service, concludes the owner must have started it, and leaves it running.
-
-Driving the real service handler and the real coordinator:
-
-    lux turned ON by OUR service: ('switch', 'turn_on')
-    _lux_boost_is_ours: False          <- the cleanup reads THIS
-    switch.turn_off on unload: 0       <- the boost we started, left running
-
-It is reached by anything that unloads the entry: the RECONFIGURE flow (swapping the power meter or
-the weather entity), a manual reload, a removal, or a restart. The coordinator that knew about the
-boost is gone, and nothing is left that will stop it: it runs to NIBE's own temporary-lux timeout -
-the immersion heater, at COP 1.0, for as long as the pump decides.
-
-(NOT an ordinary options change. This docstring used to say it was, which is false - the update
-listener hot-reloads and the entry stays loaded. See
-tests/unit/test_which_things_actually_unload_the_entry.py, which measures both.)
-
-The bug is the same shape as the one before it: the guard exists, and one of the paths into it does
-not set the flag it reads. So the switch now has ONE door, like the curve offset and the fan, and
-that door is the only thing that records who started the boost.
+The structural test pins the one-door invariant: every `switch.turn_on/off` on the lux entity goes
+through `_set_temporary_lux`, the only place that records who started the boost.
 """
 
 from __future__ import annotations
@@ -98,7 +70,7 @@ def _turn_offs(hass) -> list:
 
 @pytest.mark.asyncio
 async def test_a_boost_our_own_service_started_is_cancelled_on_unload():
-    """THE BUG. The service starts the boost; the cleanup does not recognise it as ours."""
+    """The service starts the boost; the cleanup must recognise it as ours on unload."""
     hass, coordinator, registered = _hass_and_coordinator()
     await _async_register_services(hass)
 
@@ -163,22 +135,18 @@ async def test_a_shut_down_coordinator_cannot_start_a_boost():
 
 
 def test_there_is_exactly_one_door_to_the_hot_water_switch():
-    """Structural, because this bug WAS a second door - and the last one was too.
-
-    `switch.turn_on`/`turn_off` on the temporary-lux entity is how this integration commands the
-    hot-water boost. Every one of those calls must go through `_set_temporary_lux`, because that is
-    the only place that records who started the boost - and being able to answer that question is
-    the whole reason the cleanup can run at all.
+    """Every `switch.turn_on/off` on the temporary-lux entity must go through `_set_temporary_lux` -
+    the only place that records who started the boost, which is what lets the unload cleanup tell
+    ours from the owner's.
     """
     import ast
     import pathlib
 
     def commands_the_lux_switch(call: ast.Call) -> bool:
-        """A `switch.turn_on/off` aimed at the TEMPORARY-LUX entity.
+        """A `switch.turn_on/off` aimed at the TEMPORARY-LUX entity specifically.
 
-        Scoped to the lux entity on purpose: the NIBE adapter also drives a `switch` - the enhanced-
-        ventilation one - and that is a different thing with a different guard. The first version of
-        this test matched any `switch` service call at all and flagged the fan as a hot-water door.
+        Scoped to the lux entity because the NIBE adapter also drives a different `switch` (the
+        enhanced-ventilation one), which has its own guard.
         """
         if not (
             isinstance(call.func, ast.Attribute)
@@ -202,8 +170,6 @@ def test_there_is_exactly_one_door_to_the_hot_water_switch():
 
     assert doors == [("coordinator.py", "_set_temporary_lux")], (
         f"the hot-water switch is commanded from {doors}. Every call must go through "
-        f"`_set_temporary_lux`, which is the only place that records whether the boost is ours. "
-        f"There were THREE such doors when this test was written - the DHW optimizer, the "
-        f"`boost_dhw` service, and the DHW safety stop - and only one of them set the flag the "
-        f"unload cleanup reads."
+        f"`_set_temporary_lux`, which is the only place that records whether the boost is ours - "
+        f"the fact the unload cleanup reads."
     )

@@ -1,29 +1,12 @@
-"""When the compressor is flat out, asking for more heat only wears it down.
+"""When the compressor is saturated, a higher offset buys no heat - only wear and DM deficit.
 
-The offset raises the pump's calculated supply setpoint, S1. That is how it asks for more heat -
-and it works only while the compressor has frequency left to give. Once the compressor is at
-maximum, a higher setpoint produces no additional heat at all. What it does produce is:
-
-  * wear, because the machine is held at full frequency for longer than it needs to be, and
-  * a WORSE degree-minute deficit, because DM = integral(BT25 - S1) and the offset raised S1
-    while BT25 could not follow (audit F-124).
-
-The auxiliary heater exists for exactly this moment. NIBE puts "start addition" at -700 (F750,
-menu 4.9.3) so the compressor does not have to grind at full frequency for hours. Refusing its
-help by demanding more from a saturated compressor trades cheap kWh for expensive compressor life.
-
-The integration already knows all of this and does nothing with it. CompressorHealthMonitor tracks
-continuous time above 80 Hz and above 100 Hz, and assess_risk() reports HIGH when the compressor
-has been above 100 Hz for more than fifteen minutes - "compressor at maximum capacity for extended
-period". The coordinator computes that risk and writes it to a DEBUG LOG. Nothing else consumes
-it, and the decision engine remains free to command +10.
-
-The profiles' min_runtime_minutes and min_rest_minutes are dead in the same way: declared on every
-model and the base class, read by nothing.
-
-This guard costs no comfort, and that is not a judgement - it is forced. The extra offset was not
-producing heat, so declining to ask for it cannot take any away. It HOLDS the offset; it never
-cuts it, and it never overrides the absolute safety floor.
+The offset raises the pump's supply setpoint S1. Once the compressor is at maximum frequency a
+higher S1 produces no extra heat; it only holds the machine flat out longer and deepens the
+degree-minute deficit (DM = integral(BT25 - S1)), which the auxiliary heater exists to absorb
+(F-124). So when CompressorHealthMonitor reports COMPRESSOR_RISK_HIGH, the decision engine
+declines to ask for MORE: `_apply_compressor_wear_guard` HOLDS the offset. It never CUTS the
+offset - the boost was producing no heat, so declining it costs no comfort - and it never
+overrides the absolute safety floor.
 """
 
 from datetime import datetime, timedelta

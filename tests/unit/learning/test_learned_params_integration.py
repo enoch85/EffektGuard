@@ -12,20 +12,18 @@ import pytest
 
 from custom_components.effektguard.const import (
     LEARNING_CONFIDENCE_THRESHOLD,
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
+    SAMPLES_PER_HOUR,
+    UFHType,
+    UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.optimization.learning_types import (
     LearnedThermalParameters,
 )
-from custom_components.effektguard.const import (
-    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
-    SAMPLES_PER_HOUR,
-    UPDATE_INTERVAL_MINUTES,
-)
 from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
 )
-from custom_components.effektguard.const import UFHType
 
 
 @pytest.fixture
@@ -33,11 +31,8 @@ def predictor_with_history():
     """Create a ThermalStatePredictor with sufficient history for predictions."""
     predictor = ThermalStatePredictor()
 
-    # This fixture used to say "120 observations (30 hours at 4 per hour)". The coordinator records
-    # one every UPDATE_INTERVAL_MINUTES - TWELVE an hour - so 120 samples is ten hours, not thirty,
-    # and the gate it was clearing was itself miscounted by the same factor of three. Both the
-    # count and the cadence are derived now, so the test cannot hold a private belief about how
-    # fast time passes.
+    # Count and cadence are derived from constants (records one sample every UPDATE_INTERVAL_MINUTES)
+    # so the fixture cannot drift from the gate it is meant to clear.
     required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
     base_time = datetime.now()
     for i in range(required + SAMPLES_PER_HOUR):

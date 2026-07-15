@@ -6,19 +6,9 @@
         entity = _weather_entity_with_forecast_from(NOW)   # built against the collection clock
         data = await adapter.get_forecast()               # adapter reads the clock again, NOW
 
-Those two clocks agree only for as long as nothing moves the clock between collection and the test
-running. Today they do, so the tests pass, and the fragility is invisible.
-
-FOUND BY MOVING THE CLOCK. Running the whole suite with the wall clock frozen at the two daylight
-saving transitions and at New Year:
-
-    frozen at 2026-03-29 01:30  ->   4 failed
-    frozen at 2026-10-25 02:30  ->  10 failed
-    frozen at 2026-12-31 23:59  ->  10 failed
-
-Ten tests, and EVERY ONE OF THEM was one of mine, written on this branch. The audit's F-100 counts
-141 wall-clock reads across 29 test files; almost all of them are harmless, and the ones that
-actually broke were the ones I had just added.
+Those two clocks agree only while nothing moves the clock between collection and the test running.
+Freeze the wall clock at a daylight-saving transition, or collect at 23:59:58, and they diverge -
+so the fragility is invisible on an ordinary run.
 
 The rule is narrow on purpose: read the clock INSIDE the test (a fixture is the tidy way), never at
 module scope. Constants that are plain literals - a fixed January date used as a label, say - are
@@ -49,9 +39,8 @@ def _module_level_clock_reads(path: pathlib.Path) -> list[tuple[int, str]]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
 
     # Only statements that RUN AT IMPORT. A def or a class is not one of them - its body runs when
-    # the test runs, which is exactly where reading the clock is correct. Walking into them was the
-    # first version of this and it flagged 34 perfectly good tests, which is a useful reminder that
-    # a guard has to be guarded too.
+    # the test runs, which is exactly where reading the clock is correct, so we do not descend into
+    # them.
     at_import = [
         node
         for node in tree.body

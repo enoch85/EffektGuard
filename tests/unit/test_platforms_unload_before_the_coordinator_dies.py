@@ -1,13 +1,10 @@
 """Platforms unload FIRST; the coordinator dies only after they actually did.
 
-async_unload_entry used to shut the coordinator down and THEN ask Home Assistant to unload
-the platforms. If a platform refused - which HA reports by returning False and keeping the
-entry loaded - the user was left with a loaded entry full of live entities served by a dead
-coordinator: every sensor frozen on its last value, the control loop gone, nothing saying so.
-That is the "watching a heat pump that is not there" failure, manufactured during teardown.
-
-HA's own pattern is the other order: unload platforms, and only on success tear down what
-they were reading from.
+async_unload_entry must unload the platforms before shutting the coordinator down. If it
+shuts down first and a platform then refuses to unload (HA returns False and keeps the entry
+loaded), the entry is left with live entities served by a dead coordinator - sensors frozen,
+control loop gone, nothing saying so. HA's own order is: unload platforms, and only on
+success tear down what they were reading from.
 """
 
 from unittest.mock import AsyncMock, MagicMock

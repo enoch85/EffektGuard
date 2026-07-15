@@ -1,28 +1,13 @@
-"""The whole-house meter is optional. Peak protection is not.
+"""The whole-house meter is optional; peak protection is not.
 
-`should_limit_power` opens with:
+`should_limit_power` returns "OK, no peaks recorded yet" on an empty history, and the history is
+filled only by the peak recorder. Gating that recorder on BILLABILITY - as a first billing fix did -
+leaves a house with no whole-house meter recording nothing, so peak protection never fires.
 
-    if not self._monthly_peaks:
-        return PowerLimitDecision(should_limit=False, severity="OK", reason="No peaks recorded yet")
-
-and `_monthly_peaks` is filled by exactly one caller: the coordinator's peak recorder. Gate that
-recorder on billability - as the first version of the billing fix did - and a house with no
-whole-house meter records nothing, forever. The effect layer then returns "OK, no peaks recorded
-yet" on every cycle of every day of the winter. Peak protection, which is the feature on the tin,
-never fires once.
-
-`main` did not have this hole:
-
-    has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
-
-BILLABLE and USABLE-AS-A-CONTROL-THRESHOLD are different questions. The heat pump is the dominant
-CONTROLLABLE load in the house, and `should_limit_power` compares this quarter against the month's
-own recorded peaks - so a NIBE-only history compared against NIBE-only power is self-consistent, and
-it still throttles the pump when the pump is the thing spiking. It is simply not the bill, and the
-PeakEvent carries its own provenance so that it is never reported as one.
-
-Estimates are excluded from both. A number derived from compressor Hz is not a measurement, and
-throttling a house in January on the strength of a guess is worse than not throttling it.
+BILLABLE and USABLE-AS-A-CONTROL-THRESHOLD are different questions. NIBE phase currents are a valid
+control threshold (the pump is the dominant controllable load, compared against its own recorded
+history) but are not whole-house grid import - so the PeakEvent carries provenance and is never
+reported as a bill. Estimates drive neither.
 """
 
 from __future__ import annotations

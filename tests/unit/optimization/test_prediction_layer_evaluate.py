@@ -63,12 +63,10 @@ class TestEvaluateLayerInsufficientData:
     def test_insufficient_data_returns_learning_reason(
         self, predictor, mock_nibe_state, mock_weather_data, mock_thermal_model
     ):
-        """Below a full day of history, the layer reports its progress and abstains.
+        """Below a full day of history the layer reports progress (N/REQUIRED) and abstains.
 
-        This test used to assert "0/96". 96 samples at the coordinator's five-minute tick is EIGHT
-        hours, not the twenty-four the gate's own comment claimed - and the fixtures below recorded
-        at a 15-minute cadence, which is where that belief came from. The required count is derived
-        now, so the test and the code cannot disagree about how fast time passes.
+        REQUIRED is PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR, derived from the
+        constants so the test and the code agree on the coordinator's sample cadence.
         """
         # Predictor has no history
         assert len(predictor.state_history) == 0

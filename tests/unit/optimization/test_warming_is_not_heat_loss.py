@@ -1,24 +1,13 @@
 """Solar gain is not heat loss, and corrupt stored state must not poison the scheduler.
 
-Two independent defects, both of which made the system act on a number that meant the
-opposite of what the code thought it meant.
+Comfort layer: `indoor_rate` is a SIGNED °C/h trend. The effective heat-loss rate must be
+`max(-indoor_rate, 0.0)`, not `max(abs(indoor_rate), ...)` - taking the absolute value reads a warming
+house as losing heat fast, shrinking buffer_hours and triggering a pre-heat while it overheats.
 
-F-054 - comfort layer treated WARMING as heat loss
---------------------------------------------------
-`effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)`
-
-`indoor_rate` is a SIGNED °C/h trend. Taking its absolute value turned a house that was
-warming (solar gain) into a house losing heat as fast as it was gaining it. That shrank
-`buffer_hours = overshoot / effective_heat_loss`, so the layer concluded "buffer
-insufficient - pre-heat required!" at exactly the moment the house was overheating and its
-thermal buffer was GROWING.
-
-F-035 - DHW heating rate restored from storage with no validation
------------------------------------------------------------------
-The rate is sanity-checked when LEARNED (5-25 °C/h) but was assigned verbatim when
-RESTORED, and it is used as a divisor in `estimate_heating_time`. A truncated or
-hand-edited `.storage` file could load 0.0 (ZeroDivisionError) or 0.1 (a 200-hour heat-up
-estimate, which makes the scheduler panic-heat immediately at any price, forever).
+DHW heating rate: the rate is used as a divisor in `estimate_heating_time`, so a rate restored from
+storage must pass the same plausibility band (DHW_HEATING_RATE_MIN..MAX) as a learned one - a
+truncated or hand-edited .storage file could otherwise load 0.0 or 0.1 and make the scheduler
+panic-heat forever.
 """
 
 from datetime import datetime

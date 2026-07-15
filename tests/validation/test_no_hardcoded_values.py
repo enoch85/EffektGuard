@@ -1,44 +1,17 @@
 """Enforce the constants-only rule: no NEW hardcoded numeric values in production code.
 
-The rule (.github/copilot-instructions.md, rules 3 and 4) is the repository's most-emphasised
-convention: every numeric threshold, tunable, physical constant, interval and safety limit
-belongs in const.py, documented and reused.
+The rule (.github/copilot-instructions.md, rules 3 and 4) puts every numeric threshold, tunable,
+physical constant, interval and safety limit in const.py, documented and reused. A hardcoded
+`weight >= 0.85` gate once stopped matching DM_CRITICAL_T2_WEIGHT after that constant was retuned
+to 0.81, letting a cost layer override thermal-debt recovery: the constant moved, the magic number
+did not.
 
-It is also the rule whose breach has done the most damage. A hardcoded `weight >= 0.85` gate
-in the decision engine silently stopped matching DM_CRITICAL_T2_WEIGHT once that constant was
-retuned to 0.81 - which let a cost layer override thermal-debt recovery and command a heat
-REDUCTION at deep thermal debt. The constant moved; the magic number did not.
-
-WHY THIS FILE WAS REWRITTEN
----------------------------
-The previous version enforced nothing at all. Both checks began with a bare `return`:
-
-    def test_no_hardcoded_values_in_production():
-        return  # Disabled - too many violations (1,196+), use on-demand script
-        root_dir = Path("/workspaces/EffektGuard")     # unreachable, and the wrong path
-
-Three compounding failures: the `return` made them no-ops that reported PASSED; the path
-(`/workspaces/EffektGuard`) does not exist (the repo is at `/workspace`), so even without the
-`return` they would have SKIPPED; and the two scripts they deferred to
-(`scripts/check_hardcoded_values.py`, `scripts/check_duplicate_constants.py`) did not exist.
-The rule was enforced by nothing, anywhere, while reporting 3/3 green.
-
-The root cause of the "1,196 violations" was the detector, not the code: a regex that flagged
-EVERY numeric literal, including array indices, loop bounds and `/ 60`. It was unusable, so it
-was switched off.
-
-THE APPROACH: A RATCHET
------------------------
-`scripts/check_hardcoded_values.py` is AST-based and high-signal (504 real hits, and it does
-catch every magic number the audit proved harmful). 504 is still too many to fix in one go, so
-this is a ratchet rather than a gate:
+`scripts/check_hardcoded_values.py` is AST-based and high-signal, but there are still too many
+existing hits to fix in one go, so this is a RATCHET, not a gate:
 
   - `tests/validation/hardcoded_values_baseline.json` records the accepted count PER FILE.
-  - Adding a magic number to any file makes that file exceed its baseline -> the test FAILS.
+  - Adding a magic number to any file exceeds its baseline -> the test FAILS.
   - Removing magic numbers is always allowed; lower the baseline when you do.
-
-This stops the debt growing while it is paid down, which is the only way a rule with 500
-existing violations ever becomes enforceable again.
 
 To regenerate the baseline deliberately (e.g. after moving values into const.py):
     python scripts/check_hardcoded_values.py --baseline

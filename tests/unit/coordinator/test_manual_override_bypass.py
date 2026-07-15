@@ -1,11 +1,8 @@
 """Manual force_offset commands must bypass the volatile-reversal blocker.
 
-Live-reproduced regression risk: after a +4°C offset, a user-commanded
-effektguard.force_offset with offset 0 was accepted by the service and the
-decision engine, but the coordinator's volatility blocker deferred it as a
-volatile reversal and kept the previous +4°C for 45 minutes. User commands
-are authoritative and must apply immediately; the blocker still applies to
-automatic decisions.
+After a +4°C offset, a user-commanded force_offset(0) must apply immediately: the volatility
+blocker previously deferred it as a volatile reversal and kept +4°C for 45 minutes. User commands
+are authoritative; the blocker still applies to automatic decisions.
 """
 
 from __future__ import annotations

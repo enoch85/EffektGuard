@@ -1,38 +1,13 @@
-"""`mW` and `MW` differ only in case, and one of them is a billion times the other.
+"""`mW` and `MW` differ only in case, and one is 10^9 times the other, so the unit must NOT be folded.
 
-`power_kw_from_state` case-folded the unit before looking it up. Home Assistant ships BOTH
-`UnitOfPower.MILLIWATT` ("mW") and `UnitOfPower.MEGA_WATT` ("MW"), so `.lower()` collapsed them onto
-the same key - and the table mapped that key to MEGAWATTS.
+HA ships both `UnitOfPower.MILLIWATT` ("mW") and `UnitOfPower.MEGA_WATT` ("MW"); case-folding
+collapses them, and the table mapped that key to MEGAWATTS - so a 5000 mW (5 W) sensor read as
+5 000 000 kW, persisted as the month's tariff peak. That does not throttle the house: every real
+quarter then looks safe against the astronomical threshold, so peak protection is silently disabled
+until the month rolls over. `power_kw_from_state` keys the table case-SENSITIVELY, and a second line
+of defence (TestTheSecondLineOfDefence) refuses any peak above what a domestic supply can deliver.
 
-A sensor reporting 5000 mW (five watts) was therefore read as 5 000 000 kW. That number is
-classified billable, recorded as a quarter-hour mean, and persisted as the month's tariff peak.
-
-AND THE CONSEQUENCE IS THE OPPOSITE OF THE OBVIOUS ONE. I first wrote - in the commit message, the
-code comment and this docstring - that it "pins the effect layer to CRITICAL, throttling heat in
-January to protect a peak that never happened". That is wrong, and I never tested it. Driving the
-real EffectManager:
-
-    recorded peak: 5,000,000 kW
-    house draws a perfectly normal 6 kW in a January cold snap
-      -> severity OK, should_limit False, "Safe margin: 4999994.00 kW below peak"
-
-Every real quarter looks safe against an astronomical threshold, so PEAK PROTECTION IS SILENTLY
-DISABLED FOR THE REST OF THE MONTH - and the owner blows the actual tariff peak the feature exists
-to prevent. The effect tariff bills the top three quarters of the month, so it stands for weeks.
-
-The bug is the same size. The failure mode is the opposite one, and asserting a mechanism I had not
-executed is how the wrong one got written down three times.
-
-The unit table is fixed. A number that is persisted for a month and silently governs whether the
-house is throttled also gets a plausibility bound now - see TestTheSecondLineOfDefence, and note
-what the first version of that class did wrong.
-
-The module's own docstring says "There is no defensible default... An unrecognised unit is refused."
-It then silently guessed on the single genuinely ambiguous case in Home Assistant's whole unit enum.
-
-These tests derive the ambiguity from `UnitOfPower` itself rather than hardcoding "mW"/"MW", so if
-Home Assistant ever adds another case-colliding pair they fail here instead of in someone's January
-electricity bill.
+The ambiguity is derived from `UnitOfPower` itself, so a future case-colliding pair fails here.
 """
 
 from __future__ import annotations
@@ -104,19 +79,9 @@ def test_every_power_unit_converts_to_the_same_kilowatts(value, unit, expected_k
 
 
 class TestTheSecondLineOfDefence:
-    """A number that governs a month of billing decisions gets a plausibility bound of its own.
-
-    THE FIRST VERSION OF THIS CLASS PINNED THE BUG AS AN INVARIANT. It asserted that an
-    astronomical recorded peak leaves `should_limit_power` at severity OK - which is TRUE, and is
-    precisely the damage, and is not a property anybody should be defending. It also could not fail
-    on the code it was named for: it reconstructed the mis-scaled number itself (`* 1e9`), so the
-    unit table could be re-broken underneath it and it would still pass. A test that locks in the
-    defect and cannot detect its own subject is worse than no test.
-
-    What the codebase actually wanted is the symmetric partner of a guard it already had. Peaks
-    below PEAK_RECORDING_MINIMUM are refused as standby noise. Peaks above what a domestic supply
-    can physically deliver are refused for the same reason, and the unit bug would have been
-    contained by it even before the table was fixed.
+    """A number persisted for a month gets a plausibility CEILING, the symmetric partner of the
+    PEAK_RECORDING_MINIMUM floor. Peaks above what a domestic supply can deliver are refused, so a
+    mis-scaled unit is contained even before the table is fixed.
     """
 
     @pytest.mark.asyncio

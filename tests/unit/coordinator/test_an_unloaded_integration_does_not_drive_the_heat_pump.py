@@ -1,50 +1,13 @@
-"""The integration was unloaded, and then it wrote one more offset to the heat pump.
+"""A coordinator whose entry has unloaded must not write to the heat pump.
 
-The coordinator knows this task cannot be cancelled. It says so, in its own comment:
+`_do_aligned_refresh` runs on `hass.async_create_task`, so HA cannot cancel it on unload, and it
+is mid-flight for seconds while `_read_and_decide` awaits the weather forecast, the price adapter
+and the learning modules. `_shutdown_requested` guarded the timer RE-ARM but not the WRITE, so an
+in-flight refresh drove the pump after unload. The entry unloads on the reconfigure flow, a manual
+reload, a removal or a restart (NOT on an options change, which hot-reloads) - and this stray write
+can land after the reload's new coordinator, or be a deleted integration getting the last word.
 
-    # `_shutdown_requested` is what stops an in-flight refresh from RESURRECTING this
-    # coordinator. `_do_aligned_refresh` runs on a task created with
-    # hass.async_create_task (NOT entry.async_create_task), so HA cannot cancel it on
-    # unload. Its `finally` block calls _schedule_aligned_refresh() - which, without
-    # this flag, would re-arm a timer on a DEAD coordinator ...
-
-That reasoning is right, and the guard it describes works: the dead coordinator does not re-arm
-its timer. But it guards the RE-ARM and not the WRITE, and those are different things.
-
-`_shutdown_requested` appears in exactly two places: `_schedule_aligned_refresh`, which refuses to
-re-arm, and `async_shutdown`, which sets it. Nothing consults it before `set_curve_offset()`.
-
-So an aligned refresh that is mid-flight when the entry unloads carries on to the end and drives the
-pump. And it is mid-flight for a long time: `_read_and_decide` awaits the weather forecast (a service
-call to another integration, over the network), the price adapter, and the learning modules. Driving
-the real coordinator through the real race:
-
-    unloaded. _shutdown_requested = True
-    PUMP WRITES AFTER UNLOAD: 1
-       set_curve_offset (2.0,)
-
-WHAT THAT COSTS, and the reload case is the one that bites:
-
-  * REMOVING the integration ends with it commanding the heat pump one last time. The user deleted
-    it. It should stop touching the pump, and instead it gets the last word.
-
-  * The RECONFIGURE flow - swapping the power meter, the weather entity or the pump model - ends in
-    `async_update_reload_and_abort`, a FULL reload: the old entry unloads and a new one is set up.
-    The old coordinator's write can land AFTER the new one's, so the pump is left holding a decision
-    computed by a coordinator built on the entities the user has just replaced.
-
-    (An earlier version of this docstring said "which is what Home Assistant does every time an
-    OPTION IS CHANGED". That is FALSE, and I wrote it four times without executing it: this
-    integration's update listener HOT-RELOADS, and an options change leaves the entry loaded. What
-    unloads it is the reconfigure flow, a manual reload, a removal, or a restart - each of which a
-    real user does. See tests/unit/test_which_things_actually_unload_the_entry.py, which measures
-    both.)
-
-The integration's stated invariant is that the control loop is the sole owner of the write path -
-"Writes belong to the control loop, and the control loop is `_do_aligned_refresh`: one writer at a
-time". A coordinator that has been shut down is not a writer at all.
-
-There is now one place the pump is written from, and it refuses once the entry is gone.
+The write path now has one guarded door per actuator, and each refuses once the entry is gone.
 """
 
 from __future__ import annotations
@@ -188,14 +151,10 @@ async def test_switching_optimization_off_forces_neutral_through_cooldown():
 async def test_an_unloaded_coordinator_does_not_command_the_fan_either():
     """The heating curve is not the only thing this integration writes to the pump.
 
-    `set_enhanced_ventilation` raises the exhaust fan on an F750/F730, and it is written from the
-    control loop (`_apply_airflow_decision`, reached from `_read_and_decide`) - so it rides the exact
-    same in-flight refresh, and the exact same race. I found it while re-auditing the curve-offset
-    fix, which had quietly assumed the curve was the only way out.
-
-    On a reload it is worse than a stray write: the old coordinator can switch enhanced ventilation
-    ON while the new one starts up believing it is off, and the fan is then left running by a
-    coordinator that no longer exists to turn it off again.
+    `set_enhanced_ventilation` raises the exhaust fan on an F750/F730 from the control loop, so it
+    rides the same in-flight refresh and the same race. On a reload the old coordinator can switch
+    the fan ON while the new one starts up believing it is off, leaving it running with nothing left
+    to turn it off.
     """
     coordinator = _coordinator()
     coordinator.nibe.set_enhanced_ventilation = AsyncMock(return_value=True)
@@ -213,14 +172,10 @@ async def test_an_unloaded_coordinator_does_not_command_the_fan_either():
 def test_there_is_exactly_one_door_to_each_thing_the_pump_can_be_told():
     """A structural guard, and it is the one that keeps the others honest.
 
-    The tests above prove the guarded doors refuse a dead coordinator. They cannot prove somebody has
-    not cut a NEW door beside them - and that is exactly how the ventilation write came to sit outside
-    the first version of this guard, unnoticed, while I was congratulating myself on the offset one.
-
-    So: every `self.nibe.set_*` call in the coordinator must live inside a `_write_*` method, and
-    those are the only places that ask whether the entry is still loaded. A new way to command the
-    pump either routes through one of them and inherits the guard, or changes this test deliberately,
-    in a diff someone reviews.
+    The tests above prove the guarded doors refuse a dead coordinator; they cannot prove nobody has
+    cut a NEW door beside them. So: every `self.nibe.set_*` call in the coordinator must live inside
+    a `_write_*` method - the only places that ask whether the entry is still loaded. A new way to
+    command the pump either routes through one of them or changes this test in a reviewed diff.
     """
     source = pathlib.Path("custom_components/effektguard/coordinator.py").read_text()
     tree = ast.parse(source)

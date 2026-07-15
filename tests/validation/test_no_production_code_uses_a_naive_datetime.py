@@ -7,16 +7,6 @@ Mix the two and Python does not quietly do the wrong thing - it refuses:
 And if it did not refuse, it would be worse: the box runs UTC while `datetime.now()` returns local
 time, so every interval would be wrong by the UTC offset - two hours in a Swedish summer.
 
-Two of these were in production:
-
-  * `thermal_layer.py` used `getattr(nibe_state, "timestamp", datetime.now())` as the timestamp fed
-    to the ANTI-WINDUP causation window. Every NibeState the adapter builds carries an aware
-    timestamp, so the fallback did not fire - but it is a naive datetime sitting in the emergency
-    layer, which is the one path that must never raise, waiting for the first duck-typed caller.
-    (It was also evaluated eagerly on every call, whether needed or not.)
-
-  * `airflow_optimizer.py` stamped every FlowDecision with `datetime.now()`.
-
 A grep is the right shape of test here: the rule is categorical, it costs nothing to hold, and the
 next naive datetime someone adds will be in a file nobody has thought about.
 """

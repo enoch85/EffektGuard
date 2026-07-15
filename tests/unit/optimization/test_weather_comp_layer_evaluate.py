@@ -102,21 +102,10 @@ class TestWeatherCompensationLayerEvaluate:
         assert result.reason == "Disabled"
 
     def test_no_weather_data_still_runs_the_emitter_law(self):
-        """THESE TWO TESTS USED TO ASSERT THE BUG.
+        """Math WC is the EN 442 emitter law over the pump's own outdoor and flow sensors.
 
-        They were called `test_no_weather_data_returns_zero` and `test_empty_forecast_returns_zero`,
-        and they pinned `offset == 0.0, weight == 0.0, reason == "No weather data"` as the contract.
-
-        It is not a contract, it is a defect. Math WC is the EN 442 emitter law over the pump's own
-        outdoor and flow sensors; it has never read the forecast. And the weather entity is
-        `vol.Optional` in the config flow - so this "contract" meant that leaving one dropdown blank
-        silently switched off the layer that votes on 100% of cycles, with nothing said anywhere.
-
-        In the simulator, on the air-source F2040 over 90 days of real SE4 prices, that was 296
-        dm_runaway / indoor_above_ceiling violations, 1265 minutes above the comfort ceiling, and
-        13x more immersion heat at COP 1.0 than the compressor's capacity deficit forced.
-
-        A test that codifies the bug is how the bug survives review. Both now assert the fix.
+        It has never read the forecast, so a missing weather entity (vol.Optional in the config
+        flow) must not switch it off - it needs the outdoor temperature, not a forecast.
         """
         layer = self._create_layer()
         nibe_state = MockNibeState(outdoor_temp=-5.0, flow_temp=25.0)

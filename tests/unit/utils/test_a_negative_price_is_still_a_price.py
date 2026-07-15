@@ -1,29 +1,12 @@
-"""Nordic spot prices go to zero and below, and the DHW optimizer's arithmetic broke on both.
+"""`price_savings_fraction` must handle Nordic prices at zero and below.
 
-Exactly-zero quarters occur roughly a hundred hours a year per SE bidding zone, and negative
-prices - where the grid PAYS you to take the power - are routine on windy days.
-
-The DHW optimizer decides whether to heat hot water NOW or defer to a cheaper window. It did that
-with:
-
-    if current_quarter_price and optimal_window.avg_price < current_quarter_price:
-        price_savings_pct = (current - optimal) / current
-
-**TRUTHINESS.** `if current_quarter_price` is False when the price is exactly 0.00, so the whole
-branch is skipped - and the water is heated now rather than deferred to a window where the grid
-would have paid for it.
-
-**A SIGNED DIVISOR.** Dividing by the price rather than its magnitude inverts the fraction whenever
-the current price is negative:
-
-    current -10 ore, window -60 ore  ->  (-10 - -60) / -10  =  -5.00
-    current -50 ore, window -60 ore  ->  (-50 - -60) / -50  =  -0.20
-
-Both windows are genuinely cheaper - the grid pays MORE in them - and both come out negative, fail
-the "at least 15 % cheaper" test, and are declined.
-
-AND THE FILE HAD TWO OF THESE COMPARISONS. One of them had already been fixed, comment and all, and
-the other had not - because the logic was COPIED rather than shared. Both now call one function.
+The DHW optimizer decides whether to heat now or defer to a cheaper window, and the old arithmetic
+broke on both edge cases: `if current_quarter_price` is False at exactly 0.00 (a real price, ~100
+hours/year per SE zone), skipping the whole branch; and dividing by the SIGNED price inverts the
+fraction when the current price is negative, so a genuinely cheaper (deeper-negative) window comes
+out negative and is declined. The fix divides by the MAGNITUDE, returns 1.0 when current is zero and
+a cheaper window exists, and returns None (not 0) when there is no current price - shared by both
+call sites that had drifted apart.
 """
 
 from __future__ import annotations

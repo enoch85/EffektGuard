@@ -1,37 +1,13 @@
-"""Zone 5 is a rung with no step: its band is the empty set, and it has never once fired.
+"""Every rung of the proactive ladder (Z1-Z5) must be reachable by some degree-minute value.
 
-The proactive ladder is meant to escalate gently before the critical tiers take over:
+Zone 5's band is `warning < DM <= zone5_threshold`, and `zone5_threshold` is
+`normal_max * PROACTIVE_ZONE5_THRESHOLD_PERCENT`. When that percent was 1.00, zone5_threshold equalled
+normal_max - and every climate zone also sets its warning threshold to normal_max - so both ends of
+the band were the same number and Z5 could never fire. It is now 0.875, strictly below the warning
+threshold, restoring the +3.0 rung.
 
-    Z1 +1.0   Z2 +1.5   Z3 +2.0   Z4 +2.5   Z5 +3.0   then T1 +4.0, T2 +7.0, T3 +8.5, EMERGENCY +10.0
-
-Z5's constant even says what it is for: *"Very strong prevention (bridging to WARNING)"*. It is the
-last gentle rung, the one that bridges Z4 to the first critical tier.
-
-It cannot fire. Its band is:
-
-    if expected_dm["warning"] < degree_minutes <= zone5_threshold:
-
-and `zone5_threshold` is `expected_dm["normal"] * PROACTIVE_ZONE5_THRESHOLD_PERCENT` with the percent
-set to **1.00** - so `zone5_threshold` is exactly `normal_max`. Meanwhile every climate zone in the
-table sets `dm_warning_threshold` to exactly the deep end of `dm_normal_range`:
-
-    "dm_normal_range": (-450, -700),
-    "dm_warning_threshold": -700,          # <- the same number
-
-So `warning == normal_max == zone5_threshold`, and the condition reads `-740 < DM <= -740`. **The
-empty set.** Both ends of the band are the same number, and the same temperature adjustment is added
-to both, so they move together and can never separate.
-
-The ladder therefore steps 2.5 -> 4.0 where it was designed to step 2.5 -> 3.0 -> 4.0. In effective
-pull (offset x weight) that is 1.38 -> 2.60, a near doubling, at exactly the moment the house is
-leaving its normal range and a gentle nudge is what is called for.
-
-This is not a regression. It is identical on `main`: Z5 has never fired, in any release, in any
-climate zone.
-
-The tests below check the INVARIANT, not the instance. A ladder whose rungs are computed from two
-thresholds that happen to be equal is one edit away from losing another rung silently, so every zone
-is swept across the whole DM range and required to appear.
+Two thresholds coinciding deletes a rung silently, so every zone is swept across the whole DM range
+and required to expose all five rungs, plus a monotone-escalation check across both layers.
 """
 
 from __future__ import annotations
@@ -119,11 +95,9 @@ def test_the_whole_proactive_ladder_is_reachable(latitude, outdoor):
 def test_the_ladder_escalates_monotonically(latitude):
     """A ladder that goes DOWN a rung as the house gets colder is not a ladder.
 
-    The ladder spans TWO layers. The proactive one prevents (Z1-Z5, before the warning threshold);
-    the emergency one recovers (T1-T3, after it). At the handover the proactive layer correctly
-    stands down to zero - so asking either layer alone to be monotonic is asking the wrong question,
-    and it is the question an earlier draft of this test asked. What must never weaken as the house
-    falls further into debt is the strongest thing the system ASKS FOR, across both.
+    The ladder spans two layers (proactive Z1-Z5, then emergency T1-T3), and the proactive layer
+    correctly stands down to zero at the handover. So the invariant is on the strongest boost EITHER
+    layer asks for: it must never weaken as the house falls further into debt.
     """
     proactive = ProactiveLayer(ClimateZoneDetector(latitude=latitude), heating_type="radiator")
     emergency = EmergencyLayer(ClimateZoneDetector(latitude=latitude), heating_type="radiator")

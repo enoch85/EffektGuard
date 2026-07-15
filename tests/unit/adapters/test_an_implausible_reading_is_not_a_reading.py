@@ -1,34 +1,13 @@
-"""NIBE's Modbus registers hold DECI-degrees. Omit `scale: 0.1` and BT50 reads 213 C.
+"""An implausible temperature reading is not a reading - _plausible must return None.
 
-`get_current_state` already states the principle, about a MISSING sensor:
-
-    Never substitute a plausible constant for a missing one: that makes a broken installation
-    indistinguishable from a healthy one and still writes a curve offset to the pump.
-
-A value that cannot be a temperature is the same thing wearing a number. And the mechanism is
-mundane, not exotic - the repo's OWN Modbus simulator documents the register:
-
-    40033 BT50 room temp        213   (21.3 C)
-
-A hand-written Modbus YAML that omits `scale: 0.1` reports that as 213.0 C.
-
-THE ADAPTER HAD A PLAUSIBILITY BAND AND APPLIED IT TO THE WRONG SENSORS. It checked the ADDITIONAL
-room sensors the user adds - arbitrary entities, so the caution is fair - and did NOT check the one
-the HEAT PUMP sends, which is the only one exposed to a scaling typo in the first place.
-
-At 213.0 C indoor:
-
-    comfort layer -> offset -10.00 at weight 1.00, "Overshoot: 192.0 C above target"
-
-Maximum heat reduction, at critical weight, in a Swedish January, forever. And the 18 C safety
-floor never fires either, because the safety layer is reading the same 213 C.
-
-AND THE PLACEHOLDER WAS BEING SEEDED INTO THE MEDIAN. `_calculate_multi_sensor_temperature`'s own
-docstring forbids it in as many words - "A placeholder must NEVER be passed here - seeding the
-median with DEFAULT_INDOOR_TEMP would drag the combined reading toward the target and mask a real
-deviation" - and it was being passed anyway. On a sensorless NIBE with one added sensor reading
-17.0 C in a house targeting 21.0, the median of [21.0, 17.0] is 19.0: a two-degree mask on a cold
-house, biased toward the target.
+NIBE's Modbus registers hold deci-degrees, so a hand-written YAML that omits `scale: 0.1`
+reports BT50's 21.3 C as 213.0 C, BT1's -3.2 as -32.0, BT2's 35.8 as 358.0. The
+plausibility band must cover the sensor the HEAT PUMP sends (BT50), not only the
+user-added room sensors originally checked. An implausible required sensor (outdoor,
+supply) raises UpdateFailed; an implausible BT50 degrades to "no room sensor" (comfort
+layers abstain, 18 C floor unaffected). The placeholder must never seed the multi-sensor
+median - DEFAULT_INDOOR_TEMP would drag a cold house toward the target and mask the
+deviation, which _calculate_multi_sensor_temperature's own docstring forbids.
 """
 
 from __future__ import annotations
@@ -49,14 +28,6 @@ from custom_components.effektguard.const import (
     NIBE_WATER_PLAUSIBLE_MAX,
     NIBE_WATER_PLAUSIBLE_MIN,
 )
-
-# The registers, as the repo's own Modbus simulator documents them, and what a missing
-# `scale: 0.1` turns each of them into.
-DECI_SCALING_TYPO = {
-    "BT50 room temp (register 40033)": (213, 21.3, 213.0),
-    "BT1 outdoor temp (register 40004)": (-32, -3.2, -32.0),
-    "BT2 supply temp (register 40008)": (358, 35.8, 358.0),
-}
 
 
 def _adapter(states: dict[str, str]) -> NibeAdapter:
@@ -90,13 +61,6 @@ HEALTHY = {
     "sensor.bt50": "21.3",
     "sensor.dm": "-150",
 }
-
-
-def test_the_deci_degree_trap_is_real_and_this_is_what_it_looks_like():
-    """The premise, spelled out, so nobody argues the scenario is contrived."""
-    for name, (register, correct, unscaled) in DECI_SCALING_TYPO.items():
-        assert register / 10.0 == pytest.approx(correct), f"{name}: check the fixture"
-        assert unscaled == pytest.approx(float(register)), f"{name}: check the fixture"
 
 
 class TestTheRoomSensorTheHeatPumpSends:

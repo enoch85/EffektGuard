@@ -1,13 +1,7 @@
-"""Tests for thermal mass-aware DM threshold adjustments.
+"""Thermal-mass-aware DM thresholds: slow houses warn sooner, critical stays at -1500.
 
-Validates that high thermal mass systems (concrete slab UFH) get tighter DM thresholds
-to prevent v0.1.0 solar gain overshoot problem.
-
-Test Categories:
-1. Multiplier application (concrete 1.3×, timber 1.15×, radiator 1.0×)
-2. Critical threshold preservation (always -1500)
-3. Real-world scenario prevention (v0.1.0 failure mode)
-4. Climate zone integration (thermal mass × climate awareness)
+Degree minutes are negative, so the buffer DIVIDES (concrete 1.3x, timber 1.15x, radiator 1.0x);
+a shallower threshold is reached earlier. Guards the v0.1.0 solar-gain overshoot on concrete slab.
 """
 
 import pytest
@@ -38,7 +32,7 @@ class TestThermalMassMultipliers:
         """
         layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
 
-        # Stockholm at 10°C: base warning ~-276
+        # Stockholm at 10°C: base warning ~-340
         base_thresholds = climate_detector.get_expected_dm_range(outdoor_temp=10.0)
         base_warning = base_thresholds["warning"]
 
@@ -146,27 +140,21 @@ class TestRealWorldScenarioPrevention:
 
         adjusted = layer._get_thermal_mass_adjusted_thresholds(base_thresholds)
 
-        # Adjusted warning should be around -442 (-340 * 1.3)
+        # Adjusted warning is around -262 (-340 / 1.3): reached sooner, not deeper
         # This means DM -700 is DEEP into warning/critical territory
 
-        assert adjusted["warning"] > -500  # Warning triggers before -500 (e.g. at -442)
+        assert adjusted["warning"] > -500  # Warning triggers before -500 (e.g. at -262)
 
         # If current DM is -700, it should be well past warning
         current_dm = -700
-        assert current_dm < adjusted["warning"]  # -700 < -442 (True)
+        assert current_dm < adjusted["warning"]  # -700 < -262 (True)
 
     def test_concrete_activates_t1_earlier_than_radiator(self, climate_detector):
         """Concrete slab must warn EARLIER (shallower DM) than a radiator system.
 
-        The name of this test was right and its body was not. It used to assert that concrete
-        gets a DEEPER threshold, and justified it by saying the slab "can absorb more energy
-        without immediate indoor temperature impact" - which is the argument for acting SOONER,
-        not later. Precisely because the debt does not show up indoors for six hours, a slab that
-        waits until a radiator system's threshold has already committed hours of deficit it cannot
-        take back. Heat put into concrete arrives in the room hours later; there is no catching up.
-
-        Degree minutes are negative, so a buffer above 1.0 must DIVIDE:
-        -540 / 1.3 = -415, which is reached sooner than -540.
+        The slab's debt does not reach the room for hours, so it must act before a radiator system.
+        Degree minutes are negative, so a buffer above 1.0 DIVIDES: -540 / 1.3 = -415, reached
+        sooner than -540.
         """
         concrete_layer = EmergencyLayer(climate_detector, heating_type="concrete_ufh")
         radiator_layer = EmergencyLayer(climate_detector, heating_type="radiator")

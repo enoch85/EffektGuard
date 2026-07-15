@@ -1,42 +1,11 @@
-"""Turning the thermostat OFF did not turn the optimiser off. It reads OFF while it drives the pump.
+"""Setting the thermostat to OFF must actually disable the optimiser, not just read OFF.
 
-The climate entity offers HVACMode.OFF and documents it as:
-
-    OFF: Optimization disabled (safety monitoring only)
-
-What it actually does:
-
-    async def async_set_hvac_mode(self, hvac_mode):
-        self._attr_hvac_mode = hvac_mode                       # a private copy
-        if hvac_mode == HVACMode.OFF:
-            await self.coordinator.set_optimization_enabled(False)
-
-and `set_optimization_enabled(False)` resets the curve offset to 0.0 once. That is all it does. It
-writes no flag anywhere.
-
-The coordinator's master gate reads something else entirely - the config entry:
-
-    if not self.entry.data.get("enable_optimization", True):
-        decision = OptimizationDecision(offset=0.0, reasoning="Optimization disabled by user", ...)
-
-Nothing sets that key except the `enable_optimization` SWITCH entity, which writes it into
-`entry.data` with `async_update_entry`. The thermostat never touches it. So:
-
-    user sets the thermostat to:               off
-    entry.data['enable_optimization'] =        True     <- the only thing the gate checks
-    next aligned refresh, five minutes later:  optimises, decides an offset, writes it to the pump
-
-The user turned the heating optimiser off, it went quiet for one cycle, and then it went back to
-driving their heat pump - with the thermostat still displaying OFF. And because the mode lived in a
-private attribute rather than in the entry, RestoreEntity dutifully restored the OFF display across a
-Home Assistant restart while the optimiser ran on, so the lie survived a reboot.
-
-The two controls could also simply disagree: switch off, thermostat HEAT. Two pieces of state for one
-fact, which is the failure this audit has now found in the billed quantity, in the DST hour, and in
-who started a hot-water boost.
-
-There is ONE piece of state now - `entry.data["enable_optimization"]` - and the thermostat is a view
-of it, not a second copy.
+The coordinator's master gate is `entry.data["enable_optimization"]`. Setting HVACMode.OFF must
+write that key (via `set_optimization_enabled`), or the optimiser goes quiet for one cycle and then
+resumes driving the pump while the thermostat still displays OFF. There is ONE piece of state -
+`entry.data["enable_optimization"]`, which the `enable_optimization` switch writes too - and the
+thermostat's `hvac_mode` is a VIEW of it, so the two controls cannot disagree and the mode survives a
+restart from the entry (no RestoreEntity shadowing it).
 """
 
 from __future__ import annotations

@@ -1,45 +1,13 @@
-"""Learning cannot engage on a real house, because it is asked to see through its own noise floor.
+"""Learning must be able to engage on a real house - and today it cannot, for two reasons.
 
-The indoor sensor (NIBE BT1) reports to 0.1 °C. The coordinator observes every 5 minutes. A house
-warming at a brisk 0.6 °C/h moves 0.05 °C between two observations - **half a sensor tick** - so every
-recorded rate is quantised to 0 °C/h or 1.2 °C/h, and nothing in between. The rate series is not a
-measurement of the building; it is a measurement of the sampling interval.
+Learning observes hourly (LEARNING_OBSERVATION_INTERVAL_MINUTES), not at the 5-minute control
+cadence: a 0.1 C sensor sampled every five minutes reports quantisation, not the house. The
+672-entry deque is therefore a 28-day memory. The window/cadence tests hold that.
 
-The window is the second half of it. `LEARNING_OBSERVATION_WINDOW = 672` is commented "1 week of
-15-minute observations", but the coordinator recorded every 5 minutes, so the deque spanned **56
-hours**. It is a rolling window, so day 90 saw exactly what day 3 saw. The README's "Day 8-14: high
-confidence, fully optimized" was unreachable by construction - there is no day 8 in a 56-hour memory.
-
-Sampling a building's thermal response every five minutes is measuring noise. A house has a time
-constant of hours; a concrete slab lags six. Hourly observation puts the signal above the sensor's
-resolution AND gives the same 672-entry deque a 28-day memory, which is the timescale the learning was
-always described in. That is what `LEARNING_OBSERVATION_INTERVAL_MINUTES` fixes, and the two tests
-below hold it.
-
-**IT IS NOT ENOUGH, AND AN EARLIER DRAFT OF THIS FILE CLAIMED IT WAS.** That draft carried a table
-promising 0.707 at 30 minutes and 0.811 at 60. Measured against the real learner, on three house types
-across five cadences, the answer is the same everywhere: **0.415, and it never engages.**
-
-`consistency = 1 - std/mean` is taken over EVERY heating observation, and a house sitting at
-equilibrium contributes a rate of exactly zero. Those zeros are averaged INTO the mean - 186 of 338
-samples on a wooden house at hourly cadence - so the mean is dragged below the 0.1 °C/h floor by the
-samples where the house was doing nothing, consistency pins to 0.0, and confidence caps at
-obs(0.4) + time(0.2) = **0.600** against a 0.7 gate. Forever, on any house. **The better the control,
-the stiller the house, the less it can be learned.**
-
-And it cannot be repaired by tuning. Filtering down to the samples that DO move scores the 5-minute
-cadence at a **perfect 1.000** - because at that cadence the only rates clearing the floor are exactly
-one sensor quantum, so they are all identical, std collapses to zero, and the quantisation artefact
-reads as certainty. That is the flatlined-sensor bug wearing a different hat. `std/mean` does not
-measure knowledge; it rewards data for being degenerate, and a dead sensor is the most degenerate data
-there is.
-
-Confidence has to be measured by what it claims to measure: PREDICTION ERROR against held-out
-observations. That is a redesign of a metric that gates the pre-heating layer at weight 0.65, so it is
-the owner's call, and it is recorded as a strict xfail below rather than quietly left green.
-
-Owner decision: *"Learning is one of the key stones here."* So it has to be able to learn - and the
-cadence was necessary, but it was not the thing standing in the way.
+Even so, learning never engages (F-132b, the strict xfail below): the confidence metric caps at
+0.600 on any real house, and - independently - the confidence gate reads a dict key that nothing
+writes, so it is False forever. The remaining tests hold that the pre-heat never sizes itself from
+the quarantined heat-loss index. Enabling learning is the owner's call.
 """
 
 from __future__ import annotations
@@ -176,11 +144,10 @@ def test_the_production_cadence_could_not_learn_this_same_house():
 
 
 def test_a_flatlined_sensor_still_teaches_us_nothing():
-    """The F-132 regression guard, and the reason the metric cannot simply be loosened.
+    """A dead indoor sensor - one value forever - must score below the gate.
 
-    A dead indoor sensor - one value, forever - used to score PERFECT consistency, because std/mean
-    reads zero scatter as certainty. It earned 0.867 confidence and engaged, while a house that was
-    genuinely heating scored 0.467 and did not. Whatever replaces the metric must keep this at zero.
+    std/mean reads zero scatter as certainty, so a flat line could earn perfect consistency.
+    Whatever replaces the confidence metric must keep this case at zero.
     """
     model = AdaptiveThermalModel(initial_thermal_mass=1.0)
     start = datetime(2026, 1, 1, 0, 0)
@@ -205,16 +172,11 @@ def test_a_flatlined_sensor_still_teaches_us_nothing():
 
 
 def test_the_heat_loss_coefficient_is_never_used_as_a_control_input():
-    """It is quarantined at the source, and it must stay that way.
+    """The learned heat-loss coefficient is a relative index, not W/K, and must never reach control.
 
-    `_calculate_heat_loss_coefficient` says so itself: indoor temperature decay ALONE cannot yield a
-    W/K coefficient - that needs thermal capacitance or measured heat input, and neither is available.
-    The `* 3600 * 50` in it is, in its own words, "a heuristic mapping into a plausible-looking
-    100-300 range, nothing more". It comes out clamped at 300.0 on the houses above: a ceiling, not a
-    measurement.
-
-    The decision engine takes heat_loss_coefficient from the user's configuration. This test exists so
-    that stays true - the number LOOKS like physics, and that is exactly what makes it dangerous.
+    `_calculate_heat_loss_coefficient` cannot yield a physical W/K value from decay alone; it
+    lands clamped in a plausible 100-300 range. The decision engine takes the coefficient from
+    configuration instead, and this test holds that the learned index stays out of the source.
     """
     source = inspect.getsource(decision_engine)
 
@@ -234,34 +196,14 @@ def test_the_heat_loss_coefficient_is_never_used_as_a_control_input():
 
 
 class TestTwoDefectsWereCancellingEachOther:
-    """The xfail above blames the confidence metric. That is ONE of two reasons learning is dead.
+    """A second, independent reason learning is inert - and the trap disarming it revealed.
 
-    THE SECOND: `should_use_learned_parameters()` reads `learned_parameters["confidence"]`, and
-    `update_learned_parameters()` returns the confidence on a dataclass and NEVER stores it in that
-    dict. The only production writer of `learned_parameters` is the `insulation_quality` setter,
-    and it writes one key: `heat_loss_coefficient`. So the gate returns False forever, however well
-    the model learns and whatever the owner does to the confidence metric.
-
-    AND THE DEAD GATE WAS THE ONLY THING KEEPING THE CODE SAFE. `calculate_preheating_target` had:
-
-        if params and self.should_use_learned_parameters():
-            heat_loss_coef = params.heat_loss_coefficient      # a RELATIVE, DIMENSIONLESS INDEX
-        else:
-            heat_loss_coef = 180.0  # W/°C typical house       # a PHYSICAL COEFFICIENT
-        heat_loss_rate = (heat_loss_coef / 1000.0) * decay_rate * temp_diff / 10
-
-    Two different UNITS on the two branches of one variable, divided by 1000 as if it were watts.
-    And `_calculate_heat_loss_coefficient`'s own docstring forbids exactly this:
-
-        "It MUST NOT be used as an absolute W/°C coefficient anywhere in the control path"
-
-    So repairing the gate - which looks like an obvious one-line bug - would have silently armed a
-    unit error in the pre-heat path. Two defects cancelling is not a working system; it is a trap
-    for whoever fixes the first one.
-
-    The trap is disarmed: the coefficient comes from configuration, never from learning, exactly as
-    the estimator instructs. ENABLING learning is still F-132b and still the owner's call. Making
-    it safe to enable was not.
+    The gate `should_use_learned_parameters()` reads `learned_parameters["confidence"]`, a key
+    only the `insulation_quality` setter ever writes (and it writes `heat_loss_coefficient`, not
+    confidence), so the gate is False forever. That dead gate once masked a unit error:
+    `calculate_preheating_target` would have fed the learned relative index into
+    `heat_loss_coef / 1000.0` as if it were W/K. Production now always uses the configured
+    coefficient; these two tests hold the gate closed and the pre-heat off the learned index.
     """
 
     def test_the_gate_can_never_open_however_much_the_model_learns(self):
@@ -284,18 +226,11 @@ class TestTwoDefectsWereCancellingEachOther:
         )
 
     def test_the_preheat_never_sizes_itself_with_the_quarantined_index(self):
-        """The trap, disarmed. The control path must not touch the learned coefficient at all.
+        """The control path must not touch the learned coefficient at all.
 
-        The estimator's own docstring says its value is a relative cooling index and must never be
-        used as W/°C in the control path. So the pre-heat must size identically whether that index
-        reads 180 or 3000 - because production does not read it.
-
-        The decay rate is pinned to a realistic POSITIVE value here. Left to itself the model
-        learns a decay of -0.10 (it believes the house warms as it cools, which is its own
-        symptom of F-132b), and a negative decay zeroes the deficit for any coefficient at all -
-        so the first version of this test compared 21.0 against 21.0 and passed against a plant
-        with the trap fully re-armed. A test has to be in a regime where the thing it guards could
-        actually move the answer.
+        The pre-heat must size identically whether the learned index reads 180 or 3000, because
+        production takes the coefficient from configuration. Decay is pinned to a positive value
+        so the deficit is non-zero and a re-armed trap could actually move the answer.
         """
         model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
         model.learned_parameters = {"confidence": 1.0}  # force the gate wide open

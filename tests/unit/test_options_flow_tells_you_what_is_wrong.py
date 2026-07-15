@@ -1,20 +1,9 @@
-"""A helpful error message, computed and then thrown away.
+"""The options flow must surface its own validation message, not throw it away.
 
-`_validate_and_convert_dhw_config` raises `vol.Invalid` with a message that says exactly what the
-user got wrong:
-
-    DHW target temperature must be between 45.0-60.0°C
-
-`async_step_init` calls it without catching anything. An exception escaping a config-flow step is
-not shown to the user - Home Assistant catches it, logs a traceback, and renders the generic
-**"Unknown error occurred"**. So the sentence above is written, and never read. The user is told
-that something failed, not what, and their input is gone.
-
-Home Assistant's own pattern is to collect the problem into an `errors` dict and re-show the form
-with the message attached to the field. That is what the config flow already does elsewhere in this
-integration; the options flow does not.
-
-Nothing here reaches the heat pump. It reaches the person trying to configure one.
+`_validate_and_convert_dhw_config` raises `vol.Invalid` with a message naming the field and its
+permitted range. `async_step_init` must catch it and re-show the form with the message in an
+`errors` dict - an exception left to escape a config-flow step renders as HA's generic "Unknown
+error occurred", so the user is told that something failed but not what, and their input is gone.
 """
 
 from __future__ import annotations

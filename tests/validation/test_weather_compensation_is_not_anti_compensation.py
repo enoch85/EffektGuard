@@ -1,57 +1,23 @@
 """Weather compensation must ask for a flow temperature that can actually heat the house.
 
-The "Math WC" layer is enabled on every installation - `decision_engine.py` reads
-`config.get("enable_weather_compensation", True)`, and `CONF_ENABLE_WEATHER_COMPENSATION` is
-defined in const.py but read nowhere, so no config-flow option can switch it off.
+The "Math WC" layer is enabled on every installation (decision_engine reads
+`config.get("enable_weather_compensation", True)`; no config-flow option switches it off). It can
+still take the early exit `if not weather_data or not weather_data.forecast_hours: weight=0.0`, so
+an installation with a blank weather entity runs with it silently disabled - see
+tests/unit/optimization/test_the_core_control_law_does_not_need_a_forecast.py.
 
-    AND THAT SENTENCE WAS FALSE WHEN IT WAS WRITTEN, which is worth leaving here as a warning.
-    No config-flow OPTION could switch the layer off, true - but `evaluate_layer` opened with
-    `if not weather_data or not weather_data.forecast_hours: return weight=0.0`, and the weather
-    entity is `vol.Optional`. So any installation that left that dropdown blank ran with Math WC
-    silently disabled, and this docstring said it couldn't happen. See
-    tests/unit/optimization/test_the_core_control_law_does_not_need_a_forecast.py. Checking that
-    a flag cannot be set is not the same as checking that the code cannot take the early exit.
+The test house is the standard Swedish low-temperature radiator design: 22 C indoor, 150 W/K, 50 C
+supply at the -15 C design outdoor. At -15 C the emitters MUST run at 50 C or the house cannot hold
+22 C - a matter of the emitter law, not opinion. The removed Kuehne model targeted far less (its
+curve rose only ~0.22 C of supply per -1 C outdoor where this house needs 0.76), cutting hardest
+exactly when the house needs heat most; and nothing downstream catches it, because lowering the
+offset lowers S1 and DM = integral(BT25 - S1), so degree minutes IMPROVE as the house cools (F-120).
 
-The test house is the standard Swedish low-temperature radiator design used throughout the
-simulator: 22 C indoor, 150 W/K heat loss, 50 C supply at the -15 C design outdoor
-temperature. That design point is what "correctly tuned" means here - at -15 C the emitters
-must run at 50 C or the house cannot hold 22 C, as a matter of the emitter law, not opinion.
-
-Measured against that, the Kuehne model (audit F-119/F-121) computes:
-
-    outdoor   supply the house needs   Kuehne's "optimal"   offset it commands
-      +10             31.1                    26.0                -2.71
-        0             38.6                    28.5                -6.09
-      -10             46.2                    30.7                -9.55
-      -15             50.0                    31.7               -11.06
-      -20             53.8                    32.7               -12.59
-
-Its curve rises only 0.22 C of supply per -1 C outdoor, where this house needs
-(50 - 22) / (22 - -15) = 0.76. So the gap widens as it gets colder and the layer cuts hardest
-exactly when the house needs heat most. At the design point it believes 31.7 C will do the
-work of 50 C.
-
-Nothing downstream catches it. Lowering the offset lowers S1, and DM = integral(BT25 - S1), so
-degree minutes IMPROVE as the house cools (audit F-120): the degree-minute safety net is
-structurally blind to under-heating that EffektGuard itself causes, and the only backstop is
-the 18 C floor. Over a 31-day simulation this drags mean indoor from 22.00 C (baseline) to
-21.33 C and holds the house below the comfort band for 92% of the month, buying a 0.4%
-improvement in the price paid per kWh.
-
-Kuehne has since been replaced by the EN 442 emitter law (utils/emitter.py). The layer now
-targets 50.00 C at the design point - exactly what the house needs, by construction - and its
-corrections are small positive trims (+1.13 C at -15 C) rather than deepening cuts.
-
-These tests assert properties that ANY correct weather-compensation model has, so they outlive
-the particular model that satisfies them today:
-
-  ADEQUACY  - at the design outdoor temperature the flow target must be able to heat the house.
-              The decisive one, and it needs no arbitrary threshold: it measures the model
-              against the house's own design point.
-  NO CUTS   - with the house on target and the curve already correct, the layer must not take
-              heat away. It is a trim, not a replacement curve.
-  BOUNDED   - the correction stays inside WEATHER_COMP_MAX_OFFSET in both directions, so a
-              mis-configured design point cannot become a large swing at the pump.
+These tests assert properties ANY correct model has, so they outlive the model that satisfies them:
+  ADEQUACY - at the design outdoor temperature the flow target must be able to heat the house.
+  NO CUTS  - with the house on target and the curve already correct, the layer must not take heat
+             away. It is a trim, not a replacement curve.
+  BOUNDED  - the correction stays inside WEATHER_COMP_MAX_OFFSET in both directions.
 """
 
 from datetime import datetime, timedelta

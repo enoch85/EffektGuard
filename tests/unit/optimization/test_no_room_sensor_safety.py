@@ -1,22 +1,14 @@
 """A system with no room sensor must still get thermal-debt protection.
 
-When no BT50 / room sensor exists, the adapter reports DEFAULT_INDOOR_TEMP (21.0) as a
-placeholder. That value happens to equal the usual target, so `temp_deviation` comes out
-as exactly 0.0 - and two gates in the emergency layer read that as "we are at target":
+With no BT50 the adapter reports DEFAULT_INDOOR_TEMP (21.0) as a placeholder. It equals the
+usual target, so `temp_deviation` is exactly 0.0 - which two gates in the emergency layer read
+as "at target": `temp_deviation > tolerance_range` is False, and `temp_deviation >= 0` is always
+True, returning weight 0.0 unless the price is cheap. That disabled the whole thermal-debt layer
+on exactly the sensorless systems that depend on degree minutes most. The safety layer had the
+mirror failure: it fires below MIN_TEMP_LIMIT (18.0), which the placeholder 21.0 sits above.
 
-    Case 1: `temp_deviation > tolerance_range`   -> False (fine)
-    Case 2: `temp_deviation >= 0`                -> TRUE, always
-
-Case 2 then returns weight 0.0 whenever the price is not cheap. Net effect: the ENTIRE
-thermal-debt layer was disabled on every sensorless system - precisely the systems that
-depend on degree minutes most, since they have no comfort signal to fall back on.
-
-The safety layer had the mirror-image failure: it fires below MIN_TEMP_LIMIT (18.0), and
-the placeholder 21.0 sits above it, so it could never trigger either.
-
-Correct behaviour: layers that reason about comfort ABSTAIN when the indoor reading is not
-a measurement, and the degree-minute tiers run normally. That is how NIBE itself operates
-without a room sensor.
+Correct behaviour: comfort-reasoning layers ABSTAIN when the indoor reading is not a
+measurement, and the degree-minute tiers run normally, as NIBE runs without a sensor.
 """
 
 from datetime import datetime
@@ -67,7 +59,7 @@ class TestEmergencyLayerStillProtectsSensorlessSystems:
         )
 
     def test_deep_thermal_debt_still_triggers_recovery_without_a_room_sensor(self):
-        """The F-052 hole: Case 2 saw deviation 0.0, called it "at target", and abstained."""
+        """Case 2 saw deviation 0.0, called it "at target", and abstained without a sensor."""
         decision = self._layer().evaluate_layer(
             nibe_state=sensorless_state(),
             weather_data=None,

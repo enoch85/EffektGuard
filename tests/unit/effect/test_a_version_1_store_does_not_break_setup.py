@@ -1,15 +1,10 @@
 """An upgrade must not break setup: version-1 peak records are migrated, not parsed.
 
-Main recorded 15-minute quarter peaks (``quarter_of_day``) in a version-1 store. This branch
-bills the HOURLY mean and its records carry ``period_of_day``, but the store still declared
-version 1 - so Home Assistant handed the old payload straight to ``PeakEvent.from_dict``,
-which raised ``KeyError: 'period_of_day'`` inside ``async_setup_entry``. Every existing
-installation failed setup on upgrade.
-
-A quarter-hour mean is not convertible to an hourly mean - they are different billed
-quantities - so migration DISCARDS the old records and the month's top-3 restarts from live
-measurement. Losing at most one month of partial peak history is recoverable; failing setup
-for every upgrading user is not.
+Version 1 recorded 15-minute quarter peaks (``quarter_of_day``). This branch bills the HOURLY mean
+(``period_of_day``), and the two are different billed quantities - so migration DISCARDS the old
+records and the month's top-3 restarts from live measurement. Parsing them instead raised
+``KeyError: 'period_of_day'`` in ``PeakEvent.from_dict`` inside ``async_setup_entry``, failing setup
+for every upgrading install. Losing at most a month of partial history is recoverable; that was not.
 """
 
 from unittest.mock import MagicMock

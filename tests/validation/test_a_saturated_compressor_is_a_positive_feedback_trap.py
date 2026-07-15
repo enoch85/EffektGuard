@@ -1,58 +1,22 @@
-"""KNOWN DEFECT, RECORDED NOT FIXED. F-124 is marked BLOCKED-ON-OWNER in the audit.
+"""KNOWN DEFECT, RECORDED NOT FIXED. F-124 is BLOCKED-ON-OWNER in the audit.
 
-`DM = integral(BT25 - S1)`. Raising the curve offset raises S1 - the setpoint - INSTANTLY, while
-BT25 (the water the pump actually makes) can only follow if the compressor has headroom left.
+`DM = integral(BT25 - S1)`. Raising the curve offset raises S1 instantly; BT25 - the water the
+pump actually makes - can only follow if the compressor has headroom. A SATURATED compressor has
+none, so raising the offset widens the gap, DM falls FASTER, the emergency layer sees them falling
+and raises the offset again: a positive feedback loop. The unit test below proves the mechanism -
+handed a pump at maximum flow, a house ABOVE target and DM at the integrator floor, the emergency
+layer still commands +10.
 
-When the compressor is SATURATED it has none. So raising the offset widens the gap it is measuring,
-degree minutes fall FASTER, the emergency layer sees them falling and raises the offset again. A
-positive feedback loop, and the owner named it before this simulation ever ran:
+On every machine that saturates, the optimiser buys MORE resistive heat than the capacity deficit
+forces (1.2-1.7x on datasheet-sized systems). It does NOT cook a correctly-sized house: the pump's
+own start addition arms the elpatron first (F750 -700, S-series -460, VVM 320 -760, see
+test_the_plant_engages_aux_where_the_pump_does.py) and holds the house, while the controller wastes
+money fighting a wall.
 
-    "if you keep raising the DM during stress, it will never be able to get itself out of that
-     spinning loop downwards, it will worsen."
-
-THE MECHANISM IS REAL AND THE UNIT TEST BELOW PROVES IT: handed a pump at maximum flow, a house
-ABOVE target and DM at the integrator floor, the emergency layer still commands +10.
-
-HOW MUCH IT COSTS WAS ONCE OVERSTATED, BY THIS FILE. Earlier versions here reported the house
-"cooked to ~30 C" and "2-5x the resistive heat" - measured on a plant whose immersion heater
-waited for EffektGuard's -1500 floor. No factory-default NIBE does that: the F750 arms its
-elpatron at DM -700 (menu 4.9.3), the S-series controllers near -460, the VVM 320 near -760,
-and the elpatron then works DM back UP. Re-measured with the pumps' own start-addition values
-(see test_the_plant_engages_aux_where_the_pump_does.py):
-
-    SWEDISH SIZING (cold climate, -22 C). Only the F2040 saturates, BY DESIGN: NIBE declares
-    Tbiv -9 C, so below -9 C its supplementary heat is SUPPOSED to run.
-
-        airsource_f2040   38.5 kWh resistive where the deficit forced 22.4 (1.7x).
-                          Indoor held (max 22.6 C); DM settles at -771 - the hardware
-                          start-addition, exactly where Swedish forum reports say a real
-                          pump's DM asymptotes. The damage is ~16 kWh of COP-1.0 money per
-                          cold snap, not a cooked house.
-
-    UNDERSIZED PUMPS (average-climate sizing against a Swedish winter):
-
-        wooden_f750       76.4 kWh vs 50.8 forced (1.5x), indoor held
-        concrete_f1155   164.5 kWh vs 116.9 forced (1.4x), indoor held
-        villa_s1155      143.5 kWh vs 115.9 forced (1.24x - inside the tolerance bound)
-        airsource_f2040  the raw trap, still: DM pegs the -3000 integrator floor, indoor
-                         hits 29.2 C, 9303 violations - a machine driven below its own
-                         operating envelope, where nearly all of the burn (1652 of 1743 kWh)
-                         is physically forced but the controller's latching places it as
-                         overshoot.
-
-THE FINDING STANDS, at its honest size: on every machine that saturates, the optimiser buys
-MORE resistive heat than the capacity deficit forces (1.4-1.7x on datasheet-sized systems),
-because the emergency ladder keeps raising a setpoint the compressor cannot follow. What it no
-longer claims: that a correctly-sized system gets cooked. The hardware's own elpatron catches
-the house; the controller wastes money fighting a wall.
-
-WHY THIS IS NOT FIXED HERE. The EMERGENCY tier deliberately bypasses the anti-windup written for
-exactly this failure mode, and that bypass is documented twice, in the owner's own code, as
-intentional. Changing it means deciding what a heat pump should do when it physically cannot meet
-its own curve - a heat-pump decision, not a code cleanup. BLOCKED-ON-OWNER, and it stays that way.
-
-The `xfail` is STRICT on purpose: if someone fixes this, the suite goes RED and they are forced to
-come here and delete the marker. A known defect nobody trips over is a defect that gets forgotten.
+WHY NOT FIXED HERE: the EMERGENCY tier deliberately bypasses the anti-windup written for this
+failure mode. Changing it means deciding what a pump should do when it physically cannot meet its
+own curve - a heat-pump decision, not a code cleanup. The xfail is STRICT: fix the defect and the
+suite goes RED, forcing whoever fixes it to come here and delete the marker.
 """
 
 from __future__ import annotations
@@ -79,12 +43,10 @@ def test_the_emergency_tier_asks_for_maximum_heat_at_the_aux_limit():
     reason=(
         "F-124, BLOCKED-ON-OWNER. A saturated compressor cannot raise BT25, so raising S1 makes "
         "DM = integral(BT25 - S1) fall FASTER. The emergency layer answers by raising it again and "
-        "latches at +10. EVERY machine that saturates is made worse by it, under both of NIBE's "
-        "published sizing conventions: the optimiser burns 2-5x the resistive heat of a do-nothing "
-        "controller - and 1.2-2.8x what the capacity deficit physically forces - and cooks the "
-        "house to about 30 C while doing nothing holds 22. The only system that escapes is the one "
-        "whose pump has 1.8x spare capacity. Fixing it means deciding what a pump should do when it "
-        "physically cannot meet its own curve - a heat-pump decision, not a code-cleanup one."
+        "latches at +10. Every machine that saturates is made worse by it: the optimiser burns "
+        "1.2-1.7x the resistive heat the capacity deficit physically forces. Fixing it means "
+        "deciding what a pump should do when it physically cannot meet its own curve - a heat-pump "
+        "decision, not a code-cleanup one."
     ),
 )
 def test_the_emergency_layer_does_not_keep_raising_a_pump_that_has_nothing_left():
@@ -105,9 +67,8 @@ def test_the_emergency_layer_does_not_keep_raising_a_pump_that_has_nothing_left(
         is_heating = True
         is_hot_water = False
 
-    # The first version of this call passed a keyword the layer does not have, so it died on
-    # TypeError before reaching the assertion - and ordinary CI counted that as the expected
-    # xfail. raises=AssertionError above makes that impersonation impossible now.
+    # raises=AssertionError on the marker ensures this xfails on the ASSERTION below, not on some
+    # unrelated TypeError that would silently impersonate the expected failure.
     decision = layer.evaluate_layer(
         _SaturatedPump(),
         weather_data=None,

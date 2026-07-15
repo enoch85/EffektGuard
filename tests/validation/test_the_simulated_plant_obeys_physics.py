@@ -1,42 +1,24 @@
-"""The simulator is the instrument. An instrument that flatters the thing it measures is worse
-than no instrument, because it produces numbers people quote.
+"""The simulator is the instrument. An instrument that flatters what it measures produces numbers
+people quote, so the harness `scripts/simulation/sim_harness.py` needs guards of its own. It once
+shipped three defects, all reported as PASS, which this file now pins:
 
-Every simulation claim on this branch rests on `scripts/simulation/sim_harness.py`, and the harness
-had no test of its own. It shipped three defects that this file now pins, all of which I introduced
-or kept, and all of which it reported as PASS.
+1. THE ENERGY "AUDITS" WERE ALGEBRAIC IDENTITIES. `metered = power - aux - standby` against
+   `owed = q/cop`, where power was DEFINED as `q/cop + aux + standby` - x - y + y = x. Doubling the
+   compressor's COP left the audit reporting 0.00 % error and PASS. There is no exact energy audit
+   to be had inside a closed ODE plant; what CAN fail is a physical BOUND or a LEAK, and those are
+   what the harness asserts now.
 
-1. THE ENERGY "AUDITS" WERE ALGEBRAIC IDENTITIES.
-
-       power_kw = q_comp/cop + aux + standby        (the plant)
-       metered  = power_kw - aux - standby          (the "meter")
-       owed     = q_comp/cop                        (the "independent" figure)
-
-   Substitute the first into the second and you get the third: x - y + y = x. I called these "two
-   different expressions of the same joules" in the code and in a test docstring. Doubling the
-   compressor's COP - which halves the electricity bill, a catastrophic plant bug - left the audit
-   reporting 0.00 % error and PASS on all five houses. The room-side "first law residual" is the
-   same trick with the room ODE and I had already caught that one, then rebuilt it.
-
-   There is no exact energy audit to be had inside a closed ODE plant. Every residual you can write
-   is a rearrangement of the equations that produced it. What CAN fail is a statement about
-   something the bookkeeping does not determine - a physical bound, or a leak - and those are what
-   the harness asserts now, and what this file checks it still asserts.
-
-2. THE PLANT DESTROYED ENERGY IT HAD CHARGED FOR. The water node's temperature was force-clamped to
-   the pump's maximum AFTER the ODE integrated it, so joules vanished with no residual noticing:
-   183 kWh in the F2040 cold snap, while every "audit" above read 0.00 %. The immersion heater was
-   pouring 3 kW into a node already at its ceiling - 2.6 K of overshoot per five-minute step - and
-   the clamp deleted it. Real immersion heaters have thermostats.
+2. THE PLANT DESTROYED ENERGY IT HAD CHARGED FOR. The water node was force-clamped to the pump's
+   maximum AFTER the ODE integrated it, so joules vanished with no residual noticing - the immersion
+   heater pouring into a node already at its ceiling, the clamp deleting it. Real immersion heaters
+   have thermostats.
 
 3. THE PLANT INTEGRATED DEGREE MINUTES AGAINST A SETPOINT THE PUMP WAS FORBIDDEN TO REACH. `flow`
    was clamped to max_flow_temp; `flow_target` was not. DM is the integral of (flow - flow_target),
-   so in the F2040 cold snap DM fell at up to 4.1 per minute NO MATTER WHAT ANY CONTROLLER DID, ran
-   to the integrator floor on its own, and the harness recorded 1134 `dm_runaway` violations and
-   blamed the recovery ladder. A NIBE limits its calculated supply temperature to the configured
-   maximum; it does not chase water it cannot make.
-
-   This one matters beyond the harness: it inflated the evidence for F-124 by about three times.
-   See test_a_saturated_compressor_is_a_positive_feedback_trap, where the honest numbers now live.
+   so DM fell no matter what any controller did and the harness blamed the recovery ladder. A NIBE
+   limits its calculated supply temperature to the configured maximum; it does not chase water it
+   cannot make. This one inflated the evidence for F-124; the honest numbers now live in
+   test_a_saturated_compressor_is_a_positive_feedback_trap.
 """
 
 from __future__ import annotations
@@ -185,39 +167,30 @@ class TestTheCopModelIsBoundedByPhysicsAndByTheDatasheet:
 class TestThePlantDoesNotDestroyEnergyItChargedFor:
     """The clamp overwrites a state variable after the ODE integrated it. Nothing else can leak.
 
-    THE FIRST VERSION OF THIS CLASS COULD NOT FAIL, and I only found that by mutating the plant
-    underneath it. Two ways, both worth naming, because they are the same two mistakes this whole
-    branch keeps making:
-
-      * the leak test ran on two days of MILD self-test weather, where no pump ever reaches its
-        immersion heater. Nothing ran, so nothing leaked, so it passed - on a plant with the
-        thermostat torn out. A test needs a PRECONDITION proving the mechanism it guards actually
-        engaged, and it now has one.
-      * the thermostat test recomputed the headroom formula inside the test and asserted the result
-        equalled itself. Pure tautology. It now reads the real plant's output.
+    Each test needs a PRECONDITION proving the mechanism it guards actually engaged (a leak test on
+    mild weather, where no pump reaches its immersion heater, passes on a plant with the thermostat
+    torn out), and it reads the real plant's output rather than recomputing the headroom formula and
+    asserting the result equals itself.
     """
 
     def test_the_pump_that_actually_reaches_its_immersion_heater_leaks_nothing(self):
         """The F2040 in a deep cold snap: the ONE case that pins the water node at its ceiling.
 
-        This is where 183 kWh went missing while every energy audit in the harness read 0.00 %. It
-        is an outdoor-air pump, so it is the only one whose capacity collapses with the weather,
+        It is an outdoor-air pump, so it is the only one whose capacity collapses with the weather,
         the only one that saturates, and the only one that falls back on resistive heat.
         """
         stats = _the_only_run_that_reaches_the_immersion_heater()
 
         assert stats["aux_kwh"] > 0, (
             "PRECONDITION FAILED, and this is the important half: if the immersion heater never "
-            "ran, this test proves nothing about a plant that mishandles it. The first version of "
-            "this test had no such check, ran on mild weather, and passed happily against a plant "
-            "with the heater's thermostat removed."
+            "ran, this test proves nothing about a plant that mishandles it - a leak test on mild "
+            "weather passes happily against a plant with the heater's thermostat removed."
         )
         assert abs(stats["water_node_leak_kwh"]) <= sim.WATER_NODE_LEAK_BUDGET_KWH, (
             f"The F2040 burned {stats['aux_kwh']:.1f} kWh of immersion heat and the flow clamp "
             f"destroyed {abs(stats['water_node_leak_kwh']):.1f} kWh of it: energy the meter charged "
             f"for and the room never received. No energy residual in this harness can see that, "
-            f"because they are all rearrangements of the ODE that runs BEFORE the clamp - which is "
-            f"exactly why they all read 0.00 % while 183 kWh went missing."
+            f"because they are all rearrangements of the ODE that runs BEFORE the clamp."
         )
 
     @pytest.mark.parametrize("coldsnap", [False, True], ids=["mild", "coldsnap"])
@@ -236,14 +209,11 @@ class TestThePlantDoesNotDestroyEnergyItChargedFor:
 
 
 class TestThePumpIsNeverAskedForWaterItCannotMake:
-    """The artifact that inflated F-124 by about three times.
+    """The artifact that inflated the evidence for F-124.
 
-    THE FIRST VERSION OF THIS TEST WAS A TAUTOLOGY. It computed `capped = min(uncapped, max_flow)`
-    in the test body and then asserted `capped <= max_flow`. It never touched the plant, so
-    unclamping the plant's own S1 - the actual bug - left it green. `min(x, m) <= m` is true of
-    arithmetic, not of this codebase.
-
-    It now reads `flow_target_max` off a real run: what the plant ACTUALLY asked the pump for.
+    It reads `flow_target_max` off a real run - what the plant ACTUALLY asked the pump for - rather
+    than recomputing `min(uncapped, max_flow)` in the test body and asserting the result is <=
+    max_flow, which is true of arithmetic and never touches the plant's own (unclamped) S1.
     """
 
     def test_the_saturated_pump_is_never_asked_for_water_above_its_maximum(self):
@@ -251,8 +221,8 @@ class TestThePumpIsNeverAskedForWaterItCannotMake:
 
         Degree minutes are the integral of (BT25 - S1). `flow` was clamped to max_flow_temp and
         `flow_target` was not, so the plant integrated against a setpoint the pump was physically
-        forbidden to reach: DM fell at up to 4.1 per minute regardless of what the controller did,
-        hit the integrator floor unaided, and the harness called it a control failure 1134 times.
+        forbidden to reach: DM fell regardless of the controller and floored on its own, and the
+        harness called it a control failure.
         """
         stats = _the_only_run_that_reaches_the_immersion_heater()
         house = next(h for h in sim.HOUSES if h.name == _SATURATING_HOUSE)
@@ -324,8 +294,8 @@ class TestTheHarnessCannotGoBackToBeingUnfalsifiable:
             assert metric in checked, (
                 f"`{metric}` is computed by the harness and never asserted in check_invariants. "
                 f"A number that is tracked and ignored is decoration: aux_kwh and the comfort "
-                f"minutes were both tracked and ignored while the optimiser cooked a house to "
-                f"35 C and burned 266 kWh of resistive heat, and every run still printed PASS."
+                f"minutes were both tracked and ignored while the optimiser overheated a house and "
+                f"burned resistive heat, and every run still printed PASS."
             )
 
     def test_carnot_is_asserted_during_the_run_not_merely_available(self):

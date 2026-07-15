@@ -6,10 +6,8 @@ the S1155/F1155 controllers to about -460, the VVM 320 that pairs with an F2040 
 -760. On a healthy pump DM asymptotes AT the start-addition value, because the elpatron
 engages there and works it back up.
 
-The plant used to wait for EffektGuard's own -1500 emergency floor - 800 degree-minutes late
-for an F750 - so it under-fired the elpatron in exactly the runs that were supposed to show
-what the elpatron costs, and the cold-snap headline (aux kWh, overshoot) was computed against
-a machine no factory ships.
+Waiting for EffektGuard's own -1500 floor instead under-fires the elpatron - 800 degree-minutes
+late for an F750 - so cold-snap aux and overshoot get computed against a machine no factory ships.
 """
 
 import sys

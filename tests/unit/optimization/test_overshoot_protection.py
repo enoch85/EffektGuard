@@ -1,27 +1,9 @@
-"""Twenty-one tests for overshoot protection, and not one of them called the code.
+"""Overshoot protection: the ComfortLayer coasts a warm house, never a cold one.
 
-The file that used to be here asserted constants against literals, and then RE-IMPLEMENTED the
-production logic in order to test its own copy of it:
-
-    def calculate_response(self, overshoot: float) -> tuple[float, float]:
-        # Mirrors the logic in decision_engine._proactive_debt_prevention_layer().
-        ...
-        coast_weight = OVERSHOOT_PROTECTION_WEIGHT_MIN + fraction * (
-            OVERSHOOT_PROTECTION_WEIGHT_MAX - OVERSHOOT_PROTECTION_WEIGHT_MIN
-        )
-
-`_proactive_debt_prevention_layer` DOES NOT EXIST. It was removed, and these tests went on passing -
-because a test that transcribes the logic it is checking can never notice that the original has
-changed, let alone that it is gone.
-
-And it had changed. The transcription ramps the weight from OVERSHOOT_PROTECTION_WEIGHT_MIN (0.5).
-Production - `ComfortLayer._standard_overshoot_protection` - ramps it from LAYER_WEIGHT_COMFORT_HIGH
-(0.7) to LAYER_WEIGHT_COMFORT_CRITICAL (1.0), and never reads OVERSHOOT_PROTECTION_WEIGHT_MIN at
-all. The suite certified a number the engine does not produce, in twenty-one tests, for as long as
-the file has existed.
-
-What follows drives the real ComfortLayer. The four constants production does not read
-(OVERSHOOT_PROTECTION_WEIGHT_MIN/MAX, _COLD_SNAP_THRESHOLD, _FORECAST_HORIZON) are deleted with it.
+Drives the real ComfortLayer.evaluate_layer. The graduated response ramps the offset from
+OVERSHOOT_PROTECTION_OFFSET_MIN (-7C) at the start of the band to OVERSHOOT_PROTECTION_OFFSET_MAX
+(-10C) at full overshoot, and the weight from LAYER_WEIGHT_COMFORT_HIGH (0.7) to
+LAYER_WEIGHT_COMFORT_CRITICAL (1.0).
 """
 
 from __future__ import annotations
@@ -67,7 +49,7 @@ def _decide(overshoot: float):
 
 
 class TestTheBandItselfIsCoherent:
-    """The constants production actually reads. The others are gone."""
+    """The constants production actually reads."""
 
     def test_protection_starts_before_it_is_full(self):
         assert OVERSHOOT_PROTECTION_START < OVERSHOOT_PROTECTION_FULL
@@ -76,7 +58,7 @@ class TestTheBandItselfIsCoherent:
         assert OVERSHOOT_PROTECTION_OFFSET_MAX < OVERSHOOT_PROTECTION_OFFSET_MIN < 0.0
 
     def test_the_weight_ramp_is_the_one_production_uses(self):
-        """0.7 to 1.0, not the 0.5 the deleted transcription asserted."""
+        """The weight ramp runs from LAYER_WEIGHT_COMFORT_HIGH (0.7) to CRITICAL (1.0)."""
         assert LAYER_WEIGHT_COMFORT_HIGH < LAYER_WEIGHT_COMFORT_CRITICAL
 
 
@@ -88,10 +70,8 @@ class TestTheGraduatedResponse:
 
         assert decision.offset == pytest.approx(OVERSHOOT_PROTECTION_OFFSET_MIN, abs=0.01)
         assert decision.weight == pytest.approx(LAYER_WEIGHT_COMFORT_HIGH, abs=0.01), (
-            f"At the start of the overshoot band the layer voted weight {decision.weight:.2f}. "
-            f"Production ramps from LAYER_WEIGHT_COMFORT_HIGH ({LAYER_WEIGHT_COMFORT_HIGH}); the "
-            f"deleted tests asserted OVERSHOOT_PROTECTION_WEIGHT_MIN (0.5) - a constant production "
-            f"never reads - and could not tell, because they never called the layer."
+            f"At the start of the overshoot band the layer voted weight {decision.weight:.2f}; "
+            f"production ramps from LAYER_WEIGHT_COMFORT_HIGH ({LAYER_WEIGHT_COMFORT_HIGH})."
         )
 
     def test_at_full_overshoot_the_layer_coasts_completely(self):

@@ -1,21 +1,12 @@
-"""The Swedish user reads every sensor in English.
+"""Every sensor must be translatable, so the Swedish user does not read the dial in English.
 
-`strings.json` translates the six switches. It carries no `entity.sensor.*` block at all, and not
-one of the twenty-four sensor descriptions sets a `translation_key` - they set a hardcoded English
-`name=` instead. So `Degree Minutes`, `Supply Temperature`, `Compressor Health Status` and the rest
-stay English in sv, no, da and fi, whatever language Home Assistant is running in.
+Home Assistant resolves an entity's name by `translation_key`. A sensor that sets a hardcoded
+English `name=` instead - as all twenty-four once did - stays English in sv, no, da and fi whatever
+language HA runs in, and the primary audience for this integration is Swedish.
 
-The primary audience for this integration is Swedish. This is the same defect as F-065, which was
-fixed for the options flow, on the same reasoning: a Swedish owner was reading the DHW target
-temperature and schedule fields - the settings that directly drive the heat pump - as raw English.
-The sensors are the other half of that screen.
-
-The switches show what the fix looks like: `translation_key="price_optimization"` plus an entry
-under `entity.switch` in `strings.json`, mirrored in every locale. Home Assistant then resolves the
-name by key, and `tests/validation/test_translation_key_parity.py` keeps the five locale files in
-lockstep so nothing drifts.
-
-Nothing here touches the heat pump. It is the label on the dial, not the dial.
+The fix mirrors the six switches: `translation_key="..."` plus an `entity.sensor` entry in
+strings.json, present in every locale (test_translation_key_parity.py keeps them in lockstep).
+Nothing here touches the heat pump - it is the label on the dial, not the dial.
 """
 
 from __future__ import annotations

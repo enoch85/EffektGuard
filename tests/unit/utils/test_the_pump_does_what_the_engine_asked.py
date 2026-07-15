@@ -1,30 +1,12 @@
-"""`int(-1.9)` is `-1`. Every offset came out smaller than the engine asked for.
+"""`integer_offset_for` must ROUND, not truncate, when bridging fractional offsets to NIBE's
+integer register.
 
-NIBE's curve-offset register is integer-only and the decision engine calculates fractional offsets,
-so something has to bridge the two. That something is the LAST thing to touch the number before it
-reaches the heat pump - which makes a bias there invisible and universal. It attenuates every
-decision the engine makes, and every constant anyone has ever tuned.
-
-It truncated toward zero:
-
-    accumulated_adjustment = int(self._fractional_accumulator)
-
-Python's `int()` rounds toward zero, so the error was never random. It was always in the direction
-of doing LESS:
-
-    engine wants -1.9 C  ->  pump got -1   (0.9 C short)
-    engine wants +2.7 C  ->  pump got +2   (0.7 C short)
-
-and the residual was never re-applied, so the shortfall was permanent.
-
-The month-long simulation says this costs no measurable money (5113 SEK truncating vs 5121 SEK
-rounding, across five houses) - so the fix is made for correctness, not for savings, and the claim
-that it "makes you pay more in expensive quarters" is not supported and is not repeated here. What
-it does buy is that the pump does what the engine computed.
-
-The simulation harness used to carry its OWN transcription of this arithmetic, truncation and all,
-which is precisely how a plant model and the code it is meant to be testing drift apart without
-anyone noticing. Both now call `integer_offset_for`.
+`int(-1.9)` is `-1`: truncation toward zero made every offset come out smaller than the engine
+asked, always in the same direction, permanently (the residual was never re-applied). Since this is
+the last thing to touch the number before the pump, that bias silently attenuates every decision and
+every tuned constant. Rounding bounds the error at 0.5 C and makes it unbiased. The 1 C deadband is
+deliberate hysteresis (MyUplink is rate-limited), and the value is clamped to the register range.
+Shared with the simulation harness so the plant model and the code cannot drift.
 """
 
 from __future__ import annotations

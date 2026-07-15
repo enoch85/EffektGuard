@@ -1,10 +1,9 @@
 """Diagnostics must report the DM band production ENFORCES, not the raw zone table.
 
-The production path runs every zone range through apply_thermal_mass_buffer - a concrete slab
-is helped ~1.3x sooner - so a diagnostics dump quoting the unadjusted range told a
-slab-house owner they were being held to -414 while the code was actually intervening at
--318. A diagnostics file that disagrees with the decision it was downloaded to explain is
-worse than none: it sends the reader hunting for a discrepancy that is the dump's own.
+The production path runs every zone range through apply_thermal_mass_buffer (a concrete slab
+is helped ~1.3x sooner), so a dump quoting the unadjusted range disagrees with the decision
+it exists to explain - worse than none, since it sends the reader hunting for a discrepancy
+that is the dump's own.
 """
 
 from types import SimpleNamespace

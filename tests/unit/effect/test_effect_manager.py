@@ -84,13 +84,10 @@ class TestPeakEvent:
 
 
 class TestTheBillingPeriodIsTheHour:
-    """This class used to be TestQuarterOfDayCalculation, and it asserted arithmetic against itself:
+    """The effect tariff is billed on the HOURLY mean, day 06:00-22:00 at full weight.
 
-        assert 24 == (6 * 4) + (0 // 15)
-
-    Both sides are the same expression. It could not fail, and the thing it was pinning - that the
-    effect tariff is billed in billing_hour-hours - is not true. Ellevio: "the measurement uses hourly
-    averages". Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+    Ellevio: "the measurement uses hourly averages"; Energimarknadsinspektionen:
+    "elnatsforetagen mater din elanvandning per timme".
     """
 
     def test_daytime_runs_06_to_22(self):
@@ -345,7 +342,7 @@ class TestPeakProtectionOffset:
 
         offset = effect_manager.get_peak_protection_offset(
             current_power=3.0,  # Safe margin
-            current_period=50,
+            current_period=12,  # the same DAYTIME hour the peak was recorded in
             base_offset=0.0,
         )
 

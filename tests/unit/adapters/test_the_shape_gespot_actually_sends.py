@@ -1,42 +1,12 @@
-"""Every test of the price parser feeds a shape GE-Spot does not send.
+"""Pin the price parser to the shape GE-Spot actually publishes: datetime objects.
 
-`_parse_periods` accepts a timestamp in two forms:
-
-    if isinstance(time_str, str):
-        start_time = dt_util.parse_datetime(time_str)
-        ...
-    elif isinstance(time_str, datetime):      # <- this branch
-        start_time = time_str
-
-Every existing test - the DST day, the malformed timestamp, the F-018 missing price, all of
-them - builds its fixtures with `.isoformat()`. So the suite exercises the string branch,
-exhaustively and well.
-
-GE-Spot sends the other one. From its own `sensor/base.py`, which builds the very attribute
-this adapter reads:
-
-    # Format: [{"time": datetime object, "value": float}, ...]
-    entry = {
-        "time": dt,  # datetime object (not ISO string!)
-        "value": round(float(price), 4),
-    }
-
-Its comment says so twice, once with an exclamation mark.
-
-**The branch that runs in the owner's house is the one branch nothing tests.** Proven by
-mutation, not by reading: replace the body of that `elif` with `raise AssertionError` and the
-full suite still reports 1521 passed. The parser's production path could be deleted outright
-and this project's tests would call it green.
-
-That is how the F-018 defect survived. `raw_prices: list[dict[str, Any]]` said nothing about
-what GE-Spot sends, so nothing was written down, so nothing was tested against it - and a
-missing `value` quietly defaulted to 0.0, the cheapest possible price, for as long as nobody
-looked. The fix for F-018 was tested the same way: against ISO strings. On the path that
-actually runs, it was still unproven.
-
-So this file pins the parser to the shape GE-Spot really publishes: a timezone-aware datetime
-object, a `value` the owner pays, and a `raw_value` (pre-VAT, pre-tariff) that must never be
-mistaken for it.
+`_parse_periods` accepts `time` as either an ISO string or a timezone-aware datetime.
+GE-Spot sends the datetime-object form (its sensor/base.py builds `{"time": dt, ...}`),
+but the other tests all build fixtures with `.isoformat()`, exercising only the string
+branch. This file exercises the datetime branch: a full day parses and stays tz-aware and
+time-ordered; `value` (the billed price) is used, not `raw_value` (pre-VAT/tariff); a
+missing `value` is still dropped, not defaulted to 0.0; and a naive datetime does not
+crash the parser but resolves to None at the timestamp-containment lookup.
 """
 
 from __future__ import annotations
@@ -114,12 +84,7 @@ def test_the_pre_vat_price_is_not_mistaken_for_the_price_the_owner_pays():
 
 
 def test_a_missing_price_is_still_dropped_on_the_path_that_actually_runs():
-    """F-018, re-proven where it matters.
-
-    The F-018 fix - no default for a missing `value` - was tested against ISO strings, which is
-    to say it was tested on a path GE-Spot never takes. A guard that only holds on the branch
-    nobody uses is not a guard.
-    """
+    """A missing `value` is dropped on the datetime path too, not defaulted to 0.0."""
     periods = _adapter()._parse_periods(_live_day(broken_at=50))
 
     assert len(periods) == 95, (
@@ -145,13 +110,10 @@ def test_a_live_day_is_ordered_by_instant_without_ever_seeing_a_string():
 
 
 def test_a_naive_datetime_from_a_foreign_price_integration_is_not_silently_accepted():
-    """Not GE-Spot's shape, but nothing stops another integration presenting one.
+    """A naive datetime parses but must resolve to None at the containment lookup.
 
-    A naive datetime is the dangerous input: it parses, it sorts, and it compares against an
-    aware `dt_util.now()` by raising TypeError - which PriceData catches and answers with None.
-    Every quarter then prices as unknown. If the parser ever gains a naive-datetime guard this
-    test says so; today it records that a naive timestamp does NOT crash the parser, and that
-    the containment lookup - not the parser - is what refuses to guess.
+    A naive timestamp compared against an aware dt_util.now() raises TypeError, which
+    _index_containing catches and answers with None - it must never raise into pump control.
     """
     from custom_components.effektguard.adapters.gespot_adapter import PriceData
 

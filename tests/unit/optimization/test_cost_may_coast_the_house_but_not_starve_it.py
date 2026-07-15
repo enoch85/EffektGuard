@@ -1,31 +1,15 @@
 """A cost layer may coast the house within its comfort band. It may not coast it out.
 
-Using the band is the whole point of the integration - that is the thermal battery. But step 4 of
-`_aggregate_layers` takes the critical layer's vote ALONE:
+Using the band is the thermal battery - the point of the integration. But step 4 of
+`_aggregate_layers` takes the critical layer's vote alone, so a price layer at PEAK (weight 1.0,
+offset -10) is both max and min and the comfort layer never enters the sum. Cost then keeps cutting
+heat into an already-cold house, and nothing else objects: degree minutes are blind by construction
+(DM = integral(BT25 - S1), so lowering the curve lowers S1 and DM *improves* as the house cools).
 
-    critical_layers = [layer for layer in layers if layer.weight >= LAYER_WEIGHT_SAFETY]
-    chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
-    return self._clamp_offset(chosen)
-
-With a price layer at PEAK (weight 1.0, offset -10.0) the price layer is BOTH the max and the min,
-so the comfort layer never enters the sum at all - at any indoor temperature. Cost kept cutting heat
-into a house that was already too cold, and nothing objected until the hard 18 C floor fired, three
-degrees later.
-
-NOTHING ELSE CAN SEE THIS. Degree minutes are blind to it by construction: DM = integral(BT25 - S1),
-so lowering the curve lowers S1 and DM *improves* as the house gets colder. In the month-long
-simulation the house sat 1.1 C below target with DM at -45 - a perfectly healthy number - while the
-price layer held -3.0.
-
-The month-long simulation, against a physically honest plant, put a number on it. Across five houses
-the optimiser spent between 4 000 and 33 000 minutes below the comfort band, and a DO-NOTHING
-controller held target on every one of them. `main` was worse than this branch on all five, so this
-is long-standing, not a regression - but it means the optimiser was making the house colder than
-switching it off would have.
-
-So a cost layer's heat reduction is floored once the house is outside the band. The comfort layer's
-own demand is the floor: it is already graduated by how far out the house is, and it is the only
-layer that can see the problem at all.
+Invariant: once the house is below its comfort band, a cost layer's reduction is floored at the
+comfort layer's own (graduated) demand. The floor is ramped in via `starvation`, not switched at a
+threshold, so a dithering indoor sensor cannot chatter the curve between extremes. It never weakens a
+safety or physics vote, and it never becomes a heat source of its own.
 """
 
 from __future__ import annotations
@@ -206,22 +190,12 @@ class TestTheFloorNeverWeakensSafety:
 
 
 class TestTheFloorIsRampedNotSwitched:
-    """A boolean on a temperature threshold is a bang-bang controller, and I shipped one.
+    """A boolean floor on a temperature threshold is a bang-bang controller.
 
-    The first version of this floor was `below_comfort_band: bool`, evaluated at
-    `target - tolerance_range`. AT that boundary the comfort layer is asking for nothing, so
-    "floor at comfort" meant "jump to zero", and driving the real engine across it gave:
-
-        indoor 20.80 C  ->  offset -10.00      cost layer free
-        indoor 20.79 C  ->  offset  +0.01      floored at comfort
-
-    A hundredth of a degree flipping the command by ten degrees. Real indoor sensors dither by more
-    than that, so the house would sit on the boundary flipping the curve between its extremes -
-    and every flip is a Modbus write to a real heat pump.
-
-    The ramp fixes it by construction: at the boundary the floor IS the cost layer's own vote, so
-    nothing moves, and it climbs to the comfort layer's demand as the house leaves the band the
-    owner actually asked for.
+    A boolean at `target - tolerance_range` jumps the command by up to 10 C on a hundredth of a
+    degree - and a real indoor sensor dithers by more, chattering a Modbus write every cycle. The
+    ramp fixes it by construction: at the inner edge the floor IS the cost layer's own vote (nothing
+    moves), climbing monotonically to the comfort layer's demand as the house leaves the band.
     """
 
     def _sweep(self, engine, comfort_offset: float = 0.2):

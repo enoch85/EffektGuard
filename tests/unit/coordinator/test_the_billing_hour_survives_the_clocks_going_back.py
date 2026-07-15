@@ -1,46 +1,16 @@
-"""On the night the clocks go back, one hour of the month's tariff peak was deleted.
+"""The billing hour must survive DST: the autumn fold must not delete a month's peak.
 
-I WROTE THIS BUG. The commit that made the effect tariff bill the HOUR instead of the quarter
-(`a6eecb9`) accumulates a time-weighted mean between hour boundaries, and it detects the boundary
-like this:
+When the clocks go back, wall-clock hour 02 happens twice (02:00 CEST, then 02:00 CET). PEP 495
+ignores `fold` when comparing two aware datetimes with the same tzinfo, so an hour-boundary check
+that compares local wall-clock times sees 02:00 CEST == 02:00 CET: the rollover never fires, the
+two hours merge, and sample deltas across the fold run backwards - subtracting the earlier hour's
+energy instead of recording it. 02:00 is exactly where the optimiser puts its load (cheap night
+power), so this deletes the hour most likely to be the month's peak.
 
-    now = dt_util.now()                                    # aware, local
-    period_start = now.replace(minute=0, second=0, ...)    # aware, local
-    if period_start != self._period_power_start:           # <-- roll the hour over
-        ...
-
-On the last Sunday of October, Europe/Stockholm puts 03:00 CEST back to 02:00 CET, and the wall-clock
-hour 02 happens TWICE - two different, real, billable hours that print the same digits.
-
-And PEP 495 says: **for two aware datetimes with the SAME tzinfo, `fold` is ignored in comparisons.**
-So 02:00 CEST == 02:00 CET, as far as that `!=` is concerned. The rollover never fires. The two hours
-are merged into one accumulator, and the sample deltas across the fold run BACKWARDS - a sample at
-02:05 CET minus one at 02:55 CEST is *minus fifty minutes* - so the earlier hour's energy is
-subtracted from the later one's.
-
-Driving the REAL coordinator across the real transition, with 9 kW through the first 02:00 hour and
-1 kW through the second:
-
-    hours recorded:   hour 2, mean 1.00 kW      <- ONE event, for TWO hours
-    the truth:        hour 2 (CEST) was 9 kW, hour 2 (CET) was 1 kW
-
-The 9 kW hour does not survive. It is not merely averaged down - it is cancelled out and gone.
-
-AND 02:00 IS EXACTLY WHERE EFFEKTGUARD PUTS ITS LOAD. Night power is cheap, so the optimiser
-deliberately pre-heats and runs hot water in the small hours; the tariff's own night discount
-(22:00-06:00) is what encourages it. So the hour this deletes is the one the product most expects to
-be large - and the effect tariff bills the mean of the three highest hours of the month, so a deleted
-peak is a peak that goes unprotected for the rest of the month.
-
-THE FIX. Keep the arithmetic on the absolute time line, where an hour is always an hour and 02:00
-CEST and 02:00 CET are an hour apart, and keep the LABEL local, because the night discount and the
-month a peak belongs to are both local-clock facts:
-
-    period_start = dt_util.as_utc(now.replace(minute=0, ...))   # fold-aware -> two distinct instants
-    billing_period = get_current_billing_period(now)            # still the local hour, 0-23
-
-The spring transition is tested too, where the opposite is true: wall-clock 02:00 never happens, and
-the hour must not be invented.
+The fix keeps the accumulator arithmetic on the absolute (UTC) time line, where the two 02:00 hours
+are an hour apart, while the LABEL stays local (the night discount and the month a peak belongs to
+are local-clock facts). The spring gap is tested too: wall-clock 02:00 never happens and must not
+be invented.
 """
 
 from __future__ import annotations
@@ -226,18 +196,13 @@ async def test_the_spring_gap_does_not_invent_an_hour(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_the_first_hour_of_a_month_is_billed_to_that_month(monkeypatch):
-    """The other half of moving the arithmetic to UTC, and it does not announce itself.
+    """The completed hour is stamped local, so it is bucketed into the right calendar month.
 
-    The accumulator now runs on the absolute time line, so `completed_start` is a UTC instant. But
-    the effect layer buckets peaks by CALENDAR MONTH - `peak.timestamp.year, peak.timestamp.month` -
-    and that is a local-clock fact. In Stockholm, the billing hour 00:00-01:00 on 1 November IS
-    23:00-00:00 on 31 October in UTC. Hand the layer the UTC instant and a November peak is filed
-    against October: a month that is already billed, and whose top-three it may now displace, while
-    November begins with its own first hour missing.
-
-    A mutation test found this - reverting `timestamp=dt_util.as_local(...)` to the raw UTC stamp
-    left every test in the suite passing. The DST fix could have shipped with a month-boundary bug
-    inside it.
+    The accumulator runs on the UTC time line, but the effect layer buckets peaks by calendar month
+    (`peak.timestamp.year, peak.timestamp.month`), a local-clock fact. In Stockholm the billing hour
+    00:00-01:00 on 1 November is 23:00-00:00 on 31 October in UTC - hand the layer the raw UTC stamp
+    and a November peak is filed against an already-billed October, while November loses its first
+    hour.
     """
     coordinator = _coordinator()
     # 23:00 UTC on 31 Oct == 00:00 local on 1 Nov (CET, +01:00). Two whole local hours.

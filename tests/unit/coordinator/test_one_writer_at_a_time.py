@@ -1,23 +1,12 @@
 """Two things may drive the heat pump. They must never drive it at once.
 
-The write path has exactly two entry points: the aligned control loop, every five minutes, and a
-service that explicitly commands the pump (force_offset, boost_heating, the optimization switch).
-Nothing serialises them, and both are long coroutines that await at every step - reading entities
-through Home Assistant, saving state, calling the NIBE adapter. asyncio interleaves them freely.
+The write path has two entry points - the aligned control loop, and a service that explicitly
+commands the pump - and both are long coroutines that await at every step, so asyncio interleaves
+them freely. Without a lock, an aligned refresh that snapshotted the engine before a concurrent
+force_offset(+3) can finish afterwards and overwrite it with a stale +0.5; the same interleaving
+corrupts _apply_offset's rate limiting, which reads last_offset_timestamp and then writes it.
 
-So this sequence is not hypothetical, it is ordinary:
-
-    12:05:10  the aligned refresh starts. It reads the world and begins deciding.
-    12:05:11  the user calls force_offset(+3). The override is set on the engine, and the service
-              reads, decides (+3, honouring the override) and writes +3 to the pump.
-    12:05:12  the aligned refresh - which snapshotted the engine BEFORE the override existed -
-              finishes its decision and writes +0.5.
-
-The forced offset is gone, overwritten by a decision that predates it. The user sees the service
-succeed and the pump ignore it. The same interleaving corrupts _apply_offset's rate limiting, which
-reads self.last_offset_timestamp and then writes it.
-
-One writer at a time. The read path is unaffected: reads are free to overlap, and do.
+One writer at a time, via the control lock. Reads are unaffected: they are free to overlap, and do.
 """
 
 from __future__ import annotations

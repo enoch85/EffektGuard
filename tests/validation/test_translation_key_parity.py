@@ -1,26 +1,14 @@
 """Every locale must carry exactly the keys strings.json declares.
 
-Home Assistant resolves a translation by key. When a key is MISSING, HA falls back to the
-raw key or an empty label; when a key is STALE, it is dead weight that quietly diverges.
-Neither is visible in a test run, in CI, or in the UI of whoever wrote the change - only to
-the user in that language.
+Home Assistant resolves a translation by key. A MISSING key falls back to the raw key or an empty
+label; a STALE key is dead weight that quietly diverges. Neither is visible in a test run, in CI,
+or in the UI of whoever wrote the change - only to the user in that language, and the primary
+audience for this integration is Swedish.
 
-This drifted badly and unnoticed. `options.py` renamed its sections
-(comfort_settings -> optimization_settings, dhw_settings -> domestic_hot_water) and added
-`dhw_min_amount` / `dhw_schedules`. `strings.json` and `en.json` were updated; sv, no, da
-and fi were not:
-
-    sv: 18 missing / 19 stale
-    no: 24 missing / 19 stale   (also missing the whole airflow_optimization section)
-    da: 24 missing / 19 stale
-    fi: 24 missing / 19 stale
-
-The primary audience for this integration is Swedish, and among the missing keys were the
-DHW target temperature and the schedule fields - i.e. Swedish users were shown untranslated
-raw keys for the settings that directly drive the heat pump.
-
-An empty-string value is treated as a failure too: it silently renders as a blank label,
-which is indistinguishable from a missing translation for the person reading the screen.
+This has drifted before: options.py renamed sections and added fields, strings.json and en.json
+were updated, and sv/no/da/fi were not - leaving Swedish users raw keys for the DHW target and
+schedule fields that directly drive the heat pump. An empty-string value counts as a failure too:
+it renders as a blank label, indistinguishable from a missing translation.
 """
 
 import json

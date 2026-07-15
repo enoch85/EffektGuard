@@ -1,16 +1,9 @@
-"""A heat pump that never appears must eventually be reported as missing.
+"""A heat pump that never appears must eventually be reported as missing, not "still starting".
 
-The coordinator tolerates a missing NIBE at startup, because MyUplink can take the best part of a
-minute to publish its entities. It did so by returning `startup_pending: True` whenever
-`_first_successful_update` was still False - and nothing ever set a limit on that.
-
-So a user who picked the wrong entity, or who has no NIBE at all, gets a config entry that stays
-loaded and green forever. The entities sit at "unavailable", no repair is raised, no error is
-logged after the first informational line, and `last_update_success` stays True. The integration
-reports that it is fine, indefinitely, while controlling nothing.
-
-Waiting is right. Waiting FOREVER is a silent failure, and this integration writes to a heat pump:
-"I am fine" must mean it.
+The coordinator tolerates a missing NIBE at startup (MyUplink is slow to publish entities) by
+returning `startup_pending: True` while `_first_successful_update` is False. That grace must be
+BOUNDED by STARTUP_MAX_GRACE_ATTEMPTS: past it, a missing pump becomes UpdateFailed rather than a
+permanently green entry that reads nothing and controls nothing.
 """
 
 from unittest.mock import AsyncMock, MagicMock

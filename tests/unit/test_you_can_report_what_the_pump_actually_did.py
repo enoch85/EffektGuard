@@ -1,29 +1,14 @@
-"""When the pump does something strange, there is no way to hand over what it saw.
+"""The diagnostics hook must hand over what the DECISION saw, and must be downloadable.
 
-Home Assistant has a diagnostics hook - `async_get_config_entry_diagnostics` - and this integration
-does not implement it. That is a Bronze-tier quality-scale gap on paper. In practice it is the
-difference between a bug report that can be acted on and one that cannot: this thing decides a
-curve offset from nine weighted layers, a climate-zone degree-minute band, a compressor-wear risk
-and a 96-quarter price curve, and when it gets that wrong the owner's only recourse today is to
-copy a log line.
+`async_get_config_entry_diagnostics` carries the offset it commanded and every layer's vote, the
+NIBE state it read, the degree-minute thresholds actually in force (computed per climate zone AND
+thermal mass, so the constants prove nothing), and whether the price and weather sources were live
+(a missing price source silently withdraws the whole price layer, F-123). It must NOT carry the
+home's latitude - the dump is pasted into public issues - but keeps the climate ZONE, which
+identifies nobody. The whole dump must JSON-serialise, or the download button 500s.
 
-Diagnostics has to carry what the DECISION saw, not just what the entities show:
-
-  * the offset it commanded, and every layer's vote and weight behind it
-  * the NIBE state it read - degree minutes, indoor, outdoor, supply, return, compressor Hz
-  * the degree-minute thresholds actually in force (they are computed per climate zone AND per
-    thermal mass, so quoting the constants proves nothing)
-  * whether the price and weather sources were even live - a missing price source silently
-    withdraws the whole price layer (F-123)
-
-And it must NOT carry the home's latitude. The decision engine holds it (it is how the climate
-zone is detected), and a diagnostics dump is a file the owner pastes into a public issue tracker.
-
-Separately: `PARALLEL_UPDATES` is not declared on any platform. For a coordinator-based
-integration Home Assistant defaults it to 0 - unlimited concurrent entity service calls - and
-`climate.set_hvac_mode` reaches `set_optimization_enabled()`, which calls `async_refresh_and_apply()`
-and DRIVES THE PUMP. The control lock in `_drive_the_pump` serialises the write itself, so nothing
-is broken today; declaring the limit is saying out loud that this entity touches hardware.
+Separately: each platform declares PARALLEL_UPDATES (HA defaults a coordinator platform to 0,
+unlimited); climate is 1 because `set_hvac_mode` reaches `_drive_the_pump`.
 """
 
 from __future__ import annotations
@@ -154,9 +139,8 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
         power_kw=2.4,
     )
 
-    # REAL objects, not mocks. A dump built from MagicMocks can never be JSON-serialised - mocks
-    # are unserialisable by construction - so a serialisability test built on them proves nothing
-    # and fails for the wrong reason. These are the types production actually hands the hook.
+    # REAL objects, not mocks: MagicMocks are unserialisable by construction, so the
+    # serialisability check below needs the types production actually hands the hook.
     decision = OptimizationDecision(
         offset=1.5,
         reasoning="[Z2] DM -320, boost recovery speed | [Comfort] within band",
@@ -175,9 +159,8 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     # The real detector: Stockholm's latitude, so the zone and the band are the ones a real house
     # would be held to - and so the redaction has something genuine to redact.
     coordinator.engine.climate_detector = ClimateZoneDetector(latitude=59.3293)
-    # A real string, as the real EmergencyLayer carries - the dump reports the band AFTER the
-    # thermal-mass adjustment, so it reads this. An auto-MagicMock here is unserialisable,
-    # which is exactly what this file's serializability test exists to catch.
+    # A real string, as the real EmergencyLayer carries: the dump reports the band AFTER the
+    # thermal-mass adjustment, so it reads this. An auto-MagicMock here would be unserialisable.
     coordinator.engine.emergency_layer.heating_type = "radiator"
     coordinator.effect.get_monthly_peak_summary.return_value = {"highest": 4.2}
 
@@ -197,10 +180,9 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
 async def test_the_dump_can_actually_be_downloaded():
     """Home Assistant serialises the dump to JSON. If it cannot, the download button 500s.
 
-    This is the failure that passes every unit test and breaks in production: a datetime, an enum,
-    a dataclass - anything json.dumps refuses - and the user clicking "Download diagnostics" gets
-    an error instead of the file you asked them for. NibeState carries a `timestamp`, and the
-    degree-minute range comes back from a detector, so the risk is real rather than theoretical.
+    A datetime, an enum or a dataclass - anything json.dumps refuses - breaks the download.
+    NibeState carries a `timestamp` and the degree-minute range comes back from a detector,
+    so the risk is real.
     """
     import json
 

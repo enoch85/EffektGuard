@@ -1,44 +1,13 @@
-"""At +30 C outdoor the "warning" degree-minute threshold was POSITIVE. Then I half-fixed it.
+"""No degree-minute warning threshold may reach into the compressor's own cycling band.
 
-The zone thresholds are shifted with the weather:
+The zone thresholds are shifted shallower as it warms (`adjustment = temp_delta * 20`). NIBE starts
+the compressor at DM_THRESHOLD_START (-60) and stops it at 0, so degree minutes traverse that band on
+every normal cycle. Unbounded above, the Stockholm warning threshold climbed to -40 at +25 C and +60
+at +30 C - so in summer a healthy pump's ordinary compressor start armed the emergency ladder.
 
-    adjustment = temp_delta * 20        # warmer than the winter average -> shallower DM expected
-
-Shallowing them as it warms is right in itself. A pump that has fallen 400 degree minutes behind in
-mild weather is in more trouble than one that has fallen 400 behind in a cold snap, because it
-should not be working hard at all.
-
-But the shift was clamped only on the COLD side. Nothing bounded it above, and NIBE starts the
-compressor at DM_THRESHOLD_START (-60) and stops it at 0 - so degree minutes traverse that band on
-EVERY NORMAL CYCLE, in every season, on every heat pump. In Stockholm the warning threshold climbed
-to:
-
-    outdoor +15 C  ->  -240
-    outdoor +25 C  ->   -40      <- INSIDE the compressor's own cycling band
-    outdoor +30 C  ->   +60      <- POSITIVE: any degree-minute reading at all is a "warning"
-
-Degree minutes are essentially never positive. So above about +26 C outdoor, EVERY reading armed the
-emergency ladder - and a midsummer hot-water cycle dips degree minutes to -60 like any other, so a
-heat pump behaving perfectly was told to boost the heating curve. In July.
-
-AND THE FIRST FIX CLAMPED THE WRONG NUMBER. The thresholds are built in two steps, and this file
-originally tested only the first:
-
-    get_expected_dm_range(+25 C)["warning"]   ->  -110      the ceiling holds. This is what I tested.
-    apply_thermal_mass_buffer(..., "concrete_slab")  ->   -85      what the layers actually READ.
-
-The thermal-mass buffer DIVIDES by up to 1.3 to make a slow house react sooner, and it runs AFTER
-the clamp, so -110 / 1.3 = -85 lands back inside the band. Driving the real EmergencyLayer:
-
-    concrete_slab, outdoor +25 C, indoor 21.8 (0.2 C under target), DM -85
-      -> tier T1, offset +4.0, weight 0.65, "DM -85 beyond expected for 25.0C (threshold: -85)"
-
-A concrete-slab house gets four degrees of curve offset on a July morning, on a pump doing nothing
-worse than starting its compressor. A radiator house (multiplier 1.0) was fine, which is exactly why
-a test written against step 1 passed while the bug it was written to prevent was still live.
-
-So these tests now drive the REAL layers, with every heating_type, and the invariant is asserted on
-the number the layers read rather than on an intermediate that no consumer ever sees.
+The clamp must hold on the number the layers actually READ - AFTER `apply_thermal_mass_buffer`, which
+divides by up to 1.3 (a clamp at -110 becomes -85, back inside the band). So these tests drive the
+real layers with every heating_type, and check the warm-side ceiling never touches a winter threshold.
 """
 
 from __future__ import annotations
@@ -157,11 +126,10 @@ def test_the_normal_band_does_not_end_inside_it_either(latitude, city, outdoor, 
 
 @pytest.mark.parametrize("heating_type", HEATING_TYPES)
 def test_a_healthy_pump_in_july_is_not_given_a_curve_boost(heating_type):
-    """The consequence, executed rather than asserted. This is the test the first fix needed.
+    """A healthy summer compressor start must draw no emergency curve boost from any emitter.
 
     The layer is driven for real, with the heating_type set, at the degree minutes an ordinary
-    summer compressor start produces. Before the fix, concrete_slab and both UFH types answered
-    this with +4.0 C of offset at weight 0.65.
+    summer compressor start produces.
     """
     layer = EmergencyLayer(
         climate_detector=ClimateZoneDetector(latitude=59.33), heating_type=heating_type
@@ -207,13 +175,10 @@ def test_a_pump_in_real_thermal_debt_in_winter_still_gets_help(heating_type):
 @pytest.mark.parametrize(("latitude", "city"), LATITUDES)
 @pytest.mark.parametrize("heating_type", HEATING_TYPES)
 def test_the_ceiling_is_inert_in_winter(latitude, city, heating_type):
-    """The ceiling must not touch a single winter threshold. `min` has to be a no-op there.
+    """The warm-side ceiling must not touch a single winter threshold.
 
-    The first version of this test compared the final warning against the UNCLAMPED zone value and
-    demanded it be no shallower - which is a demand that the thermal-mass buffer not exist, since
-    making a slow house warn sooner is precisely what the buffer is for. Twenty parametrisations
-    went red on a correct fix. The thing to pin is that the CEILING changed nothing in winter, so
-    that is what it now pins: the final number must be exactly base / multiplier, unclamped.
+    In winter the final warning must be exactly base / multiplier, unclamped - the ceiling is a
+    no-op there.
     """
     detector = ClimateZoneDetector(latitude=latitude)
     multiplier = MULTIPLIERS[heating_type]

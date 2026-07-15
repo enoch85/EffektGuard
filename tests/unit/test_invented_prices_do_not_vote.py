@@ -1,31 +1,14 @@
-"""With no price source, the integration invents 96 identical prices and lets them vote.
+"""With no price source, the coordinator must NOT invent 96 identical prices and let them vote.
 
-Found on the owner's live Home Assistant: the config entry had `gespot_entity = None` (it was
-created before GE-Spot was installed). The adapter is honest about that - it raises
-`ValueError("No GE-Spot entity configured")`. The coordinator catches it and fabricates:
+The adapter raises when there is no GE-Spot entity. The coordinator must not catch that and
+fabricate a flat price curve: the invented quarters classify NORMAL, the price layer casts a real
+weighted vote, and the aggregate is dragged down - so the fabrication takes heat away from the house
+on a number nobody measured, while the reasoning string claims a price was analysed.
 
-    except (AttributeError, KeyError, ValueError, TypeError) as err:
-        _LOGGER.warning("Price data unavailable, using fallback: %s", err)
-        price_data = get_fallback_prices()          # 96 quarters, all price = 1.0
-
-This is the F-013/F-014 pattern exactly - the NIBE adapter used to invent degree minutes, was made
-to raise instead, and here the fabrication has simply moved one layer up.
-
-The audit called it "price optimisation is silently inert". It is worse than inert. The invented
-prices are a **weighted vote in the control decision**, and they drag the house colder:
-
-    price_data = None          ->  offset +1.00 °C   (engine abstains; thermal layers decide)
-    price_data = fabricated    ->  offset +0.27 °C   ("[Spot Price] Q89: NORMAL (night)")
-
-A 73 % cut in the heat commanded, sourced from a number nobody measured. And the reasoning string
-shown to the user reports "[Spot Price] ... NORMAL" as though a real price had been analysed, while
-`sensor.effektguard_current_electricity_price` publishes the invented 1.0 as if it were the going
-rate - all with `enable_price_optimization = True`, so the user believes it is working.
-
-The honest answer to "what is the electricity price?" when there is no price source is **nothing**,
-not one. The engine already handles `price_data=None` correctly: the price layer abstains and the
-thermal, comfort and safety layers decide on their own. And the user has to be TOLD - through a
-Home Assistant repair issue, not a log line nobody reads.
+`price_data=None` is the honest answer, and the engine handles it: the price layer abstains and the
+thermal, comfort and safety layers decide. The user is told through a Home Assistant repair issue,
+raised when the source is missing and cleared unconditionally (the in-memory flag does not survive a
+restart, but the repair issue does).
 """
 
 from __future__ import annotations
@@ -134,14 +117,9 @@ def test_abstaining_heats_the_house_more_than_inventing_a_price(engine, state):
         current_power=2.0,
     )
 
-    # Reproduce what the fallback used to be: 96 identical quarters, for TODAY.
-    #
-    # The date matters, and getting it wrong HIDES the bug. PriceData.get_period_index(now) looks up
-    # the CURRENT quarter, so a day stamped with some other date matches nothing, the price layer
-    # abstains, and the fabricated case comes out identical to the honest one - the test passes and
-    # proves nothing. get_fallback_prices() built its invented day around dt_util.now(), which is
-    # precisely why it had a vote to cast. (I wrote it with a fixed date first, and it silently
-    # agreed with me.)
+    # Reproduce what the fallback used to be: 96 identical quarters, for TODAY. The date must be
+    # today - get_period_index(now) looks up the CURRENT quarter, so a differently-stamped day
+    # matches nothing, the price layer abstains, and the fabricated case would look identical.
     from homeassistant.util import dt as dt_util
 
     from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
@@ -179,22 +157,11 @@ def test_abstaining_heats_the_house_more_than_inventing_a_price(engine, state):
 
 
 def test_the_repair_issue_can_be_cleared_after_a_restart():
-    """The flag lives on the coordinator. The issue lives in Home Assistant.
+    """The `_price_issue_active` flag is reset by a restart; the repair issue HA persists is not.
 
-    `_price_issue_active` is an instance attribute, and a Home Assistant restart builds a NEW
-    coordinator with it set False - while the repair issue, which HA persists in its registry,
-    is still sitting there. Guarding the DELETE on that flag means:
-
-        boot 1   no price source   -> issue raised, flag True
-        (user configures GE-Spot, restarts HA)
-        boot 2   prices fine       -> flag is False again, so the delete returns early
-                                      and the issue stays raised. Forever.
-
-    The user is then nagged about a problem they have already fixed, and nothing they do will
-    clear it. Caught on a live Home Assistant, not here - which is the point of running it.
-
-    async_delete_issue is a no-op when there is nothing to delete, so the clear path must simply
-    not be conditional on in-memory state that does not survive the thing it is tracking.
+    If the delete is guarded on that flag, an issue raised before a restart can never be cleared
+    after one - the flag is False again, the delete returns early, and the user is nagged forever.
+    async_delete_issue is a no-op when there is nothing to delete, so the clear must be unconditional.
     """
     source = inspect.getsource(EffektGuardCoordinator._clear_price_source_issue)
 

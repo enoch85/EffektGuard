@@ -1,23 +1,14 @@
 """A user command is authoritative - but not below the absolute safety floor.
 
 `force_offset` and `boost_heating` previously returned from calculate_decision BEFORE the
-safety layer, the emergency thermal-debt layer, and the anti-windup flag were computed.
-The coordinator then *explicitly* bypassed the offset-volatility blocker for manual
-decisions. Nothing downstream re-checked degree minutes or indoor temperature.
+safety layer, the emergency thermal-debt layer, and the anti-windup flag were computed, and
+the coordinator explicitly bypassed the offset-volatility blocker for manual decisions. So
+`force_offset(-10)` for 6 hours would hold maximum heat REDUCTION while the house fell below
+MIN_TEMP_LIMIT, or while DM sat past DM_THRESHOLD_AUX_LIMIT with the immersion heater running.
 
-So `force_offset(-10)` for 6 hours would hold maximum heat REDUCTION while the house fell
-below MIN_TEMP_LIMIT, or while DM sat past DM_THRESHOLD_AUX_LIMIT with the immersion
-heater running.
-
-The fix applies the floor as a FLOOR, not a replacement:
-  - a user asking for MORE heat than safety requires is passed through untouched
-    (boost_heating(+10) still boosts),
-  - a user command that would leave the system below the safety floor is raised to it.
-
-Deliberately NOT changed (needs owner/NIBE confirmation): whether a user's explicit
-positive boost should also be capped by anti-windup when it is driving a DM spiral. That
-would override an explicit user request on a heuristic, so it is flagged rather than
-silently applied.
+The fix applies the floor as a FLOOR, not a replacement: a user asking for MORE heat than
+safety requires is passed through untouched (boost_heating(+10) still boosts); a command that
+would leave the system below the safety floor is raised to it.
 """
 
 from datetime import datetime

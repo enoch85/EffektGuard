@@ -1,25 +1,16 @@
-"""One test for every document, because the wrong number was in five of them.
+"""One test for every document, because the wrong number kept turning up in the prose.
 
-`docs/CLIMATE_ZONES.md` was corrected and given a test. The test parses its TABLE rows. So the
-prose in the other documents went on being wrong, and the same figures kept turning up:
+`docs/CLIMATE_ZONES.md` has a test that parses its TABLE rows, so the PROSE in the other documents
+went on being wrong. The trap: "-450 to -700" is a real Stockholm range - at -8 C, the Cold zone's
+actual winter average - but documents assert it at -10 C, where the code gives -490 to -740. You
+cannot catch that by looking for a bad number; it is a good number attached to the wrong
+temperature, and the root is one constant (Cold `winter_avg_low` = -8.0).
 
-    docs/architecture/00_overview.md          Stockholm (-10°C): Expects DM -450 to -700
-    docs/architecture/02_emergency_thermal_debt.md   Cold Zone at -10°C: -450 to -700
-    docs/architecture/10_adaptive_climate_zones.md   "Winter avg: -10.0°C"
-
-The trap is that **-450 to -700 is a real Stockholm range**. It is what the code produces at
-**-8 °C** - the Cold zone's actual winter average. Every one of those documents asserts it at
-**-10 °C**, where the code gives **-490 to -740**. You cannot catch that by looking for a bad
-number, because it is not a bad number; it is a good number attached to the wrong temperature.
-
-The root of it is one constant. The Cold zone's `winter_avg_low` is **-8.0**, and four documents
-still say -10.0, so every threshold they derive from it is off by 40 degree-minutes.
-
-So this checks the claim, not the digits: wherever a document names a climate zone or a city, gives
-an outdoor temperature, and prints a degree-minute range, that range must be the one
-`ClimateZoneDetector` actually computes at that temperature. It reads every markdown file in the
-repository - which is the P3 recommendation the audit made and nobody implemented: generate the
-numbers from `const.py`, or at least refuse to let them drift.
+So this checks the CLAIM, not the digits, across every markdown file: wherever a document names a
+zone or city, gives an outdoor temperature, and prints a degree-minute range, that range must be
+the one ClimateZoneDetector computes at that temperature. The removed flow-temperature model
+(Kuhne) and the scaled-spread bug are guarded here too, for the same reason - a guard scoped to one
+file has a hole the shape of every other file.
 """
 
 from __future__ import annotations
@@ -49,14 +40,11 @@ ZONES = {
 DM_RANGE = re.compile(r"(-\d{2,4})\s*(?:to|–|-)\s*(-\d{2,4})")
 # An outdoor temperature: "-10°C", "-10.0°C", "at -10 C".
 OUTDOOR = re.compile(r"(-?\d{1,2}(?:\.\d)?)\s*°?\s*C\b")
-# Every way this repository writes a zone's winter average:
+# Every way this repository writes a zone's winter average - including the underscore form
+# `winter_avg_low: -10.0°C`, the constant's own name as quoted in the code blocks people copy:
 #   "Winter avg: -10.0°C"     prose and mermaid labels
 #   "Average winter low: -8°C"
-#   "winter_avg_low: -10.0°C"  the CONSTANT's own name, quoted in code blocks
-#
-# The underscore form was missed at first, and a mutation test caught it: drifting
-# `winter_avg_low: -8.0` back to -10.0 in docs/architecture/10 passed cleanly. A guard that only
-# reads prose does not guard the code blocks people actually copy.
+#   "winter_avg_low: -10.0°C"
 WINTER_AVG = re.compile(
     r"[Ww]inter[\s_](?:avg|average)(?:[\s_]low)?[:\s]+(-?\d{1,2}(?:\.\d)?)"
     r"|[Aa]verage\s+winter\s+low[:\s]+(-?\d{1,2}(?:\.\d)?)"
@@ -194,10 +182,9 @@ DENIALS = (
 def _paragraphs_that_assert(path: Path) -> str:
     """A document's claims, minus the paragraphs that exist to warn you off something.
 
-    Whitespace is normalised BEFORE the markers are looked for. Markdown wraps prose, so a denial
-    reads "**was\nremoved**" in the file and a naive substring check for "was removed" misses it -
-    which it duly did, on the one document whose whole purpose is to explain what was removed. Four
-    separate holes in these guards have now come from testing a marker against un-normalised text.
+    Whitespace is normalised BEFORE the markers are looked for: markdown wraps prose, so a denial
+    can read "**was\nremoved**" in the file and a naive substring check for "was removed" would
+    miss it.
     """
     paragraphs = path.read_text(encoding="utf-8").split("\n\n")
     return "\n\n".join(p for p in paragraphs if not any(d in " ".join(p.split()) for d in DENIALS))

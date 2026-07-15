@@ -1,56 +1,13 @@
-"""The power meter goes away, and its estimate is billed as if the meter were still there.
+"""A configured power meter that drops out must not have its estimate billed as a meter reading.
 
-The coordinator is scrupulous about this. It says so three times:
+A meter goes `unavailable` routinely (a Zigbee plug loses its router, an MQTT bridge restarts).
+The old billing guard asked whether a power sensor was CONFIGURED, not whether one had just
+MEASURED anything - so once the meter dropped out, the compressor-Hz estimate that replaced it
+was recorded as a tariff peak and stamped with source "external_meter". Provenance was falsified,
+and effect tariffs bill the top-3 hours of the month, so a phantom peak stands for weeks.
 
-    # PRIORITY 3: Estimate from compressor Hz (NOT FOR PEAK TRACKING!)
-    # WARNING: Never record estimated peaks - billing must use real measurements only
-    ...
-    # CRITICAL: Only record monthly peaks with REAL measurements
-    # Estimates are NEVER used for monthly peak tracking - billing must be accurate
-    has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
-    if not has_real_measurement:
-        return
-
-Read the guard again. `has_external_power_sensor` is:
-
-    has_external_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
-        self.nibe.power_sensor_entity
-    )
-
-That is **"is a power sensor configured"**, not **"did a power sensor just measure something"**. The
-guard asks about the config entry. It cannot ask about the measurement, because by the time it runs,
-`current_power` is a bare float with no memory of where it came from.
-
-And the sensor's availability flag is a one-way latch. It is set True the first time the meter is seen
-alive, and the listener that set it then **unsubscribes itself** - "we don't need this listener anymore".
-Nothing ever sets it back to False. So the coordinator has no mechanism to notice a meter going away.
-
-Put those together and a configured meter that drops out - a Zigbee plug losing its router, an MQTT
-bridge restarting, a Shelly rebooting; the ordinary weather of a Home Assistant install - walks straight
-through:
-
-  1. state is `unavailable`, so the reader is skipped and `current_power` stays None;
-  2. `elif not self._power_sensor_available:` is False, because the flag latched True hours ago, so the
-     early return never fires;
-  3. PRIORITY 3 estimates the power from compressor Hz, logging "[ESTIMATE ONLY - not used for peak
-     billing]";
-  4. `has_real_measurement` is True, because the entity is still *configured*;
-  5. the estimate is accumulated into the quarter mean and **recorded as a tariff peak**.
-
-In the same cycle, the log says the number must never be used for billing, and then it is used for
-billing.
-
-It is also **stamped as a real measurement**: `measurement_source` is derived from
-`has_external_power_sensor and current_power >= 0.5`, which the estimate satisfies, so the peak is
-recorded with source "external_meter". The provenance is not merely lost. It is falsified, and there is
-nothing left in the record to tell the owner - or the next maintainer - that the number was invented.
-
-Swedish effect tariffs bill the top-3 quarter means of the month. A phantom peak survives the whole
-month: it corrupts what EffektGuard believes the bill will be, what it reports to the owner, and every
-decision the effect layer makes against it.
-
-The fix is not a better guess. It is to stop passing power around as a bare float. A measurement has to
-carry where it came from, and the billing guard has to ask *that* - not the config entry.
+The fix: a measurement carries where it came from, and the billing guard asks that (via
+PEAK_CONTROL_POWER_SOURCES), not the config entry.
 """
 
 from __future__ import annotations
@@ -112,9 +69,7 @@ def _pump_running_but_unmetered() -> NibeState:
 async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
     """Samples from 10:00 through 11:00, so the HOUR is observed whole and recorded.
 
-    It used to run 10:00-10:15 and call that a billing period. The Swedish effect tariff bills the
-    HOURLY mean - Ellevio: "the measurement uses hourly averages" - so a quarter-hour never
-    completes a billing period at all.
+    The Swedish effect tariff bills the HOURLY mean, so only a full hour completes a billing period.
     """
     for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
         monkeypatch.setattr(

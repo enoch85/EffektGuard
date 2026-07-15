@@ -30,12 +30,8 @@ def mock_nibe_state():
     state.outdoor_temp = 5.0
     state.indoor_temp = 21.0
     state.supply_temp = 35.0
-    # On the real NibeState, `flow_temp` is a @property aliasing supply_temp. MagicMock does not
-    # emulate properties, so setting supply_temp alone left flow_temp as an auto-mock - and the
-    # weather-compensation layer reads flow_temp. These tests never noticed, because the layer used
-    # to return early on "No weather data" (this fixture's weather mock has an empty forecast) and
-    # so never reached it. Every test in this file was therefore driving the decision engine with
-    # its primary layer switched off. Mirror the property, or the mock is not the object.
+    # Real NibeState exposes flow_temp as a @property aliasing supply_temp; MagicMock does not
+    # emulate properties, so mirror it here - the weather-compensation layer reads flow_temp.
     state.flow_temp = 35.0
     state.degree_minutes = -100.0
     state.current_offset = 0.0
@@ -86,9 +82,8 @@ async def decision_engine(hass_mock, mock_price_data):
     effect_manager = EffectManager(hass_mock)
     thermal_model = ThermalModel(thermal_mass=1.0, insulation_quality=1.0)
 
-    # The keys the engine actually reads - the old fixture set "target_temperature" and
-    # "tolerance" 5.0, neither of which exists, so the engine ran on defaults and every
-    # assertion here was made against a configuration nobody had set (F-098).
+    # The keys the engine actually reads. An old fixture set "target_temperature" and
+    # "tolerance" 5.0, neither of which the engine reads, so it silently ran on defaults.
     config = {
         "target_indoor_temp": 21.0,
         "tolerance": 0.5,
@@ -156,7 +151,7 @@ class TestEffectLayerIntegration:
     async def test_effect_layer_critical_peak(
         self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
     ):
-        """Test effect layer responds to critical peak risk."""
+        """Peak layer stays silent (weight 0.0) when power is comfortably under the monthly peak."""
         # Set up peak in effect manager
         timestamp = datetime(2025, 10, 14, 12, 0)
         await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
@@ -178,7 +173,7 @@ class TestEffectLayerIntegration:
 
         assert effect_layer.name == "Peak"
         # A weight >= 0.0 cannot fail. With power below the recorded peak and a healthy
-        # margin, the correct behavior is a QUIET layer - pin that instead (F-097).
+        # margin, the correct behavior is a QUIET layer - pin that instead.
         assert effect_layer.weight == 0.0, (
             f"Peak layer voted weight {effect_layer.weight} with power comfortably under "
             f"the monthly peak - peak protection should be silent here."
@@ -218,17 +213,9 @@ class TestLayerPriority:
     async def test_emergency_overrides_peak_protection(
         self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
     ):
-        """Test emergency layer behavior during CRITICAL degree minutes.
-
-        Nov 30, 2025: Updated to reflect smart recovery behavior.
-        When indoor temp is at target and prices aren't cheap, the system correctly
-        ignores DM recovery (Smart Recovery feature). This is the correct behavior
-        because:
-        1. Indoor temp is comfortable (21.0°C = target)
-        2. DM recovery during non-cheap periods wastes money
-        3. The system will recover DM when prices become cheap
-
-        If we need emergency to trigger, we must set indoor temp BELOW target.
+        """With indoor temp BELOW target and CRITICAL degree minutes, emergency recovery must
+        trigger. (At target with non-cheap prices, Smart Recovery deliberately ignores the DM, so
+        the emergency case requires the temperature to be below target.)
         """
         # Set critical degree minutes close to absolute max
         mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
@@ -340,7 +327,7 @@ class TestOffsetAggregation:
     async def test_critical_layer_dominates(
         self, decision_engine, mock_nibe_state, mock_price_data, mock_weather_data
     ):
-        """Test critical layer (weight=0.99) has very high priority in aggregation."""
+        """Test critical emergency layer (weight DM_CRITICAL_T3_WEIGHT) dominates aggregation."""
         # Set critical degree minutes close to absolute max
         mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
         mock_nibe_state.outdoor_temp = 5.0
@@ -379,22 +366,16 @@ class TestOffsetAggregation:
             current_power=2.0,
         )
 
-        # The claim is about the DEBT layer: at target, with normal prices, a DM of -1300 must not
-        # force heating. It doesn't - "At target & price not cheap - ignoring DM -1300".
+        # The DEBT layer must not force heating: at target, with normal prices, a DM of -1300 is
+        # ignored - "At target & price not cheap - ignoring DM -1300".
         emergency_layer = decision.layers[1]
         assert emergency_layer.name in ("Thermal Debt", "T1", "T2", "T3")
         assert emergency_layer.weight == 0.0
         assert emergency_layer.offset == 0.0
 
-        # This used to assert `decision.offset == 0.0`, and it passed for the wrong reason: Math WC
-        # was mute in every test in this file (the fixture's weather mock has an empty forecast, and
-        # the layer used to bail out on that), so the total was zero because nothing was voting.
-        #
-        # The debt layer is silent, which is what this test is for. Math WC is not, and must not be:
-        # the flow is 35.0C where the emitter law wants 36.3C at +5C outdoor, so it corrects a curve
-        # that is genuinely running cold. That correction is not debt recovery - and note its weight
-        # is already deferred to 0.15 from 0.49 BECAUSE of the critical DM, which is the system
-        # doing precisely what it should. So assert the intent: no layer but the heating curve votes.
+        # Assert the intent rather than `decision.offset == 0.0` (which passed only because Math WC
+        # was mute). The debt layer is silent, which is what this test is for; the weather-
+        # compensation curve is the only thing entitled to move the offset here.
         voting = [layer.name for layer in decision.layers if layer.weight > 0.0]
         assert voting == ["Math WC"], (
             f"layers {voting} voted. At target with normal prices, the only thing entitled to move "

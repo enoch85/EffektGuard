@@ -1,15 +1,7 @@
 """Comprehensive tests for all EffektGuard entities, sensors, and attributes.
 
-Tests verify:
-- All sensor entities are created and have correct configuration
-- All sensor attributes are properly defined
-- Climate entity functions correctly with proper attributes
-- Switch entities are created with correct configuration
-- All entity unique IDs, names, and device info are correct
-- Sensor value functions handle None/missing data gracefully
-- Extra state attributes are populated correctly
-
-This ensures complete entity coverage for production use.
+Guards sensor/switch/climate entity configuration, unique IDs and device info, sensor
+value functions (including None/missing data), and extra state attributes.
 """
 
 import pytest
@@ -252,12 +244,10 @@ class TestSensorEntityDefinitions:
                 assert sensor.state_class == SensorStateClass.MEASUREMENT
 
     def test_curve_offset_is_a_temperature_delta_not_a_temperature(self):
-        """The heating-curve offset is an INTERVAL, and must not be absolutely converted.
+        """current_offset is a curve INTERVAL: device_class TEMPERATURE_DELTA, not TEMPERATURE.
 
-        With device_class TEMPERATURE, Home Assistant applies absolute conversion: an
-        imperial user saw an offset of 0.0 C rendered as 32.0 F, and -2 C as 28.4 F - and
-        long-term statistics stored the converted value. TEMPERATURE_DELTA is the class HA
-        provides for exactly this, and it permits MEASUREMENT.
+        TEMPERATURE would make HA convert it absolutely (0 C -> 32 F for non-metric users);
+        TEMPERATURE_DELTA is the correct class and still permits MEASUREMENT.
         """
         offset = next(s for s in SENSORS if s.key == "current_offset")
 
@@ -286,7 +276,7 @@ class TestSensorEntityDefinitions:
             "outdoor_temperature",
             "indoor_temperature",
             "nibe_power",
-            "period_of_day",
+            "quarter_of_day",
             "temperature_trend",
             "outdoor_temperature_trend",
             "optional_features_status",

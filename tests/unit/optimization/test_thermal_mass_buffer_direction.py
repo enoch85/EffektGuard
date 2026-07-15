@@ -1,22 +1,12 @@
 """A slab that takes six hours to respond must be helped SOONER, not later.
 
-Degree-minute thresholds are NEGATIVE. `_get_thermal_mass_adjusted_thresholds` multiplied them by
-a buffer above 1.0 for high-mass systems:
+Degree-minute thresholds are NEGATIVE, so the thermal-mass buffer must DIVIDE, not multiply: for a
+concrete slab, -540 / 1.3 = -415 fires earlier, while -540 * 1.3 = -702 would make the slowest
+system the LAST to intervene and the radiator the first. Heat put into a slab arrives hours later, so
+it must start recovering while the debt is still shallow.
 
-    warning = -540 * 1.3 = -702
-
-which does not tighten the threshold, it deepens it. The concrete slab - the system whose own
-docstring says it needs to act earlier, because "current DM doesn't immediately affect indoor
-temperature" and the lag is six hours or more - was made the LAST to intervene, and a radiator
-system, which can recover in under an hour, the first.
-
-The buffer must DIVIDE:
-
-    warning = -540 / 1.3 = -415        (fires earlier, as intended)
-
-The direction is not a matter of taste. Heat put into a concrete slab arrives in the room hours
-later, so a slab must start recovering while the debt is still shallow; by the time it reaches a
-radiator system's threshold, the slab has hours of unrecoverable deficit already committed.
+Invariant: warning thresholds order concrete > timber > radiator (shallower = sooner), the radiator
+(buffer 1.0) is unmodified, and the absolute limit is never buffered.
 """
 
 import pytest

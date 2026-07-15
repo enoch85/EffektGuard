@@ -1,39 +1,14 @@
-"""A billing peak was fabricated from an hour the meter mostly did not see.
+"""An hour the meter mostly did not see must not be billed at all.
 
-The code says this, in a warning it logs on every cycle the meter fails to answer:
+When the meter goes `unavailable`, nothing is billed FROM the estimate - but the billing HOUR
+used to carry on and, at close, bill whatever the meter last said before it went quiet,
+stretched across the silence. A 9 kW reading at 10:00 followed by a blackout until 10:55
+became a fabricated 8.33 kW hour ((9*55 + 1*5)/60), which stands for the rest of the month
+because the effect tariff bills the three highest hours - throttling the pump to defend a
+number that happened in no hour.
 
-    "External power meter %s did not yield a reading (state: %s).
-     Peak billing is suspended until it does - estimates are not billable."
-
-It is not suspended. Nothing is billed FROM the estimate, which is what that sentence is guarding -
-but the billing HOUR carries on regardless, and when it closes it is billed anyway, using whatever the
-meter last said before it went quiet, stretched across the whole of the silence.
-
-Driving the real coordinator: the meter reads 9 kW at 10:00, goes `unavailable`, and comes back at
-10:55 reading 1 kW. It was observed for TWO of the twelve cycles in that hour - fifty minutes of the
-sixty are a blackout - and the warning above is logged ten times.
-
-    BILLED: hour 10, 8.33 kW
-
-Which is (9 x 55 + 1 x 5) / 60: the single 9 kW reading taken at the top of the hour, extrapolated
-across fifty minutes in which nobody was watching. The house may have been idle for all of it.
-
-AND A FABRICATED PEAK IS NOT A HARMLESS ONE. The effect tariff bills the mean of the three highest
-hours of the month, and this integration throttles the heat pump to defend that record. An 8.33 kW
-entry stands for the rest of the month, and every real hour is measured against it - so the pump is
-held back, in January, to protect a number that appears on no bill and happened in no hour.
-
-THE CODE ALREADY KNOWS THE RULE. It discards the first hour after startup for exactly this reason:
-
-    "Discarding partial effect-tariff hour %d (observation began mid-hour)"
-
-An hour that began before observation is not a measurement of an hour. Neither is an hour the meter
-slept through the middle of. The rule was applied to one and not the other.
-
-WHICH WAY TO ERR, AND WHY. Refusing an under-observed hour can miss a real peak, and that costs
-protection. Billing an invented one costs a month of throttling to defend a fiction - and the utility
-bills from ITS meter, not from ours, so our record only ever decides whether to hold the pump back.
-Missing an hour is recoverable. Inventing one is not. So an hour that was not watched is not billed.
+The guard: an hour containing a silence longer than MAX_BILLING_OBSERVATION_GAP_MINUTES is
+refused. Missing a real peak is recoverable; inventing one is not.
 """
 
 from __future__ import annotations
@@ -201,15 +176,12 @@ async def test_the_gap_that_is_tolerated_is_bounded_by_the_update_interval(monke
 
 @pytest.mark.asyncio
 async def test_a_meter_that_dies_and_never_returns_does_not_bill_the_rest_of_the_hour(monkeypatch):
-    """The silence that runs to the boundary is a gap too, and a mutation test found I had missed it.
+    """The silence that runs from the last reading to the hour boundary is a gap too.
 
-    The meter answers at 10:00 and 10:05, then goes `unavailable` and stays that way. The hour closes
-    at 11:00 with two samples five minutes apart - so every gap BETWEEN readings is a healthy five
-    minutes, and a guard that only inspects those gaps sees a perfectly well-observed hour. Fifty-
-    five minutes of it are silence.
-
-    That is the ordinary shape of a meter dropping out: it does not politely return before the hour
-    ends. The last reading stands until the boundary, so THAT span is a gap and is measured as one.
+    The meter answers at 10:00 and 10:05, then stays `unavailable`. Every gap BETWEEN readings is a
+    healthy five minutes, so a guard that only inspects those gaps would see a well-observed hour -
+    but the last reading is carried across fifty-five minutes of silence to the boundary, and that
+    trailing span must be measured as a gap.
     """
     coordinator = _coordinator()
 

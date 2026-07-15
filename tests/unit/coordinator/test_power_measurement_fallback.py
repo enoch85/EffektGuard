@@ -248,17 +248,10 @@ class TestKilowattMeterNotDividedTwice:
 class TestAMeterBehindSolarIsStillTheMeter:
     """A grid-import meter reading low behind solar is reporting the truth, and the truth is billed.
 
-    There used to be a "smart fallback" here: a meter reading under 0.5 kW while the compressor ran
-    above 20 Hz was assumed to be masked by solar export, so an ESTIMATE of the compressor's draw was
-    substituted - and recorded against the effect tariff.
-
-    The grid operator bills grid IMPORT. If solar covers 4.7 kW of a 5.0 kW compressor, the house
-    imported 0.3 kW and 0.3 kW is what is charged. Recording ~5.5 kW instead inflated the month's peak
-    by an order of magnitude, in the owner's disfavour, and effect tariffs bill the top three quarters
-    of the month, so it stood for weeks.
-
-    Owner decision: "Math should be correct. So if solar covers everything but 0.5 kW, count 0.5 kW
-    for that period." The meter is the truth. There is nothing to override.
+    An old "smart fallback" substituted an ESTIMATE of compressor draw when the meter read under
+    0.5 kW while the compressor ran above 20 Hz. But the operator bills grid import, which is exactly
+    what the meter saw: recording ~5.5 kW where 0.3 kW was imported inflated the month's peak by an
+    order of magnitude. The meter is the truth; there is nothing to override.
     """
 
     @pytest.mark.asyncio
@@ -531,15 +524,12 @@ def coordinator():
 
 
 class TestTheBillingPeriodMeanIsAnHour:
-    """This class used to be TestQuarterMeanRecording, and the quantity it pinned is not billed.
+    """The billing period is the HOUR, not the quarter-hour.
 
-    The Swedish effect tariff bills the mean power over an HOUR. Ellevio: "the measurement uses
-    hourly averages". Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per
-    timme". The coordinator accumulated quarter-hours, so a 15-minute hot-water cycle at 9 kW inside
-    an otherwise idle hour was recorded as a 9 kW billing peak where the meter bills 3.
-
-    Every property these tests pinned is still worth pinning - the mean rather than the spike, the
-    time-weighting, the discarded partial period at startup. Only the window changed.
+    The Swedish effect tariff bills the mean power over an HOUR. Accumulating quarter-hours instead
+    recorded a 15-minute 9 kW hot-water cycle in an otherwise idle hour as a 9 kW billing peak where
+    the meter bills 3. These tests pin the mean rather than the spike, the time-weighting, and the
+    discarded partial startup period - over the correct (hourly) window.
     """
 
     @pytest.mark.asyncio
@@ -660,16 +650,8 @@ class TestTheBillingPeriodMeanIsAnHour:
     ):
         """A sample that stands for 15 minutes must not weigh the same as one standing for 5.
 
-        The claim - the hour's mean is time-weighted, not sample-counted - is unchanged. The SCENARIO
-        had to change. It used to read 1 kW at :00, 9 kW at :01 and 1 kW at :59, which is a
-        FIFTY-EIGHT MINUTE gap between two readings. That is not an irregular sample, it is a meter
-        that stopped answering: the coordinator now refuses to bill an hour containing a silence
-        longer than MAX_BILLING_OBSERVATION_GAP_MINUTES, because stretching one reading across most
-        of an hour invents a peak rather than measuring one (see
-        test_an_hour_the_meter_slept_through_is_not_a_bill.py).
-
-        So the arithmetic is demonstrated on an hour that was actually OBSERVED. Every gap below is
-        within the limit, and the two formulas still disagree by 40%:
+        The hour's mean is time-weighted, not sample-counted. Demonstrated on an actually-observed
+        hour (every gap within MAX_BILLING_OBSERVATION_GAP_MINUTES), where the two formulas disagree:
 
             time-weighted:   (1*45 + 9*15) / 60  = 3.0 kW   <- what the grid bills
             sample-counted:  (1+1+1+9+9) / 5     = 4.2 kW
