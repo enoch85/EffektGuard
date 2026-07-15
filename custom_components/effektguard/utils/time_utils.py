@@ -8,10 +8,10 @@ from typing import Optional
 
 from homeassistant.util import dt as dt_util
 
-from ..const import QUARTER_INTERVAL_MINUTES, QUARTERS_PER_DAY
+from ..const import MINUTES_PER_QUARTER, QUARTERS_PER_DAY
 
 # Minutes per quarter (15 min = Swedish Effektavgift measurement period)
-QUARTERS_PER_HOUR = 60 // QUARTER_INTERVAL_MINUTES  # 4
+QUARTERS_PER_HOUR = 60 // MINUTES_PER_QUARTER  # 4
 
 
 def get_current_quarter(now: Optional[datetime] = None) -> int:
@@ -28,7 +28,7 @@ def get_current_quarter(now: Optional[datetime] = None) -> int:
     """
     if now is None:
         now = dt_util.now()
-    return (now.hour * QUARTERS_PER_HOUR) + (now.minute // QUARTER_INTERVAL_MINUTES)
+    return (now.hour * QUARTERS_PER_HOUR) + (now.minute // MINUTES_PER_QUARTER)
 
 
 def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> Optional[int]:
@@ -65,3 +65,14 @@ def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> 
     if len(periods) == QUARTERS_PER_DAY and quarter < len(periods):
         return quarter
     return None
+
+
+def get_current_billing_period(now: Optional[datetime] = None) -> int:
+    """The effect tariff's billing period: the HOUR of the day, 0-23.
+
+    Not the quarter-hour. Ellevio: "the measurement uses hourly averages".
+    Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+    """
+    if now is None:
+        now = dt_util.now()
+    return now.hour

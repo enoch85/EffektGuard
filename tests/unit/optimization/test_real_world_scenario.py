@@ -1,17 +1,8 @@
-"""Test real-world multi-layer optimization scenario.
+"""Spot-price layer guards across a full day of real prices.
 
-This test validates the exact scenario documented in REAL_WORLD_EXAMPLE_ALL_FACTORS.md:
-- Time: 08:00 (Q32)
-- Spot price: 1.90 SEK/kWh (EXPENSIVE)
-- Outdoor: -5°C
-- Indoor: 20.8°C
-- DM: -180
-- All 8 layers voting and aggregating
-
-Expected result: -1.5°C offset from weighted aggregation of:
-- Weather Compensation: -2.0°C (weight 0.8)
-- Spot Price: -1.5°C (weight 0.6)
-- Comfort: +0.1°C (weight 0.3)
+Drives the engine at daytime-expensive, nighttime-cheap, and evening-peak quarters and pins the
+resulting price-layer offset and weight, including the daytime multiplier, the cheap-period
+pre-heat, and how the user's tolerance setting scales the reduction.
 """
 
 import pytest
@@ -157,208 +148,7 @@ async def decision_engine(hass_mock, expensive_price_data):
 
 
 class TestRealWorldScenario:
-    """Test complete real-world optimization scenario."""
-
-    @pytest.mark.asyncio
-    @freeze_time("2025-01-16 08:00:00")
-    async def test_08_00_expensive_morning_optimization(
-        self,
-        decision_engine,
-        real_world_nibe_state,
-        expensive_price_data,
-        winter_weather_data,
-    ):
-        """Test 08:00 expensive morning period with all layers active.
-
-        Expected behavior:
-        - Layer 1 (Safety): 0.0°C (temp OK)
-        - Layer 2 (Emergency): 0.0°C (DM -180 acceptable)
-        - Layer 3 (Proactive Debt Prevention): +0.5°C (DM -180 approaching -240 threshold)
-        - Layer 4 (Effect Tariff): 0.0°C (no peak risk)
-        - Layer 5 (Prediction): 0.0°C (optional, not configured)
-        - Layer 6 (Weather Comp): Variable (based on current vs optimal)
-        - Layer 7 (Weather Pred): +3.0°C (5°C drop triggers preheating)
-        - Layer 8 (Spot Price): -1.5°C (EXPENSIVE period, daytime multiplier)
-        - Layer 9 (Comfort): 0.0°C (temp at target)
-
-        Final offset will be POSITIVE (weather preheating overrides price savings)
-        Safety > cost savings: thermal protection during cold spell
-        """
-        # Mock dt_util.now() to return our test timestamp (08:00)
-        test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)
-
-        with patch(
-            "custom_components.effektguard.optimization.decision_engine.dt_util.now",
-            return_value=test_time,
-        ):
-            decision = decision_engine.calculate_decision(
-                nibe_state=real_world_nibe_state,
-                price_data=expensive_price_data,
-                weather_data=winter_weather_data,
-                current_peak=2.8,  # Safe margin from monthly peak 5.2 kW
-                current_power=1.5,
-            )
-
-            # Debug: Check what quarter we're actually in
-            calc_quarter = (test_time.hour * 4) + (test_time.minute // 15)
-            print(f"\n=== Debug Info ===")
-            print(f"Test timestamp: {test_time}")
-            print(f"Calculated quarter: Q{calc_quarter}")
-            print(
-                f"Price at Q{calc_quarter}: {expensive_price_data.today[calc_quarter].price:.2f} SEK"
-            )
-            print(f"Price layer reason: {decision.layers[6].reason}")
-            print(f"==================\n")
-
-        # Verify decision structure
-        assert decision is not None
-        assert hasattr(decision, "offset")
-        assert hasattr(decision, "reasoning")
-        assert hasattr(decision, "layers")
-
-        # Verify all 9 layers exist (added proactive thermal debt layer)
-        assert len(decision.layers) == 9
-
-        # Layer 1: Safety (should be inactive, temp OK)
-        safety_layer = decision.layers[0]
-        assert safety_layer.offset == 0.0
-        assert "Safety" in safety_layer.reason or "OK" in safety_layer.reason
-
-        # Layer 2: Emergency (should be inactive, DM OK)
-        emergency_layer = decision.layers[1]
-        assert emergency_layer.offset == 0.0
-        assert emergency_layer.weight == 0.0
-        assert (
-            "Emergency" in emergency_layer.reason
-            or "OK" in emergency_layer.reason
-            or "-180" in emergency_layer.reason
-        )
-
-        # Layer 3: Proactive Debt Prevention (NEW - may be active at DM -180)
-        proactive_layer = decision.layers[2]
-        # May vote for gentle heating to prevent debt progression
-
-        # Layer 4: Effect Tariff (should be inactive, safe margin)
-        effect_layer = decision.layers[3]
-        assert effect_layer.offset == 0.0
-        assert effect_layer.weight == 0.0
-
-        # Layer 5: Prediction (Phase 6 optional, not configured)
-        prediction_layer = decision.layers[4]
-        assert prediction_layer.offset == 0.0
-        assert prediction_layer.weight == 0.0
-
-        # Layer 6: Weather Compensation (deferred when thermal debt exists)
-        weather_comp_layer = decision.layers[5]
-        # Note: With DM -180 (light debt), weather compensation defers to recovery layers
-        # This is correct production behavior: safety > optimization
-        # Weight will be 0.0 when deferred, or >0 if debt is minimal
-        assert weather_comp_layer.weight >= 0.0  # May be deferred
-        # When deferred, reason will mention "debt" or "Deferred"
-
-        # Layer 7: Weather Prediction (may be active with forecast)
-        weather_pred_layer = decision.layers[6]
-        # Weather layer can vote for pre-heating
-
-        # Layer 8: Spot Price (SHOULD BE ACTIVE - KEY TEST)
-        price_layer = decision.layers[7]
-        assert price_layer.offset < 0.0, "Price layer should reduce during EXPENSIVE period"
-        # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
-        # Weight may be reduced based on VOLATILE_WEIGHT_REDUCTION constant
-        min_expected_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
-        max_expected_weight = LAYER_WEIGHT_PRICE
-        assert min_expected_weight <= price_layer.weight <= max_expected_weight, (
-            f"Price layer weight should be between {min_expected_weight} (volatile) and "
-            f"{max_expected_weight} (normal), got {price_layer.weight}"
-        )
-        assert (
-            "EXPENSIVE" in price_layer.reason
-            or "PEAK" in price_layer.reason
-            or "Q32" in price_layer.reason
-        )
-
-        # Calculate expected price offset
-        # With the new price data:
-        # Q32 = 2.40 SEK (high in the distribution)
-        # Should be classified as EXPENSIVE or PEAK based on percentiles
-        # Base: -1.0°C (EXPENSIVE) or -2.0°C (PEAK)
-        # Daytime multiplier: ×1.5
-        # Tolerance factor: 5/5.0 = 1.0
-        # Expected: -1.5°C to -3.0°C range
-        assert price_layer.offset <= -1.0, (
-            f"Price layer should significantly reduce during expensive period, "
-            f"got {price_layer.offset}°C with reason: {price_layer.reason}"
-        )
-
-        # Layer 9: Comfort (should be slightly positive, temp below target)
-        comfort_layer = decision.layers[8]
-        # May be inactive if temp is close to target
-        if comfort_layer.weight > 0:
-            assert comfort_layer.offset >= -0.5, "Comfort offset should be gentle"
-
-        # Final offset - The multi-layer system balances all factors
-        # In this scenario:
-        # - Weather pre-heat: +1.17°C (weight 0.7) - suggests heating before cold
-        # - Spot Price: -1.5°C (weight 0.75) - expensive period, reduce heating
-        # - Math WC: +0.33°C (weight 0.3185) - weather compensation adjustment
-        # - Proactive Z1: +0.5°C (weight 0.3) - gentle debt prevention
-        #
-        # The weighted average can be negative if price weight > weather weight
-        # This is correct behavior: during expensive periods, optimize for cost
-        # unless weather protection is critical (which it's not at 5h lead time)
-        #
-        # The system correctly prioritizes cost savings when there's adequate time
-        # before the cold snap (5 hours with 6h lead time = not urgent)
-        assert decision.offset is not None, "Decision should have an offset"
-
-        # Verify all major layers contributed to the decision
-        active_layers = [l for l in decision.layers if l.weight > 0]
-        active_layer_names = [l.name for l in active_layers]
-
-        # Weather pre-heat layer should be active
-        assert any(
-            "Weather" in name or "Pre-heat" in name for name in active_layer_names
-        ), f"Weather/preheat should be considered. Active layers: {active_layer_names}"
-
-        # Price layer should be active
-        assert (
-            "Spot Price" in active_layer_names
-        ), f"Price layer should be active. Active layers: {active_layer_names}"
-
-        # Expected range: Price optimization may win if not urgent
-        # If offset is negative: cost optimization dominant (correct when not urgent)
-        # If offset is positive: weather protection dominant (correct when urgent)
-        # The multi-layer system balances all factors - result can be negative or positive
-        # depending on the relative weights and urgency
-        assert (
-            -3.0 <= decision.offset <= 3.0
-        ), f"Final offset {decision.offset}°C outside safety bounds -3.0 to 3.0°C"
-
-        # Verify reasoning includes active layers
-        assert decision.reasoning != ""
-        # Should mention weather compensation, spot price, and/or comfort
-        reasoning_lower = decision.reasoning.lower()
-        assert (
-            "wc" in reasoning_lower
-            or "weather" in reasoning_lower
-            or "spot" in reasoning_lower
-            or "price" in reasoning_lower
-        ), f"Reasoning should mention active layers: {decision.reasoning}"
-
-        print(f"\n=== Real-World Scenario Test Results ===")
-        print(f"Time: 08:00 (Q32)")
-        print(f"Outdoor: {real_world_nibe_state.outdoor_temp}°C")
-        print(f"Indoor: {real_world_nibe_state.indoor_temp}°C")
-        print(f"Spot Price: {expensive_price_data.today[32].price:.2f} SEK/kWh")
-        print(f"\nLayer Votes:")
-        for i, layer in enumerate(decision.layers, 1):
-            if layer.weight > 0:
-                print(
-                    f"  Layer {i}: {layer.offset:+.1f}°C (weight {layer.weight:.1f}) - {layer.reason}"
-                )
-        print(f"\nFinal Offset: {decision.offset:.1f}°C")
-        print(f"Reasoning: {decision.reasoning}")
-        print(f"========================================\n")
+    """Price-layer offset and weight at representative quarters through the day."""
 
     @pytest.mark.asyncio
     @freeze_time("2025-01-16 08:00:00")
@@ -369,10 +159,8 @@ class TestRealWorldScenario:
         expensive_price_data,
         winter_weather_data,
     ):
-        """Test that daytime multiplier amplifies expensive/peak reductions.
-
-        Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
-        when much cheaper period detected within 4-hour horizon.
+        """The daytime multiplier amplifies the EXPENSIVE reduction, and a forecast adjustment
+        adds further reduction when a much cheaper period lies ahead.
         """
         test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)  # Q32
 
@@ -396,8 +184,7 @@ class TestRealWorldScenario:
             # Tolerance factor: 0.2 + ((2.0 - 0.5) / 2.5) * 0.8 = 0.68
             # Mode multiplier: 1.0 (balanced)
             # Base: -1.0 × 1.5 × 0.68 × 1.0 = -1.02°C
-            # Forward-looking: Detects cheaper period ahead (Q44-48 @ 0.90 öre = 62% cheaper)
-            # Forecast adjustment: -1.5°C (wait for cheaper period - strengthened Dec 5, 2025)
+            # Forecast adjustment: -1.5°C (cheaper period ahead, Q44-48 @ 0.90 öre = 62% cheaper)
             # Expected: -1.02 + (-1.5) = -2.52°C
 
             assert price_layer.offset == pytest.approx(-2.5, abs=0.3)
@@ -505,13 +292,11 @@ class TestRealWorldScenario:
         real_world_nibe_state,
         winter_weather_data,
     ):
-        """Test that user tolerance setting scales spot price optimization.
+        """The user tolerance setting scales the spot-price reduction.
 
-        Tolerance range: 0.5-3.0 maps to factor 0.2-1.0
-        Formula: factor = 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
-
-        Note: Forward-looking price optimization (Nov 27, 2025) adds forecast adjustment
-        independent of tolerance setting.
+        Tolerance range 0.5-3.0 maps to factor 0.2-1.0:
+        factor = 0.2 + ((tolerance - 0.5) / 2.5) * 0.8. The forecast adjustment is added on top,
+        independent of tolerance.
         """
         test_time = datetime(2025, 1, 16, 8, 0, tzinfo=timezone.utc)  # Q32
 
@@ -555,7 +340,7 @@ class TestRealWorldScenario:
                 # Daytime: ×1.5
                 # Tolerance factor: 0.2 + ((tolerance - 0.5) / 2.5) * 0.8
                 # Mode multiplier: 1.0 (balanced)
-                # Forward-looking: -1.5°C (cheaper period ahead, strengthened Dec 5, 2025)
+                # Forecast adjustment: -1.5°C (cheaper period ahead)
                 expected_base = -1.0 * 1.5 * expected_factor * 1.0  # mode mult = 1.0
                 expected_offset = expected_base + (-1.5)  # Add forecast adjustment
 

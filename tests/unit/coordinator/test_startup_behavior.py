@@ -107,6 +107,7 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
         phase2_current=None,
         phase3_current=None,
         power_kw=None,
+        current_offset=0.0,
     )
 
     nibe = MagicMock()
@@ -156,7 +157,9 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
 
     coordinator._apply_airflow_decision = AsyncMock()
 
-    result = await coordinator._async_update_data()
+    # Drive the pump for real. Calling the read hook would prove nothing: the read path applies
+    # nothing at all, so the assertion below would hold whether the grace period worked or not.
+    result = await coordinator._drive_the_pump()
 
     # First successful update is within grace period by default.
     coordinator._apply_airflow_decision.assert_not_awaited()
@@ -182,6 +185,7 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         dhw_top_temp=45.0,
         power_sensor_entity="sensor.power",
         dhw_amount_minutes=10,
+        current_offset=0.0,
     )
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
     nibe.set_curve_offset = AsyncMock(return_value=True)

@@ -90,40 +90,17 @@
     "step": {
       "init": {
         "title": "EffektGuard-alternativ",
-        "description": "Konfigurera optimeringsbeteende och byggnadsegenskaper.\n\n**Ändringar tillämpas omedelbart** utan omstart. Använd **Omkonfigurera** för att ändra sensorval.",
-        "data": {
-          "optimization_mode": "Optimeringsläge"
-        },
-        "data_description": {
-          "optimization_mode": "**Komfort**: Tight temperaturkontroll, minimal prisoptimering, prioriterar stabil värme. **Balanserad**: Måttlig optimering som tillåter små temperaturvariationer för kostnadsbesparingar. **Besparingar**: Maximal prisoptimering med större temperatursvängningar under billiga/dyra perioder"
-        },
         "sections": {
-          "comfort_settings": {
-            "name": "Komfortinställningar",
-            "description": "Finjustera temperaturkomforttolerans",
+          "optimization_settings": {
+            "name": "Optimeringsinställningar",
+            "description": "Välj optimeringsläge och temperaturtolerans",
             "data": {
+              "optimization_mode": "Optimeringsläge",
               "tolerance": "Temperaturtolerans"
             },
             "data_description": {
+              "optimization_mode": "**Komfort**: Tight temperaturkontroll, minimal prisoptimering, prioriterar stabil värme. **Balanserad**: Måttlig optimering som tillåter små temperaturvariationer för kostnadsbesparingar. **Besparingar**: Maximal prisoptimering med större temperatursvängningar under billiga/dyra perioder",
               "tolerance": "Styr tillåten temperaturavvikelse från mål (±0,2°C dödzon bibehålls alltid). Högre värden tillåter mer aggressiv kostnadsoptimering men större temperatursvängningar"
-            }
-          },
-          "dhw_settings": {
-            "name": "Varmvatteninställningar",
-            "description": "Schemalägg när varmvatten ska värmas",
-            "data": {
-              "dhw_target_temp": "Varmvatten måltemperatur",
-              "dhw_morning_enabled": "Morgon varmvatten",
-              "dhw_morning_hour": "Morgon starttid",
-              "dhw_evening_enabled": "Kväll varmvatten",
-              "dhw_evening_hour": "Kväll starttid"
-            },
-            "data_description": {
-              "dhw_target_temp": "Måltemperatur för varmvatten (45-60°C)",
-              "dhw_morning_enabled": "Aktivera uppvärmning av varmvatten på morgonen",
-              "dhw_morning_hour": "Morgonbehovsperiod starttimme",
-              "dhw_evening_enabled": "Aktivera uppvärmning av varmvatten på kvällen",
-              "dhw_evening_hour": "Kvällsbehovsperiod starttimme"
             }
           },
           "building_characteristics": {
@@ -136,6 +113,24 @@
             "data_description": {
               "thermal_mass": "Hur snabbt byggnaden reagerar på förändringar (0,5=lätt/trä, 1,0=normal, 2,0=tung/betong)",
               "insulation_quality": "Övergripande isoleringsnivå (0,5=dålig, 1,0=normal, 2,0=utmärkt)"
+            }
+          },
+          "domestic_hot_water": {
+            "name": "Varmvatten (DHW)",
+            "description": "Schemalägg när varmvattnet ska vara klart och hur mycket du behöver",
+            "data": {
+              "dhw_target_temp": "Varmvatten måltemperatur",
+              "dhw_min_amount": "Minsta mängd varmvatten vid schemalagd tid",
+              "dhw_schedules": "Aktivera/inaktivera",
+              "dhw_morning_hour": "Morgon starttid",
+              "dhw_evening_hour": "Kväll starttid"
+            },
+            "data_description": {
+              "dhw_target_temp": "Måltemperatur för varmvatten (45-60°C)",
+              "dhw_min_amount": "Antal minuters varmvatten som ska finnas tillgängligt vid den schemalagda tiden.\n\nEffektGuard värmer under de billigaste timmarna för att säkerställa att mängden är klar när du behöver den.",
+              "dhw_schedules": "Välj vilka uppvärmningsperioder som ska vara aktiva. Avmarkera för att stänga av uppvärmning under perioden.",
+              "dhw_morning_hour": "Morgonbehovsperiod starttimme",
+              "dhw_evening_hour": "Kvällsbehovsperiod starttimme"
             }
           },
           "airflow_optimization": {
@@ -152,6 +147,9 @@
           }
         }
       }
+    },
+    "error": {
+      "invalid_dhw_config": "Ogiltig varmvatteninställning: {reason}"
     }
   },
   "entity": {
@@ -174,6 +172,80 @@
       "airflow_optimization": {
         "name": "Luftflödesoptimering"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Aktuell förskjutning"
+      },
+      "degree_minutes": {
+        "name": "Gradminuter"
+      },
+      "supply_temperature": {
+        "name": "Framledningstemperatur"
+      },
+      "outdoor_temperature": {
+        "name": "Utomhustemperatur"
+      },
+      "indoor_temperature": {
+        "name": "Inomhustemperatur"
+      },
+      "current_price": {
+        "name": "Aktuellt elpris"
+      },
+      "peak_today": {
+        "name": "Effekttopp idag"
+      },
+      "peak_this_month": {
+        "name": "Effekttopp denna månad"
+      },
+      "nibe_power": {
+        "name": "NIBE effekt"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorfrekvens"
+      },
+      "compressor_health": {
+        "name": "Kompressorns hälsostatus"
+      },
+      "optimization_reasoning": {
+        "name": "Optimeringsmotivering"
+      },
+      "quarter_of_day": {
+        "name": "Kvart på dygnet"
+      },
+      "price_period_classification": {
+        "name": "Prisperiodens klassificering"
+      },
+      "temperature_trend": {
+        "name": "Trend för inomhustemperatur"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Trend för utomhustemperatur"
+      },
+      "savings_estimate": {
+        "name": "Uppskattad besparing per månad"
+      },
+      "optional_features_status": {
+        "name": "Status för valfria funktioner"
+      },
+      "heat_pump_model": {
+        "name": "Värmepumpsmodell"
+      },
+      "dhw_status": {
+        "name": "Varmvattenstatus"
+      },
+      "dhw_recommendation": {
+        "name": "Varmvattenrekommendation"
+      },
+      "dhw_next_boost_time": {
+        "name": "Schemalagd varmvattenstart"
+      },
+      "airflow_enhancement": {
+        "name": "Förhöjt luftflöde"
+      },
+      "airflow_thermal_gain": {
+        "name": "Värmevinst från luftflöde"
+      }
     }
   },
   "services": {
@@ -184,6 +256,16 @@
     "boost_hot_water": {
       "name": "Boosta varmvatten",
       "description": "Starta omedelbar varmvattencykel"
+    }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ingen elpriskälla",
+      "description": "EffektGuard saknar elprisdata, så prisoptimeringen är inte igång - värmekurvan styrs enbart av komfort och säkerhet. Konfigurera en spotprisentitet (GE-Spot, Nord Pool eller liknande) i integrationens inställningar för att aktivera den."
+    },
+    "no_dhw_control_entity": {
+      "title": "Ingen entitet för varmvattenstyrning",
+      "description": "EffektGuard styr varmvatten genom att slå på NIBEs tillfälliga lyx-brytare, och ingen sådan entitet hittades. Home Assistants NIBE-integration exponerar det registret (50004) endast för F-serien, så en S-seriepump saknar motsvarighet - varmvattenoptimeringen är INTE igång, och en schemalagd körning som sensorerna visar kommer inte att ske. Värmeoptimeringen påverkas inte."
     }
   }
 }

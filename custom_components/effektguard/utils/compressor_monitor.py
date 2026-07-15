@@ -17,6 +17,15 @@ from typing import TypedDict
 
 from homeassistant.util import dt as dt_util
 
+from ..const import (
+    COMPRESSOR_HZ_MAX,
+    COMPRESSOR_RISK_ELEVATED,
+    COMPRESSOR_RISK_HIGH,
+    COMPRESSOR_RISK_NOTABLE,
+    COMPRESSOR_RISK_OK,
+    COMPRESSOR_RISK_WATCH,
+)
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -126,10 +135,12 @@ class CompressorHealthMonitor:
         if timestamp is None:
             timestamp = dt_util.now()
 
-        # Validate Hz reading
-        if hz < 0 or hz > 150:
-            _LOGGER.warning("Invalid compressor Hz reading: %d (expected 0-120 range)", hz)
-            hz = max(0, min(hz, 150))
+        # Clamp and warning message both bound by COMPRESSOR_HZ_MAX, so they cannot disagree.
+        if hz < 0 or hz > COMPRESSOR_HZ_MAX:
+            _LOGGER.warning(
+                "Invalid compressor Hz reading: %d (expected 0-%d range)", hz, COMPRESSOR_HZ_MAX
+            )
+            hz = max(0, min(hz, COMPRESSOR_HZ_MAX))
 
         # Add to history
         self.hz_history.append((timestamp, hz))
@@ -330,7 +341,7 @@ class CompressorHealthMonitor:
         if stats.time_above_100hz > timedelta(minutes=15):
             minutes = stats.time_above_100hz.total_seconds() / 60
             return (
-                "HIGH",
+                COMPRESSOR_RISK_HIGH,
                 f"Compressor at {stats.current_hz} Hz for {minutes:.0f} min",
             )
 
@@ -339,7 +350,7 @@ class CompressorHealthMonitor:
         if stats.time_above_80hz > timedelta(hours=2):
             hours = stats.time_above_80hz.total_seconds() / 3600
             return (
-                "ELEVATED",
+                COMPRESSOR_RISK_ELEVATED,
                 f"Sustained operation ({stats.avg_1h:.0f} Hz avg) for {hours:.1f}h",
             )
 
@@ -347,7 +358,7 @@ class CompressorHealthMonitor:
         # System consistently operating at high capacity
         if stats.avg_6h > 70:
             return (
-                "NOTABLE",
+                COMPRESSOR_RISK_NOTABLE,
                 f"6-hour average: {stats.avg_6h:.0f} Hz",
             )
 
@@ -356,18 +367,18 @@ class CompressorHealthMonitor:
         # Normal if brief, concerning if sustained
         if stats.avg_1h > 75:
             return (
-                "WATCH",
+                COMPRESSOR_RISK_WATCH,
                 f"High demand period (1h avg: {stats.avg_1h:.0f} Hz, current: {stats.current_hz} Hz)",
             )
 
         # OK: Normal operation
         if stats.current_hz > 0:
             return (
-                "OK",
+                COMPRESSOR_RISK_OK,
                 f"Normal operation ({stats.current_hz} Hz, 6h avg: {stats.avg_6h:.0f} Hz)",
             )
         else:
-            return ("OK", "Compressor idle")
+            return (COMPRESSOR_RISK_OK, "Compressor idle")
 
     def get_diagnostic_info(self, stats: CompressorStats) -> CompressorDiagnosticsDict:
         """Get diagnostic information for troubleshooting.

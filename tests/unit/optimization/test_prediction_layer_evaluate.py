@@ -7,6 +7,11 @@ import pytest
 from unittest.mock import MagicMock
 from datetime import datetime, timedelta
 
+from custom_components.effektguard.const import (
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
+    SAMPLES_PER_HOUR,
+    UPDATE_INTERVAL_MINUTES,
+)
 from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
     PredictionLayerDecision,
@@ -48,13 +53,21 @@ def mock_thermal_model():
     return model
 
 
+# A full day of history, in samples, at whatever cadence the coordinator actually runs at.
+REQUIRED_SAMPLES = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+
+
 class TestEvaluateLayerInsufficientData:
     """Test evaluate_layer when insufficient learning data."""
 
     def test_insufficient_data_returns_learning_reason(
         self, predictor, mock_nibe_state, mock_weather_data, mock_thermal_model
     ):
-        """When <96 observations, returns learning status."""
+        """Below a full day of history the layer reports progress (N/REQUIRED) and abstains.
+
+        REQUIRED is PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR, derived from the
+        constants so the test and the code agree on the coordinator's sample cadence.
+        """
         # Predictor has no history
         assert len(predictor.state_history) == 0
 
@@ -69,16 +82,16 @@ class TestEvaluateLayerInsufficientData:
         assert result.offset == 0.0
         assert result.weight == 0.0
         assert "Learning:" in result.reason
-        assert "0/96" in result.reason
+        assert f"0/{REQUIRED_SAMPLES}" in result.reason
 
     def test_partial_data_shows_progress(
         self, predictor, mock_nibe_state, mock_weather_data, mock_thermal_model
     ):
         """When partial observations, shows learning progress."""
-        # Add 48 observations (half of required 96)
-        for i in range(48):
+        half = REQUIRED_SAMPLES // 2
+        for i in range(half):
             predictor.record_state(
-                timestamp=datetime.now() - timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
                 outdoor_temp=0.0,
                 heating_offset=0.0,
@@ -95,7 +108,7 @@ class TestEvaluateLayerInsufficientData:
 
         assert result.offset == 0.0
         assert result.weight == 0.0
-        assert "48/96" in result.reason
+        assert f"{half}/{REQUIRED_SAMPLES}" in result.reason
 
 
 class TestEvaluateLayerNoWeatherData:
@@ -104,9 +117,9 @@ class TestEvaluateLayerNoWeatherData:
     def test_no_weather_data_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When weather_data is None, returns no pre-heat."""
         # Add enough observations
-        for i in range(100):
+        for i in range(REQUIRED_SAMPLES + 4):
             predictor.record_state(
-                timestamp=datetime.now() - timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
                 outdoor_temp=0.0,
                 heating_offset=0.0,
@@ -129,9 +142,9 @@ class TestEvaluateLayerNoWeatherData:
     def test_empty_forecast_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When forecast_hours is empty, returns no pre-heat."""
         # Add enough observations
-        for i in range(100):
+        for i in range(REQUIRED_SAMPLES + 4):
             predictor.record_state(
-                timestamp=datetime.now() - timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
                 outdoor_temp=0.0,
                 heating_offset=0.0,
@@ -162,9 +175,9 @@ class TestEvaluateLayerReturnsDecision:
     ):
         """evaluate_layer returns PredictionLayerDecision."""
         # Add enough observations
-        for i in range(100):
+        for i in range(REQUIRED_SAMPLES + 4):
             predictor.record_state(
-                timestamp=datetime.now() - timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
                 outdoor_temp=0.0,
                 heating_offset=0.0,
@@ -190,9 +203,9 @@ class TestEvaluateLayerReturnsDecision:
     ):
         """Decision name is always 'Learned Pre-heat'."""
         # Add enough observations
-        for i in range(100):
+        for i in range(REQUIRED_SAMPLES + 4):
             predictor.record_state(
-                timestamp=datetime.now() - timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
                 outdoor_temp=0.0,
                 heating_offset=0.0,

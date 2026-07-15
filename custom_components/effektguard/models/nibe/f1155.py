@@ -3,18 +3,59 @@
 Inverter-controlled GSHP - F-series ground source, predecessor of the S1155.
 Available in 3 sizes: 1.5-6 kW, 4-12 kW, 4-16 kW.
 
-Added for issue #18: F1155 owners connect via local Modbus (nibe_heatpump
-integration / MODBUS40) and previously had to pick the S1155 profile.
+F1155 owners connect via local Modbus (nibe_heatpump integration / MODBUS40).
 
-Source: https://www.nibe.eu/en-eu/products/heat-pumps/ground-source-heat-pumps
-Physics inherit from the S1155 (same GSHP family, stable 5-8°C ground
-temperature); COP curve set slightly below the S1155 (older inverter
-platform, SCOP ~5.0).
+Heat source is brine from a borehole, so performance is keyed on INCOMING BRINE temperature, not
+outdoor air. The F1155 and S1155 publish IDENTICAL EN 14511 data at every size (below, verbatim).
 """
 
 from dataclasses import dataclass
 
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
+
+# F1155-12. EN 14511 rating points, VERBATIM.
+#
+# Keyed on INCOMING BRINE temperature, not outdoor air (datasheet capacity chart x-axis is
+# "Incoming brine temp, C"). All four points are at NOMINAL (50 Hz) frequency; NIBE publishes no
+# min-/max-frequency COP for these pumps, only the modulation envelope ("Heating capacity (PH)"),
+# so load dependence of efficiency is NOT measurable here - see HouseConfig.exergy_efficiency.
+F1155_12_DATASHEET = (
+    RatingPoint(
+        "0/35 nominal (50 Hz), incoming brine 0 C",
+        source_temp_c=0.0,
+        flow_temp_c=35.0,
+        heat_output_kw=5.06,
+        cop=4.87,
+    ),
+    RatingPoint(
+        "0/45 nominal (50 Hz), incoming brine 0 C",
+        source_temp_c=0.0,
+        flow_temp_c=45.0,
+        heat_output_kw=4.78,
+        cop=3.75,
+    ),
+    RatingPoint(
+        "10/35 nominal (50 Hz), incoming brine 10 C",
+        source_temp_c=10.0,
+        flow_temp_c=35.0,
+        heat_output_kw=6.33,
+        cop=6.12,
+    ),
+    RatingPoint(
+        "10/45 nominal (50 Hz), incoming brine 10 C",
+        source_temp_c=10.0,
+        flow_temp_c=45.0,
+        heat_output_kw=5.98,
+        cop=4.59,
+    ),
+)
+F1155_12_SOURCE = (
+    "NIBE F1155 installer manual, Output data according to EN 14511, "
+    "F1155_12 column. https://installer.nibe.eu/ "
+    "(F1155: IHB EN 2008-5/331379 p.69; S1155: IHB EN 2001-1/531210 p.70. The two "
+    "publish IDENTICAL EN 14511 data at every size - same platform.)"
+)
 from .s1155 import NibeS1155Profile
 
 
@@ -37,23 +78,28 @@ class NibeF1155Profile(NibeS1155Profile):
     model_type: str = "F-series GSHP"
 
     # Mid-range variant (4-12 kW)
-    rated_power_kw: tuple[float, float] = (4.0, 12.0)  # Heat output
-    typical_electrical_range_kw: tuple[float, float] = (0.6, 2.8)  # Estimated from SCOP ~5.0
+    datasheet_points: tuple[RatingPoint, ...] = F1155_12_DATASHEET
+    datasheet_source: str = F1155_12_SOURCE
+    design_heat_load_kw: float = (
+        12.0  # Pdesignh - installer manual "Nominal heating output (Pdesignh) 12 kW" (F1155-12)
+    )
+    immersion_heater_kw: float = 7.0  # datasheet: additional power 1/2/3/4/5/6/7 kW
+    heating_capacity_range_kw: tuple[float, float] = (
+        3.0,
+        12.0,
+    )  # datasheet "Heating capacity (PH)"
+
+    rated_power_kw: tuple[float, float] = (3.0, 12.0)  # the PH modulation envelope, EN 14511
+    typical_electrical_range_kw: tuple[float, float] = (1.04, 2.5)  # PE at the rating points
     modulation_range: tuple[int, int] = (20, 120)
 
-    typical_cop_range: tuple[float, float] = (3.3, 5.3)  # GSHP, slightly below S1155
+    typical_cop_range: tuple[float, float] = (3.75, 6.12)  # published COPs, 0/45 .. 10/35
 
     def __post_init__(self):
-        """Initialize COP curve - S1155 shape shifted slightly down for the
-        older F-series inverter platform."""
-        self.cop_curve = {
-            7: 5.3,
-            5: 5.1,
-            0: 4.8,
-            -5: 4.6,  # Ground temp stable
-            -10: 4.3,  # Ground temp stable
-            -15: 4.1,
-            -20: 3.8,
-            -25: 3.6,
-            -30: 3.3,  # Much better than ASHP at extreme temps
-        }
+        """Initialize display-only COP proxy.
+
+        Nothing computes from it: COP is a function of brine + flow temperature, not the weather,
+        and the simulator takes it from `datasheet_points`. The proxy is a dashboard seasonal curve
+        anchored on the two published W35/W45 COPs at 0 C brine.
+        """
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points, source_temp_c=0.0)

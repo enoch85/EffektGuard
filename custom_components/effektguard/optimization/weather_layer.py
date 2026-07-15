@@ -1,21 +1,18 @@
-"""Weather compensation calculations for optimal flow temperature.
+"""Weather compensation: the flow temperature the emitters need for the current weather.
 
 TODO: Rename this module to flow_temp_layer.py and classes to FlowTemp* for clarity.
       "Weather compensation" is confusing - this layer optimizes FLOW TEMPERATURE
       based on outdoor conditions, not weather forecasting. (Dec 19, 2025)
 
-Implements scientifically-validated mathematical formulas from OpenEnergyMonitor research:
-1. André Kühne's Universal Formula (validated across Vaillant, Daikin, Mitsubishi, NIBE)
-2. Timbones' Heat Transfer Method (radiator output approach)
-3. UFH-specific flow temperature adjustments
-4. Adaptive Climate System (combines universal zones with weather learning)
+The flow temperature comes from the EN 442 emitter law (see utils/emitter.py), anchored either
+on the emitters' rated output or on the system's design point. This layer then:
 
-References:
-    - Mathematical_Enhancement_Summary.md
-    - OpenEnergyMonitor.org community research
-    - Timbones' calculation spreadsheet
-    - HeatpumpMonitor.org performance data
-    - POST_PHASE_5_ROADMAP.md Phase 6 - Adaptive learning
+1. adds a climate-zone safety margin (latitude-derived, globally applicable),
+2. converts the result into a curve OFFSET relative to what the pump is currently delivering,
+3. defers to thermal reality by shedding weight when degree minutes show real thermal debt.
+
+The offset is a TRIM on the pump's own heating curve, not a replacement for it: if the curve is
+correctly tuned the correction is near zero, and it is bounded either way.
 """
 
 import logging
@@ -27,18 +24,17 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     DEFAULT_CURVE_SENSITIVITY,
+    DEFAULT_DESIGN_FLOW_TEMP_RADIATOR,
+    DEFAULT_DESIGN_FLOW_TEMP_UFH,
+    DEFAULT_DESIGN_OUTDOOR_TEMP,
+    DEFAULT_DESIGN_SPREAD,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DHW_WEATHER_COOLDOWN_MINUTES,
-    KUEHNE_COEFFICIENT,
-    KUEHNE_POWER,
     LAYER_WEIGHT_WEATHER_PREDICTION,
     RADIATOR_POWER_COEFFICIENT,
     RADIATOR_RATED_DT,
-    UFH_FLOW_REDUCTION_CONCRETE,
-    UFH_FLOW_REDUCTION_TIMBER,
-    UFH_MIN_FLOW_TEMP_CONCRETE,
-    UFH_MIN_FLOW_TEMP_TIMBER,
+    UFH_POWER_COEFFICIENT,
     WEATHER_COMP_DEFER_DM_CRITICAL,
     WEATHER_COMP_DEFER_DM_LIGHT,
     WEATHER_COMP_DEFER_DM_MODERATE,
@@ -47,12 +43,17 @@ from ..const import (
     WEATHER_COMP_DEFER_WEIGHT_LIGHT,
     WEATHER_COMP_DEFER_WEIGHT_MODERATE,
     WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
+    WEATHER_COMP_MAX_OFFSET,
     WEATHER_FORECAST_DROP_THRESHOLD,
+    BALANCE_POINT_MAX_OFFSET,
+    BALANCE_POINT_MIN_OFFSET,
+    INTERNAL_GAINS_W,
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
     WEATHER_WEIGHT_CAP,
 )
+from ..utils.emitter import en442_flow_temp
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,11 +97,9 @@ class WeatherCompensationLayerDecision:
     """Decision from the mathematical weather compensation layer.
 
     Encapsulates the flow temperature optimization based on:
-    - Universal flow temperature formula (André Kühne)
-    - Heat transfer method (Timbones, if radiator specs available)
-    - UFH-specific adjustments
-    - Adaptive climate zones
-    - Weather learning (unusual pattern detection)
+    - the EN 442 emitter law (rated-output anchor, or the system design point)
+    - adaptive climate zones
+    - weather learning (unusual pattern detection)
     """
 
     name: str
@@ -120,21 +119,23 @@ class FlowTempCalculation:
     """Result of flow temperature calculation with reasoning."""
 
     flow_temp: float  # Calculated optimal flow temperature (°C)
-    method: str  # Calculation method used
+    method: str  # "en442_rated_output" or "en442_design_point"
     heating_type: str  # "radiator", "concrete_ufh", "timber_ufh", etc.
     confidence: float  # 0-1 confidence in calculation
     reasoning: str  # Explanation of calculation
-    raw_kuehne: Optional[float] = None  # Raw Kühne result before adjustments
-    raw_timbones: Optional[float] = None  # Raw Timbones result before adjustments
+    raw_design_point: Optional[float] = None  # EN 442 anchored on the system design point
+    raw_rated_output: Optional[float] = None  # EN 442 anchored on the emitters' rated output
 
 
 class WeatherCompensationCalculator:
     """Calculate optimal flow temperatures using validated mathematical formulas.
 
-    Implements three complementary methods:
-    1. André Kühne's formula - Universal physics-based calculation
-    2. Timbones' method - Radiator-specific heat transfer approach
-    3. UFH adjustments - Specialized underfloor heating optimization
+    One law - the EN 442 emitter characteristic equation - with two anchors:
+    1. the emitters' rated output at DT50, when the installer has supplied it (preferred);
+    2. otherwise the system's design point (design flow temperature at the design outdoor temp).
+
+    Underfloor heating is handled by its own exponent (EN 1264, n ~ 1.1) and its own design flow
+    temperature, not by subtracting a fixed amount from a radiator curve.
     """
 
     def __init__(
@@ -142,272 +143,233 @@ class WeatherCompensationCalculator:
         heat_loss_coefficient: float = DEFAULT_HEAT_LOSS_COEFFICIENT,
         radiator_rated_output: Optional[float] = None,
         heating_type: str = "radiator",
+        design_outdoor_temp: float = DEFAULT_DESIGN_OUTDOOR_TEMP,
+        design_flow_temp: Optional[float] = None,
+        design_spread: float = DEFAULT_DESIGN_SPREAD,
+        internal_gains_w: float = INTERNAL_GAINS_W,
     ):
         """Initialize weather compensation calculator.
 
         Args:
             heat_loss_coefficient: Building heat loss in W/°C (typical 100-300)
-            radiator_rated_output: Total rated radiator output at DT50 in Watts
+            radiator_rated_output: Total rated emitter output at DT50 in Watts
             heating_type: "radiator", "concrete_ufh", "timber_ufh", "mixed"
+            design_outdoor_temp: Dimensioning outdoor temperature (DUT/DVUT, °C)
+            design_flow_temp: Supply temperature needed at the design outdoor temperature (°C).
+                Defaults by emitter type, since an underfloor system is dimensioned far cooler
+                than radiators.
+            design_spread: Flow-return spread at the design load (°C)
+            internal_gains_w: Free heat from bodies, appliances and the sun (W). Set to 0.0 to
+                reproduce the UK reference tools (OpenEnergyMonitor's WeatherComp, Timbones'
+                spreadsheet), which carry no gains term. A real house is not gains-free; see const.py.
         """
         self.heat_loss_coefficient = heat_loss_coefficient
         self.radiator_rated_output = radiator_rated_output
+        self.internal_gains_w = internal_gains_w
         self.heating_type = heating_type
+        self.design_outdoor_temp = design_outdoor_temp
+        self.design_spread = design_spread
+
+        # Underfloor heating has its own emitter exponent (EN 1264, n ~ 1.1) and a far lower
+        # design flow temperature. Its lower temperatures belong HERE, in the curve itself - not
+        # as a fixed subtraction applied to a radiator curve afterwards.
+        self.is_underfloor = heating_type in ("concrete_ufh", "timber_ufh", "timber")
+        self.emitter_exponent = (
+            UFH_POWER_COEFFICIENT if self.is_underfloor else RADIATOR_POWER_COEFFICIENT
+        )
+        if design_flow_temp is not None:
+            self.design_flow_temp = design_flow_temp
+        elif self.is_underfloor:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_UFH
+        else:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
 
         _LOGGER.debug(
-            "WeatherCompensationCalculator initialized: HC=%.1f W/°C, "
-            "radiator_output=%s W, type=%s",
+            "WeatherCompensationCalculator initialized: type=%s, design %.1f°C @ %.1f°C outdoor, "
+            "spread=%.1f°C, emitter exponent n=%.2f, HC=%.1f W/°C, rated_output=%s W",
+            heating_type,
+            self.design_flow_temp,
+            self.design_outdoor_temp,
+            self.design_spread,
+            self.emitter_exponent,
             heat_loss_coefficient,
             radiator_rated_output,
-            heating_type,
         )
 
-    def calculate_kuehne_flow_temp(
+    def balance_point_temp(self, indoor_setpoint: float) -> float:
+        """Outdoor temperature at which this house needs no heat at all.
+
+        Derived from watts, not fitted to a curve:
+
+            balance = indoor_setpoint - internal_gains_W / heat_loss_W_per_K
+
+        Gains are watts divided by the house's own heat loss, so the same free heat is worth FEWER
+        degrees in a leaky house, not more; a fixed offset in degrees gets that backwards. The
+        balance point cannot be recovered by fitting a heating curve - the constant-spread term has
+        the same shape and opposite sign (see `utils/emitter.py`).
+
+        Args:
+            indoor_setpoint: Target indoor temperature (°C)
+
+        Returns:
+            Balance-point outdoor temperature (°C)
+        """
+        if self.internal_gains_w <= 0.0:
+            return indoor_setpoint  # gains disabled: the UK reference tools' demand model
+
+        offset = self.internal_gains_w / self.heat_loss_coefficient
+        offset = max(BALANCE_POINT_MIN_OFFSET, min(offset, BALANCE_POINT_MAX_OFFSET))
+        return indoor_setpoint - offset
+
+    def calculate_design_point_flow_temp(
         self,
         indoor_setpoint: float,
         outdoor_temp: float,
     ) -> float:
-        """Calculate optimal flow temperature using André Kühne's universal formula.
+        """Flow temperature from the EN 442 emitter law, anchored on the system design point.
 
-        Formula: TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
-
-        Note: HC must be in kW/K for correct results!
-
-        Validated across manufacturers: Vaillant, Daikin, Mitsubishi, NIBE.
-        Based on heat transfer physics, not manufacturer-specific curves.
+        The default path: it needs only quantities an installer knows (the dimensioning outdoor
+        temperature, the supply temperature the system needs at it, the flow-return spread, and
+        the emitter type), and by construction it reproduces the design flow temperature at the
+        design outdoor temperature - so a correctly tuned pump curve gets a near-zero correction.
 
         Args:
             indoor_setpoint: Target indoor temperature (°C)
             outdoor_temp: Current outdoor temperature (°C)
 
         Returns:
-            Optimal flow temperature (°C)
-
-        References:
-            Mathematical_Enhancement_Summary.md: André Kühne's formula
-            OpenEnergyMonitor community validation data
+            Required flow temperature (°C)
         """
-        # Calculate temperature differential
-        temp_diff = indoor_setpoint - outdoor_temp
-
-        # Ensure positive differential (can't heat when outdoor > indoor setpoint)
-        if temp_diff <= 0:
-            return indoor_setpoint
-
-        # André Kühne's formula
-        # TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
-        # Convert heat loss coefficient from W/°C to kW/K
-        heat_loss_kw = self.heat_loss_coefficient / 1000.0
-        heat_term = heat_loss_kw * temp_diff
-        flow_temp = KUEHNE_COEFFICIENT * (heat_term**KUEHNE_POWER) + indoor_setpoint
+        flow_temp = en442_flow_temp(
+            indoor_setpoint=indoor_setpoint,
+            outdoor_temp=outdoor_temp,
+            design_outdoor_temp=self.design_outdoor_temp,
+            design_flow_temp=self.design_flow_temp,
+            design_spread=self.design_spread,
+            emitter_exponent=self.emitter_exponent,
+            balance_point_temp=self.balance_point_temp(indoor_setpoint),
+        )
 
         _LOGGER.debug(
-            "Kühne formula: outdoor=%.1f°C, indoor_target=%.1f°C, "
-            "temp_diff=%.1f°C, HC=%.3f kW/K -> flow=%.1f°C",
+            "EN 442 (design point): outdoor=%.1f°C, target=%.1f°C, design=%.1f°C@%.1f°C, "
+            "spread=%.1f°C, n=%.2f -> flow=%.1f°C",
             outdoor_temp,
             indoor_setpoint,
-            temp_diff,
-            heat_loss_kw,
+            self.design_flow_temp,
+            self.design_outdoor_temp,
+            self.design_spread,
+            self.emitter_exponent,
             flow_temp,
         )
 
         return flow_temp
 
-    def calculate_timbones_flow_temp(
+    def calculate_rated_output_flow_temp(
         self,
         indoor_setpoint: float,
         outdoor_temp: float,
-        flow_return_dt: float = 5.0,
+        flow_return_dt: float,
     ) -> Optional[float]:
-        """Calculate optimal flow temperature using Timbones' heat transfer method.
+        """The same EN 442 law, parameterised by the emitters' rated output instead.
 
-        Based on radiator output calculations and heat loss coefficient.
-        Requires radiator_rated_output to be configured.
+        When the installer knows the total rated emitter output at ΔT50, the law can be anchored
+        on the EN 442 rating point directly:
 
-        Formula:
-        1. Heat demand = heat_loss_coefficient × (indoor - outdoor)
-        2. Required DT = 50K × (heat_demand / radiator_output)^(1/1.3)
-        3. Flow temp = indoor + required_DT + (flow_return_dt / 2)
+            ΔT = ΔT_N × (Φ / Φ_N) ** (1 / n)
+
+        Preferred over the design-point form, because Φ_N is a measured nameplate figure. Same
+        physics either way - both invert `Φ / Φ_N = (ΔT / ΔT_N) ** n`; only the anchor differs.
 
         Args:
             indoor_setpoint: Target indoor temperature (°C)
             outdoor_temp: Current outdoor temperature (°C)
-            flow_return_dt: Design flow-return temperature differential (°C)
+            flow_return_dt: Flow-return spread at the design load (°C)
 
         Returns:
-            Optimal flow temperature (°C), or None if radiator output not configured
-
-        References:
-            Timbones' calculation spreadsheet (OpenEnergyMonitor community)
-            Radiator output formula: Heat = Rated × (DT/50K)^1.3
+            Required flow temperature (°C), or None if the rated output is not configured.
         """
-        if self.radiator_rated_output is None:
-            _LOGGER.debug("Timbones method requires radiator_rated_output configuration")
+        if self.radiator_rated_output is None or self.radiator_rated_output <= 0:
             return None
 
-        # Calculate heat demand
-        temp_diff = indoor_setpoint - outdoor_temp
-        if temp_diff <= 0:
-            return indoor_setpoint
+        # The SAME balance point the design-point anchor uses. This is the PREFERRED path
+        # (confidence 0.95), so a gains term applied to only the other anchor would leave the two
+        # anchors of "the same law" disagreeing for every installer who supplied a rated output.
+        load = self.balance_point_temp(indoor_setpoint) - outdoor_temp
+        if load <= 0:
+            # Continuous limit as load -> 0, matching en442_flow_temp. See utils/emitter.py.
+            return indoor_setpoint + (flow_return_dt / 2.0)
 
-        heat_demand = self.heat_loss_coefficient * temp_diff
-
-        # Calculate required radiator temperature differential
-        # From radiator equation: Output = Rated × (ΔT/50K)^1.3
-        # Inverted: ΔT = 50K × (Output/Rated)^(1/1.3)
+        heat_demand = self.heat_loss_coefficient * load
         output_ratio = heat_demand / self.radiator_rated_output
-        required_dt = RADIATOR_RATED_DT * (output_ratio ** (1 / RADIATOR_POWER_COEFFICIENT))
 
-        # Mean water temperature = room temp + required DT
-        mean_water_temp = indoor_setpoint + required_dt
+        # The exponent is the EMITTER's: underfloor uses EN 1264's n ~ 1.1, not a radiator's 1.3.
+        required_dt = RADIATOR_RATED_DT * (output_ratio ** (1.0 / self.emitter_exponent))
 
-        # Flow temperature = MWT + half of flow-return differential
-        flow_temp = mean_water_temp + (flow_return_dt / 2)
+        flow_temp = indoor_setpoint + required_dt + (flow_return_dt / 2.0)
 
         _LOGGER.debug(
-            "Timbones method: heat_demand=%.0f W, radiator_output=%.0f W, "
-            "required_DT=%.1f K, MWT=%.1f°C -> flow=%.1f°C",
+            "EN 442 (rated output): demand=%.0f W, rated=%.0f W, ratio=%.3f, n=%.2f, "
+            "required ΔT=%.1f K -> flow=%.1f°C",
             heat_demand,
             self.radiator_rated_output,
+            output_ratio,
+            self.emitter_exponent,
             required_dt,
-            mean_water_temp,
             flow_temp,
         )
 
         return flow_temp
-
-    def apply_ufh_adjustment(
-        self,
-        radiator_flow_temp: float,
-        ufh_type: str,
-    ) -> float:
-        """Apply underfloor heating adjustments to radiator-calculated flow temp.
-
-        UFH systems require lower flow temperatures due to larger heat exchange surface.
-        Adjustments based on real-world UFH installations and thermal properties.
-
-        Args:
-            radiator_flow_temp: Flow temperature calculated for radiators (°C)
-            ufh_type: "concrete_slab", "timber", or "radiator" (no adjustment)
-
-        Returns:
-            Adjusted flow temperature for UFH system (°C)
-
-        References:
-            Mathematical_Enhancement_Summary.md: UFH-specific optimizations
-            Floor_Heating_Enhancements.md: Thermal lag and mass modeling
-        """
-        if ufh_type == "concrete_slab":
-            # Concrete slab UFH: 8°C reduction, minimum 25°C
-            ufh_flow_temp = radiator_flow_temp - UFH_FLOW_REDUCTION_CONCRETE
-            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_FLOW_TEMP_CONCRETE)
-
-            _LOGGER.debug(
-                "UFH concrete adjustment: radiator=%.1f°C -> UFH=%.1f°C "
-                "(reduction=%.1f°C, min=%.1f°C)",
-                radiator_flow_temp,
-                ufh_flow_temp,
-                UFH_FLOW_REDUCTION_CONCRETE,
-                UFH_MIN_FLOW_TEMP_CONCRETE,
-            )
-
-        elif ufh_type == "timber":
-            # Timber UFH: 5°C reduction, minimum 22°C
-            ufh_flow_temp = radiator_flow_temp - UFH_FLOW_REDUCTION_TIMBER
-            ufh_flow_temp = max(ufh_flow_temp, UFH_MIN_FLOW_TEMP_TIMBER)
-
-            _LOGGER.debug(
-                "UFH timber adjustment: radiator=%.1f°C -> UFH=%.1f°C "
-                "(reduction=%.1f°C, min=%.1f°C)",
-                radiator_flow_temp,
-                ufh_flow_temp,
-                UFH_FLOW_REDUCTION_TIMBER,
-                UFH_MIN_FLOW_TEMP_TIMBER,
-            )
-
-        else:
-            # Radiator system - no adjustment
-            ufh_flow_temp = radiator_flow_temp
-
-        return ufh_flow_temp
 
     def calculate_optimal_flow_temp(
         self,
         indoor_setpoint: float,
         outdoor_temp: float,
-        prefer_method: str = "kuehne",
-        flow_return_dt: float = 5.0,
+        flow_return_dt: Optional[float] = None,
     ) -> FlowTempCalculation:
-        """Calculate optimal flow temperature using best available method.
+        """Flow temperature the emitters need, by the EN 442 emitter law.
 
-        Prioritizes André Kühne's formula by default (universal, physics-based).
-        Falls back to Timbones' method if configured and requested.
-        Applies UFH adjustments automatically based on heating_type.
+        One law, two anchors: the emitters' rated output when the installer has supplied it,
+        otherwise the system's design point.
 
         Args:
             indoor_setpoint: Target indoor temperature (°C)
             outdoor_temp: Current outdoor temperature (°C)
-            prefer_method: "kuehne" (default), "timbones", or "auto"
-            flow_return_dt: Design flow-return differential (°C)
+            flow_return_dt: Flow-return spread (°C). Defaults to the configured design spread.
 
         Returns:
-            FlowTempCalculation with optimal temperature and reasoning
+            FlowTempCalculation with the required temperature and its reasoning.
         """
-        raw_kuehne = None
-        raw_timbones = None
-        method_used = "kuehne"
-        confidence = 0.9  # High confidence in physics-based formula
+        spread = flow_return_dt if flow_return_dt is not None else self.design_spread
 
-        # Calculate using André Kühne's formula (always available)
-        raw_kuehne = self.calculate_kuehne_flow_temp(indoor_setpoint, outdoor_temp)
-        flow_temp = raw_kuehne
+        raw_rated_output = self.calculate_rated_output_flow_temp(
+            indoor_setpoint, outdoor_temp, spread
+        )
+        raw_design_point = self.calculate_design_point_flow_temp(indoor_setpoint, outdoor_temp)
 
-        # Try Timbones' method if configured and requested
-        if prefer_method in ("timbones", "auto") and self.radiator_rated_output is not None:
-            raw_timbones = self.calculate_timbones_flow_temp(
-                indoor_setpoint, outdoor_temp, flow_return_dt
+        if raw_rated_output is not None:
+            flow_temp = raw_rated_output
+            method_used = "en442_rated_output"
+            confidence = 0.95  # anchored on a measured nameplate figure
+            detail = (
+                f"EN 442 via rated output: {raw_rated_output:.1f}°C "
+                f"(emitters {self.radiator_rated_output:.0f} W @ ΔT50, n={self.emitter_exponent})"
+            )
+        else:
+            flow_temp = raw_design_point
+            method_used = "en442_design_point"
+            confidence = 0.9
+            detail = (
+                f"EN 442 via design point: {raw_design_point:.1f}°C "
+                f"({self.design_flow_temp:.0f}°C @ {self.design_outdoor_temp:.0f}°C outdoor, "
+                f"n={self.emitter_exponent})"
             )
 
-            if raw_timbones is not None:
-                if prefer_method == "timbones":
-                    # User explicitly prefers Timbones
-                    flow_temp = raw_timbones
-                    method_used = "timbones"
-                    confidence = 0.85  # Slightly lower (requires radiator spec)
-                elif prefer_method == "auto":
-                    # Average both methods for robustness
-                    flow_temp = (raw_kuehne + raw_timbones) / 2
-                    method_used = "kuehne+timbones"
-                    confidence = 0.95  # Higher confidence with multiple methods
-
-        # Apply UFH adjustments if applicable
-        if self.heating_type in ("concrete_ufh", "timber"):
-            ufh_type = "concrete_slab" if self.heating_type == "concrete_ufh" else "timber"
-            flow_temp = self.apply_ufh_adjustment(flow_temp, ufh_type)
-
-        # Build reasoning string
-        reasoning_parts = [f"Outdoor: {outdoor_temp:.1f}°C, Indoor target: {indoor_setpoint:.1f}°C"]
-
-        if method_used == "kuehne":
-            reasoning_parts.append(
-                f"André Kühne formula: {raw_kuehne:.1f}°C "
-                f"(HC={self.heat_loss_coefficient:.0f} W/°C)"
-            )
-        elif method_used == "timbones":
-            reasoning_parts.append(
-                f"Timbones method: {raw_timbones:.1f}°C "
-                f"(radiator={self.radiator_rated_output:.0f}W)"
-            )
-        elif method_used == "kuehne+timbones":
-            reasoning_parts.append(
-                f"Combined: Kühne={raw_kuehne:.1f}°C, "
-                f"Timbones={raw_timbones:.1f}°C, avg={flow_temp:.1f}°C"
-            )
-
-        if self.heating_type in ("concrete_ufh", "timber"):
-            reasoning_parts.append(f"UFH adjustment applied ({self.heating_type})")
-
-        reasoning = "; ".join(reasoning_parts)
+        reasoning = "; ".join(
+            [
+                f"Outdoor: {outdoor_temp:.1f}°C, Indoor target: {indoor_setpoint:.1f}°C",
+                detail,
+            ]
+        )
 
         return FlowTempCalculation(
             flow_temp=flow_temp,
@@ -415,48 +377,64 @@ class WeatherCompensationCalculator:
             heating_type=self.heating_type,
             confidence=confidence,
             reasoning=reasoning,
-            raw_kuehne=raw_kuehne,
-            raw_timbones=raw_timbones,
+            raw_design_point=raw_design_point,
+            raw_rated_output=raw_rated_output,
         )
 
     def calculate_required_offset(
         self,
         optimal_flow_temp: float,
         current_flow_temp: float,
-        curve_sensitivity: float = 1.5,
+        curve_sensitivity: float = DEFAULT_CURVE_SENSITIVITY,
     ) -> float:
-        """Calculate heating curve offset needed to achieve optimal flow temperature.
+        """Curve offset needed to move the flow temperature to the calculated optimum.
+
+        Weather compensation TRIMS the pump's own heating curve; it does not replace it. If the
+        curve is correctly tuned this correction is near zero. Bounded so that a mis-configured
+        design point can never command a large swing.
 
         Args:
             optimal_flow_temp: Target flow temperature from weather compensation (°C)
             current_flow_temp: Current actual flow temperature (°C)
             curve_sensitivity: Flow temp change per offset unit (°C/offset)
-                              Typical NIBE: 1.5°C per offset unit
 
         Returns:
-            Recommended heating curve offset adjustment (°C)
+            Recommended heating curve offset adjustment (°C), bounded by WEATHER_COMP_MAX_OFFSET.
         """
         temp_deviation = optimal_flow_temp - current_flow_temp
         offset_adjustment = temp_deviation / curve_sensitivity
 
-        _LOGGER.debug(
-            "Offset calculation: optimal=%.1f°C, current=%.1f°C, "
-            "error=%.1f°C, sensitivity=%.1f -> offset=%.1f",
-            optimal_flow_temp,
-            current_flow_temp,
-            temp_deviation,
-            curve_sensitivity,
-            offset_adjustment,
-        )
+        bounded = max(-WEATHER_COMP_MAX_OFFSET, min(WEATHER_COMP_MAX_OFFSET, offset_adjustment))
 
-        return offset_adjustment
+        if bounded != offset_adjustment:
+            _LOGGER.debug(
+                "Weather compensation offset %.1f°C bounded to %.1f°C (optimal=%.1f°C, "
+                "current=%.1f°C) - a correction this large means the pump's curve or the "
+                "configured design point disagrees with reality",
+                offset_adjustment,
+                bounded,
+                optimal_flow_temp,
+                current_flow_temp,
+            )
+        else:
+            _LOGGER.debug(
+                "Offset calculation: optimal=%.1f°C, current=%.1f°C, "
+                "error=%.1f°C, sensitivity=%.1f -> offset=%.1f",
+                optimal_flow_temp,
+                current_flow_temp,
+                temp_deviation,
+                curve_sensitivity,
+                bounded,
+            )
+
+        return bounded
 
 
 class AdaptiveClimateSystem:
     """Combine universal climate zones with adaptive weather learning.
 
     DESIGN PHILOSOPHY:
-    - Universal math (André Kühne, Timbones) works globally
+    - The emitter law (EN 442) works globally
     - Climate zones provide baseline safety margins
     - Weather learning adapts to local unusual patterns
     - No country-specific hardcoding needed
@@ -638,13 +616,19 @@ class WeatherPredictionLayer:
     3. MODERATION: Let SAFETY, COMFORT, EFFECT layers handle naturally via weighted aggregation
     """
 
-    def __init__(self, thermal_mass: float = 1.0):
+    def __init__(
+        self, thermal_mass: float = 1.0, forecast_horizon: float = WEATHER_FORECAST_HORIZON
+    ):
         """Initialize weather prediction layer.
 
         Args:
             thermal_mass: Building thermal mass (0.5=light, 1.0=medium, 1.5=heavy)
+            forecast_horizon: How far ahead to scan, in hours. Comes from the thermal model because
+                it depends on the fabric: a fixed 12 h window cannot see the slow, deep slide that
+                drains a slab, so the pre-heat never fires. See ThermalModel.get_prediction_horizon.
         """
         self.thermal_mass = thermal_mass
+        self.forecast_horizon = forecast_horizon
 
     def evaluate_layer(
         self,
@@ -693,7 +677,7 @@ class WeatherPredictionLayer:
 
         # Check forecast for significant temperature drop
         current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[: int(WEATHER_FORECAST_HORIZON)]
+        forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
 
         if not forecast_hours:
             return WeatherLayerDecision(
@@ -750,7 +734,9 @@ class WeatherPredictionLayer:
             if forecast_triggered and indoor_cooling:
                 trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
             elif forecast_triggered:
-                trigger = f"Forecast {temp_drop:.1f}°C drop in {WEATHER_FORECAST_HORIZON:.0f}h (proactive)"
+                trigger = (
+                    f"Forecast {temp_drop:.1f}°C drop in {self.forecast_horizon:.0f}h (proactive)"
+                )
             else:
                 trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
 
@@ -772,12 +758,10 @@ class WeatherPredictionLayer:
 class WeatherCompensationLayer:
     """Mathematical weather compensation layer with adaptive climate system.
 
-    Calculates optimal flow temperature using:
-    - Universal flow temperature formula (validated across manufacturers)
-    - Heat transfer method (if radiator specs available)
-    - UFH-specific adjustments (concrete/timber)
-    - Adaptive climate zones (latitude-based, globally applicable)
-    - Weather learning (unusual pattern detection)
+    Calculates the required flow temperature using:
+    - the EN 442 emitter law (rated-output anchor, or the system design point)
+    - adaptive climate zones (latitude-based, globally applicable)
+    - weather learning (unusual pattern detection)
 
     Automatically adapts to global climates:
     - Kiruna, Sweden (-30°C) → Arctic zone → 2.5°C base margin
@@ -872,19 +856,19 @@ class WeatherCompensationLayer:
                     reason=f"DHW cooldown ({minutes_since_dhw:.0f}/{DHW_WEATHER_COOLDOWN_MINUTES}min)",
                 )
 
-        if not weather_data or not weather_data.forecast_hours:
-            return WeatherCompensationLayerDecision(
-                name="Math WC", offset=0.0, weight=0.0, reason="No weather data"
-            )
-
+        # NO GUARD ON weather_data HERE, AND THERE MUST NOT BE ONE. This layer is the EN 442 emitter
+        # law, driven by the pump's own outdoor and flow sensors (below), not by the forecast - the
+        # forecast is used only for unusual-weather detection further down, which carries its own
+        # guard. A weather entity is vol.Optional in the config flow, so guarding here silently
+        # switched off the primary control law (the one layer that votes every cycle) on any install
+        # that left the dropdown blank.
         current_outdoor = nibe_state.outdoor_temp
         current_flow = nibe_state.flow_temp
 
-        # Calculate optimal flow temperature using physics-based formulas
+        # Flow temperature the emitters actually need, by the EN 442 emitter law
         flow_calc = self.weather_comp.calculate_optimal_flow_temp(
             indoor_setpoint=target_temp,
             outdoor_temp=current_outdoor,
-            prefer_method="auto",  # Combines universal formula + heat transfer if available
         )
 
         # Adaptive climate system safety adjustments
@@ -893,7 +877,9 @@ class WeatherCompensationLayer:
         unusual_severity = 0.0
 
         # Check for unusual weather patterns if weather learner available
-        if self.weather_learner and weather_data.forecast_hours:
+        # The one thing here that DOES need the forecast. Without it, unusual-weather detection
+        # simply stands down - the emitter law above does not, and did not need to.
+        if self.weather_learner and weather_data and weather_data.forecast_hours:
             try:
                 current_date = get_current_datetime() if get_current_datetime else dt_util.now()
 
@@ -924,11 +910,19 @@ class WeatherCompensationLayer:
             unusual_severity=unusual_severity,
         )
 
-        # Apply safety margin to calculated flow temp
-        adjusted_flow_temp = flow_calc.flow_temp + safety_margin
+        # The safety margin is an ASYMMETRIC TOLERANCE, not an addition to the setpoint. Inside the
+        # band [required, required + margin] the curve is left alone; below it the curve is pulled up
+        # to what the emitter law demands; above it, back down to the band top. Adding the margin to
+        # the setpoint instead makes the correction strictly positive everywhere - a DC bias that
+        # permanently tells a perfectly tuned curve to add heat.
+        required_flow = flow_calc.flow_temp
+        if current_flow < required_flow:
+            adjusted_flow_temp = required_flow
+        elif current_flow > required_flow + safety_margin:
+            adjusted_flow_temp = required_flow + safety_margin
+        else:
+            adjusted_flow_temp = current_flow
 
-        # Calculate required offset from current flow temperature
-        # NIBE curve sensitivity: ~1.5°C flow change per 1°C offset
         required_offset = self.weather_comp.calculate_required_offset(
             optimal_flow_temp=adjusted_flow_temp,
             current_flow_temp=current_flow,

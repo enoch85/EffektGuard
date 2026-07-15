@@ -14,7 +14,14 @@ from dataclasses import dataclass
 
 # Ensure model modules are imported so they register with the registry
 # The registry uses decorators executed at import time
+from custom_components.effektguard.const import (
+    DEFAULT_DESIGN_FLOW_TEMP_RADIATOR,
+    DEFAULT_DESIGN_OUTDOOR_TEMP,
+    DEFAULT_DESIGN_SPREAD,
+    RADIATOR_POWER_COEFFICIENT,
+)
 from custom_components.effektguard.models import nibe as _nibe_models  # noqa: F401
+from custom_components.effektguard.utils.emitter import en442_flow_temp
 
 
 # Mock existing EffektGuard components for testing
@@ -175,120 +182,12 @@ class TestModelThermalDebtIntegration:
                 previous_temp = temp
 
 
-class TestModelFlowTemperatureIntegration:
-    """Test models integrate with flow temperature formula."""
-
-    def test_models_flow_temp_in_realistic_range(self):
-        """Test flow temperatures are realistic for UFH and radiators."""
-        from custom_components.effektguard.models.registry import HeatPumpModelRegistry
-
-        registry = HeatPumpModelRegistry()
-
-        print("\n" + "=" * 80)
-        print("FLOW TEMPERATURE REALISM TEST")
-        print("=" * 80)
-        print("UFH typical: 25-45°C, Radiators typical: 35-55°C")
-        print("=" * 80)
-
-        for model_id in ["nibe_f750", "nibe_f2040", "nibe_s1155"]:
-            model = registry.get_model(model_id)
-
-            print(f"\nModel: {model.model_name}")
-            print("-" * 80)
-            print(
-                f"{'Outdoor':>8} | {'Indoor':>7} | {'Flow (UFH)':>12} | "
-                f"{'Flow (Rads)':>12} | {'Valid':>6}"
-            )
-            print("-" * 80)
-
-            test_scenarios = [
-                (10, 21),  # Mild
-                (0, 21),  # Average winter
-                (-10, 21),  # Cold
-                (-20, 21),  # Very cold
-            ]
-
-            for outdoor, indoor in test_scenarios:
-                # Calculate heat demand for typical house
-                heat_loss_coef_ufh = 180.0  # W/°C typical house with UFH
-                heat_demand_ufh_kw = (indoor - outdoor) * heat_loss_coef_ufh / 1000.0
-
-                heat_loss_coef_rads = 200.0  # W/°C slightly worse insulation
-                heat_demand_rads_kw = (indoor - outdoor) * heat_loss_coef_rads / 1000.0
-
-                # Test UFH
-                flow_ufh = model.calculate_optimal_flow_temp(outdoor, indoor, heat_demand_ufh_kw)
-
-                # Test radiators (higher heat demand)
-                flow_rads = model.calculate_optimal_flow_temp(outdoor, indoor, heat_demand_rads_kw)
-
-                # Validate UFH range (allow clamping to model min_flow_temp)
-                ufh_ok = flow_ufh >= model.min_flow_temp and flow_ufh <= 50
-                # Validate radiator range (allow clamping to model min_flow_temp)
-                rads_ok = flow_rads >= model.min_flow_temp and flow_rads <= 60
-
-                status = "✓" if (ufh_ok and rads_ok) else "⚠"
-
-                print(
-                    f"{outdoor:>6}°C | {indoor:>5}°C | {flow_ufh:>10.1f}°C | "
-                    f"{flow_rads:>10.1f}°C | {status:>6}"
-                )
-
-                # Flow temp should be reasonable (respecting model limits)
-                assert (
-                    ufh_ok
-                ), f"UFH flow {flow_ufh:.1f}°C invalid (model min: {model.min_flow_temp}°C)"
-                assert (
-                    rads_ok
-                ), f"Radiator flow {flow_rads:.1f}°C invalid (model min: {model.min_flow_temp}°C)"
-
-                # Radiators should need higher flow temp than UFH (or similar)
-                assert (
-                    flow_rads >= flow_ufh - 2
-                ), f"Radiators should need higher/equal flow temp than UFH"
-
-    def test_models_flow_temp_increases_as_outdoor_temp_drops(self):
-        """Test flow temperature increases as it gets colder (physics)."""
-        from custom_components.effektguard.models.registry import HeatPumpModelRegistry
-
-        registry = HeatPumpModelRegistry()
-        f750 = registry.get_model("nibe_f750")
-
-        print("\n" + "=" * 80)
-        print("FLOW TEMPERATURE WEATHER COMPENSATION TEST")
-        print("=" * 80)
-        print(f"Model: {f750.model_name}")
-        print("=" * 80)
-        print(f"{'Outdoor':>8} | {'Flow Temp':>10} | {'ΔFlow':>8} | {'Valid':>6}")
-        print("-" * 80)
-
-        previous_flow = None
-        previous_outdoor = None
-
-        for outdoor in range(10, -25, -5):
-            # Calculate heat demand
-            indoor = 21.0
-            heat_loss_coef = 180.0  # W/°C
-            heat_demand_kw = (indoor - outdoor) * heat_loss_coef / 1000.0
-
-            flow = f750.calculate_optimal_flow_temp(outdoor, indoor, heat_demand_kw)
-
-            if previous_flow is not None:
-                delta_flow = flow - previous_flow
-                # Flow should increase or stay same as outdoor drops
-                # (unless clamped by model's min_flow_temp)
-                is_valid = delta_flow >= -1.0  # Allow for clamping to min
-                status = "✓" if is_valid else "✗"
-
-                print(f"{outdoor:>6}°C | {flow:>8.1f}°C | {delta_flow:>+6.1f}°C | {status:>6}")
-
-                # Note: Flow can stop increasing if it hits min_flow_temp limit
-                # This is correct behavior, not a failure
-            else:
-                print(f"{outdoor:>6}°C | {flow:>8.1f}°C | baseline | ✓")
-
-            previous_flow = flow
-            previous_outdoor = outdoor
+# NOTE: TestModelFlowTemperatureIntegration was removed along with
+# HeatPumpProfile.calculate_optimal_flow_temp. A heat-pump profile describes the PUMP; the flow
+# temperature a house needs is a property of the HOUSE's emitters, which a profile cannot know.
+# The flow-temperature model now lives in optimization/weather_layer.py (EN 442 emitter law, see
+# utils/emitter.py) and is tested in tests/unit/climate/test_weather_compensation.py and
+# tests/validation/test_weather_compensation_is_not_anti_compensation.py. See audit F-119 / F-121.
 
 
 class TestModelCapacityAndSizing:
@@ -330,9 +229,16 @@ class TestModelCapacityAndSizing:
             max_heat = f730.typical_electrical_range_kw[1] * cop
             can_meet = heat_demand_kw <= max_heat
 
-            # Calculate optimal flow temp
+            # The flow temperature the emitters need, from the one model that owns it.
             indoor = 21
-            optimal_flow = f730.calculate_optimal_flow_temp(outdoor, indoor, heat_demand_kw)
+            optimal_flow = en442_flow_temp(
+                indoor_setpoint=indoor,
+                outdoor_temp=outdoor,
+                design_outdoor_temp=DEFAULT_DESIGN_OUTDOOR_TEMP,
+                design_flow_temp=DEFAULT_DESIGN_FLOW_TEMP_RADIATOR,
+                design_spread=DEFAULT_DESIGN_SPREAD,
+                emitter_exponent=RADIATOR_POWER_COEFFICIENT,
+            )
 
             # Validate with model's power check
             result = f730.validate_power_consumption(

@@ -1,38 +1,60 @@
 """NIBE F750 heat pump profile.
 
-8kW ASHP - Most common model for 100-150m² houses in Sweden.
-Based on NIBE official specifications and Swedish forum validation.
+EXHAUST-AIR heat pump. Its heat source is the house's own ventilation air, not the outdoor air, and
+its output is bounded by the airflow it breathes - it is not an ASHP and cannot make 8 kW.
+Performance derives from the EN 14511 rating points below; see RatingPoint in models/base.py.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
-from ..base import HeatPumpProfile, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
+from ...const import DM_THRESHOLD_AUX_LIMIT
+
+# NIBE F750, "Output data according to EN 14 511", part no. 066 063 / 066 061. VERBATIM.
+# The only three performance figures NIBE publishes for this machine.
+F750_DATASHEET = (
+    RatingPoint(
+        "A20(12)W35, exhaust air flow 108 m3/h (30 l/s) min compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=35.0,
+        heat_output_kw=1.144,
+        cop=4.20,
+        airflow_m3h=108.0,
+    ),
+    RatingPoint(
+        "A20(12)W35, exhaust air flow 252 m3/h (70 l/s) min compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=35.0,
+        heat_output_kw=1.498,
+        cop=4.72,
+        airflow_m3h=252.0,
+    ),
+    RatingPoint(
+        "A20(12)W45, exhaust air flow 252 m3/h (70 l/s) max compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=45.0,
+        heat_output_kw=4.994,
+        cop=2.43,
+        airflow_m3h=252.0,
+    ),
+)
+F750_SOURCE = (
+    "NIBE F750 product data sheet, 'Output data according to EN 14 511', part no. 066 063/066 061. "
+    "https://www.teplounion.com/doc/NIBE-F750-information.pdf"
+)
 
 
 @HeatPumpModelRegistry.register("nibe_f750")
 @dataclass
 class NibeF750Profile(HeatPumpProfile):
-    """NIBE F750 8kW Air Source Heat Pump.
+    """NIBE F750 EXHAUST-AIR heat pump.
 
-    **Target Market**: 100-150m² standard insulation houses
-    **Typical Application**: Single-family homes, floor heating + radiators
-    **Electrical**: 3-phase 16A (11kW) or 3-phase 20A (13.8kW)
-    **Heating Medium**: Optimized for UFH (25-35°C flow), OK for radiators (45-55°C)
+    NIBE publishes three EN 14511 points (F750_DATASHEET) and no others. Maximum specified heating
+    output is 4.994 kW; the heat source is 20 C extract air (A20(12)), so outdoor air never touches
+    the evaporator. Everything the simulator believes derives from those points and nothing else.
 
-    **Power Characteristics**:
-    - Rated: 8kW heat at 7°C outdoor, 45°C flow
-    - Modulation: 1.2-6.5kW electrical (3-phase)
-    - Typical: 1.5-2.5kW electrical for well-matched system
-
-    **COP Performance**:
-    - Best: 5.0 at 7°C outdoor (mild Swedish winter)
-    - Good: 4.0 at 0°C (Malmö/Gothenburg average)
-    - Acceptable: 3.0 at -10°C (Stockholm cold spell)
-    - Survival: 2.0 at -25°C (Kiruna extreme)
-
-    **Source**: NIBE F750 datasheet, Swedish NIBE forum validation
+    Pdesign 5 kW. Immersion heater 0.5-6.5 kW. SCOP(EN 14825) 4.5/4.7 average/cold at 35 C.
     """
 
     # Identity
@@ -40,14 +62,23 @@ class NibeF750Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "F-series ASHP"
 
-    # Power characteristics
-    rated_power_kw: tuple[float, float] = (2.0, 8.0)  # Heat output range
-    typical_electrical_range_kw: tuple[float, float] = (1.2, 6.5)  # 3-phase
+    # THE DATASHEET. Everything below that is a number is derived from it in __post_init__.
+    datasheet_points: tuple[RatingPoint, ...] = F750_DATASHEET
+    datasheet_source: str = F750_SOURCE
+
+    # Power characteristics - DERIVED from the rating points, not restated.
+    design_heat_load_kw: float = 5.0  # Pdesignh - datasheet "Nominal heating output (Pdesign) 5 kW"
+    immersion_heater_kw: float = 3.5  # datasheet: "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
+    heating_capacity_range_kw: tuple[float, float] = (
+        1.144,
+        4.994,
+    )  # the max-compressor-frequency point IS the maximum
+    rated_power_kw: tuple[float, float] = (1.144, 4.994)  # PH min..max, EN 14511
+    typical_electrical_range_kw: tuple[float, float] = (0.27, 2.06)  # PH/COP at those same points
     modulation_range: tuple[int, int] = (70, 120)  # Hz (inverter compressor)
     modulation_type: str = "inverter"
 
-    # Efficiency - Real-world COP curve for F750
-    typical_cop_range: tuple[float, float] = (2.0, 5.0)
+    typical_cop_range: tuple[float, float] = (2.43, 4.72)  # the published COPs, min..max
     optimal_flow_delta: float = 27.0  # SPF 4.0+ target (outdoor + 27°C)
     cop_curve: dict[float, float] = None  # Set in __post_init__
 
@@ -58,16 +89,12 @@ class NibeF750Profile(HeatPumpProfile):
     max_flow_temp: float = 60.0
     min_flow_temp: float = 20.0
 
-    # Swedish optimization parameters (validated in Swedish NIBE forum)
-    dm_threshold_start: float = -60  # Standard NIBE compressor start
-    dm_threshold_extended: float = -240  # Extended runs (custom stevedvo setting)
-    dm_threshold_warning: float = -400  # Approaching thermal debt danger
-    dm_threshold_critical: float = -500  # Emergency recovery needed
-    dm_threshold_aux_swedish: float = -1500  # Swedish aux delay optimization
-
-    # Cycling protection (prevents compressor wear)
-    min_runtime_minutes: int = 30  # NIBE recommendation
-    min_rest_minutes: int = 10  # Minimum off time between cycles
+    # The simulator reads this so the plant model tracks what the integration believes.
+    # It cannot do that while the profile restates the number, so it references it (F-076).
+    dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
+    # SOURCED: F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3 "start addition",
+    # setting range -2000..-30, factory default -700. The pump's own elpatron fires here.
+    aux_start_dm: float = -700.0
 
     # Exhaust air heat pump features
     # F750 is an EAHP - supports airflow optimization for heat extraction
@@ -75,64 +102,15 @@ class NibeF750Profile(HeatPumpProfile):
     standard_airflow_m3h: float = 150.0  # Normal ventilation rate
     enhanced_airflow_m3h: float = 252.0  # Maximum ventilation rate
 
-    # MODELING LIMITATION (review 2026-07): this is an exhaust-air heat pump;
-    # its COP depends primarily on exhaust-air (source) and flow (sink)
-    # temperatures, not outdoor temperature. The outdoor-keyed curve below is
-    # an indirect approximation - adequate for relative decisions, NOT
-    # validated for absolute energy/savings claims.
     def __post_init__(self):
-        """Initialize COP curve after dataclass creation."""
-        # Real-world F750 COP curve (tested and validated)
-        self.cop_curve = {
-            7: 5.0,  # Rated conditions (mild winter)
-            5: 4.5,  # Mild
-            0: 4.0,  # Average Swedish winter (Malmö, Gothenburg)
-            -5: 3.5,  # Common cold (Stockholm, Uppsala)
-            -10: 3.0,  # Cold winter (most of Sweden)
-            -15: 2.7,  # Design temperature (Northern Sweden)
-            -20: 2.3,  # Very cold (Luleå, Umeå)
-            -25: 2.0,  # Extreme cold (Kiruna)
-            -30: 1.8,  # Survival mode (rare extreme)
-        }
+        """DISPLAY-ONLY seasonal COP proxy for the dashboard. Nothing computes from it.
 
-    def calculate_optimal_flow_temp(
-        self,
-        outdoor_temp: float,
-        indoor_target: float,
-        heat_demand_kw: float,
-    ) -> float:
-        """Calculate optimal flow temperature for F750.
-
-        Uses André Kühne's universal formula validated across manufacturers
-        combined with F750-specific efficiency targets.
-
-        Args:
-            outdoor_temp: Current outdoor temperature (°C)
-            indoor_target: Target indoor temperature (°C)
-            heat_demand_kw: Required heat output (kW)
-
-        Returns:
-            Optimal flow temperature (°C) for maximum efficiency
+        The simulator takes COP from `datasheet_points` via the exergy model
+        (scripts/simulation/sim_harness.py), which uses the SOURCE temperature (a constant 20 C for
+        this machine) and flow temperature, never the weather. The proxy is anchored on the two
+        published endpoints (COP 4.72 min-freq/W35, 2.43 max-freq/W45).
         """
-        # André Kühne formula (validated universal formula)
-        # Source: Mathematical_Enhancement_Summary.md
-        heat_loss_coefficient = 180.0  # W/°C typical Swedish house
-        temp_diff = indoor_target - outdoor_temp
-
-        flow_from_formula = (
-            KUEHNE_COEFFICIENT
-            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
-            + indoor_target
-        )
-
-        # F750 efficiency target: outdoor + 27°C for SPF 4.0+
-        flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
-
-        # Return lower value (more efficient while meeting demand)
-        optimal = min(flow_from_formula, flow_from_efficiency + 3.0)
-
-        # Clamp to F750 limits
-        return max(self.min_flow_temp, min(optimal, self.max_flow_temp))
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 
     def validate_power_consumption(
         self,
