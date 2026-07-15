@@ -23,9 +23,6 @@ CONF_SUPPLY_TEMP_ENTITY: Final = "supply_temp_entity"  # Optional: BT2/BT25/BT63
 CONF_RETURN_TEMP_ENTITY: Final = "return_temp_entity"  # Optional: BT3 override
 CONF_DHW_CHARGING_TEMP_ENTITY: Final = "dhw_charging_temp_entity"  # Optional: BT6 override
 CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.temporary_lux_50004
-CONF_ENABLE_DHW_OPTIMIZATION: Final = "enable_dhw_optimization"  # Enable intelligent DHW scheduling
-CONF_DHW_DEMAND_PERIODS: Final = "dhw_demand_periods"  # High DHW demand periods (JSON list)
-CONF_DHW_TARGET_TEMP: Final = "dhw_target_temp"  # User-configurable DHW target temperature (°C)
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
@@ -36,13 +33,11 @@ CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
 CONF_ENABLE_HOT_WATER_OPTIMIZATION: Final = "enable_hot_water_optimization"
 CONF_ENABLE_WEATHER_COMPENSATION: Final = "enable_weather_compensation"  # Universal formulas
 CONF_ENABLE_OPTIMIZATION: Final = "enable_optimization"  # Master enable switch
-CONF_TARGET_TEMPERATURE: Final = "target_temperature"
 CONF_TOLERANCE: Final = "tolerance"
 CONF_OPTIMIZATION_MODE: Final = "optimization_mode"
 CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
 CONF_HEAT_PUMP_MODEL: Final = "heat_pump_model"
-CONF_WEATHER_COMPENSATION_WEIGHT: Final = "weather_compensation_weight"  # 0.0-1.0
 
 # Defaults
 DEFAULT_TOLERANCE: Final = 0.5
@@ -58,8 +53,9 @@ DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 DEFAULT_DHW_MORNING_HOUR: Final = 7  # Default morning DHW availability hour (07:00)
 DEFAULT_DHW_EVENING_HOUR: Final = 18  # Default evening DHW availability hour (18:00)
 
-# Climate entity temperature limits (displayed in UI)
-MIN_INDOOR_TEMP: Final = 15.0  # °C - minimum settable temperature
+# Climate entity temperature limits (displayed in UI).
+# The MINIMUM is MIN_TEMP_LIMIT - the safety floor - not a separate number: a setpoint the
+# safety layer answers with an emergency is not a setpoint (audit F-085).
 MAX_INDOOR_TEMP: Final = 25.0  # °C - maximum settable temperature
 TEMP_STEP: Final = 0.5  # °C - temperature adjustment step
 
@@ -72,6 +68,13 @@ DAYTIME_END_HOUR: Final = 22  # 22:00 - daytime ends (nighttime 22:00-06:00)
 # Quarter equivalents (each hour = 4 quarters, so 6*4=24 and 22*4=88)
 DAYTIME_START_QUARTER: Final = 24  # Quarter 24 = 06:00
 DAYTIME_END_QUARTER: Final = 87  # Quarter 87 = 21:45 (last daytime quarter)
+
+# Swedish effect tariffs weight night quarters at half. This was a bare 0.5 in two places in
+# effect_layer, and the fact that it is a WEIGHTING rather than a power was easy to lose sight of:
+# the coordinator fed the savings baseline an unweighted peak and compared it against a weighted
+# one, so a single night quarter reported 150 SEK/month of "savings" that were nothing but this
+# number. Anything compared against a monthly peak has to be put through effective_tariff_power_kw.
+NIGHT_TARIFF_WEIGHT: Final = 0.5
 
 # Optimization modes for climate entity presets
 OPTIMIZATION_MODE_COMFORT: Final = "comfort"  # Minimize deviation, accept higher costs
@@ -135,9 +138,31 @@ MIN_OFFSET: Final = -10.0
 MAX_OFFSET: Final = 10.0
 MIN_TEMP_LIMIT: Final = 18.0
 
+# The lowest target the system can actually HOLD, as opposed to the lowest it will not treat as an
+# emergency. The safety layer fires below MIN_TEMP_LIMIT, and the comfort band is target ± tolerance
+# - so a target sitting AT the floor puts the lower half of its own comfort band inside the
+# emergency zone, and ordinary control noise trips a full MAX_OFFSET boost that carries
+# is_emergency=True and bypasses the volatility blocker. A target must sit at least one tolerance
+# above the floor (audit F-085).
+#
+# This is the slider's minimum, computed at the DEFAULT tolerance. The engine enforces the real
+# bound - MIN_TEMP_LIMIT + the tolerance actually configured - and says so if it has to.
+MIN_TARGET_TEMP: Final = MIN_TEMP_LIMIT + DEFAULT_TOLERANCE  # 18.5 °C at the default ±0.5
+
+# Power-reading plausibility. The margin covers startup/defrost transients above the
+# machine's compressor-plus-immersion ceiling before a reading is called implausible.
+POWER_VALIDATION_MARGIN: Final = 1.2
+
 # Service call rate limiting (boost, DHW, general)
 HEATING_BOOST_COOLDOWN_MINUTES: Final = 45  # Space heating boost cooldown
 DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
+
+# boost_dhw duration window. EffektGuard itself ends the boost when it expires; NIBE's own
+# temporary-lux timeout (~3 h one-shot on the F-series) still applies underneath, which is why
+# the ceiling matches it.
+DHW_BOOST_DEFAULT_DURATION_MINUTES: Final = 90
+DHW_BOOST_MIN_DURATION_MINUTES: Final = 30
+DHW_BOOST_MAX_DURATION_MINUTES: Final = 180
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 
@@ -171,23 +196,20 @@ LAYER_WEIGHT_PRICE: Final = 0.8  # Strong influence - balanced with other layers
 LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PREDICTION: Final = 0.65  # Prediction layer weight (Phase 6)
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
-LAYER_WEIGHT_COMFORT_MAX: Final = 0.5  # Maximum comfort weight (legacy - unused after Phase 2)
+LAYER_WEIGHT_COMFORT_MAX: Final = (
+    0.5  # Ceiling of the comfort layer's urgency ramp (comfort_layer.py)
+)
 
 # Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
 # Provides dynamic response to temperature overshoot severity
 # Dec 2, 2025: Lowered thresholds - comfort layer triggers at 0.5°C and 1.0°C
-COMFORT_OVERSHOOT_SEVERE: Final = 0.5  # °C over tolerance for severe response
-COMFORT_OVERSHOOT_CRITICAL: Final = 1.0  # °C over tolerance for critical response
 LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-0.5°C over tolerance
-LAYER_WEIGHT_COMFORT_SEVERE: Final = 0.9  # Very high priority: 0.5-1°C over tolerance
 LAYER_WEIGHT_COMFORT_CRITICAL: Final = (
     1.0  # Critical priority: 1°C+ over tolerance (same as safety)
 )
 
 # Graduated comfort layer correction multipliers (Phase 2)
 COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction
-COMFORT_CORRECTION_STRONG: Final = 1.2  # 1-2°C over tolerance: strong correction
-COMFORT_CORRECTION_CRITICAL: Final = 1.5  # 2°C+ over tolerance: emergency correction
 
 # Effect tariff / Peak protection layer weights and offsets
 # Oct 19, 2025: Increased weights to make peak protection more decisive
@@ -201,8 +223,6 @@ EFFECT_OFFSET_PREDICTIVE: Final = -1.5  # Moderate reduction before peak
 EFFECT_OFFSET_WARNING_RISING: Final = -1.0  # Gentle reduction near peak
 EFFECT_OFFSET_WARNING_STABLE: Final = -0.5  # Light reduction near peak
 EFFECT_MARGIN_PREDICTIVE: Final = 1.0  # kW margin threshold for predictive action
-EFFECT_MARGIN_WARNING: Final = 1.5  # kW margin threshold for warning
-EFFECT_MARGIN_WATCH: Final = 2.5  # kW margin threshold for watch
 
 # Effect layer predictive power thresholds (Oct 19, 2025)
 # Predicts future power demand based on thermal trend rate
@@ -255,6 +275,11 @@ CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
 DM_THRESHOLD_AUX_LIMIT: Final = -1500  # Auxiliary heat threshold (prevent expensive elpatron)
 
+# How far the EXPECTED degree-minute band must stay clear of the absolute floor above: a house whose
+# "normal" range reached the emergency trigger would be normal and in danger at once (audit F-076).
+DM_NORMAL_MIN_BUFFER: Final = 100  # DM - the shallow end of "normal" stays this clear of the floor
+DM_WARNING_BUFFER: Final = 50  # DM - normal_max and warning stay this clear of it
+
 # Multi-tier CRITICAL thermal debt intervention (Oct 19, 2025 - Climate-Aware)
 # Philosophy: Progressive escalation based on climate-aware WARNING threshold
 # Tiers calculated dynamically as: WARNING + margin (adapts to climate zone)
@@ -285,8 +310,30 @@ DM_CRITICAL_T3_MAX: Final = -1450  # Safety cap: 50 DM margin from absolute max 
 DM_CRITICAL_T1_PEAK_AWARE_OFFSET: Final = 0.5  # T1 minimal: Just enough to stabilize
 DM_CRITICAL_T2_PEAK_AWARE_OFFSET: Final = 0.75  # T2 minimal: Moderate escalation
 DM_CRITICAL_T3_PEAK_AWARE_OFFSET: Final = 1.0  # T3 minimal: Aggressive recovery needed
-PEAK_AWARE_EFFECT_THRESHOLD: Final = -1.0  # Effect offset threshold for peak detection
-PEAK_AWARE_EFFECT_WEIGHT_MIN: Final = 0.5  # Minimum effect weight for peak detection
+
+# Emergency tier identifiers (see thermal_layer.EmergencyLayerDecision.tier)
+#
+# SAFETY DISPATCH MUST KEY ON THESE NAMES - never on a layer's weight or on the
+# magnitude of its offset. Both are unreliable discriminators:
+#   - The offset returned by a tier has already passed through thermal-recovery
+#     damping, the anti-windup cap, and the volatile-boost skip, so a damped T3 can
+#     emerge smaller than an undamped T1.
+#   - A weight is a tuning parameter. Retuning DM_CRITICAL_T2_WEIGHT (0.85 -> 0.81)
+#     silently moved T2 below a hardcoded `weight >= 0.85` gate, which dropped T2
+#     recovery into the cost-layer override path and produced a -3.0 C heat REDUCTION
+#     at deep thermal debt.
+DM_TIER_EMERGENCY: Final = "EMERGENCY"  # DM <= DM_THRESHOLD_AUX_LIMIT (absolute priority)
+DM_RECOVERY_TIERS: Final[frozenset[str]] = frozenset({"T1", "T2", "T3"})
+
+# Minimal offsets applied when a recovery tier coincides with a CRITICAL cost layer
+# (effect tariff at the monthly peak, or a PEAK spot-price quarter). Large enough to
+# stop DM worsening, small enough not to grow the monthly peak. Keyed by tier name so
+# that damping cannot change which tier's compromise is selected.
+DM_CRITICAL_PEAK_AWARE_OFFSETS: Final[dict[str, float]] = {
+    "T1": DM_CRITICAL_T1_PEAK_AWARE_OFFSET,
+    "T2": DM_CRITICAL_T2_PEAK_AWARE_OFFSET,
+    "T3": DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
+}
 
 # Thermal Recovery Damping - General (Oct 20, 2025)
 # Prevent concrete slab thermal overshoot when solar gain naturally warms house during recovery
@@ -513,9 +560,13 @@ THERMAL_MASS_CONCRETE_UFH_THRESHOLD: Final = 1.5  # >= 1.5 = concrete underfloor
 THERMAL_MASS_TIMBER_UFH_THRESHOLD: Final = 1.2  # >= 1.2 = timber underfloor heating
 # Below 1.2 defaults to radiator heating
 
-# Tolerance range multiplier (Oct 19, 2025)
-# Scales user tolerance setting (1-10) to actual temperature range
-TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # Scale: 1-10 -> 0.4-4.0°C
+# THE INNER BAND: how much of the owner's tolerance (in DEGREES) a cost layer may spend freely.
+#
+# An owner who asks for +/-0.5 C gets an INNER band of +/-0.2 C inside which the spot and effect
+# layers may coast the house around for free - the thermal battery - and a ramp out to the +/-0.5 C
+# they actually asked for, across which the comfort layer progressively takes the floor back.
+# See DecisionEngine._starvation_fraction.
+TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # of the owner's tolerance: 0.5 C -> a 0.2 C free band
 
 # Safety layer emergency offsets (Oct 19, 2025)
 # Used for extreme temperature deviations and absolute DM maximum
@@ -545,11 +596,26 @@ WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
 # DESIGN: All proactive zones trigger BEFORE warning threshold!
 # Z1-Z5 are PREVENTION layers. T1-T3 are RECOVERY layers (after warning).
 #
+# WHY ZONE 5 WAS UNREACHABLE (kept as a comment: it was a module-level string bound to a
+# name nothing read, which is dead code however useful the words are).
+# Zone 5 was unreachable for the whole life of this project, in every release and every climate zone.
+#
+# Its band is `warning < DM <= zone5_threshold`, and the percent below was 1.00 - so zone5_threshold
+# came out at exactly `normal_max`. Every climate zone ALSO sets `dm_warning_threshold` to exactly the
+# deep end of `dm_normal_range`, so `warning == normal_max == zone5_threshold` and the band read
+# `-740 < DM <= -740`: the empty set. Both ends were the same number, and the same temperature
+# adjustment is added to both, so they could never separate.
+#
+# 1.00 is the one value that gives this rung no step to stand on, and it contradicts the DESIGN note
+# directly above: Z1-Z5 trigger BEFORE the warning threshold, so Z5's boundary must sit strictly before
+# it. 0.875 splits the old Z4 band in half and hands the deeper half to Z5 - the ladder regains the
+# +3.0 rung it was built with, and no threshold that governs when RECOVERY starts moves at all.
+
 PROACTIVE_ZONE1_THRESHOLD_PERCENT: Final = 0.02  # 2% of normal max (ultra-early warning, Jan 2026)
 PROACTIVE_ZONE2_THRESHOLD_PERCENT: Final = 0.30  # 30% of normal max (moderate)
 PROACTIVE_ZONE3_THRESHOLD_PERCENT: Final = 0.50  # 50% of normal max (significant)
 PROACTIVE_ZONE4_THRESHOLD_PERCENT: Final = 0.75  # 75% of normal max (strong)
-PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 1.00  # 100% of normal max (at warning boundary)
+PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 0.875  # 87.5% - strictly BEFORE warning (see note above)
 
 # Proactive layer zone offsets and weights (Oct 19, 2025)
 # Progressive escalation as DM approaches warning threshold
@@ -601,10 +667,6 @@ OVERSHOOT_PROTECTION_START: Final = (
 OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for full response
 OVERSHOOT_PROTECTION_OFFSET_MIN: Final = -7.0  # Offset at start threshold (coast gently)
 OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # Offset at full threshold (full coast)
-OVERSHOOT_PROTECTION_WEIGHT_MIN: Final = 0.5  # Weight at start threshold
-OVERSHOOT_PROTECTION_WEIGHT_MAX: Final = 1.0  # Weight at full threshold (full override)
-OVERSHOOT_PROTECTION_FORECAST_HORIZON: Final = 12  # Hours to check forecast stability
-OVERSHOOT_PROTECTION_COLD_SNAP_THRESHOLD: Final = 3.0  # °C drop that qualifies as cold snap
 
 # Price-aware overshoot protection (Dec 4, 2025)
 # Rapid cooling detection (Oct 19, 2025)
@@ -646,8 +708,35 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 #   - Let SAFETY, COMFORT, EFFECT layers moderate naturally via weighted aggregation
 #
 # Real-world validation: Prevents 20:00→04:00 emergency cycles and 16:00 overshoot
+# The unit shown on the price sensor when the spot-price integration has not (yet) reported one.
+# The sensor prefers the user's own integration's unit; this is only the gap-filler during startup
+# or a brief outage. It is öre because that is what GE-Spot reports for SE4 (audit F-070).
+# Home Assistant repair-issue id raised when there is no electricity price source at all.
+# Without prices the price layer abstains entirely - which is correct - but the user has
+# `enable_price_optimization` switched on and believes it is trading. A log line does not tell
+# them; a repair issue does. (Audit F-123.)
+PRICE_SOURCE_ISSUE_ID: Final = "no_price_source"
+
+# EffektGuard drives hot water by toggling NIBE's temporary-lux switch. Home Assistant's own NIBE
+# integration only maps that register (50004) for the F-series, so an S-series pump exposes no such
+# entity at all - and the DHW half of EffektGuard then does nothing whatsoever. It said so in a
+# _LOGGER.debug, while the UI carried on showing a hot-water status, a recommendation and a
+# scheduled start time that could never fire. Same rule as the price source: a debug line is not
+# telling anyone.
+DHW_CONTROL_ISSUE_ID: Final = "no_dhw_control_entity"
+
+PRICE_UNIT_FALLBACK: Final = "öre/kWh"
+
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
+
+# `WeatherData.forecast_hours` MUST be filtered to the future, because every consumer slices it
+# POSITIONALLY (`[:3]`, `[:24]`, `[:horizon]`). A stalled weather integration holds a forecast that
+# starts hours ago, so an unfiltered `[:3]` reads weather from the past and a cold snap an hour away
+# falls outside every horizon - exactly the case pre-heat exists for. Entries whose hour has ENDED
+# are dropped; the current hour is kept (current_temp carries the present reading anyway), and an
+# all-past forecast becomes EMPTY, which the layers already treat as "no forecast".
+WEATHER_FORECAST_PERIOD_HOURS: Final = 1.0  # each forecast entry covers one hour
 WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
 LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)
@@ -731,6 +820,17 @@ PRICE_PERCENTILE_VERY_CHEAP: Final = 10  # Bottom 10% = VERY_CHEAP
 PRICE_PERCENTILE_CHEAP: Final = 25  # 10-25% = CHEAP
 PRICE_PERCENTILE_NORMAL: Final = 75  # 25-75% = NORMAL
 PRICE_PERCENTILE_EXPENSIVE: Final = 90  # 75-90% = EXPENSIVE
+PRICE_PERCENTILE_MEDIAN: Final = 50  # the day's midpoint; guards every band against a plateau
+
+# A day whose prices barely move carries no signal, and percentile RANK cannot see that: it is
+# scale-invariant, so it cannot tell a 130 ore spread from a 0.4 ore one. A day that ran from
+# 39.80 to 40.20 ore used to earn the full VERY_CHEAP..PEAK banding - a 14 C swing in commanded
+# offset - to chase four tenths of an ore.
+#
+# The test is RELATIVE, not an absolute number of ore, because nothing in the price layer knows
+# its unit: PriceData carries none, and GE-Spot publishes whatever the owner configured. An
+# absolute threshold would be a hundred times wrong for anyone reporting SEK/kWh.
+PRICE_FLAT_DAY_SPREAD_FRACTION: Final = 0.05  # p90-p10 must exceed 5 % of the day's price scale
 # Above 90% = PEAK
 
 # Price classification base offsets (Dec 3, 2025, updated Dec 8, 2025)
@@ -752,9 +852,6 @@ PRICE_PRE_PEAK_OFFSET: Final = -6.0  # °C - gradual reduction before PEAK arriv
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
-COMFORT_DM_COOLING_THRESHOLD: Final = (
-    -200  # Block cooling corrections when DM < -200 (thermal debt accumulating)
-)
 
 # Comfort layer thermal-aware calculations (Dec 8, 2025)
 # Heat loss rate calculation: base_heat_loss = temp_diff / (insulation * HEAT_LOSS_DIVISOR)
@@ -827,20 +924,72 @@ UFH_RADIATOR_PREDICTION_HORIZON: Final = 6.0  # hours - <1 hour lag (increased f
 
 DEFAULT_CURVE_SENSITIVITY: Final = 1.5  # NIBE curve sensitivity (~1.5°C flow change per 1°C offset)
 
-# Weather compensation mathematical constants
-KUEHNE_COEFFICIENT: Final = 2.55  # Universal coefficient for flow temperature calculation
-KUEHNE_POWER: Final = 0.78  # Power coefficient for heat transfer physics
-RADIATOR_POWER_COEFFICIENT: Final = 1.3  # BS EN442 standard radiator output
-RADIATOR_RATED_DT: Final = 50.0  # Standard test DT (75°C flow, 65°C return, 20°C room)
+# Weather compensation - EN 442 emitter law (see utils/emitter.py)
+#
+#   EN 442-1:2014 3.31   emitter output: Phi / Phi_N = (dT / dT_N) ** n
+#   EN 442-1:2014 3.23   rated point 75/65/20 => dT_N = 50 K, ARITHMETIC mean.
+#                        Never pair this reference with a log-mean dT.
+#   EN 1264              underfloor: q = 8.92 * dT ** 1.1 => n ~ 1.1
+RADIATOR_POWER_COEFFICIENT: Final = 1.3  # EN 442 exponent n, panel/sectional radiators
+RADIATOR_RATED_DT: Final = 50.0  # EN 442 rated excess temperature (75/65/20)
+UFH_POWER_COEFFICIENT: Final = 1.1  # EN 1264 exponent n, underfloor (NOT 1.3)
 
-# UFH flow temperature adjustments
-UFH_FLOW_REDUCTION_CONCRETE: Final = 8.0  # °C reduction for concrete slab UFH
-UFH_FLOW_REDUCTION_TIMBER: Final = 5.0  # °C reduction for timber/lightweight UFH
-UFH_MIN_FLOW_TEMP_CONCRETE: Final = 25.0  # Minimum effective concrete slab temp
-UFH_MIN_FLOW_TEMP_TIMBER: Final = 22.0  # Minimum effective timber UFH temp
+# Design point: the outdoor temperature the emitters were sized for, and the supply they need at
+# it. Defaults describe a standard Swedish low-temperature radiator system, erring WARM: a
+# too-warm design point over-supplies slightly, a too-cold one silently under-heats, and degree
+# minutes cannot detect under-heating that a negative offset causes (they improve as it worsens).
+# INTERNAL GAINS. Bodies, appliances and the sun heat a house for free. Demand is NOT linear in
+# (indoor - outdoor); it is linear in (balance_point - outdoor), and it reaches zero well before
+# the outdoor air reaches room temperature. Ignoring that asks the pump to run hot in mild weather
+# - where most of the season's kWh are delivered, and where OEM's measured fleet puts the COP
+# penalty at 2.5-3 % per degree of excess flow.
+#
+# GAINS ARE WATTS, NOT DEGREES. The balance point is DERIVED, never fitted:
+#
+#     balance_point = indoor_setpoint - INTERNAL_GAINS_W / heat_loss_coefficient
+#
+# A fixed offset in degrees would make the gains scale with the house's heat loss - a leaky house
+# would be credited with MORE free heat than a well-insulated one, from the same bodies and the
+# same fridge. Backwards. Watts divided by W/K is the only form that gets this right, and it is
+# the form both measured sources below are expressed in.
+#
+# Measured sources:
+#   * heatpumpmonitor.org, 383 monitored systems with a fitted heat-demand line: median implied
+#     gains 583 W (750 W among the systems where it fitted non-zero).
+#   * OpenEnergyMonitor's SCOP tool: baseTemp 15.5 C against a 19.3 C room. Its source carries the
+#     naive no-gains formula COMMENTED OUT, with the note "This approach would need to take into
+#     account gains, hence use of degree days approach".
+#
+# NOT a source: fitting this against NIBE's published heating curve. That fit is DEGENERATE - a
+# constant spread lifts the curve by (spread/2)(1 - phi^(1/n)) and the balance point drops it by
+# the same basis function, so the two are not separately identifiable and any assumed spread
+# manufactures a matching "gains" figure. Fitting the post-fix law to Kuhne's Vaillant curve -
+# which contains PROVABLY ZERO gains - still yields 0.3 K at spread 0, 2.6 K at spread 5 and 4.9 K
+# at spread 10. A curve fit cannot see gains. Only a wattage can.
+INTERNAL_GAINS_W: Final = 600.0  # W of free heat; fleet median 583 W
+
+# A mis-configured heat loss must not drive the balance point somewhere absurd (a 20 W/K entry
+# would put it 30 K below the setpoint and switch heating off entirely).
+BALANCE_POINT_MIN_OFFSET: Final = 1.0  # C below setpoint, floor
+BALANCE_POINT_MAX_OFFSET: Final = 6.0  # C below setpoint, ceiling
+
+DEFAULT_DESIGN_OUTDOOR_TEMP: Final = -15.0  # °C, dimensioning outdoor temperature (DUT/DVUT)
+DEFAULT_DESIGN_FLOW_TEMP_RADIATOR: Final = 50.0  # °C supply at DUT for radiators
+DEFAULT_DESIGN_FLOW_TEMP_UFH: Final = 35.0  # °C supply at DUT for UFH (NIBE: normally 35-45)
+DEFAULT_DESIGN_SPREAD: Final = 5.0  # °C flow-return spread at design load
+
+# Weather compensation TRIMS the pump's own curve, it does not replace it: a correctly tuned curve
+# needs a near-zero correction. This bound stops a mis-configured design point from ever
+# commanding a large swing in either direction.
+WEATHER_COMP_MAX_OFFSET: Final = 3.0  # °C, absolute cap on the compensation offset
 
 # Heat loss coefficient defaults (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
+
+# Fallback decay rate for the pre-heat sizing, used until learning is trusted. It was a bare 0.15
+# in adaptive_learning next to a bare 180.0 - and the 180.0 was a second copy of the constant
+# directly above this line.
+DEFAULT_THERMAL_DECAY_RATE: Final = 0.15  # °C per hour, per °C of indoor-outdoor difference
 
 # Power estimation defaults (kW)
 # Used when actual power sensor unavailable - fallback values
@@ -856,34 +1005,116 @@ TEMP_FACTOR_MAX: Final = 3.0  # Maximum temperature scaling factor
 PEAK_RECORDING_MINIMUM: Final = 0.5  # kW - lowered from 1.0 for better learning
 # Typical NIBE consumption: standby 0.05-0.1 kW, heating 2.5-6.0 kW
 
+# And a CEILING, for the same reason the floor exists: a reading this far outside what a house can
+# physically draw is not a peak, it is a broken sensor.
+#
+# A Swedish domestic service is 16-25 A three-phase (11-17 kW); 35 A (24 kW) is a large villa with
+# an EV charger. 100 kW cannot happen behind a domestic main fuse, so nothing real is ever refused
+# here - but a mis-scaled reading is, and one of those got all the way into the tariff record:
+# `power_kw_from_state` case-folded its unit and read 5000 mW (five watts) as 5 000 000 kW. The
+# unit table is fixed, but a number that is persisted for a month and silently governs whether the
+# house is throttled deserves a plausibility bound of its own. An astronomical recorded peak does
+# not throttle the house - it makes every real quarter look safe against it, and peak protection
+# goes quiet for the rest of the month.
+PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a sensor fault
+
 # Update intervals
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
-QUARTER_INTERVAL_MINUTES: Final = 15  # Swedish Effektavgift measurement period
+# The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that - it is NOT the
+# effect tariff's measurement period, which the comment here used to claim it was. See
+# BILLING_PERIOD_MINUTES below. Conflating the two is what made the integration defend a peak
+# nobody is billed for.
 QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
 # Native interval counts a day can have: 92 (spring DST), 96 (normal),
 # 100 (autumn DST). Anything else means the source delivered a data gap.
 NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
+# How many consecutive update cycles the coordinator will wait for the heat pump to appear before
+# it reports failure. MyUplink can take 45-50 seconds to publish its entities, so waiting is right;
+# waiting FOREVER is a silent failure. Unbounded, a user who picked the wrong entity - or who has
+# no NIBE at all - keeps a config entry that stays loaded and green indefinitely while the
+# integration reads nothing and controls nothing.
+#
+# At UPDATE_INTERVAL_MINUTES this is a generous margin over any plausible MyUplink start-up.
+# How old a NIBE reading may be before it stops being a reading and becomes a memory.
+#
+# The adapter rejects `unavailable` and `unknown`, so an upstream integration that DIES is caught -
+# MyUplink and nibe_heatpump use a coordinator, and their entities go unavailable when polling
+# fails. But `manifest.json` also lists mqtt and modbus, and an MQTT sensor holds its last retained
+# value indefinitely: if the bridge publishing degree minutes stops, the sensor goes on reporting
+# the number it was given hours ago and every other check passes. The pump keeps being driven on it,
+# and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
+#
+# 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
+# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
+# today can be broken by the guard. (Audit F-015.)
+NIBE_READING_MAX_AGE_MINUTES: Final = 30
+
+STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
+
 STARTUP_GRACE_UPDATES: Final = 1  # Number of full cycles to observe before active control
 STARTUP_GRACE_MIN_INTERVAL: Final = 120  # Seconds - minimum lockout before observation cycles
 
 # Thermal predictor history constants (derived from UPDATE_INTERVAL_MINUTES)
 SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 5-min intervals
 
+# THE PREDICTION GATES COUNTED SAMPLES AND SPOKE IN HOURS, AND THE TWO DISAGREED BY 3x.
+#
+# SAMPLES_PER_HOUR is derived correctly above, and the predictor's own deque is sized with it. The
+# gates were not: they hardcoded 4, 96 and 8, with comments claiming "1 hour", "24 hours" and
+# "2+ hours". At a five-minute coordinator tick those are 20 minutes, EIGHT hours, and 40 minutes.
+#
+# The learned pre-heating layer therefore engaged on a THIRD of the data it believed it had, and
+# eight hours of a Swedish winter night is not a representative day. The hours are named here and
+# the sample counts derived from them, so the two can no longer drift apart.
+PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all
+PREDICTION_RESPONSIVENESS_MIN_HOURS: Final = 2  # before estimating how fast the house responds
+PREDICTION_LEARNED_PREHEAT_MIN_HOURS: Final = 24  # before acting on learned pre-heating
+
 # Adaptive learning parameters
 # Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
-LEARNING_OBSERVATION_WINDOW: Final = 672  # 1 week of 15-minute observations
-LEARNING_MIN_OBSERVATIONS: Final = 96  # 24 hours minimum for basic learning
+#
+# LEARNING OBSERVES ON A DIFFERENT CLOCK FROM CONTROL, and it has to.
+#
+# Control runs every UPDATE_INTERVAL_MINUTES because the pump needs steering that often. Learning
+# used to piggy-back on the same tick, and could therefore never learn anything: the room
+# sensor (NIBE BT50) reports to 0.1 C, and a house warming at a brisk 0.6 C/h moves 0.05 C in five minutes - half
+# a sensor tick. Every observed rate quantised to 0.0 or 1.2 C/h with nothing in between, so the
+# scatter that `_calculate_confidence` scores was a measurement of the SAMPLING INTERVAL, not of the
+# building. Confidence sat at 0.467 against a 0.7 gate, on any house, forever (F-132).
+#
+# The same house, identical physics, identical sensor, watched more slowly:
+#     5 min   quantum 1.20 C/h   confidence 0.467   never engages
+#    15 min   quantum 0.40 C/h   confidence 0.600   never engages
+#    30 min   quantum 0.20 C/h   confidence 0.707   engages, barely
+#    60 min   quantum 0.10 C/h   confidence 0.811   engages, comfortably
+#
+# Hourly is also the honest timescale for the question being asked. A building's thermal time
+# constant is hours; the concrete slab in UFH_CONCRETE_* lags six of them. Sampling that every five
+# minutes is sampling noise.
+#
+# It fixes the memory as well. The 672-entry deque was commented "1 week" but spanned 56 HOURS at the
+# 5-minute cadence - and it is a rolling window, so the model on day 90 saw exactly what it saw on
+# day 3, and the README's "Day 8-14: high confidence" was unreachable by construction. At one
+# observation an hour the same deque remembers 28 days.
+LEARNING_OBSERVATION_INTERVAL_MINUTES: Final = (
+    60  # Learning observes hourly, not every control tick
+)
+LEARNING_OBSERVATION_WINDOW: Final = 672  # 672 hourly observations = 28 days of memory
+LEARNING_MIN_OBSERVATIONS: Final = 96  # 96 hourly observations = 4 days before learning may engage
 LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
+
+# What it takes for the heating observations to carry any information at all.
+# The room sensor (NIBE BT50) reports to 0.1 C. A house that moved less than one sensor tick per
+# hour WHILE ACTIVELY HEATING has told us nothing measurable about itself: the signal is below the
+# instrument's resolution. Such a run must score ZERO confidence, not perfect confidence - which is
+# what a std/mean ratio does when every reading is identical and std collapses to 0 (F-132).
+LEARNING_MIN_HEATING_RATE: Final = 0.1  # °C/h - one sensor tick per hour; below this, no signal
+LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before consistency means much
 
 # Swedish climate regions - SMHI historical data (1961-1990)
 # Source: Swedish_Climate_Adaptations.md
-CLIMATE_SOUTHERN_SWEDEN: Final = "southern_sweden"  # Malmö/Gothenburg (0°C Jan avg)
-CLIMATE_CENTRAL_SWEDEN: Final = "central_sweden"  # Stockholm (-4°C Jan avg)
-CLIMATE_MID_NORTHERN_SWEDEN: Final = "mid_northern_sweden"  # Umeå/Östersund (-8°C Jan avg)
-CLIMATE_NORTHERN_SWEDEN: Final = "northern_sweden"  # Luleå (-11°C Jan avg)
-CLIMATE_NORTHERN_LAPLAND: Final = "northern_lapland"  # Kiruna (-13°C Jan avg)
 
 # Climate zones - Import from dedicated module
 # Source: optimization/climate_zones.py
@@ -898,15 +1129,16 @@ CLIMATE_NORTHERN_LAPLAND: Final = "northern_lapland"  # Kiruna (-13°C Jan avg)
 #
 # Import is done at runtime to avoid circular dependencies - use the climate_zones module directly.
 
-# Storage
-STORAGE_VERSION: Final = 1
+# Storage. Two stores, two schemas, two lifecycles - so two versions.
+# Effect store v1 recorded 15-minute quarter peaks (`quarter_of_day`). The tariff bills the
+# HOURLY mean (see effect_layer.py), and a quarter-hour mean is not convertible to one, so
+# migration to v2 discards v1 records and the month's top-3 restarts from live measurement.
+EFFECT_STORAGE_VERSION: Final = 2
+LEARNING_STORAGE_VERSION: Final = 1
 STORAGE_KEY: Final = f"{DOMAIN}_state"
 STORAGE_KEY_LEARNING: Final = f"{DOMAIN}_learned_data"
 
 # Services
-SERVICE_SET_OPTIMIZATION_MODE: Final = "set_optimization_mode"
-SERVICE_FORCE_UPDATE: Final = "force_update"
-SERVICE_RESET_PEAKS: Final = "reset_peaks"
 SERVICE_FORCE_OFFSET: Final = "force_offset"
 SERVICE_RESET_PEAK_TRACKING: Final = "reset_peak_tracking"
 SERVICE_BOOST_HEATING: Final = "boost_heating"
@@ -919,20 +1151,12 @@ ATTR_DURATION: Final = "duration"
 ATTR_TARGET_TEMP: Final = "target_temp"
 
 # Attributes
-ATTR_CURRENT_OFFSET: Final = "current_offset"
-ATTR_DECISION_REASONING: Final = "decision_reasoning"
-ATTR_LAYER_VOTES: Final = "layer_votes"
-ATTR_PEAK_TODAY: Final = "peak_today"
-ATTR_PEAK_THIS_MONTH: Final = "peak_this_month"
-ATTR_THERMAL_DEBT: Final = "thermal_debt"
-ATTR_QUARTER_OF_DAY: Final = "quarter_of_day"
-ATTR_OPTIONAL_FEATURES: Final = "optional_features_status"
 
 # DHW (Domestic Hot Water) Optimization Constants
 # Based on DHW_RESEARCH_FINDINGS.md and DHW_IMPLEMENTATION_CORRECTIONS.md
 #
 # Temperature hierarchy:
-# - 20°C (DHW_SAFETY_CRITICAL): Hard floor, always heat (emergency)
+# - 20°C (DHW_SAFETY_CRITICAL): below this, price is no longer a reason to wait
 # - 30°C (DHW_SAFETY_MIN): Price optimization minimum (allows tank to cool for better price-based heating)
 # - 40°C (DHW_MIN_TEMP): User-configurable minimum (validation)
 # - 45°C (MIN_DHW_TARGET_TEMP): Minimum user target / NIBE start threshold
@@ -950,27 +1174,49 @@ DHW_READY_THRESHOLD: Final = (
     52.0  # °C - DHW at normal target (50°C + 2°C buffer for "ready" status)
 )
 
-# Legionella Prevention (requires DHW tank immersion heater, Swedish: elpatron)
-# Boverket.se official guidelines:
-# - Legionella bacteria grow at 20-45°C (our new low-temp optimization range!)
-# - Legionella dormant below 20°C
-# - Killed at high temperatures (≥60°C)
-# - Water heaters should maintain ≥60°C to prevent bacterial growth
+# Legionella / hygiene.
 #
-# Heat pump limitation:
-# - Compressor can only reach ~50-55°C max (COP/efficiency limits)
-# - NIBE automatically engages DHW tank immersion heater to reach 60°C
-# - This is standard operation for all NIBE Legionella protection
-# - Our hygiene boost schedules this during cheapest electricity periods
+# ⚠️ EFFEKTGUARD DOES NOT PROVIDE LEGIONELLA PROTECTION. NIBE DOES.
 #
-# NOTE: DHW immersion heater (elpatron) is separate from space heating auxiliary heater.
-# They are different electrical heating systems with different purposes.
-DHW_LEGIONELLA_DETECT: Final = (
-    55.0  # °C - BT7 temp indicating Legionella boost complete (observed 55.3°C in production)
-)
-DHW_LEGIONELLA_PREVENT_TEMP: Final = (
-    56.0  # °C - Target temp for hygiene boost (kills bacteria, requires immersion heater)
-)
+# NIBE's built-in "periodic increase" function (menu 2.9.1 on F-series, 2.4 on S-series -
+# NOT 4.9.5, which is schedule blocking) is ACTIVATED FROM THE FACTORY, runs every 14 days
+# (7 on S-series), targets a stop temperature of 55 C (settable 55-70, never lower), and
+# explicitly uses "the compressor AND the immersion heater". EffektGuard cannot block it,
+# and cannot even observe it: Home Assistant's myuplink integration excludes parameters
+# 47050 (enable) and 47051 (interval) from the entities it creates.
+# Source: NIBE F750 / F730 / F1155 installer manuals, menus 2.9.1 and 5.1.1.
+#
+# Why EffektGuard's own boost CANNOT perform a Legionella cycle:
+# Temporary lux is not a setpoint - it switches the hot-water comfort mode to LUXURY for
+# 3/6/12 h, so the tank is driven to the pump's configured LUXURY STOP temperature. Factory
+# values, measured on BT6 (the CONTROL sensor): F750 54 C, F730 53 C, F1155 53 C - all BELOW
+# the 55 C floor NIBE enforces for its Legionella function. Those setpoints are
+# installer-adjustable, so their true value is UNKNOWN to us at runtime. Never hard-code it.
+#
+# NOTE: the DHW immersion heater (elpatron) is separate from the space-heating auxiliary
+# heater. Different electrical systems, different purposes.
+DHW_LEGIONELLA_DETECT: Final = 55.0
+"""°C on BT7 taken as evidence that a high-temperature cycle occurred.
+
+Unsound as proof that OUR boost completed; kept only as a best-effort observation of NIBE's
+own periodic increase:
+  - BT7 is "hot water, DISPLAY"; BT6 is "hot water, CONTROL". Every setpoint acts on BT6.
+  - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
+  - Temporary lux stops at 53-54 C on BT6, so it will not reach this threshold.
+"""
+
+DHW_LEGIONELLA_PREVENT_TEMP: Final = 56.0
+"""°C - target requested for the opportunistic high-temperature top-up.
+
+NEVER ACTUALLY WRITTEN TO NIBE: the only DHW actuator is the temporary-lux switch, and the
+pump heats to ITS OWN configured lux stop temperature, not to this value.
+"""
+
+# Days without any observed high-temperature cycle after which EffektGuard warns the user.
+# NIBE's periodic increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory, so
+# going well beyond that suggests it has been switched off on the pump. DIAGNOSTIC ONLY -
+# we warn, we do not attempt to substitute for the function (we cannot: see above).
+DHW_LEGIONELLA_OVERDUE_DAYS: Final = 21.0
 DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
@@ -990,6 +1236,14 @@ CONF_DHW_MIN_AMOUNT: Final = "dhw_min_amount"  # Config key for min hot water mi
 # Used as fallback when insufficient history for dynamic calculation
 # The dhw_optimizer uses calculate_heating_rate() for dynamic estimation from BT7 history
 DHW_DEFAULT_HEATING_RATE: Final = 14.0  # °C/hour (measured from debug log)
+
+# Plausible band for the DHW tank heating rate (°C/hour). Applied BOTH when a rate is learned
+# from BT7 history AND when one is restored from storage: an unchecked restore can load 0.0
+# (ZeroDivisionError in estimate_heating_time) or 0.1 (a 200-hour heat-up estimate, which makes
+# the scheduler panic-heat immediately at any price, forever).
+DHW_HEATING_RATE_MIN: Final = 5.0
+DHW_HEATING_RATE_MAX: Final = 25.0
+
 DHW_AMOUNT_HEATING_BUFFER: Final = 0.5  # Hours buffer for scheduling (arrive early, not late)
 
 # DHW optimal window price optimization (Phase 1 fix - Jan 2026)
@@ -1005,6 +1259,13 @@ DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER: Final = (
 DM_DHW_BLOCK_FALLBACK: Final = -340.0  # Fallback: Never start DHW below this DM
 DM_DHW_ABORT_FALLBACK: Final = -500.0  # Fallback: Abort DHW if reached during run
 
+# How far BELOW the block threshold a running DHW cycle is allowed to sink before it gives up.
+# Heating hot water takes the compressor away from space heating, so degree minutes ALWAYS fall
+# during a cycle. Abort must therefore sit deeper than block, or every cycle that starts near the
+# block threshold is aborted on the next tick and the pump cycles (audit F-030). This 160 DM is the
+# gap the fallback pair above already encodes: -340 block, -500 abort.
+DM_DHW_ABORT_BUFFER: Final = 160.0
+
 # DHW runtime safeguards (monitoring only - NIBE controls actual completion)
 DHW_SAFETY_RUNTIME_MINUTES: Final = 30  # Safety minimum heating (emergency)
 DHW_NORMAL_RUNTIME_MINUTES: Final = 45  # Normal DHW heating window
@@ -1012,10 +1273,17 @@ DHW_EXTENDED_RUNTIME_MINUTES: Final = 60  # High demand period heating
 DHW_URGENT_RUNTIME_MINUTES: Final = 90  # Urgent pre-demand heating
 
 # NIBE Power Calculation Constants (Swedish 3-phase standard)
-# All NIBE heat pumps in Sweden are 3-phase systems
-NIBE_VOLTAGE_PER_PHASE: Final = (
-    240.0  # V - Swedish 3-phase: 400V between phases, 240V phase-to-neutral
-)
+# All NIBE heat pumps in Sweden are 3-phase systems.
+#
+# This was 240.0 V, and its own comment gave the reason it could not be: "400V between phases,
+# 240V phase-to-neutral". Those two numbers contradict each other by a factor of sqrt(3) -
+# 400 / sqrt(3) is 230.94, not 240. 240 V is the legacy UK/US figure.
+#
+# IEC 60038 and EN 50160 declare the European low-voltage supply as 230/400 V, and Sweden is
+# 230 V phase-to-neutral. At 240 V every power figure derived from NIBE's BE1/BE2/BE3 phase
+# currents came out 4.3 % HIGH - and those figures now feed the monthly peak history that drives
+# peak protection, so the bias is not cosmetic.
+NIBE_VOLTAGE_PER_PHASE: Final = 230.0  # V - IEC 60038: 230/400 V, phase-to-neutral
 NIBE_POWER_FACTOR: Final = 0.95  # Conservative for inverter compressor (real likely 0.96-0.98)
 
 # ============================================================================
@@ -1056,14 +1324,11 @@ AIRFLOW_EVAPORATOR_TEMP_DROP: Final = 12.0  # °C typical temperature drop throu
 AIRFLOW_DEFAULT_STANDARD: Final = 150.0  # m³/h - Normal ventilation
 AIRFLOW_DEFAULT_ENHANCED: Final = 252.0  # m³/h - Maximum ventilation
 
-# COP improvement from enhanced airflow
-# More air → warmer evaporator → better COP
-# Empirically ~20% improvement at enhanced flow
-AIRFLOW_COP_IMPROVEMENT_FACTOR: Final = 1.20  # 20% COP improvement
-AIRFLOW_BASE_COP: Final = 3.3  # Typical NIBE F750 COP
-
-# Compressor input power for benefit calculations
-AIRFLOW_COMPRESSOR_INPUT_KW: Final = 2.0  # kW typical compressor electrical input
+# The airflow COP-improvement constants that lived here are gone with the term that used them.
+# Extracting more heat from more air and "improving the COP" are the same joules: at constant
+# electrical input the first law gives d(Q_cond) = d(Q_evap) = P_el * d(COP). Adding both counted
+# the heat twice, and made a net thermal LOSS look like a gain across the whole heating season.
+# See optimization/airflow_optimizer.py.
 
 # Temperature thresholds
 AIRFLOW_OUTDOOR_TEMP_MIN: Final = -15.0  # °C - Never enhance below this (penalty exceeds gains)
@@ -1107,17 +1372,119 @@ CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
 # NIBE Enhanced Ventilation (F750/F730)
 # Controls the "Increased Ventilation" switch on exhaust air heat pumps
 # Entity pattern: switch.{device}_increased_ventilation
-NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 5  # Minimum minutes to run enhanced
+# THE VENTILATION FAN COULD CYCLE FOREVER, AND THE GUARD MEANT TO STOP IT GUARDED NOTHING.
+#
+# NIBE_VENTILATION_MIN_ENHANCED_DURATION was 5 minutes - exactly UPDATE_INTERVAL_MINUTES - so a
+# turn-off was permitted on the very next coordinator tick. And nothing at all guarded the turn-ON.
+# A decision that oscillates around its threshold, which is what a marginal COP gain does, produced
+# twelve fan state changes an hour, indefinitely. On an exhaust-air F750 every one of them perturbs
+# the source air the compressor is drawing from.
+#
+# It was also shorter than the SHORTEST duration the airflow optimizer ever recommends
+# (AIRFLOW_DURATION_SMALL_DEFICIT, 15 min) - so it could never enforce even the mildest of them.
+# The optimizer's own `duration_minutes` is now the minimum run time; this is only a floor under it,
+# for the case where a decision arrives with no duration at all.
+NIBE_VENTILATION_MIN_ENHANCED_DURATION: Final = 15  # Minimum minutes to run enhanced
 
-DHW_SAFETY_CRITICAL: Final = 20.0  # °C - Hard floor, always heat below this (emergency)
+# And a minimum REST before enhancing again, which did not exist. Without it the fan can go
+# ON -> hold -> OFF -> ON on the next tick, and the minimum run time above just sets the period of
+# the oscillation rather than preventing it.
+NIBE_VENTILATION_MIN_REST_DURATION: Final = 15  # Minimum minutes at normal before re-enhancing
+
+# "HARD FLOOR, ALWAYS HEAT BELOW THIS" IS WHAT THIS SAID, AND IT IS NOT TRUE.
+#
+# Below 20 C the optimizer stops WAITING FOR A CHEAPER PRICE. It does not heat unconditionally, and
+# it must not: two things still outrank the hot water, and both are deliberate.
+#
+#   * CRITICAL THERMAL DEBT. Running a DHW cycle takes the compressor away from space heating, and
+#     doing that while the house is already in deep degree-minute debt is how a recoverable debt
+#     becomes an immersion-heater one.
+#   * THE HOUSE ITSELF BEING BELOW ITS SAFETY FLOOR. The owner's rule, in his own words: "DHW wins,
+#     but never below safety."
+#
+# Verified by driving the real scheduler at 15 C - five degrees under this "hard floor":
+#
+#     DHW 15 C, DM  -150, indoor 21.0  ->  heats            (DHW_SAFETY_MINIMUM)
+#     DHW 15 C, DM -1400, indoor 21.0  ->  does NOT heat    (CRITICAL_THERMAL_DEBT)
+#     DHW 15 C, DM  -150, indoor 17.0  ->  does NOT heat    (SPACE_HEATING_EMERGENCY)
+#
+# The code is right. The comment was the lie, and it is the kind of lie that gets a safety rule
+# "restored" by the next reader who trusts it.
+DHW_SAFETY_CRITICAL: Final = 20.0  # °C - below this, price stops being a reason to defer
 DHW_SAFETY_MIN: Final = 30.0  # °C - Safety minimum (can defer if 20-30°C during expensive periods)
 DHW_COOLING_RATE: Final = 0.5  # °C/hour - Conservative DHW tank cooling estimate
 
 # Unit conversion
 WATTS_PER_KILOWATT: Final = 1000.0
+KILOWATTS_PER_MEGAWATT: Final = 1000.0
+MILLIWATTS_PER_KILOWATT: Final = 1_000_000.0
+
+# Where a power reading came from. The monthly effect tariff may only be billed against a real
+# measurement, so the value has to carry its own provenance - asking whether a power ENTITY is
+# configured tells you nothing about whether it answered this cycle.
+POWER_SOURCE_EXTERNAL_METER: Final = "external_meter"
+POWER_SOURCE_NIBE_CURRENTS: Final = "nibe_currents"
+POWER_SOURCE_ESTIMATE: Final = "estimate"
+POWER_SOURCE_NONE: Final = "none"
+
+# BILLABLE and USABLE-AS-A-CONTROL-THRESHOLD are two different questions, and conflating them broke
+# the integration's headline feature for everyone without a whole-house meter.
+#
+# BILLABLE: the Swedish effect tariff bills whole-house grid IMPORT, so only a whole-house meter can
+# produce a number that belongs in a billing figure. NIBE phase currents (BE1/BE2/BE3) measure the
+# heat pump and nothing else - not the oven, not the EV charger. Estimates are fabricated. Neither
+# may be reported to the owner as "your monthly peak".
+BILLABLE_POWER_SOURCES: Final = frozenset({POWER_SOURCE_EXTERNAL_METER})
+
+# PEAK CONTROL: a reading does not have to be the billed quantity to be worth acting on. The heat
+# pump is the dominant CONTROLLABLE load in the house, and `should_limit_power` compares this
+# quarter against the month's own recorded peaks - so a NIBE-only history compared against NIBE-only
+# power is self-consistent, and it still throttles the pump when the pump is the thing spiking.
+#
+# The whole-house meter is OPTIONAL in the config flow. Gating peak RECORDING on billability alone
+# left `_monthly_peaks` permanently empty for those users, and `should_limit_power` returns
+# "OK - no peaks recorded yet" on an empty history: peak protection silently never fired at all.
+# `main` allowed phase currents here (`has_external_power_sensor or phase1_current is not None`) and
+# ran a winter that way.
+#
+# Estimates stay out of BOTH. A number derived from compressor Hz is not a measurement, and driving
+# peak protection from it would throttle the house on the strength of a guess.
+PEAK_CONTROL_POWER_SOURCES: Final = frozenset(
+    {POWER_SOURCE_EXTERNAL_METER, POWER_SOURCE_NIBE_CURRENTS}
+)
 
 # NIBE Adapter Constants
 NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when sensor unavailable
+
+# AN IMPLAUSIBLE READING IS NOT A READING.
+#
+# `get_current_state` already says this about a MISSING sensor: "Never substitute a plausible
+# constant for a missing one: that makes a broken installation indistinguishable from a healthy
+# one and still writes a curve offset to the pump." A reading that is physically impossible is the
+# same thing wearing a number, and the mechanism that produces one is mundane: NIBE's Modbus
+# registers hold temperatures in DECI-degrees, so a hand-written YAML that omits `scale: 0.1`
+# reports BT50's 213 as 213.0 C rather than 21.3 C. The repo's own Modbus simulator documents
+# exactly that register, with exactly that value.
+#
+# 213 C indoor is not a rounding error. The comfort layer reads a 192 C overshoot and commands
+# -10.0 C at critical weight, forever - maximum heat reduction in a Swedish January - and the
+# 18 C safety floor never fires, because the safety layer is reading the same 213 C.
+#
+# These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
+# catch a value that cannot be a temperature at all, not to second-guess a working sensor.
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+
+# Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
+# habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
+# the degree-minute warning threshold to -1450 - fifty short of the aux limit - so the immersion
+# heater engages with no warning at all.
+NIBE_OUTDOOR_PLAUSIBLE_MIN: Final = -50.0
+NIBE_OUTDOOR_PLAUSIBLE_MAX: Final = 50.0
+
+# Heating water (BT25/BT63 supply, BT3 return). It cannot freeze and it cannot boil.
+NIBE_WATER_PLAUSIBLE_MIN: Final = 0.0
+NIBE_WATER_PLAUSIBLE_MAX: Final = 100.0
 NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
     1.0  # °C - Write to NIBE when accumulator crosses ±1.0
 )
@@ -1291,14 +1658,66 @@ SPACE_HEATING_DEMAND_MODERATE_THRESHOLD: Final = 2.0  # kW - Display threshold
 SPACE_HEATING_DEMAND_LOW_THRESHOLD: Final = 0.5  # kW - Display threshold
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
 
-# Savings Calculation Constants (Swedish electricity market)
-# Swedish effect tariff - typical cost per kW of monthly peak
-# Based on common Swedish grid operators (Ellevio ~55, Vattenfall/E.ON ~50 SEK/kW/month)
-SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 50.0  # Conservative average
+# THE SWEDISH EFFECT TARIFF, AS A REAL COMPANY ACTUALLY BILLS IT.
+#
+# Ellevio publishes its model in full, and 81.25 is theirs:
+#
+#     "Genomsnittet av de tre hogsta effekttopparna under manaden" - the mean of the three highest
+#     peaks of the month, at most one per day, so on three different days. The measurement uses
+#     HOURLY AVERAGES. Between 22:00 and 06:00 "raknas bara halva effekttoppen" - only half the
+#     peak counts. 81,25 kr per kilowatt per manad.
+#     https://www.ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/
+#
+# REGULATORY STATUS, AND IT IS NOT SETTLED. On 13 March 2026 the government instructed
+# Energimarknadsinspektionen to repeal the requirement that grid companies levy effect charges at
+# all - the stated reason being that every DSO had built its own model, with different calculations,
+# different hours and different prices. EIFS 2022:1 was repealed in June 2026 and Ellevio dropped
+# its effect charge on 1 June 2026. Ei must propose a new, uniform model by 12 April 2027.
+#
+# Effect charges are NOT prohibited and several DSOs still levy them, so the feature is not dead -
+# but this rate is one company's, it is no longer that company's, and it is not configurable. That
+# is a product decision and it is the owner's.
+#     https://www.regeringen.se/pressmeddelanden/2026/03/krav-pa-inforande-av-effektavgifter-stoppas/
+#     https://ei.se/konsument/anvand-el-smartare/elnatsavtal-med-effektavgift
+SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 81.25  # Ellevio, kr/kW/month
 
-# Baseline peak estimation - assumes optimization reduces peak by ~15%
-# If no baseline observed, estimate unoptimized peak from current optimized peak
-BASELINE_PEAK_MULTIPLIER: Final = 1.176  # Inverse of 0.85 (15% reduction)
+# THE TARIFF BILLS THE HOUR. IT DOES NOT BILL THE QUARTER-HOUR.
+#
+# The integration measured quarter-hour means and called them billing peaks, and the constant that
+# said so called itself "Swedish Effektavgift measurement period". Ellevio: "the measurement uses
+# hourly averages". Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+#
+# The difference is up to fourfold. A 15-minute hot-water cycle at 9 kW inside an otherwise idle
+# hour has an hourly mean of 3 kW - and EffektGuard recorded 9, then throttled the heat pump to
+# defend a peak that appears on no bill.
+# The outdoor temperatures the DISPLAY COP curve is tabulated at, and the span it interpolates over.
+# Nothing computes from that curve - the simulator takes COP from the datasheet rating points - it is
+# a dashboard proxy: in a colder month the house asks for hotter water, which costs efficiency. The
+# span runs from the warmest tabulated point (+7 C) to the coldest (-20 C), i.e. 27 K.
+DISPLAY_COP_CURVE_TEMPS: Final = (7, 5, 0, -5, -10, -15, -20)
+DISPLAY_COP_CURVE_COLD_C: Final = -20.0
+DISPLAY_COP_CURVE_SPAN_K: Final = 27.0
+
+BILLING_PERIOD_MINUTES: Final = 60
+BILLING_PERIODS_PER_DAY: Final = 24
+# The longest silence between two meter readings that still leaves a billing hour MEASURED.
+#
+# The hourly mean extrapolates each reading forward until the next one arrives - right at the
+# five-minute cadence, absurd across a blackout (a 9 kW reading stretched over 50 unwatched minutes
+# billed an 8.33 kW hour from two samples).
+#
+# A JUDGEMENT, NOT A CITATION. No standard says how much of an hour must be seen. What is defensible
+# is the direction: missing a real peak costs some protection, inventing one costs a month of
+# throttling to defend a fiction - and the utility bills from ITS meter, not ours. Three update
+# intervals: one or two missed cycles is jitter; fifteen minutes of silence is an outage.
+MAX_BILLING_OBSERVATION_GAP_MINUTES: Final = 15
+
+# BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the
+# CURRENT peak - `baseline = peak * 1.176` - so the reported effect-tariff saving reduced to
+# `0.176 * peak * tariff`: a higher peak reported MORE "savings", and the sensor could never read
+# zero however badly the optimiser was doing. A baseline is now either MEASURED (from the quarters
+# recorded while the optimisation switch is off, when the offset is held at 0.0) or absent, and an
+# absent one reports no effect saving at all.
 
 # Price-unit handling for savings math. GE-Spot preserves whatever display
 # unit the user configured; savings must convert to the MAIN currency unit
@@ -1337,6 +1756,23 @@ POWER_MULTIPLIER_MILD: Final = 1.0  # >0°C
 # - 50 Hz (mid): ~3.5-4.5 kW
 # - 80 Hz (normal max): ~6.0-7.0 kW
 # - 100-120 Hz (emergency/max): Higher output, reduced efficiency
+# Compressor stress levels, as reported by CompressorHealthMonitor.assess_risk().
+#
+# HIGH means the compressor has been above 100 Hz for more than fifteen minutes: it is at maximum
+# capacity and has nothing left to give. Asking it for more heat by raising the curve offset
+# produces NONE - the offset raises the calculated supply setpoint S1, and the compressor cannot
+# follow it. What it does produce is wear, and a DEEPER degree-minute deficit, because
+# DM = integral(BT25 - S1) and S1 just went up while BT25 could not.
+#
+# The auxiliary heater exists for exactly this moment: NIBE places "start addition" where it does
+# (menu 4.9.3) so the compressor need not grind at full frequency for hours. Declining its help by
+# demanding more from a saturated compressor trades cheap kWh for expensive compressor life.
+COMPRESSOR_RISK_HIGH: Final = "HIGH"  # >100 Hz for >15 min - at maximum, nothing left to give
+COMPRESSOR_RISK_ELEVATED: Final = "ELEVATED"  # >80 Hz for >2 h
+COMPRESSOR_RISK_NOTABLE: Final = "NOTABLE"
+COMPRESSOR_RISK_WATCH: Final = "WATCH"
+COMPRESSOR_RISK_OK: Final = "OK"
+
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)
 COMPRESSOR_HZ_RANGE: Final = 100  # 120-20 = operating range

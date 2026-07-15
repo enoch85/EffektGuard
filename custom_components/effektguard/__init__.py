@@ -12,27 +12,54 @@ effect tariff system.
 import logging
 from datetime import datetime, timedelta
 
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.exceptions import (
+    ConfigEntryNotReady,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .adapters.gespot_adapter import GESpotAdapter
+from .adapters.nibe_adapter import NibeAdapter
+from .adapters.weather_adapter import WeatherAdapter
 from .const import (
+    ATTR_DURATION,
+    ATTR_OFFSET,
+    CONF_NIBE_TEMP_LUX_ENTITY,
+    DHW_BOOST_COOLDOWN_MINUTES,
+    DHW_BOOST_DEFAULT_DURATION_MINUTES,
+    DHW_BOOST_MAX_DURATION_MINUTES,
+    DHW_BOOST_MIN_DURATION_MINUTES,
     DOMAIN,
     HEATING_BOOST_COOLDOWN_MINUTES,
-    DHW_BOOST_COOLDOWN_MINUTES,
+    MAX_OFFSET,
+    MIN_OFFSET,
+    SERVICE_BOOST_DHW,
+    SERVICE_BOOST_HEATING,
+    SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
+    SERVICE_FORCE_OFFSET,
     SERVICE_RATE_LIMIT_MINUTES,
-    CONF_NIBE_TEMP_LUX_ENTITY,
-    DHW_MIN_TEMP,
-    DHW_MAX_TEMP,
+    SERVICE_RESET_PEAK_TRACKING,
 )
 from .coordinator import EffektGuardCoordinator
+from .optimization.decision_engine import DecisionEngine
+from .optimization.effect_layer import EffectManager
+from .optimization.price_layer import PriceAnalyzer
+from .optimization.thermal_layer import ThermalModel
 
 _LOGGER = logging.getLogger(__name__)
 
-# Service call cooldown tracking (per hass instance)
+# Service-call cooldowns at MODULE scope, deliberately. They rate-limit the two services that can
+# hurt the machine (boost_heating commands MAX_OFFSET; boost_dhw fires the immersion heater via
+# temporary lux). On the coordinator they would die with it, and HA's reload re-creates the
+# coordinator - so a user could boost to +10 C, reload to clear the cooldown, and boost again.
+# single_config_entry is true, so a module global cannot leak across entries.
+# See tests/unit/test_the_boost_cooldown_survives_a_reload.py.
 _service_last_called: dict[str, datetime] = {}
 
 
@@ -127,13 +154,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Unload a config entry.
+
+    Platforms unload FIRST. If one refuses, HA keeps the entry loaded and its entities
+    alive - so the coordinator behind them must stay alive too. Shutting it down first
+    left a loaded entry served by a dead coordinator: every sensor frozen on its last
+    value, the control loop gone, nothing saying so.
+    """
     _LOGGER.info("Unloading EffektGuard integration")
 
-    # Get coordinator before removing from hass.data
-    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
 
-    # Save persistent state before unloading
+    coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator:
         try:
             await coordinator.async_shutdown()
@@ -141,30 +175,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except (OSError, RuntimeError, ValueError) as err:
             _LOGGER.warning("Failed to shutdown coordinator cleanly: %s", err)
 
-    # Unload platforms
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    hass.data[DOMAIN].pop(entry.entry_id, None)
 
-    # Remove coordinator
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+    # Unregister services if this is the last config entry
+    if not hass.data[DOMAIN]:
+        _async_unregister_services(hass)
 
-        # Unregister services if this is the last config entry
-        if not hass.data[DOMAIN]:
-            _async_unregister_services(hass)
-
-    return unload_ok
+    return True
 
 
 def _async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister integration services when last config entry is removed."""
-    from .const import (
-        SERVICE_BOOST_DHW,
-        SERVICE_BOOST_HEATING,
-        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
-        SERVICE_FORCE_OFFSET,
-        SERVICE_RESET_PEAK_TRACKING,
-    )
-
     services = [
         SERVICE_FORCE_OFFSET,
         SERVICE_RESET_PEAK_TRACKING,
@@ -182,18 +203,16 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update.
+    """Handle a config-entry update by hot-reloading runtime settings.
 
-    Called when entry.options changes (from options flow UI).
-    Entity selections are in entry.data and don't trigger this listener.
+    Hot-reloading (not tearing the entry down) preserves the startup grace period whose reset
+    would block offset application, the entities that would otherwise flicker, and accumulated
+    state (compressor stats, trends, thermal predictor).
 
-    Since our options flow only contains runtime settings (target temp, tolerance,
-    thermal mass, DHW schedules, etc.), we can always hot-reload without restart.
-
-    This prevents:
-    - Startup grace period reset (which blocks offset application)
-    - Screen flickering from entity recreation
-    - Lost state (compressor stats, trends, thermal predictor)
+    HA fires this listener on ANY entry change - data or options - and switch.py writes feature
+    flags into entry.data. Handling only runtime settings is still correct: switch flags are read
+    from entry.data at the point of use, and entity selections go through the reconfigure flow,
+    which schedules a FULL reload that rebuilds the adapters.
     """
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if not coordinator:
@@ -208,6 +227,11 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.info("Options updated, applying changes (no restart)")
     await coordinator.async_update_config(merged_config)
 
+    # Tell the entities: the switches and the thermostat are VIEWS of this entry, and a view only
+    # updates when asked. Without this the master switch kept displaying "on" for five minutes after
+    # the thermostat wrote OFF, until the next coordinator refresh happened to re-render it.
+    coordinator.async_update_listeners()
+
 
 async def _create_coordinator(
     hass: HomeAssistant,
@@ -218,23 +242,13 @@ async def _create_coordinator(
     This factory function creates all dependencies and injects them into
     the coordinator following clean architecture principles.
     """
-    from .adapters.gespot_adapter import GESpotAdapter
-    from .adapters.nibe_adapter import NibeAdapter
-    from .adapters.weather_adapter import WeatherAdapter
-    from .optimization.decision_engine import DecisionEngine
-    from .optimization.effect_layer import EffectManager
-    from .optimization.price_layer import PriceAnalyzer
-    from .optimization.thermal_layer import ThermalModel
-
     # Create data adapters
     nibe_adapter = NibeAdapter(hass, entry.data)
     gespot_adapter = GESpotAdapter(hass, entry.data)
 
-    # Weather adapter: check options first, fall back to data
-    weather_config = dict(entry.data)
-    if "weather_entity" in entry.options:
-        weather_config["weather_entity"] = entry.options["weather_entity"]
-    weather_adapter = WeatherAdapter(hass, weather_config)
+    # weather_entity is written only to entry.data (config and reconfigure flows), never to
+    # entry.options, so the adapter is built from entry.data alone.
+    weather_adapter = WeatherAdapter(hass, dict(entry.data))
 
     # Create optimization components
     price_analyzer = PriceAnalyzer()
@@ -302,22 +316,6 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     - boost_dhw: Manual DHW heating boost
     - calculate_optimal_schedule: Preview 24h optimization
     """
-    import voluptuous as vol
-    from homeassistant.exceptions import ServiceValidationError
-    from homeassistant.helpers import config_validation as cv
-
-    from .const import (
-        ATTR_DURATION,
-        ATTR_OFFSET,
-        ATTR_TARGET_TEMP,
-        MAX_OFFSET,
-        MIN_OFFSET,
-        SERVICE_BOOST_DHW,
-        SERVICE_BOOST_HEATING,
-        SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
-        SERVICE_FORCE_OFFSET,
-        SERVICE_RESET_PEAK_TRACKING,
-    )
 
     def get_coordinator(hass: HomeAssistant) -> EffektGuardCoordinator | None:
         """Get first available coordinator from domain data."""
@@ -357,11 +355,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 f"Offset {offset} outside valid range [{MIN_OFFSET}, {MAX_OFFSET}]"
             )
 
-        # Set override in decision engine
-        coordinator.engine.set_manual_override(offset, duration)
+        if not coordinator.optimization_enabled:
+            raise ServiceValidationError(
+                "EffektGuard is OFF. Turn optimization on before forcing an offset."
+            )
 
-        # Request immediate update
-        await coordinator.async_request_refresh()
+        await coordinator.async_apply_manual_override(offset, duration)
 
         # Update last called timestamp
         _update_service_timestamp("force_offset")
@@ -417,12 +416,13 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         _LOGGER.info("Boost heating service called: duration=%s minutes", duration)
 
-        # Set maximum positive offset for boost duration
         boost_offset = MAX_OFFSET  # +10°C
-        coordinator.engine.set_manual_override(boost_offset, duration)
+        if not coordinator.optimization_enabled:
+            raise ServiceValidationError(
+                "EffektGuard is OFF. Turn optimization on before boosting heating."
+            )
 
-        # Request immediate update
-        await coordinator.async_request_refresh()
+        await coordinator.async_apply_manual_override(boost_offset, duration)
 
         # Update last called timestamp
         _update_service_timestamp("boost_heating")
@@ -449,20 +449,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         if not coordinator:
             raise ServiceValidationError("No EffektGuard coordinator found")
 
-        target_temp = call.data.get(ATTR_TARGET_TEMP, DHW_MAX_TEMP)
-        duration = call.data.get(ATTR_DURATION, 180)  # 3 hours default (NIBE temporary lux)
+        duration = call.data.get(ATTR_DURATION, DHW_BOOST_DEFAULT_DURATION_MINUTES)
 
-        _LOGGER.info(
-            "Boost DHW service called: target_temp=%s°C, duration=%s minutes",
-            target_temp,
-            duration,
-        )
-
-        # Validate target temperature
-        if not DHW_MIN_TEMP <= target_temp <= 70.0:
-            raise ServiceValidationError(
-                f"Target temperature {target_temp} outside safe range [{DHW_MIN_TEMP}, 70.0]°C"
-            )
+        # No target_temp: temporary lux is a switch and the pump heats to its own lux temperature,
+        # so there is nothing to set. duration is enforced here - the coordinator ends the boost.
+        _LOGGER.info("Boost DHW service called: duration=%s minutes", duration)
 
         # Get temporary lux entity from config
         temp_lux_entity = coordinator.config_entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
@@ -475,32 +466,25 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
             )
 
-        # Turn on temporary lux switch (NIBE will handle 3-hour DHW priority)
-        _LOGGER.info("Activating NIBE temporary lux via %s", temp_lux_entity)
-        await hass.services.async_call(
-            "switch",
-            "turn_on",
-            {"entity_id": temp_lux_entity},
-            blocking=True,
-        )
+        # Go through the coordinator, not straight at the switch: that records the boost as OURS
+        # (so unload stops it) and opens the user window (so the price optimizer does not cancel it
+        # on the next cycle).
+        try:
+            await coordinator.async_start_dhw_boost(duration, dt_util.utcnow())
+        except HomeAssistantError as err:
+            raise ServiceValidationError(str(err)) from err
 
-        # Store DHW boost request in coordinator for tracking
-        coordinator.data["dhw_boost"] = {
-            "target_temp": target_temp,
-            "duration_minutes": duration,
-            "requested_at": dt_util.now(),
-            "method": "temporary_lux",
-        }
-
-        # Request immediate update to track status
+        # The lux switch is on - the entities just need to catch up.
         await coordinator.async_request_refresh()
 
         # Update last called timestamp
         _update_service_timestamp("boost_dhw")
 
         _LOGGER.info(
-            "DHW boost activated via temporary lux: %s°C target for %s minutes",
-            target_temp,
+            "DHW boost activated via NIBE temporary lux on %s for %s minutes. The pump decides "
+            "the lux temperature; EffektGuard ends the boost when the window closes, unless "
+            "NIBE's own lux timeout or the thermal-debt safety stop ends it first.",
+            temp_lux_entity,
             duration,
         )
 
@@ -605,11 +589,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     boost_dhw_schema = vol.Schema(
         {
-            vol.Optional(ATTR_TARGET_TEMP, default=55.0): vol.All(
-                vol.Coerce(float), vol.Range(min=40.0, max=70.0)
-            ),
-            vol.Optional(ATTR_DURATION, default=90): vol.All(
-                vol.Coerce(int), vol.Range(min=30, max=180)
+            vol.Optional(ATTR_DURATION, default=DHW_BOOST_DEFAULT_DURATION_MINUTES): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=DHW_BOOST_MIN_DURATION_MINUTES, max=DHW_BOOST_MAX_DURATION_MINUTES),
             ),
         }
     )
@@ -659,7 +641,10 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
             calculate_optimal_schedule_handler,
             schema=calculate_optimal_schedule_schema,
-            supports_response=True,
+            # SupportsResponse.OPTIONAL, not a bare True: HA compares this by identity, so True
+            # passes `is not SupportsResponse.NONE` but fails `is SupportsResponse.OPTIONAL`,
+            # advertising the service as response-REQUIRED. The handler returns a dict or nothing.
+            supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered service: %s", SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
 

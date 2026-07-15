@@ -90,40 +90,17 @@
     "step": {
       "init": {
         "title": "EffektGuard-alternativer",
-        "description": "Konfigurer optimaliseringsadferd og bygningsegenskaper.\n\n**Endringer gjelder umiddelbart** uten omstart. Bruk **Omkonfigurer** for å endre sensorvalg.",
-        "data": {
-          "optimization_mode": "Optimaliseringsmodus"
-        },
-        "data_description": {
-          "optimization_mode": "**Komfort**: Tett temperaturkontroll, minimal prisoptimalisering, prioriterer stabil oppvarming. **Balansert**: Moderat optimalisering som tillater små temperaturvariasjoner for kostnadsbesparelser. **Besparelser**: Maksimal prisoptimalisering med større temperatursvingninger under billige/dyre perioder"
-        },
         "sections": {
-          "comfort_settings": {
-            "name": "Komfortinnstillinger",
-            "description": "Finjuster temperaturkomforttoleranse",
+          "optimization_settings": {
+            "name": "Optimeringsinnstillinger",
+            "description": "Velg optimeringsmodus og temperaturtoleranse",
             "data": {
+              "optimization_mode": "Optimaliseringsmodus",
               "tolerance": "Temperaturtoleranse"
             },
             "data_description": {
+              "optimization_mode": "**Komfort**: Tett temperaturkontroll, minimal prisoptimalisering, prioriterer stabil oppvarming. **Balansert**: Moderat optimalisering som tillater små temperaturvariasjoner for kostnadsbesparelser. **Besparelser**: Maksimal prisoptimalisering med større temperatursvingninger under billige/dyre perioder",
               "tolerance": "Styrer tillatt temperaturavvik fra mål (±0,2°C dødband opprettholdes alltid). Høyere verdier tillater mer aggressiv kostnadsoptimalisering men større temperatursvingninger"
-            }
-          },
-          "dhw_settings": {
-            "name": "Varmtvannsinnstillinger",
-            "description": "Planlegg når varmtvann skal varmes",
-            "data": {
-              "dhw_target_temp": "Varmtvann måltemperatur",
-              "dhw_morning_enabled": "Morgen varmtvann",
-              "dhw_morning_hour": "Morgen starttid",
-              "dhw_evening_enabled": "Kveld varmtvann",
-              "dhw_evening_hour": "Kveld starttid"
-            },
-            "data_description": {
-              "dhw_target_temp": "Måltemperatur for varmtvann (45-60°C)",
-              "dhw_morning_enabled": "Aktiver morgen varmtvannsoppvarming",
-              "dhw_morning_hour": "Morgenbehovsperiode starttid",
-              "dhw_evening_enabled": "Aktiver kveld varmtvannsoppvarming",
-              "dhw_evening_hour": "Kveldsbehovsperiode starttid"
             }
           },
           "building_characteristics": {
@@ -137,9 +114,42 @@
               "thermal_mass": "Hvor raskt bygningen reagerer på endringer (0,5=lett/tre, 1,0=normal, 2,0=tung/betong)",
               "insulation_quality": "Samlet isoleringsnivå (0,5=dårlig, 1,0=normal, 2,0=utmerket)"
             }
+          },
+          "domestic_hot_water": {
+            "name": "Varmtvann (DHW)",
+            "description": "Planlegg når varmtvannet skal være klart og hvor mye du trenger",
+            "data": {
+              "dhw_target_temp": "Varmtvann måltemperatur",
+              "dhw_min_amount": "Minste mengde varmtvann til planlagt tid",
+              "dhw_schedules": "Aktiver/deaktiver",
+              "dhw_morning_hour": "Morgen starttid",
+              "dhw_evening_hour": "Kveld starttid"
+            },
+            "data_description": {
+              "dhw_target_temp": "Måltemperatur for varmtvann (45-60°C)",
+              "dhw_min_amount": "Antall minutter med varmtvann som skal være tilgjengelig til planlagt tid.\n\nEffektGuard varmer i de billigste timene for å sikre at mengden er klar når du trenger den.",
+              "dhw_schedules": "Velg hvilke oppvarmingsperioder som skal være aktive. Fjern haken for å slå av oppvarming i perioden.",
+              "dhw_morning_hour": "Morgenbehovsperiode starttid",
+              "dhw_evening_hour": "Kveldsbehovsperiode starttid"
+            }
+          },
+          "airflow_optimization": {
+            "name": "Luftstrømoptimering (avtrekksluft)",
+            "description": "Konfigurer luftmengder for avtrekksvarmepumper. Aktiver/deaktiver via bryteren Luftstrømoptimering under Kontroller.",
+            "data": {
+              "airflow_standard_rate": "Normal luftmengde",
+              "airflow_enhanced_rate": "Forhøyet luftmengde"
+            },
+            "data_description": {
+              "airflow_standard_rate": "Normal ventilasjonsmengde ved vanlig drift.\nStill den inn på ønsket komfortnivå for daglig bruk.\n\nNIBE F750 standard: 150 m³/h (hastighet 2).",
+              "airflow_enhanced_rate": "Forhøyet ventilasjonsmengde brukt under gunstige forhold for å hente ut mer varme fra avtrekksluften og forbedre COP.\n\nNIBE F750 standard: 252 m³/h (hastighet 4)."
+            }
           }
         }
       }
+    },
+    "error": {
+      "invalid_dhw_config": "Ugyldig varmtvannsinnstilling: {reason}"
     }
   },
   "entity": {
@@ -162,6 +172,80 @@
       "airflow_optimization": {
         "name": "Luftstrømoptimalisering"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Gjeldende forskyvning"
+      },
+      "degree_minutes": {
+        "name": "Gradminutter"
+      },
+      "supply_temperature": {
+        "name": "Turtemperatur"
+      },
+      "outdoor_temperature": {
+        "name": "Utetemperatur"
+      },
+      "indoor_temperature": {
+        "name": "Innetemperatur"
+      },
+      "current_price": {
+        "name": "Gjeldende strømpris"
+      },
+      "peak_today": {
+        "name": "Effekttopp i dag"
+      },
+      "peak_this_month": {
+        "name": "Effekttopp denne måneden"
+      },
+      "nibe_power": {
+        "name": "NIBE effekt"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorfrekvens"
+      },
+      "compressor_health": {
+        "name": "Kompressorens helsestatus"
+      },
+      "optimization_reasoning": {
+        "name": "Optimeringsbegrunnelse"
+      },
+      "quarter_of_day": {
+        "name": "Kvarter i døgnet"
+      },
+      "price_period_classification": {
+        "name": "Prisperiodens klassifisering"
+      },
+      "temperature_trend": {
+        "name": "Trend for innetemperatur"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Trend for utetemperatur"
+      },
+      "savings_estimate": {
+        "name": "Estimert månedlig besparelse"
+      },
+      "optional_features_status": {
+        "name": "Status for valgfrie funksjoner"
+      },
+      "heat_pump_model": {
+        "name": "Varmepumpemodell"
+      },
+      "dhw_status": {
+        "name": "Varmtvannsstatus"
+      },
+      "dhw_recommendation": {
+        "name": "Varmtvannsanbefaling"
+      },
+      "dhw_next_boost_time": {
+        "name": "Planlagt varmtvannsstart"
+      },
+      "airflow_enhancement": {
+        "name": "Økt luftstrøm"
+      },
+      "airflow_thermal_gain": {
+        "name": "Varmegevinst fra luftstrøm"
+      }
     }
   },
   "services": {
@@ -172,6 +256,16 @@
     "boost_hot_water": {
       "name": "Boost varmtvann",
       "description": "Start umiddelbar varmtvannssyklus"
+    }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ingen strømpriskilde",
+      "description": "EffektGuard mangler strømprisdata, så prisoptimaliseringen kjører ikke - varmekurven styres kun av komfort og sikkerhet. Konfigurer en spotprisentitet (GE-Spot, Nord Pool eller lignende) i integrasjonens innstillinger for å aktivere den."
+    },
+    "no_dhw_control_entity": {
+      "title": "Ingen entitet for varmtvannsstyring",
+      "description": "EffektGuard styrer varmtvann ved å slå på NIBEs midlertidige luksus-bryter, og ingen slik entitet ble funnet. Home Assistants NIBE-integrasjon eksponerer det registeret (50004) kun for F-serien, så en S-seriepumpe har ingen tilsvarende - varmtvannsoptimaliseringen kjører IKKE, og en planlagt kjøring som sensorene viser vil ikke skje. Varmeoptimaliseringen påvirkes ikke."
     }
   }
 }

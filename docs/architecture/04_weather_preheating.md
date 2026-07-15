@@ -108,46 +108,71 @@ This prevents unnecessary pre-heating during:
 - Small temperature variations (thermal mass handles it)
 - Forecast uncertainties (avoid overreaction)
 
-### Thermal Decay Modeling
+### The Actual Algorithm
 
-The pre-heating calculation accounts for **heat loss during the forecast period**:
+> ⚠️ **This section used to describe a thermal-decay model that does not exist.** It documented a
+> `heat_loss_rate`, an `expected_temp_end`, a `deficit`, a `1.0 / thermal_mass` safety margin, a
+> `-2.0 × thermal_mass` dynamic threshold and a +3.0 °C cap. **Not one of those variables is in
+> `weather_layer.py`.** Its worked example concluded "+3.0 °C", overstating the layer's authority
+> by 3.6× against the +0.83 the code actually emitted at the time. What follows is the code.
 
-#### Step 1: Calculate Heat Loss Rate
-```
-heat_loss_rate = temperature_difference / (insulation_quality × 10)
+`WeatherPredictionLayer.evaluate_layer()` is deliberately simple: it decides **whether** to
+pre-heat, not **how much**. The amount is a constant.
+
+```python
+# 1. Look ahead as far as this building's thermal mass justifies.
+#    6 h radiators / 12 h timber UFH / 24 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
+forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
+
+# 2. The coldest hour in that window, relative to now.
+temp_drop = min(f.temperature for f in forecast_hours) - nibe_state.outdoor_temp
+
+# 3. Two independent triggers - either fires the layer.
+forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD      # -4.0 °C
+indoor_cooling = (trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION    # -0.5 °C/h
+                  and trend_confidence > 0.4)
+
+if forecast_triggered or indoor_cooling:
+    return WeatherLayerDecision(
+        offset=WEATHER_PREHEAT_OFFSET,                                  # +2.0 °C, a constant
+        weight=min(LAYER_WEIGHT_WEATHER_PREDICTION * thermal_mass, WEATHER_WEIGHT_CAP),
+    )
 ```
 
-#### Step 2: Project End Temperature  
-```
-expected_temp_end = current_temp - (heat_loss_rate × forecast_hours)
-```
+**The horizon must follow the thermal mass, and this is not cosmetic.** A concrete slab does not
+get into thermal debt from a sudden plunge — the pump's own curve is reactive but fast, and
+catches that. It gets into debt from a slow, deep slide, and a fixed 12-hour window cannot see one:
 
-#### Step 3: Calculate Required Pre-heating
-```
-deficit = desired_temp - expected_temp_end
-safety_margin = 1.0 / thermal_mass
-target_temp = desired_temp + deficit + safety_margin
-```
+| cold snap | drop within 12 h | fires? | drop within 24 h | fires? |
+|---|---|---|---|---|
+| 15 °C over 6 h (plunge) | −15.0 °C | yes | −15.0 °C | yes |
+| 15 °C over 48 h (two days) | **−3.8 °C** | **NO** | −7.5 °C | yes |
+| 20 °C over 72 h (three days) | **−3.3 °C** | **NO** | −6.7 °C | yes |
 
-#### Step 4: Apply Limits
-```
-final_target = min(target_temp, desired_temp + 3.0)  // Cap at +3°C
-offset = final_target - current_target_temp
-```
+Within any twelve hours of a two-day slide the temperature falls less than the four degrees needed
+to trigger, so the pre-heat **never fired** — while the sudden plunge, which *did* trigger it, is
+the case that needed it least. See audit F-130.
 
 ### Safety Mechanisms
 
-#### Maximum Pre-heat Limit
-Pre-heating is capped at **+3.0°C above normal target** to prevent:
-- Excessive energy consumption
-- Thermal debt accumulation
-- Overheating during forecast errors
+#### The pre-heat is bounded by construction
+`WEATHER_PREHEAT_OFFSET` is **+2.0 °C**, and it is sized, not tuned: the fabric must reach the edge
+of `THERMAL_BATTERY_BAND` (±1.0 °C) **within the horizon the house is given**, or the pre-heat is
+decoration. On the simulator's validated plant models the previous +0.83 took **28.4 h** (radiator)
+and **34.6 h** (concrete slab) to fill that band, against horizons of 12 h and 24 h. It could never
+charge the battery before the cold arrived. At +2.0 it takes 9.6 h and 14.8 h — both inside. See
+audit F-130 and `tests/unit/optimization/test_preheat_can_actually_charge_the_house.py`.
 
-#### Thermal Mass-Based Safety Margin
-Higher thermal mass buildings get **smaller safety margins**:
-- Low mass (0.5): 2.0°C safety margin
-- Normal mass (1.0): 1.0°C safety margin  
-- High mass (2.0): 0.5°C safety margin
+It cannot cook the house: the comfort layer takes charge at the edge of the storage band, and
++2.0 sits within `WEATHER_COMP_MAX_OFFSET` (3.0), the bound placed on every weather-driven
+correction.
+
+#### Weight scales with thermal mass
+```
+weight = min(LAYER_WEIGHT_WEATHER_PREDICTION × thermal_mass, WEATHER_WEIGHT_CAP)
+```
+A heavy building both needs more warning and can store more, so its pre-heat vote carries further.
+The cap keeps it below the Safety layer.
 
 This reflects their ability to store and retain heat effectively.
 

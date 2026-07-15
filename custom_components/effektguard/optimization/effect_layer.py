@@ -1,13 +1,16 @@
 """Effect tariff manager for Swedish Effektavgift optimization.
 
-Tracks 15-minute power consumption windows and manages monthly peak
-avoidance to minimize effect tariff charges.
+Tracks HOURLY mean power and manages monthly peak avoidance to minimise effect tariff charges.
 
-Swedish effect tariff rules:
-- Measured in 15-minute windows (quarterly periods)
-- Daytime (06:00-22:00): Full weight
-- Nighttime (22:00-06:00): 50% weight
-- Monthly charge based on top 3 peaks
+Swedish effect tariff rules, as Ellevio actually publishes them:
+- Measured as HOURLY MEAN POWER, not 15-minute windows (a quarter-hour mean overstates the billed
+  peak by up to fourfold).
+- Daytime (06:00-22:00): full weight
+- Nighttime (22:00-06:00): "raknas bara halva effekttoppen" - half the peak counts
+- Monthly charge on the mean of the three highest hours, at most one per day
+- 81,25 kr/kW/month
+  https://www.ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/
+  Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme."
 """
 
 import logging
@@ -20,6 +23,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BILLABLE_POWER_SOURCES,
     COMPRESSOR_HZ_MIN,
     COMPRESSOR_HZ_RANGE,
     COMPRESSOR_POWER_MAX_KW,
@@ -32,8 +36,8 @@ from ..const import (
     COMPRESSOR_TEMP_FACTOR_COOL,
     COMPRESSOR_TEMP_FACTOR_EXTREME_COLD,
     COMPRESSOR_TEMP_FACTOR_MILD,
-    DAYTIME_END_QUARTER,
-    DAYTIME_START_QUARTER,
+    DAYTIME_END_HOUR,
+    DAYTIME_START_HOUR,
     DEFAULT_HEAT_PUMP_POWER_KW,
     EFFECT_MARGIN_PREDICTIVE,
     EFFECT_OFFSET_CRITICAL,
@@ -49,35 +53,55 @@ from ..const import (
     EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE,
     EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD,
     EFFECT_PREDICTIVE_WARMING_DECREASE,
+    EFFECT_STORAGE_VERSION,
     EFFECT_WEIGHT_CRITICAL,
     EFFECT_WEIGHT_PREDICTIVE,
     EFFECT_WEIGHT_WARNING_RISING,
     EFFECT_WEIGHT_WARNING_STABLE,
+    NIGHT_TARIFF_WEIGHT,
+    PEAK_RECORDING_MAXIMUM,
     PEAK_RECORDING_MINIMUM,
     POWER_MULTIPLIER_COLD,
     POWER_MULTIPLIER_MILD,
     POWER_MULTIPLIER_VERY_COLD,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NONE,
     POWER_STANDBY_KW,
     POWER_TEMP_COLD_THRESHOLD,
     POWER_TEMP_VERY_COLD_THRESHOLD,
     STORAGE_KEY,
-    STORAGE_VERSION,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
 )
-from ..utils.time_utils import get_current_quarter
+from ..utils.time_utils import get_current_billing_period
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def is_daytime_hour(hour: int) -> bool:
+    """Whether this HOUR is billed at the full tariff rate. Ellevio's discount is 22:00-06:00."""
+    return DAYTIME_START_HOUR <= hour < DAYTIME_END_HOUR
+
+
+def effective_tariff_power_kw(power_kw: float, hour: int) -> float:
+    """What the effect tariff will BILL this hour's mean power as. Night hours count half.
+
+    THE ONE DEFINITION - everything that goes near a monthly peak comes through here. When the
+    weighting was open-coded, the savings baseline compared an UNWEIGHTED peak against a weighted
+    one and reported phantom savings (a night peak looked ~half off with the optimiser idle).
+    """
+    return power_kw if is_daytime_hour(hour) else power_kw * NIGHT_TARIFF_WEIGHT
 
 
 class PeakEventDict(TypedDict):
     """Dictionary representation of a PeakEvent for serialization."""
 
     timestamp: str  # ISO format
-    quarter_of_day: int
+    period_of_day: int
     actual_power: float
     effective_power: float
     is_daytime: bool
+    source: str
 
 
 class PeakSummaryPeakDict(TypedDict):
@@ -87,48 +111,69 @@ class PeakSummaryPeakDict(TypedDict):
     effective_power: float
     actual_power: float
     is_daytime: bool
+    source: str
+    billable: bool
 
 
 class MonthlyPeakSummaryDict(TypedDict):
-    """Summary of monthly peaks for display."""
+    """Summary of monthly peaks for display.
+
+    `billable` is False as soon as ANY peak in the history came from something other than a
+    whole-house meter. The tariff is charged on the top three HOURS together, so one pump-only
+    hour in the set makes the whole figure something other than the bill - and the owner is told
+    that rather than shown a number that looks like money.
+    """
 
     count: int
     highest: float
+    billable: bool
     peaks: list[PeakSummaryPeakDict]
 
 
 @dataclass
 class PeakEvent:
-    """Record of a 15-minute peak power event.
+    """One billing period's mean power - an HOUR, which is what the tariff bills.
 
-    Tracks both actual and effective power (accounting for day/night weighting).
+    Tracks both actual and effective power (accounting for the 22:00-06:00 half-price window).
     """
 
     timestamp: datetime
-    quarter_of_day: int  # 0-95
+    period_of_day: int  # the billing HOUR, 0-23
     actual_power: float  # kW
     effective_power: float  # kW (with day/night weighting)
     is_daytime: bool
+    # Where the number came from. A peak from NIBE's phase currents is a valid CONTROL threshold but
+    # is not whole-house grid import, so it must never be reported as the month's billing peak.
+    # Carrying provenance lets one history serve both purposes.
+    source: str = POWER_SOURCE_EXTERNAL_METER
+
+    @property
+    def is_billable(self) -> bool:
+        """Whether this peak may appear in a billing figure shown to the owner."""
+        return self.source in BILLABLE_POWER_SOURCES
 
     def to_dict(self) -> PeakEventDict:
         """Convert to dictionary for storage."""
         return {
             "timestamp": self.timestamp.isoformat(),
-            "quarter_of_day": self.quarter_of_day,
+            "period_of_day": self.period_of_day,
             "actual_power": self.actual_power,
             "effective_power": self.effective_power,
             "is_daytime": self.is_daytime,
+            "source": self.source,
         }
 
     @classmethod
     def from_dict(cls, data: PeakEventDict) -> "PeakEvent":
-        """Create from dictionary."""
+        """Create from dictionary. Records older than this schema never reach here: the store
+        migration (EffectStore) discards them, so every field is present."""
         return cls(
             timestamp=dt_util.parse_datetime(data["timestamp"]),
-            quarter_of_day=data["quarter_of_day"],
+            period_of_day=data["period_of_day"],
             actual_power=data["actual_power"],
             effective_power=data["effective_power"],
             is_daytime=data["is_daytime"],
+            source=data["source"],
         )
 
 
@@ -155,8 +200,38 @@ class EffectLayerDecision:
     reason: str  # Human-readable explanation
 
 
+class EffectStore(Store):
+    """Peak-history storage, with migration from the quarter-hour era.
+
+    Version 1 recorded 15-minute quarter peaks (``quarter_of_day``). The effect tariff bills
+    the HOURLY mean, so a quarter-hour record is not a billable quantity and cannot be
+    converted into one - migration discards them and the month's top-3 restarts from live
+    measurement. Parsing them instead is what broke setup for every upgrading install:
+    ``PeakEvent.from_dict`` raised ``KeyError: 'period_of_day'`` inside ``async_setup_entry``.
+    """
+
+    async def _async_migrate_func(
+        self,
+        old_major_version: int,
+        old_minor_version: int,
+        old_data: dict | None,
+    ) -> dict:
+        """Migrate stored peak history to the current schema."""
+        if old_major_version < EFFECT_STORAGE_VERSION:
+            discarded = len(old_data.get("peaks", [])) if isinstance(old_data, dict) else 0
+            if discarded:
+                _LOGGER.warning(
+                    "Discarding %d peak record(s) written by the 15-minute tariff model: the "
+                    "effect tariff bills the hourly mean, and a quarter-hour mean is not "
+                    "convertible to one. Peak tracking restarts from live measurement.",
+                    discarded,
+                )
+            return {"peaks": []}
+        return old_data if isinstance(old_data, dict) else {"peaks": []}
+
+
 class EffectManager:
-    """Manage effect tariff optimization with 15-minute granularity."""
+    """Manage effect tariff optimization on hourly billing periods."""
 
     def __init__(self, hass: HomeAssistant):
         """Initialize effect manager.
@@ -165,7 +240,7 @@ class EffectManager:
             hass: Home Assistant instance for storage
         """
         self.hass = hass
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store = EffectStore(hass, EFFECT_STORAGE_VERSION, STORAGE_KEY)
         self._monthly_peaks: list[PeakEvent] = []  # Top 3 peaks this month
         self._current_peak: float = 0.0
 
@@ -206,21 +281,25 @@ class EffectManager:
             }
         )
 
-    async def record_quarter_measurement(
+    async def record_period_measurement(
         self,
         power_kw: float,
-        quarter: int,
+        period: int,
         timestamp: datetime,
+        source: str = POWER_SOURCE_EXTERNAL_METER,
     ) -> PeakEvent | None:
-        """Record a 15-minute power measurement.
+        """Record one completed BILLING PERIOD - an HOUR, which is what the tariff bills.
 
-        Only records measurements above minimum threshold to avoid storing
-        standby power or startup transients as legitimate peaks.
+        The tariff bills the mean power over a whole hour, so a 15-minute 9 kW hot-water cycle in an
+        otherwise idle hour is a 3 kW billed peak, not 9 - recording the quarter-hour mean overstates
+        it and throttles the pump to defend the difference.
 
         Args:
-            power_kw: Power consumption in kW
-            quarter: Quarter of day (0-95)
+            power_kw: MEAN power over the hour, in kW
+            period: the billing hour of the day (0-23)
             timestamp: Measurement timestamp
+            source: Where the reading came from. A NIBE-currents peak is a valid CONTROL threshold
+                but is not whole-house grid import, so it never reaches a billing figure.
 
         Returns:
             PeakEvent if this creates a new monthly peak, None otherwise
@@ -235,15 +314,44 @@ class EffectManager:
             )
             return None
 
-        # Determine if daytime (06:00-22:00)
-        is_daytime = DAYTIME_START_QUARTER <= quarter <= DAYTIME_END_QUARTER
+        # A plausibility CEILING, for the same reason the floor exists. A peak is persisted for a
+        # month and every later hour is judged against it, so one impossible reading (a mis-scaled
+        # unit once put 5 000 000 kW here) makes every real hour look safe and disables peak
+        # protection until the month rolls over. Nothing behind a domestic main fuse reaches
+        # PEAK_RECORDING_MAXIMUM, so no real house is refused.
+        if power_kw > PEAK_RECORDING_MAXIMUM:
+            _LOGGER.warning(
+                "Refusing to record %.0f kW as a tariff peak: no domestic supply can deliver it "
+                "(ceiling %.0f kW), so this is a sensor fault or a unit-scaling error. Recording "
+                "it would make every real hour look safe against it and disable peak protection "
+                "for the rest of the month.",
+                power_kw,
+                PEAK_RECORDING_MAXIMUM,
+            )
+            return None
 
-        # Calculate effective power (50% weight at night)
-        effective_power = power_kw if is_daytime else power_kw * 0.5
+        is_daytime = is_daytime_hour(period)
+        effective_power = effective_tariff_power_kw(power_kw, period)
+
+        # AT MOST ONE PEAK PER DAY. Ellevio: the monthly charge is the mean of the three highest
+        # hourly peaks, and "the three peaks must come from three different days" - only a day's
+        # highest hour counts. Date-blind top-3 let one cold Saturday fill all three slots, which
+        # overstates the bill and understates the margin the pump is then throttled against.
+        # https://www.ellevio.se/abonnemang/elnatspriser/ny-prismodell-baserad-pa-effekt/
+        same_day = next(
+            (p for p in self._monthly_peaks if p.timestamp.date() == timestamp.date()),
+            None,
+        )
+        if same_day is not None and effective_power <= same_day.effective_power:
+            return None
 
         # Check if this is a new peak
         is_new_peak = False
-        if len(self._monthly_peaks) < 3:
+        if same_day is not None:
+            # The day's counted peak is its highest hour; this hour outbills it.
+            self._monthly_peaks.remove(same_day)
+            is_new_peak = True
+        elif len(self._monthly_peaks) < 3:
             # Haven't filled top 3 yet
             is_new_peak = True
         else:
@@ -258,10 +366,11 @@ class EffectManager:
             # Create new peak event
             peak_event = PeakEvent(
                 timestamp=timestamp,
-                quarter_of_day=quarter,
+                period_of_day=period,
                 actual_power=power_kw,
                 effective_power=effective_power,
                 is_daytime=is_daytime,
+                source=source,
             )
             self._monthly_peaks.append(peak_event)
 
@@ -269,11 +378,11 @@ class EffectManager:
             self._monthly_peaks.sort(key=lambda p: p.effective_power, reverse=True)
 
             _LOGGER.info(
-                "New monthly peak #%d: %.2f kW effective (%.2f kW actual) at Q%d %s",
+                "New monthly peak #%d: %.2f kW effective (%.2f kW actual) in hour %02d, %s",
                 len(self._monthly_peaks),
                 effective_power,
                 power_kw,
-                quarter,
+                period,
                 "day" if is_daytime else "night",
             )
 
@@ -284,7 +393,7 @@ class EffectManager:
     def should_limit_power(
         self,
         current_power: float,
-        current_quarter: int,
+        current_period: int,
     ) -> PowerLimitDecision:
         """Determine if power should be limited to avoid new 15-minute peak.
 
@@ -292,14 +401,12 @@ class EffectManager:
 
         Args:
             current_power: Current household power draw (kW)
-            current_quarter: Current quarter of day (0-95)
+            current_period: the billing HOUR of the day (0-23)
 
         Returns:
             Decision with limit recommendation and severity
         """
-        # Calculate effective power
-        is_daytime = DAYTIME_START_QUARTER <= current_quarter <= DAYTIME_END_QUARTER
-        effective_power = current_power if is_daytime else current_power * 0.5
+        effective_power = effective_tariff_power_kw(current_power, current_period)
 
         # If no peaks yet, no limit needed
         if not self._monthly_peaks:
@@ -354,20 +461,20 @@ class EffectManager:
     def get_peak_protection_offset(
         self,
         current_power: float,
-        current_quarter: int,
+        current_period: int,
         base_offset: float,
     ) -> float:
-        """Calculate additional offset for 15-minute peak protection.
+        """Calculate additional offset for HOURLY peak protection.
 
         Args:
             current_power: Current power draw (kW)
-            current_quarter: Quarter of day (0-95)
+            current_period: the billing HOUR of the day (0-23)
             base_offset: Base offset from price optimization
 
         Returns:
             Additional negative offset if needed to reduce consumption
         """
-        decision = self.should_limit_power(current_power, current_quarter)
+        decision = self.should_limit_power(current_power, current_period)
 
         if decision.should_limit:
             # Return the recommended offset (already negative)
@@ -375,6 +482,18 @@ class EffectManager:
         else:
             # No additional offset needed
             return 0.0
+
+    def prune_peaks_for_current_month(self) -> None:
+        """Drop peaks that belong to a previous month.
+
+        The effect tariff bills a MONTHLY peak, so last month's peaks must not survive into
+        this one. Must be reachable outside async_load(): an instance that stays up across a
+        month boundary would otherwise carry the old month's top-3 forward, leaving the
+        threshold, the peak_this_month sensor and the savings figure all stale.
+
+        Called on the month-change branch of the coordinator's daily rollover.
+        """
+        self._clean_old_peaks()
 
     def _clean_old_peaks(self) -> None:
         """Remove peaks from previous months."""
@@ -407,18 +526,22 @@ class EffectManager:
             return {
                 "count": 0,
                 "highest": 0.0,
+                "billable": False,
                 "peaks": [],
             }
 
         return {
             "count": len(self._monthly_peaks),
             "highest": self._monthly_peaks[0].effective_power,
+            "billable": all(p.is_billable for p in self._monthly_peaks),
             "peaks": [
                 {
                     "timestamp": p.timestamp.isoformat(),
                     "effective_power": p.effective_power,
                     "actual_power": p.actual_power,
                     "is_daytime": p.is_daytime,
+                    "source": p.source,
+                    "billable": p.is_billable,
                 }
                 for p in self._monthly_peaks
             ],
@@ -546,11 +669,10 @@ class EffectManager:
                 reason="Disabled by user",
             )
 
-        # Get current quarter
-        current_quarter = get_current_quarter()
+        # The billing period is the HOUR - see the module docstring and BILLING_PERIOD_MINUTES.
+        current_period = get_current_billing_period()
 
-        # Check if approaching monthly 15-minute peak
-        limit_decision = self.should_limit_power(current_power, current_quarter)
+        limit_decision = self.should_limit_power(current_power, current_period)
 
         # Get thermal trend for predictive analysis
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
@@ -589,9 +711,17 @@ class EffectManager:
                 weight=EFFECT_WEIGHT_CRITICAL,
                 reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
             )
-        elif predicted_margin < EFFECT_MARGIN_PREDICTIVE and predicted_power_increase > 0:
-            # PREDICTIVE: Will approach peak in next 15 min - act NOW
-            # This is the key innovation: prevent spike before it happens
+        elif (
+            current_peak > 0
+            and predicted_margin < EFFECT_MARGIN_PREDICTIVE
+            and predicted_power_increase > 0
+        ):
+            # PREDICTIVE: Will approach peak in next 15 min - act NOW to prevent the spike.
+            #
+            # The `current_peak > 0` guard is required: with no peak history current_peak is 0.0, so
+            # `predicted_margin = 0.0 - predicted_power` is ALWAYS negative and this branch would fire
+            # on every cooling house from day one, voting a heat-reducing offset that outranks T1/T2
+            # recovery. Missing input must abstain, never vote to reduce heat.
             return EffectLayerDecision(
                 name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,

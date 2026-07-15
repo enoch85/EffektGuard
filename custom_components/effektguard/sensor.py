@@ -27,11 +27,21 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BILLABLE_POWER_SOURCES,
+    POWER_SOURCE_ESTIMATE,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NIBE_CURRENTS,
+    POWER_SOURCE_NONE,
+    PRICE_UNIT_FALLBACK,
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
+from .optimization.effect_layer import effective_tariff_power_kw
 
 _LOGGER = logging.getLogger(__name__)
+
+# Read-only: every sensor serves the coordinator's last decision. Nothing here reaches the pump.
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -65,20 +75,19 @@ class EffektGuardSensorEntityDescription(SensorEntityDescription):
 SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     EffektGuardSensorEntityDescription(
         key="current_offset",
-        name="Current Offset",
+        translation_key="current_offset",
         icon="mdi:thermometer-lines",
-        device_class=SensorDeviceClass.TEMPERATURE,
+        # A heating-curve offset is an INTERVAL, not an absolute temperature. device_class
+        # TEMPERATURE applies absolute conversion, so an imperial user saw 0.0 C as 32.0 F and
+        # statistics stored the converted value; TEMPERATURE_DELTA converts as an interval.
+        device_class=SensorDeviceClass.TEMPERATURE_DELTA,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda coordinator: (
-            coordinator.data["decision"].offset
-            if coordinator.data and coordinator.data.get("decision")
-            else 0.0
-        ),
+        value_fn=lambda coordinator: coordinator.current_offset,
     ),
     EffektGuardSensorEntityDescription(
         key="degree_minutes",
-        name="Degree Minutes",
+        translation_key="degree_minutes",
         icon="mdi:timer-outline",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -90,7 +99,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="supply_temperature",
-        name="Supply Temperature",
+        translation_key="supply_temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -104,7 +113,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="outdoor_temperature",
-        name="Outdoor Temperature",
+        translation_key="outdoor_temperature",
         icon="mdi:thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -118,7 +127,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="indoor_temperature",
-        name="Indoor Temperature",
+        translation_key="indoor_temperature",
         icon="mdi:home-thermometer",
         device_class=SensorDeviceClass.TEMPERATURE,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -132,11 +141,13 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="current_price",
-        name="Current Electricity Price",
+        translation_key="current_price",
         icon="mdi:currency-eur",
-        device_class=SensorDeviceClass.MONETARY,
-        # Unit dynamically set from spot price entity in native_unit_of_measurement property
-        # Note: monetary device_class doesn't support state_class
+        # NOT device_class=MONETARY: the unit comes from the spot-price entity and is typically
+        # "öre/kWh", a RATE not an amount, and MONETARY permits only state_class TOTAL, which would
+        # have the recorder SUM a price. MEASUREMENT is what a price is and gives it min/max/mean
+        # long-term statistics (F-070).
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
             if coordinator.data
@@ -147,7 +158,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="peak_today",
-        name="Peak Today",
+        translation_key="peak_today",
         icon="mdi:transmission-tower",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -156,7 +167,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="peak_this_month",
-        name="Peak This Month",
+        translation_key="peak_this_month",
         icon="mdi:transmission-tower-export",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -165,7 +176,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="nibe_power",
-        name="NIBE Power",
+        translation_key="nibe_power",
         icon="mdi:heat-pump",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -185,7 +196,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="compressor_frequency",
-        name="Compressor Frequency",
+        translation_key="compressor_frequency",
         icon="mdi:engine",
         native_unit_of_measurement="Hz",
         state_class=SensorStateClass.MEASUREMENT,
@@ -200,7 +211,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="compressor_health",
-        name="Compressor Health Status",
+        translation_key="compressor_health",
         icon="mdi:engine-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -211,7 +222,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="optimization_reasoning",
-        name="Optimization Reasoning",
+        translation_key="optimization_reasoning",
         icon="mdi:brain",
         value_fn=lambda coordinator: (
             # Truncate to 255 chars for Home Assistant state limit
@@ -229,7 +240,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="quarter_of_day",
-        name="Quarter of Day",
+        translation_key="quarter_of_day",
         icon="mdi:clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -238,7 +249,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="price_period_classification",
-        name="Price Period Classification",
+        translation_key="price_period_classification",
         icon="mdi:chart-timeline-variant",
         value_fn=lambda coordinator: (
             coordinator.data.get("current_classification") if coordinator.data else "unknown"
@@ -246,7 +257,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="temperature_trend",
-        name="Indoor Temperature Trend",
+        translation_key="temperature_trend",
         icon="mdi:trending-up",
         # No device_class - this is a rate of change, not a temperature
         native_unit_of_measurement="°C/h",
@@ -264,7 +275,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="outdoor_temperature_trend",
-        name="Outdoor Temperature Trend",
+        translation_key="outdoor_temperature_trend",
         icon="mdi:weather-partly-cloudy",
         # No device_class - this is a rate of change, not a temperature
         native_unit_of_measurement="°C/h",
@@ -282,11 +293,18 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="savings_estimate",
-        name="Estimated Monthly Savings",
+        translation_key="savings_estimate",
         icon="mdi:cash-multiple",
-        device_class=SensorDeviceClass.MONETARY,
+        # NOT device_class=MONETARY: MONETARY permits only state_class TOTAL, and TOTAL makes the
+        # recorder keep a running SUM - but this is a forward-looking monthly PROJECTION that rises
+        # and falls with the forecast, so summing it is meaningless (F-070).
+        #
+        # The unit is hardcoded SEK, correctly: the effect-tariff term is
+        # SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH and the spot component is dropped when the price
+        # unit is not SEK-compatible. Do NOT derive the unit from the spot entity, which reports
+        # öre/kWh - labelling a SEK value "öre" is a 100x error. (A non-Swedish user seeing a SEK
+        # figure from a Swedish tariff is a tariff-model issue, F-107, open with the owner.)
         native_unit_of_measurement="SEK",
-        state_class=SensorStateClass.TOTAL,
         value_fn=lambda coordinator: (
             coordinator.data["savings"].monthly_estimate
             if coordinator.data
@@ -297,14 +315,14 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="optional_features_status",
-        name="Optional Features Status",
+        translation_key="optional_features_status",
         icon="mdi:feature-search-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: ("active" if coordinator.data else "initializing"),
     ),
     EffektGuardSensorEntityDescription(
         key="heat_pump_model",
-        name="Heat Pump Model",
+        translation_key="heat_pump_model",
         icon="mdi:heat-pump",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -316,7 +334,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     # DHW (Domestic Hot Water) sensors
     EffektGuardSensorEntityDescription(
         key="dhw_status",
-        name="DHW Status",
+        translation_key="dhw_status",
         icon="mdi:water-boiler",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -325,7 +343,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="dhw_recommendation",
-        name="DHW Recommendation",
+        translation_key="dhw_recommendation",
         icon="mdi:water-boiler-auto",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -336,7 +354,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="dhw_next_boost_time",
-        name="DHW Scheduled Start",
+        translation_key="dhw_next_boost_time",
         icon="mdi:clock-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -347,7 +365,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     # Airflow Optimization sensors (Exhaust Air Heat Pump)
     EffektGuardSensorEntityDescription(
         key="airflow_enhancement",
-        name="Airflow Enhancement",
+        translation_key="airflow_enhancement",
         icon="mdi:fan",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda coordinator: (
@@ -358,7 +376,7 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
     ),
     EffektGuardSensorEntityDescription(
         key="airflow_thermal_gain",
-        name="Airflow Thermal Gain",
+        translation_key="airflow_thermal_gain",
         icon="mdi:heat-wave",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
@@ -503,23 +521,26 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 return self._restored_value
         return self._restored_value
 
+    def _spot_price_unit(self) -> str | None:
+        """The unit the user's own spot-price integration reports, e.g. "öre/kWh" or "SEK/kWh"."""
+        try:
+            gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
+            if gespot_entity_id:
+                gespot_state = self.coordinator.hass.states.get(gespot_entity_id)
+                if gespot_state:
+                    unit = gespot_state.attributes.get("unit_of_measurement")
+                    if isinstance(unit, str) and unit:
+                        return unit
+        except (AttributeError, KeyError):
+            pass
+        return None
+
     @property
     def native_unit_of_measurement(self) -> str | None:
-        """Return the unit of measurement dynamically for price sensor."""
-        # For current_price sensor, get unit from spot price entity
+        """Return the unit, following the user's own price data where money is involved."""
         if self.entity_description.key == "current_price":
-            try:
-                gespot_entity_id = self.coordinator.entry.data.get("gespot_entity")
-                if gespot_entity_id:
-                    gespot_state = self.coordinator.hass.states.get(gespot_entity_id)
-                    if gespot_state:
-                        return gespot_state.attributes.get("unit_of_measurement", "öre/kWh")
-            except (AttributeError, KeyError):
-                pass
-            # Fallback to öre/kWh if spot price entity not available
-            return "öre/kWh"
+            return self._spot_price_unit() or PRICE_UNIT_FALLBACK
 
-        # For all other sensors, use description's unit
         return self.entity_description.native_unit_of_measurement
 
     def _add_weather_forecast_to_attrs(self, attrs: dict[str, Any], hours: int = 12) -> None:
@@ -885,6 +906,17 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         attrs["baseline_cost"] = savings.baseline_cost
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
+                    if hasattr(savings, "effect_baseline_measured"):
+                        # A zero effect saving is ambiguous: either the baseline has never been
+                        # measured (no unoptimised period seen) or it has and the saving really is
+                        # zero. Surface the flag so the two are distinguishable.
+                        attrs["effect_baseline_measured"] = savings.effect_baseline_measured
+                        if not savings.effect_baseline_measured:
+                            attrs["effect_savings_note"] = (
+                                "No effect-tariff saving is claimed: this house has never been "
+                                "observed with optimization switched off, so there is nothing to "
+                                "compare against. Turn optimization off for a while to measure it."
+                            )
 
         elif key == "peak_today":
             # Peak tracking metadata - when, how, and context
@@ -908,53 +940,56 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_time"] = None
                 attrs["time_since_peak"] = "No peak recorded today"
 
-            # Which 15-minute quarter (Swedish effect tariff)
-            if self.coordinator.peak_today_quarter is not None:
-                attrs["peak_quarter"] = self.coordinator.peak_today_quarter
-                # Convert quarter to human-readable time
-                hour = self.coordinator.peak_today_quarter // 4
-                minute = (self.coordinator.peak_today_quarter % 4) * 15
-                attrs["peak_quarter_time"] = f"{hour:02d}:{minute:02d}"
+            # The effect tariff bills on the hourly mean, so report the billing HOUR
+            # (peak_today_period), not a 15-minute quarter.
+            if self.coordinator.peak_today_period is not None:
+                attrs["peak_billing_hour"] = self.coordinator.peak_today_period
+                attrs["peak_billing_hour_time"] = f"{self.coordinator.peak_today_period:02d}:00"
             else:
-                attrs["peak_quarter"] = None
-                attrs["peak_quarter_time"] = None
+                attrs["peak_billing_hour"] = None
+                attrs["peak_billing_hour_time"] = None
 
             # How was it measured? (Trust/accuracy)
             attrs["measurement_source"] = self.coordinator.peak_today_source
 
             # Human-readable source description
             source_descriptions = {
-                "external_meter": "Whole-house power meter (best accuracy)",
-                "nibe_currents": "NIBE phase currents (NIBE only)",
-                "estimate": "Estimated from compressor (display only)",
-                "unknown": "No measurement available yet",
+                POWER_SOURCE_EXTERNAL_METER: "Whole-house power meter (best accuracy)",
+                POWER_SOURCE_NIBE_CURRENTS: "NIBE phase currents (NIBE only)",
+                POWER_SOURCE_ESTIMATE: "Estimated from compressor (display only)",
+                POWER_SOURCE_NONE: "No measurement available yet",
             }
-            attrs["measurement_description"] = source_descriptions.get(
-                self.coordinator.peak_today_source, "Unknown source"
+            source = self.coordinator.peak_today_source
+            attrs["measurement_description"] = source_descriptions.get(source, "Unknown source")
+
+            # Billable sources are defined once (BILLABLE_POWER_SOURCES) and the coordinator's peak
+            # recorder tests the same set, so what the owner is told cannot disagree with what was
+            # recorded against the tariff.
+            attrs["is_real_measurement"] = source in BILLABLE_POWER_SOURCES
+
+            # Compare like with like: peak_this_month is the EFFECTIVE (tariff-weighted) peak - night
+            # hours count half - while peak_today is raw kW. Weight peak_today the same way before
+            # comparing, or a 3.1 kW night blip (billed as 1.55 kW) is flagged as a new monthly peak.
+            today_as_billed = (
+                effective_tariff_power_kw(
+                    self.coordinator.peak_today, self.coordinator.peak_today_period
+                )
+                if self.coordinator.peak_today_period is not None
+                else self.coordinator.peak_today
             )
-
-            # Is this real measurement or estimate?
-            attrs["is_real_measurement"] = self.coordinator.peak_today_source in [
-                "external_meter",
-                "nibe_currents",
-            ]
-
-            # Will this affect monthly billing?
-            # Only real measurements from external meter affect effect tariff billing
-            # NIBE currents measure only heat pump (missing other house loads)
             will_affect = (
-                self.coordinator.peak_today_source == "external_meter"
-                and self.coordinator.peak_today > self.coordinator.peak_this_month
+                source in BILLABLE_POWER_SOURCES
+                and today_as_billed > self.coordinator.peak_this_month
             )
             attrs["will_affect_billing"] = will_affect
 
             if will_affect:
                 attrs["billing_impact"] = (
-                    f"New monthly peak: {self.coordinator.peak_today:.2f} kW "
+                    f"New monthly peak: {today_as_billed:.2f} kW "
                     f"(previous: {self.coordinator.peak_this_month:.2f} kW)"
                 )
-            elif self.coordinator.peak_today_source != "external_meter":
-                attrs["billing_impact"] = "Not used for billing (no external meter configured)"
+            elif source not in BILLABLE_POWER_SOURCES:
+                attrs["billing_impact"] = "Not used for billing (no real power measurement)"
             else:
                 attrs["billing_impact"] = (
                     f"Below monthly peak of {self.coordinator.peak_this_month:.2f} kW"
@@ -1329,21 +1364,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
 
         elif key == "airflow_thermal_gain":
-            # Thermal gain statistics and breakdown
             if "airflow_decision" in self.coordinator.data:
                 decision = self.coordinator.data["airflow_decision"]
                 if decision:
                     attrs["mode"] = decision.mode.value
-
-            # Enhancement statistics (gain-related)
-            if (
-                hasattr(self.coordinator, "airflow_optimizer")
-                and self.coordinator.airflow_optimizer
-            ):
-                stats = self.coordinator.airflow_optimizer.get_enhancement_stats()
-                attrs["total_decisions"] = stats.get("total_decisions", 0)
-                attrs["enhance_recommendations"] = stats.get("enhance_recommendations", 0)
-                attrs["enhance_percentage"] = round(stats.get("enhance_percentage", 0.0), 1)
-                attrs["average_gain_kw"] = round(stats.get("average_gain_kw", 0.0), 3)
 
         return attrs

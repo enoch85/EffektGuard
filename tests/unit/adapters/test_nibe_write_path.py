@@ -45,7 +45,7 @@ class TestOffsetWriteBlocking:
         # Big offset so the accumulator crosses the +-1 threshold from 0
         result = await adapter.set_curve_offset(3.0)
 
-        assert result is True
+        assert result == 3
         call = hass.services.async_call.call_args
         assert call.args[:2] == ("number", "set_value")
         assert call.kwargs["blocking"] is True
@@ -57,7 +57,7 @@ class TestOffsetWriteBlocking:
         adapter, hass = make_adapter(call_side_effect=HomeAssistantError("value out of range"))
         result = await adapter.set_curve_offset(3.0)
 
-        assert result is False
+        assert result is None
         # bookkeeping not advanced to the failed value
         assert adapter._last_nibe_offset == 0
         assert adapter._last_write is None
@@ -67,7 +67,7 @@ class TestOffsetWriteBlocking:
         adapter, hass = make_adapter(call_side_effect=TypeError("boom"))
         # Must not raise
         result = await adapter.set_curve_offset(3.0)
-        assert result is False
+        assert result is None
 
 
 class TestOffsetClamp:
@@ -93,7 +93,7 @@ class TestOffsetClamp:
         adapter, hass = make_adapter(offset_attrs={"min": 0.0, "max": 100.0})
         # -2 requested; clamps to 0, equals current -> no write, no crash
         result = await adapter.set_curve_offset(-2.0)
-        assert result is False
+        assert result is None
 
     async def test_malformed_minmax_does_not_crash(self):
         """Non-numeric min/max attributes must be ignored, not raise."""
@@ -101,9 +101,20 @@ class TestOffsetClamp:
         result = await adapter.set_curve_offset(3.0)
 
         # Falls back to MIN_OFFSET/MAX_OFFSET clamp, write still succeeds
-        assert result is True
+        assert result == 3
         written = hass.services.async_call.call_args.args[2]["value"]
         assert written == 3
+
+    async def test_forced_neutral_write_bypasses_cooldown(self):
+        """OFF must reach the pump even immediately after an ordinary write."""
+        adapter, hass = make_adapter(offset_state="2")
+        adapter._last_nibe_offset = 2
+        adapter._last_write = datetime.now(timezone.utc)
+
+        result = await adapter.set_curve_offset(0.0, force_write=True)
+
+        assert result == 0
+        assert hass.services.async_call.call_args.args[2]["value"] == 0
 
 
 class TestUnknownValueMarker:

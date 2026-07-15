@@ -126,6 +126,28 @@ class ComfortLayer:
         Returns:
             ComfortLayerDecision with comfort correction
         """
+        # A NIBE with no room sensor (no BT50) is a legitimate configuration: it runs on degree
+        # minutes and the heating curve. The adapter substitutes DEFAULT_INDOOR_TEMP (21.0) so the
+        # display has something to show, and sets `indoor_temp_valid=False` - in its own words, "so
+        # comfort-reasoning layers abstain". This is the comfort-reasoning layer, and it did not.
+        #
+        # Every deviation computed from that placeholder is fiction. With a target BELOW 21.0 - and
+        # 18.5 is now an allowed target - the layer reads a permanent overshoot that no amount of
+        # heating can correct, because nothing is measuring the house:
+        #
+        #     target 19.0  ->  offset -10.00 at weight 1.00, "Overshoot: 2.0C above target"
+        #
+        # A full coast at critical weight, forever, on a house nobody is measuring. Only the
+        # degree-minute emergency path stands between that and a cold house, and it would be
+        # fighting this layer on every cycle for the whole winter.
+        if not getattr(nibe_state, "indoor_temp_valid", True):
+            return ComfortLayerDecision(
+                name="Comfort",
+                offset=0.0,
+                weight=0.0,
+                reason="No indoor sensor - abstaining (degree minutes protect this system)",
+            )
+
         temp_deviation = nibe_state.indoor_temp - self.target_temp
         tolerance = self.tolerance_range
         dead_zone = self.mode_config.dead_zone
@@ -247,11 +269,19 @@ class ComfortLayer:
                 future_temp_diff = indoor_temp - forecast_min_outdoor
                 forecast_heat_loss = future_temp_diff / (insulation * HEAT_LOSS_DIVISOR)
 
-        # Use the WORSE of current trend or forecast-based loss
-        effective_heat_loss = max(abs(indoor_rate), forecast_heat_loss)
+        # Use the WORSE of the observed cooling rate and the forecast-based loss.
+        #
+        # Only COOLING is heat loss. `indoor_rate` is a SIGNED °C/h trend, and taking its
+        # absolute value here treated a WARMING house as if it were losing heat fastest:
+        # on a sunny morning, solar gain of +0.6 °C/h became an apparent 0.6 °C/h loss,
+        # beating the modelled loss (~0.2), which shrank buffer_hours and made the layer
+        # conclude "buffer insufficient - pre-heat!" at the exact moment the house was
+        # overheating. The thermal buffer is GROWING then, not draining.
+        observed_cooling = max(-indoor_rate, 0.0)
+        effective_heat_loss = max(observed_cooling, forecast_heat_loss)
 
-        # Safety: minimum loss rate
-        if effective_heat_loss <= 0.01:
+        # Safety: never divide by a vanishing loss rate (buffer_hours would explode).
+        if effective_heat_loss <= COMFORT_HEAT_LOSS_FLOOR:
             effective_heat_loss = COMFORT_HEAT_LOSS_FLOOR
 
         # Calculate buffer duration

@@ -12,7 +12,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Optional, Protocol
 
+from homeassistant.util import dt as dt_util
+
 from ..const import (
+    THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
+    THERMAL_MASS_TIMBER_UFH_THRESHOLD,
+    UFH_CONCRETE_PREDICTION_HORIZON,
+    UFH_RADIATOR_PREDICTION_HORIZON,
+    UFH_TIMBER_PREDICTION_HORIZON,
     ANTI_WINDUP_CAUSATION_WINDOW_MINUTES,
     ANTI_WINDUP_COOLDOWN_MINUTES,
     ANTI_WINDUP_DM_DROPPING_RATE,
@@ -39,6 +46,7 @@ from ..const import (
     DM_THRESHOLD_AUX_LIMIT,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PROACTIVE_MIN,
+    MIN_OFFSET,
     MULTIPLIER_BOOST_30_PERCENT,
     MULTIPLIER_REDUCTION_20_PERCENT,
     PROACTIVE_ZONE1_OFFSET,
@@ -100,7 +108,7 @@ from ..const import (
     DM_RECOVERY_RATE_MILD,
     DM_RECOVERY_RATE_VERY_COLD,
 )
-from .climate_zones import ClimateZoneDetector
+from .climate_zones import ClimateZoneDetector, keep_triggers_clear_of_the_compressor_band
 from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
@@ -234,7 +242,10 @@ class EmergencyLayerDecision:
     weight: float
     reason: str
     # Additional diagnostic fields
-    tier: str = ""  # "T1", "T2", "T3", "WARNING", "CAUTION", "OK"
+    # Authoritative discriminator for safety dispatch in the decision engine.
+    # "EMERGENCY" (DM past the aux limit), "T3", "T2", "T1", "WARNING", "CAUTION",
+    # "COOLDOWN", "ANTI_WINDUP", "OK". See const.DM_TIER_EMERGENCY / DM_RECOVERY_TIERS.
+    tier: str = ""
     degree_minutes: float = 0.0
     threshold_used: float = 0.0
     damping_applied: bool = False
@@ -288,15 +299,62 @@ class ThermalModel:
         self.insulation_quality = insulation_quality
 
     def get_prediction_horizon(self) -> float:
-        """Get prediction horizon for weather forecasting.
+        """How far ahead this house must look to act in time - heavier fabric, longer lag.
 
-        Base implementation returns default 12 hours.
-        AdaptiveThermalModel overrides this with UFH-type-specific values.
+        A concrete slab's slow time constant (~70 h) makes six hours its LAG, not its horizon: a
+        flat 12 h window cannot see the slow, deep outdoor slide that actually drains it (only a
+        sudden plunge, which the pump's own curve already catches), so the pre-heat never fires.
+        Horizon is UFH-type-specific; see docs/research/03_concrete_slab_response.md and the
+        UFH_*_PREDICTION_HORIZON constants.
 
         Returns:
-            Prediction horizon in hours (default 12.0)
+            Prediction horizon in hours.
         """
-        return 12.0  # Default medium horizon
+        if self.thermal_mass >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+            return UFH_CONCRETE_PREDICTION_HORIZON
+        if self.thermal_mass >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+            return UFH_TIMBER_PREDICTION_HORIZON
+        return UFH_RADIATOR_PREDICTION_HORIZON
+
+
+def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
+    """Move the degree-minute thresholds to suit how slowly this house responds.
+
+    The slower the emitter, the SOONER it must start recovering. Degree minutes are NEGATIVE, so the
+    buffer DIVIDES (multiplying would deepen the threshold and delay the response).
+
+    Shared by EmergencyLayer and ProactiveLayer on purpose: a threshold is a property of the house,
+    not the layer. When only one layer applied the buffer there was a band of DM in which neither
+    responded.
+
+    The divide can undo the warm-side ceiling, so keep_triggers_clear_of_the_compressor_band is
+    re-applied HERE, on the value the layers actually read - clamping before the last thing that
+    changes it is no clamp at all (e.g. -110 / 1.3 = -85, back inside the compressor's own cycling
+    band, once flagged a warm-morning slab house as in thermal debt).
+
+    Args:
+        base_thresholds: Climate-aware thresholds from ClimateZoneDetector
+        heating_type: "radiator", "concrete_ufh", "concrete_slab", "timber", "timber_ufh"
+
+    Returns:
+        The same thresholds, moved to suit the emitter's thermal lag.
+    """
+    if heating_type in ("concrete_ufh", "concrete_slab"):
+        multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE
+    elif heating_type in ("timber", "timber_ufh"):
+        multiplier = DM_THERMAL_MASS_BUFFER_TIMBER
+    else:
+        multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR
+
+    return keep_triggers_clear_of_the_compressor_band(
+        {
+            "normal_min": base_thresholds["normal_min"] / multiplier,
+            "normal_max": base_thresholds["normal_max"] / multiplier,
+            "warning": base_thresholds["warning"] / multiplier,
+            # The auxiliary-heat limit is hardware. It is the same for every emitter.
+            "critical": base_thresholds["critical"],
+        }
+    )
 
 
 class EmergencyLayer:
@@ -319,6 +377,14 @@ class EmergencyLayer:
 
     Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
     This is the hard safety limit validated by Swedish NIBE forums.
+
+    VOLATILE-PRICE SUPPRESSION (deliberate smoothness/recovery trade-off): when the current
+    spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS, should_skip_volatile_boost()
+    zeroes the T1/T2/T3 recovery offset and cuts weight to VOLATILE_WEIGHT_REDUCTION, to avoid
+    compressor cycling on brief windows. Cost: DM may keep falling during a volatile run. Bounded
+    because the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of evaluate_layer returns first, so the
+    EMERGENCY tier is never suppressed. If a DM spiral ever coincides with short price runs, look
+    here first.
     """
 
     def __init__(
@@ -601,7 +667,10 @@ class EmergencyLayer:
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
         current_offset = getattr(nibe_state, "current_offset", 0.0)
-        timestamp = getattr(nibe_state, "timestamp", datetime.now())
+        # dt_util.utcnow(), never a naive datetime.now(): this fallback feeds the anti-windup
+        # causation window, and a naive datetime there raises TypeError inside the emergency layer -
+        # the one path that must never fail.
+        timestamp = getattr(nibe_state, "timestamp", None) or dt_util.utcnow()
 
         # Track offset changes for causation detection (Jan 2026)
         # This records when offset was raised to distinguish self-induced spirals
@@ -618,6 +687,26 @@ class EmergencyLayer:
         )
 
         temp_deviation = indoor_temp - target_temp
+
+        # ========================================
+        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
+        # ========================================
+        # MUST come before every other branch: the anti-windup and "too warm" cases return early, so
+        # placing any of them first makes the hard limit unenforceable (e.g. "too warm" trips at only
+        # tolerance_range over target, silencing this on a solar-gain morning during a debt spiral).
+        # Past this threshold NIBE engages the aux immersion heater; declining to respond guarantees
+        # it rather than preventing it.
+        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+            return EmergencyLayerDecision(
+                name="Thermal Debt",
+                offset=SAFETY_EMERGENCY_OFFSET,
+                weight=1.0,
+                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit {DM_THRESHOLD_AUX_LIMIT}",
+                tier="EMERGENCY",
+                degree_minutes=degree_minutes,
+                threshold_used=DM_THRESHOLD_AUX_LIMIT,
+                dm_rate=dm_rate,
+            )
 
         # ========================================
         # ANTI-WINDUP: Prevent offset raises that make DM worse (Jan 2026 fix)
@@ -667,7 +756,7 @@ class EmergencyLayer:
                     reduction = (
                         abs(dm_rate) / ANTI_WINDUP_REDUCTION_RATE_DIVISOR
                     ) * ANTI_WINDUP_REDUCTION_MULTIPLIER
-                    new_offset = max(-10.0, current_offset - reduction)  # Floor at MIN_OFFSET
+                    new_offset = max(MIN_OFFSET, current_offset - reduction)
                     reason = (
                         f"DM dropping {dm_rate:.0f}/h - reducing offset by {reduction:.1f}°C "
                         f"(from +{current_offset:.0f}°C to {new_offset:.1f}°C)"
@@ -700,8 +789,14 @@ class EmergencyLayer:
                     dm_rate=dm_rate,
                 )
 
+        # Cases 1 and 2 reason about indoor comfort, so both need a REAL indoor reading. Without a
+        # room sensor the adapter reports DEFAULT_INDOOR_TEMP (== target), so temp_deviation == 0.0
+        # and Case 2's `>= 0` gate would permanently disable DM protection on exactly the systems
+        # that depend on it most. Skip both and use the degree-minute tiers, as NIBE does sensorless.
+        indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
+
         # Case 1: Too warm (above tolerance)
-        if temp_deviation > tolerance_range:
+        if indoor_is_measured and temp_deviation > tolerance_range:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
                 offset=0.0,
@@ -713,7 +808,7 @@ class EmergencyLayer:
 
         # Case 2: At target + Not cheap (and not at absolute limit)
         # Use _is_price_cheap to check current price classification
-        if temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
+        if indoor_is_measured and temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
             if not self._is_price_cheap(price_data, get_current_datetime):
                 return EmergencyLayerDecision(
                     name="Thermal Debt",
@@ -723,18 +818,6 @@ class EmergencyLayer:
                     tier="OK",
                     degree_minutes=degree_minutes,
                 )
-
-        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
-            return EmergencyLayerDecision(
-                name="Thermal Debt",
-                offset=SAFETY_EMERGENCY_OFFSET,
-                weight=1.0,
-                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit -1500",
-                tier="EMERGENCY",
-                degree_minutes=degree_minutes,
-                threshold_used=DM_THRESHOLD_AUX_LIMIT,
-            )
 
         # Calculate context-aware thresholds based on outdoor temperature
         expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
@@ -1020,38 +1103,12 @@ class EmergencyLayer:
         return False
 
     def _get_thermal_mass_adjusted_thresholds(self, base_thresholds: dict) -> dict:
-        """Adjust DM thresholds based on thermal mass.
-
-        High thermal mass systems need tighter thresholds because:
-        - Long thermal lag (6+ hours for concrete slab)
-        - Current DM doesn't immediately affect indoor temperature
-        - Solar gain can mask underlying thermal debt accumulation
-
-        Args:
-            base_thresholds: Climate-aware thresholds from ClimateZoneDetector
-
-        Returns:
-            Adjusted thresholds with thermal mass buffer applied
-        """
-        if self.heating_type in ("concrete_ufh", "concrete_slab"):
-            multiplier = DM_THERMAL_MASS_BUFFER_CONCRETE
-        elif self.heating_type in ("timber", "timber_ufh"):
-            multiplier = DM_THERMAL_MASS_BUFFER_TIMBER
-        else:
-            multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR
-
-        adjusted = {
-            "normal_min": base_thresholds["normal_min"] * multiplier,
-            "normal_max": base_thresholds["normal_max"] * multiplier,
-            "warning": base_thresholds["warning"] * multiplier,
-            "critical": base_thresholds["critical"],  # Never adjust absolute maximum
-        }
+        """Thresholds moved to suit this house's thermal lag. See apply_thermal_mass_buffer."""
+        adjusted = apply_thermal_mass_buffer(base_thresholds, self.heating_type)
 
         _LOGGER.debug(
-            "Thermal mass adjusted thresholds: heating type '%s' (multiplier %.2f) "
-            "→ warning %.0f (base: %.0f)",
+            "Thermal mass adjusted thresholds: heating type '%s' → warning %.0f (base: %.0f)",
             self.heating_type,
-            multiplier,
             adjusted["warning"],
             base_thresholds["warning"],
         )
@@ -1253,14 +1310,19 @@ class ProactiveLayer:
         self,
         climate_detector: ClimateZoneDetector,
         get_thermal_trend: Optional[Callable[[], dict]] = None,
+        heating_type: str = "radiator",
     ):
         """Initialize proactive layer.
 
         Args:
             climate_detector: ClimateZoneDetector for context-aware thresholds
             get_thermal_trend: Callable returning thermal trend dict
+            heating_type: Heating system type. The proactive layer must read the SAME thresholds
+                as the emergency layer, or a band of degree minutes falls between them in which
+                neither responds.
         """
         self.climate_detector = climate_detector
+        self.heating_type = heating_type
         self._get_thermal_trend = get_thermal_trend or (
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
@@ -1591,7 +1653,9 @@ class ProactiveLayer:
         Returns:
             Dictionary with normal and warning thresholds
         """
-        dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
+        dm_range = apply_thermal_mass_buffer(
+            self.climate_detector.get_expected_dm_range(outdoor_temp), self.heating_type
+        )
 
         return {
             "normal": dm_range["normal_max"],

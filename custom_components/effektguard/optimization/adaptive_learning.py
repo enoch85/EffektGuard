@@ -19,7 +19,11 @@ import numpy as np
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    DEFAULT_HEAT_LOSS_COEFFICIENT,
+    DEFAULT_THERMAL_DECAY_RATE,
     LEARNING_CONFIDENCE_THRESHOLD,
+    LEARNING_MIN_HEATING_RATE,
+    LEARNING_MIN_HEATING_SAMPLES,
     LEARNING_MIN_OBSERVATIONS,
     LEARNING_OBSERVATION_WINDOW,
     UFH_CONCRETE_PREDICTION_HORIZON,
@@ -483,10 +487,18 @@ class AdaptiveThermalModel:
                 rate = obs.temp_change / obs.time_delta_hours
                 heating_rates.append(rate)
 
-        if len(heating_rates) > 10:
-            consistency = 1.0 - min(np.std(heating_rates) / max(np.mean(heating_rates), 0.1), 1.0)
+        # The std/mean consistency ratio LIES when there is no signal: an identical (flatlined)
+        # reading collapses std to 0 and scores perfect consistency 1.0, above a house genuinely
+        # heating (F-132). So the weak cases are answered before the ratio is taken - both give
+        # ZERO, the honest answer to "how well do we know this building".
+        mean_rate = float(np.mean(heating_rates)) if heating_rates else 0.0
+
+        if len(heating_rates) <= LEARNING_MIN_HEATING_SAMPLES:
+            consistency = 0.0  # too little evidence is not half the evidence
+        elif mean_rate < LEARNING_MIN_HEATING_RATE:
+            consistency = 0.0  # the house moved less than one sensor tick per hour while heating
         else:
-            consistency = 0.5
+            consistency = 1.0 - min(float(np.std(heating_rates)) / mean_rate, 1.0)
 
         # Time span (prefer observations over longer period)
         if len(self.observations) > 1:
@@ -583,18 +595,25 @@ class AdaptiveThermalModel:
             Target indoor temperature for pre-heating phase (°C)
 
         References:
-            - Forum_Summary.md: stevedvo's thermal debt case study
-            - Enhancement_Proposals.md: Thermal model mathematics
+            docs/research/01_degree_minutes.md - the forum case studies this method's tuning
+            descends from are marked UNSOURCED there (anecdote, not documents in this repository).
         """
-        # Get learned parameters or use defaults
+        # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING: the learning estimator produces a
+        # RELATIVE cooling index, not a physical W/°C value, and this is the control path. The old
+        # code carried that index and a literal 180.0 W/°C on the two branches of one variable (two
+        # units), both fed into `/ 1000.0` as if watts per kelvin. It never fired only because the
+        # gate is dead (should_use_learned_parameters reads a "confidence" key never stored), so
+        # repairing that gate would have silently armed the unit error. See
+        # test_learning_can_actually_learn.py; enabling learning is the owner's call (F-132b), making
+        # it SAFE to enable is this.
         params = self.update_learned_parameters()
+
+        heat_loss_coef = DEFAULT_HEAT_LOSS_COEFFICIENT
+
         if params and self.should_use_learned_parameters():
-            heat_loss_coef = params.heat_loss_coefficient
             decay_rate = params.thermal_decay_rate
         else:
-            # Conservative defaults
-            heat_loss_coef = 180.0  # W/°C typical house
-            decay_rate = 0.15  # °C per hour per °C difference
+            decay_rate = DEFAULT_THERMAL_DECAY_RATE
 
         # Account for thermal decay during forecast period
         temp_diff = current_temp - forecast_min_temp

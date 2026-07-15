@@ -2,31 +2,36 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    DHW_CONTROL_ISSUE_ID,
+    PRICE_SOURCE_ISSUE_ID,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
-    CLIMATE_CENTRAL_SWEDEN,
-    CLIMATE_MID_NORTHERN_SWEDEN,
-    CLIMATE_NORTHERN_LAPLAND,
-    CLIMATE_NORTHERN_SWEDEN,
-    CLIMATE_SOUTHERN_SWEDEN,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_DHW_MIN_AMOUNT,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    CONF_ENABLE_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     CONF_NIBE_TEMP_LUX_ENTITY,
     DEFAULT_DHW_EVENING_HOUR,
@@ -41,20 +46,29 @@ from .const import (
     DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
+    MAX_BILLING_OBSERVATION_GAP_MINUTES,
+    PEAK_CONTROL_POWER_SOURCES,
+    LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MIN_DHW_TARGET_TEMP,
     NIBE_VENTILATION_MIN_ENHANCED_DURATION,
-    QUARTER_INTERVAL_MINUTES,
+    NIBE_VENTILATION_MIN_REST_DURATION,
+    POWER_SOURCE_ESTIMATE,
+    POWER_SOURCE_EXTERNAL_METER,
+    POWER_SOURCE_NIBE_CURRENTS,
+    POWER_SOURCE_NONE,
     STORAGE_KEY_LEARNING,
-    STORAGE_VERSION,
+    LEARNING_STORAGE_VERSION,
+    TOLERANCE_RANGE_MULTIPLIER,
     STARTUP_GRACE_MIN_INTERVAL,
+    STARTUP_MAX_GRACE_ATTEMPTS,
     STARTUP_GRACE_UPDATES,
     UPDATE_INTERVAL_MINUTES,
-    WATTS_PER_KILOWATT,
 )
 from .models.nibe import NibeF750Profile
 from .models.registry import HeatPumpModelRegistry
 from .optimization.adaptive_learning import AdaptiveThermalModel
 from .optimization.airflow_optimizer import AirflowOptimizer
+from .optimization.billing_period import BillingPeriodAccumulator
 from .optimization.decision_engine import (
     OptimizationDecision,
     get_safe_default_decision,
@@ -65,11 +79,11 @@ from .optimization.dhw_optimizer import (
     IntelligentDHWScheduler,
 )
 from .optimization.prediction_layer import ThermalStatePredictor
-from .optimization.price_layer import get_fallback_prices
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor
-from .utils.time_utils import get_current_quarter
+from .utils.power import power_kw_from_state
+from .utils.time_utils import get_current_billing_period
 from .utils.volatile_helpers import OffsetVolatilityTracker
 
 if TYPE_CHECKING:
@@ -105,6 +119,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            # Hand HA the entry. Without it HA falls back to a deprecated ContextVar
+            # (breaks_in_ha_version 2026.8), which is only set inside async_setup_entry - so
+            # `self.config_entry` is None for a coordinator built anywhere else (audit F-073).
+            config_entry=entry,
             name=DOMAIN,
             # Disable base class automatic scheduling - we use clock-aligned scheduling instead
             # This prevents drift from startup time and ensures updates at :00:10, :05:10, etc.
@@ -143,10 +161,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Pass climate zone info for seasonal-aware defaults
         climate_zone_info = decision_engine.climate_detector.zone_info
         self.weather_learner = WeatherPatternLearner(climate_zone_info=climate_zone_info)
-        self.climate_region = self._detect_climate_region(hass)
 
         # Compressor health monitoring (Oct 19, 2025)
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
+        # The monitor's verdict, fed to the decision engine so it will not demand more heat from a
+        # compressor already at maximum frequency.
+        self.compressor_risk: str | None = None
         self.compressor_stats = None  # Latest CompressorStats from monitor
 
         # DHW temporary lux entity (stored once, reused everywhere)
@@ -233,6 +253,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Track airflow enhancement state for minimum duration enforcement
         self._airflow_enhance_start: datetime | None = None
+        # How long the airflow optimizer asked this enhancement to run (15-60 min, by deficit).
+        # This bounds the fan's minimum run time so a marginal decision cannot cycle it every tick.
+        self._airflow_enhance_minutes: int = NIBE_VENTILATION_MIN_ENHANCED_DURATION
+        # When the fan last returned to normal, so it cannot be re-enhanced on the very next tick.
+        self._airflow_normal_since: datetime | None = None
 
         if demand_periods:
             try:
@@ -259,25 +284,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Could not format DHW periods: %s", err)
 
         # Learning storage
-        self.learning_store = Store(hass, STORAGE_VERSION, STORAGE_KEY_LEARNING)
+        self.learning_store = Store(hass, LEARNING_STORAGE_VERSION, STORAGE_KEY_LEARNING)
 
         # State tracking
         self.current_offset: float = 0.0
         self.last_applied_offset: float | None = None  # Last offset written to NIBE
         self.last_offset_timestamp: datetime | None = None  # When offset was last applied
+        # Daily high-water mark (display + diagnostics). Monotonically non-decreasing
+        # until the midnight reset. NEVER pass this to the decision engine as
+        # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
         self.peak_this_month: float = 0.0
-        # Swedish quarter-hour tariffs bill the 15-minute MEAN power, not an
-        # instantaneous sample: accumulate real measurements within the
-        # quarter and record the mean when the quarter completes. The quarter
-        # is identified by its start instant (fold-preserving aware local
-        # time), so autumn's repeated wall-clock hour yields two distinct
-        # quarters. The first quarter after startup is observed but never
-        # recorded - it began before we could watch it.
-        self._quarter_power_samples: list[tuple[datetime, float]] = []
-        self._quarter_power_start: datetime | None = None
-        self._quarter_power_number: int = 0
-        self._quarter_power_partial: bool = False
+        # Instantaneous whole-house power (kW), refreshed every cycle by
+        # _update_peak_tracking. None until the first successful measurement, in which
+        # case peak protection stays disabled rather than acting on a guess.
+        self.current_power_kw: float | None = None
+        # What the effect tariff bills: the time-weighted mean power over a billing HOUR (a
+        # quarter-hour mean overstates the billed peak up to fourfold). The arithmetic lives in
+        # billing_period.py, once, so the simulator runs the same object rather than a second copy.
+        self._billing_period = BillingPeriodAccumulator()
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
         self._last_learning_save: datetime | None = None  # Track last learned data save time
@@ -297,7 +322,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
         self.peak_today_source: str = "unknown"  # external_meter, nibe_currents, estimate
-        self.peak_today_quarter: int | None = None  # 15-min quarter (0-95) for effect tariff
+        self.peak_today_period: int | None = None  # the billing HOUR (0-23) for the effect tariff
         self.yesterday_peak: float = 0.0  # Yesterday's peak for comparison
 
         # DHW tracking (unified: is_hot_water OR temp_lux active)
@@ -306,6 +331,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_heating_start = None  # When current/last DHW cycle started
         self.dhw_heating_end = None  # When last DHW cycle ended
         self.dhw_was_active = False  # Track DHW state (is_hot_water OR temp_lux)
+        # True while a temporary-lux boost that EFFEKTGUARD started is still running. The owner may
+        # also start one from the heat pump's own panel or their own automation, and that one is
+        # none of our business - so shutdown only cancels a boost we are responsible for.
+        self._lux_boost_is_ours = False
+        # While set, a boost_dhw SERVICE call owns the lux switch: ordinary price optimization
+        # may not cancel it before this instant. Safety still may - see _apply_dhw_control.
+        self._service_boost_until: datetime | None = None
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -313,6 +345,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
         self._first_successful_update = False
+        # Consecutive cycles spent waiting for the heat pump to appear. Bounded: see
+        # STARTUP_MAX_GRACE_ATTEMPTS. Distinct from _startup_update_count below, which counts
+        # observation cycles AFTER the pump is already answering.
+        self._startup_grace_attempts = 0
         self._startup_update_count = 0  # Count updates before ending grace period
         self._startup_grace_updates = (
             STARTUP_GRACE_UPDATES  # Require N updates before active control
@@ -322,66 +358,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Startup grace: timeout after which observation cycles begin
         self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
 
+        # Whether the "no price source" repair issue is currently raised.
+        self._price_issue_active = False
+        self._dhw_issue_active = False
+
+        # One writer at a time. See _drive_the_pump: the aligned control loop and a service that
+        # commands the pump are both long coroutines, and asyncio interleaves them freely.
+        self._control_lock = asyncio.Lock()
+
         # Power sensor availability tracking (event-driven)
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
+        # Learning observes hourly, not per control cycle - see _record_learning_observations
+        self._last_learning_observation: datetime | None = None
         self._power_sensor_listener = None
-
-    def _detect_climate_region(self, hass: HomeAssistant) -> str:
-        """Detect Swedish climate region based on Home Assistant location.
-
-        Uses latitude to determine climate region for adaptive learning thresholds.
-
-        Swedish climate regions (based on SMHI climate data):
-        - Southern Sweden (55-58°N): Malmö, Gothenburg - Jan avg 0.1°C
-        - Central Sweden (58-62°N): Stockholm, Gävle - Jan avg -3.7°C
-        - Mid-Northern Sweden (62-65°N): Östersund, Umeå - Jan avg -7.9°C
-        - Northern Sweden (65-67°N): Luleå, Boden - Jan avg -11.0°C
-        - Northern Lapland (67-70°N): Kiruna, Gällivare - Jan avg -12.5°C
-
-        Args:
-            hass: HomeAssistant instance
-
-        Returns:
-            Climate region constant (southern_sweden, central_sweden, etc.)
-        """
-        try:
-            # Get Home Assistant latitude
-            latitude = hass.config.latitude
-
-            if latitude is None:
-                _LOGGER.warning("Latitude not configured, defaulting to central Sweden")
-                return CLIMATE_CENTRAL_SWEDEN
-
-            # Detect region based on latitude bands
-            if latitude < 58.0:
-                region = CLIMATE_SOUTHERN_SWEDEN
-                region_name = "Southern Sweden (Malmö/Gothenburg)"
-            elif latitude < 62.0:
-                region = CLIMATE_CENTRAL_SWEDEN
-                region_name = "Central Sweden (Stockholm/Gävle)"
-            elif latitude < 65.0:
-                region = CLIMATE_MID_NORTHERN_SWEDEN
-                region_name = "Mid-Northern Sweden (Östersund/Umeå)"
-            elif latitude < 67.0:
-                region = CLIMATE_NORTHERN_SWEDEN
-                region_name = "Northern Sweden (Luleå/Boden)"
-            else:
-                region = CLIMATE_NORTHERN_LAPLAND
-                region_name = "Northern Lapland (Kiruna)"
-
-            _LOGGER.info(
-                "Detected climate region: %s (latitude: %.2f°N)",
-                region_name,
-                latitude,
-            )
-
-            return region
-
-        except (AttributeError, KeyError, ValueError) as err:
-            _LOGGER.warning("Failed to detect climate region: %s, defaulting to central", err)
-            return CLIMATE_CENTRAL_SWEDEN
 
     def _calculate_next_aligned_time(self) -> datetime:
         """Calculate next 5-minute boundary + 10 seconds.
@@ -415,6 +406,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         This gives sensors time to update before we read them, and aligns
         with 15-minute spot price intervals.
         """
+        # Never re-arm a coordinator that has been shut down. _do_aligned_refresh calls this from
+        # a `finally`, so an update in flight when the entry unloads would otherwise arm a fresh
+        # timer on a dead object - two coordinators driving one pump with conflicting offsets.
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator shut down - not re-arming the aligned refresh")
+            return
+
         # Cancel any existing schedule
         if self._unsub_aligned_refresh:
             self._unsub_aligned_refresh()
@@ -438,19 +436,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
 
     async def _do_aligned_refresh(self) -> None:
-        """Perform refresh and schedule next aligned update.
+        """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        Note: _async_update_data() now handles scheduling at the end of every update,
-        so we don't need to schedule here. This method is called by the timer callback.
+        Sole owner of the retry timer: the base scheduler is disabled (update_interval=None), so
+        nothing else re-arms it. That is why the broad `except Exception` is correct - anything the
+        update path raises would otherwise kill the task silently and permanently
+        (`last_update_success` stays True while the pump holds its last offset until HA restarts).
+        The `finally` re-arms so the loop survives any single bad cycle.
         """
         try:
-            self.data = await self._async_update_data()
+            # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
+            # lock, so a service commanding the pump at the same moment waits its turn.
+            self.data = await self._drive_the_pump()
             self.last_update_success = True
             self.async_set_updated_data(self.data)
-        except (UpdateFailed, OSError, ValueError, TypeError, KeyError, AttributeError) as err:
+        except UpdateFailed as err:
+            # Expected degradation (e.g. required NIBE sensors unreadable).
             self.last_update_success = False
             _LOGGER.error("Update failed: %s", err)
-            # Still need to schedule next update even on failure
+        except Exception:  # noqa: BLE001 - supervisory loop; see docstring
+            self.last_update_success = False
+            _LOGGER.exception(
+                "Unexpected error during EffektGuard update. The update loop will continue; "
+                "entities are marked unavailable for this cycle and no offset was written."
+            )
+        finally:
+            # ALWAYS re-arm. Without this the coordinator dies permanently on any
+            # unhandled exception, because update_interval is None.
             self._schedule_aligned_refresh()
 
     async def async_initialize_learning(self) -> None:
@@ -636,6 +648,66 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             power_state.state if power_state else "None",
         )
 
+    async def _set_temporary_lux(self, on: bool) -> bool:
+        """Command the hot-water boost. The ONE place that records WHO STARTED IT.
+
+        That record is what lets `_cancel_our_dhw_boost` tell ours from the household's; reaching
+        the switch directly disowns a boost we started, leaving it to run to NIBE's lux timeout.
+        Starting from a shut-down coordinator is refused; STOPPING is not - it is the cleanup, and
+        runs during shutdown.
+
+        tests/unit/test_a_hot_water_boost_we_started_is_a_hot_water_boost_we_stop.py
+        """
+        if not self.temp_lux_entity:
+            return False
+
+        if on and self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to start a hot-water boost. The entry is "
+                "unloaded; nothing would be left to stop it."
+            )
+            return False
+
+        try:
+            # The generic service, not switch.*: a nibe_heatpump/Modbus user has no lux
+            # switch - their bridge is an input_boolean helper - and homeassistant.turn_on
+            # drives both domains through this same one door (issue #18).
+            await self.hass.services.async_call(
+                "homeassistant",
+                "turn_on" if on else "turn_off",
+                {"entity_id": self.temp_lux_entity},
+                blocking=True,
+            )
+        except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
+            _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
+            return False
+
+        # Ours if we switched it on; not ours once it is off, whoever asked for that.
+        self._lux_boost_is_ours = on
+        return True
+
+    async def _cancel_our_dhw_boost(self) -> None:
+        """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
+
+        Called on unload. A boost the OWNER started is left alone.
+        """
+        # Whatever happens below, the entry is going away - no service window survives it.
+        self._service_boost_until = None
+        if not (self._lux_boost_is_ours and self.temp_lux_entity):
+            return
+
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is None or state.state != STATE_ON:
+            self._lux_boost_is_ours = False
+            return
+
+        _LOGGER.info(
+            "Cancelling the EffektGuard hot-water boost on %s before unload - it would otherwise "
+            "run to NIBE's own timeout with nothing left to stop it",
+            self.temp_lux_entity,
+        )
+        await self._set_temporary_lux(False)
+
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
 
@@ -644,8 +716,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         - Effect tracking state (monthly peaks)
 
         Called during integration unload or reload.
+
+        IDEMPOTENT BY DESIGN. This runs TWICE per unload: the base DataUpdateCoordinator
+        registers `config_entry.async_on_unload(self.async_shutdown)` in its __init__, and
+        async_unload_entry also calls it explicitly. Without the guard below, every unload
+        saved the learning data and the effect peaks twice.
         """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator already shut down - ignoring repeat call")
+            return
+
         _LOGGER.debug("Shutting down EffektGuard coordinator")
+
+        # Base shutdown FIRST: it sets `_shutdown_requested` (which stops an in-flight
+        # _do_aligned_refresh from re-arming its timer, making the reload's coordinator the only
+        # writer) and shuts down the debouncer (a trailing debounced refresh could otherwise fire
+        # after unload and write an offset).
+        await super().async_shutdown()
 
         try:
             # Unsubscribe aligned refresh timer (if active)
@@ -659,6 +746,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._power_sensor_listener()
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
+
+            # Cancel OUR OWN DHW boost on unload. Nothing else does: a reload or restart mid-boost
+            # otherwise leaves the temporary-lux switch ON until NIBE's timeout, running a
+            # high-temperature cycle nobody asked for and nobody is left to stop. Only ours - a
+            # boost the owner started from the pump panel is none of our business.
+            await self._cancel_our_dhw_boost()
 
             # Save learning state
             if self.adaptive_learning or self.thermal_predictor or self.weather_learner:
@@ -679,7 +772,115 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Don't raise - allow shutdown to complete
 
     async def _async_update_data(self) -> dict[str, object]:
+        """Home Assistant's READ hook. Reads the world and decides. It NEVER writes.
+
+        Public and debounced, so anything may refresh it (a reload, an options change, a
+        bookkeeping service). Writes belong to the control loop `_do_aligned_refresh`; services
+        that mean to command the pump call `async_refresh_and_apply`.
+        """
+        return await self._read_and_decide(apply=False)
+
+    async def async_refresh_and_apply(self, *, explicit_command: bool = False) -> None:
+        """Read, decide, and DRIVE THE PUMP. For services that genuinely command it.
+
+        force_offset and boost_heating mean what they say and must land immediately, not at the
+        next aligned tick. Bookkeeping services must NOT use this - they call
+        `async_request_refresh()`, which reads and decides but writes nothing.
+        """
+        self.data = await self._drive_the_pump(explicit_command=explicit_command)
+        self.async_set_updated_data(self.data)
+
+    async def _drive_the_pump(self, *, explicit_command: bool = False) -> dict[str, object]:
+        """The write path. Its sole owner, and the only place `apply=True` is passed.
+
+        The aligned control loop and an explicit-command service both reach the pump, and both
+        await freely; without _control_lock a forced offset and an in-flight aligned decision
+        race, and the older decision can overwrite the newer write (and corrupt _apply_offset's
+        read-then-write rate limiting). Reads are NOT serialised - they touch no hardware.
+
+        tests/unit/coordinator/test_one_writer_at_a_time.py
+        """
+        async with self._control_lock:
+            return await self._read_and_decide(
+                apply=True,
+                explicit_command=explicit_command,
+            )
+
+    def _report_no_price_source(self, reason: str) -> None:
+        """Tell the user, in the UI, that price optimisation is not running.
+
+        A _LOGGER.warning is not telling anyone. The user has `enable_price_optimization` switched
+        on and believes the integration is trading on price; without a price source it simply is
+        not, and nothing on screen says so (audit F-123).
+        """
+        if self._price_issue_active:
+            return
+
+        _LOGGER.warning(
+            "No electricity price data (%s) - price optimization is NOT running", reason
+        )
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            PRICE_SOURCE_ISSUE_ID,
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=PRICE_SOURCE_ISSUE_ID,
+        )
+        self._price_issue_active = True
+
+    def _raise_dhw_control_issue(self) -> None:
+        """Tell the user, in the UI, that hot-water optimisation is not running.
+
+        They have `enable_hot_water_optimization` switched on, the DHW sensors are populated, and
+        one of them is showing the time of a boost that will never happen.
+        """
+        if self._dhw_issue_active:
+            return
+
+        _LOGGER.warning(
+            "No temporary-lux switch found (register 50004) - hot-water optimization is NOT "
+            "running. Home Assistant's NIBE integration exposes this switch for F-series pumps "
+            "only; an S-series pump has no equivalent entity."
+        )
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            DHW_CONTROL_ISSUE_ID,
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=DHW_CONTROL_ISSUE_ID,
+        )
+        self._dhw_issue_active = True
+
+    def _clear_dhw_control_issue(self) -> None:
+        """A lux switch has appeared. Deliberately NOT guarded on the flag - see below."""
+        async_delete_issue(self.hass, DOMAIN, DHW_CONTROL_ISSUE_ID)
+        self._dhw_issue_active = False
+
+    def _clear_price_source_issue(self) -> None:
+        """Prices are flowing again.
+
+        Deliberately NOT guarded on `_price_issue_active`: that flag resets to False on restart
+        while the repair issue, which HA persists in its own registry, stays raised - so guarding
+        the delete would leave the issue up forever after a restart. `async_delete_issue` is a
+        no-op when nothing is raised.
+        """
+        async_delete_issue(self.hass, DOMAIN, PRICE_SOURCE_ISSUE_ID)
+        self._price_issue_active = False
+
+    async def _read_and_decide(
+        self,
+        apply: bool,
+        explicit_command: bool = False,
+    ) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
+
+        Args:
+            apply: Whether to drive the heat pump with the resulting decision. Only the control
+                loop and the services that explicitly command the pump may pass True.
+            explicit_command: A user command that bypasses startup observation and ordinary write
+                cooldown. The decision engine's absolute safety floor still applies.
 
         This method:
         1. Gathers data from all sources (with graceful degradation)
@@ -701,6 +902,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Gather core data (NIBE - required, but allow startup grace period)
         try:
             nibe_data = await self.nibe.get_current_state()
+            self.current_offset = float(nibe_data.current_offset)
             _LOGGER.debug(
                 "NIBE data retrieved: indoor %.1f°C, outdoor %.1f°C, flow %.1f°C, DM %.0f",
                 nibe_data.indoor_temp,
@@ -712,6 +914,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Mark first successful update
             if not self._first_successful_update:
                 self._first_successful_update = True
+                self._startup_grace_attempts = 0
                 _LOGGER.info("EffektGuard fully initialized - NIBE entities available")
 
             # Update compressor health monitoring (Oct 19, 2025)
@@ -728,11 +931,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.compressor_stats = self.compressor_monitor.update(
                     nibe_data.compressor_hz, nibe_data.timestamp, heating_mode
                 )
-                # Log compressor diagnostics at debug level
                 if self.compressor_stats:
+                    # This is a CONTROL INPUT, not a log line. A compressor that has been at
+                    # maximum frequency for a quarter of an hour has nothing left to give, and
+                    # asking it for more heat buys only wear and a deeper DM deficit.
                     risk_level, risk_reason = self.compressor_monitor.assess_risk(
                         self.compressor_stats
                     )
+                    self.compressor_risk = risk_level
                     _LOGGER.debug(
                         "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f, mode: %s) - %s: %s",
                         self.compressor_stats.current_hz,
@@ -749,10 +955,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
+                self._startup_grace_attempts += 1
+
+                if self._startup_grace_attempts > STARTUP_MAX_GRACE_ATTEMPTS:
+                    # The grace period is over. A heat pump that has not appeared by now is not
+                    # slow, it is missing - a wrong entity, or none configured at all - and saying
+                    # "still starting up" forever leaves the entry green while nothing is read and
+                    # nothing is controlled.
+                    _LOGGER.error(
+                        "NIBE entities never became available after %d attempts (~%d minutes). "
+                        "Check that the configured entities exist and their integration is "
+                        "loaded. Last error: %s",
+                        self._startup_grace_attempts - 1,
+                        (self._startup_grace_attempts - 1) * UPDATE_INTERVAL_MINUTES,
+                        err,
+                    )
+                    raise UpdateFailed(
+                        f"NIBE entities unavailable after "
+                        f"{self._startup_grace_attempts - 1} attempts: {err}"
+                    ) from err
+
                 _LOGGER.info(
                     "Waiting for NIBE entities to become available: %s "
-                    "(this is normal during HA startup, will retry in %d minutes)",
+                    "(this is normal during HA startup, attempt %d of %d, "
+                    "will retry in %d minutes)",
                     err,
+                    self._startup_grace_attempts,
+                    STARTUP_MAX_GRACE_ATTEMPTS,
                     UPDATE_INTERVAL_MINUTES,
                 )
                 # Important: even though we return early, we must keep clock-aligned scheduling
@@ -800,12 +1029,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_price,
                     unit,
                 )
+                self._clear_price_source_issue()
             else:
-                _LOGGER.debug("Spot price data empty, using fallback prices")
-                price_data = get_fallback_prices()
+                self._report_no_price_source("the price entity returned no quarters")
+                price_data = None
         except (AttributeError, KeyError, ValueError, TypeError) as err:
-            _LOGGER.warning("Price data unavailable, using fallback: %s", err)
-            price_data = get_fallback_prices()
+            # Do NOT fabricate. A flat fallback (the old one returned 96 quarters priced 1.0)
+            # classifies NORMAL and casts a real price vote, dragging the aggregate offset down on
+            # a number nobody measured - +1.00 °C became +0.27 °C (F-123, same class as
+            # F-013/F-014). None is honest: the price layer abstains and the thermal, comfort and
+            # safety layers decide on their own.
+            self._report_no_price_source(str(err))
+            price_data = None
 
         # Weather forecast
         try:
@@ -818,7 +1053,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             else:
                 _LOGGER.debug("Weather forecast not available (optional feature disabled)")
-        except (AttributeError, KeyError, ValueError, TypeError) as err:
+        except (HomeAssistantError, AttributeError, KeyError, ValueError, TypeError) as err:
+            # Weather is OPTIONAL - never let it take the whole update down.
+            # HomeAssistantError was missing here: weather.get_forecasts raises it for any
+            # entity without an hourly forecast, and it is not a subclass of the others.
             _LOGGER.info("Weather forecast unavailable: %s", err)
             weather_data = None
 
@@ -826,7 +1064,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         is_grace_period = False
 
         # Check if optimization is enabled (master switch)
-        if not self.entry.data.get("enable_optimization", True):
+        optimization_enabled = self.entry.data.get("enable_optimization", True)
+        if not optimization_enabled:
             _LOGGER.info("Optimization disabled by user - maintaining neutral offset")
             decision = OptimizationDecision(
                 offset=0.0,
@@ -835,19 +1074,27 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
         else:
             try:
-                # Validate peak tracking data
-                if self.peak_today is None or self.peak_today < 0:
-                    _LOGGER.error(
-                        "Peak tracking error: peak_today is %s "
-                        "(should have actual power measurement). "
-                        "This indicates power sensor is not "
-                        "configured or unavailable. Peak protection "
-                        "will be disabled until sensors are available.",
-                        self.peak_today,
+                # The effect layer needs INSTANTANEOUS power to judge how close the current
+                # quarter is to the monthly peak. Passing peak_today here (a daily maximum
+                # that only ratchets upward until midnight) made a single morning spike pin
+                # the effect layer to CRITICAL - weight 1.0, offset -3.0 - for the rest of
+                # the day, even with the compressor idle.
+                if self.current_power_kw is None or self.current_power_kw < 0:
+                    _LOGGER.warning(
+                        "No valid power measurement (%s) - disabling peak protection this "
+                        "cycle rather than acting on a guess. Configure a power sensor or "
+                        "NIBE phase currents for effect-tariff protection.",
+                        self.current_power_kw,
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
                 else:
-                    current_power_for_decision = self.peak_today
+                    # LIKE FOR LIKE: the monthly record is an HOURLY MEAN, so the layer is
+                    # compared against the hour this cycle projects to, not the instant. A
+                    # five-minute oven spike early in the hour projects to almost nothing;
+                    # the same spike at :55 has already committed most of the hour.
+                    current_power_for_decision = self._billing_period.projected_hour_mean(
+                        dt_util.now(), self.current_power_kw
+                    )
 
                 # Check if DHW is active (EITHER is_hot_water sensor OR temp_lux switch)
                 # When NIBE heats DHW, flow temp reads charging temp (45-60°C), not space heating
@@ -889,12 +1136,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power_for_decision,  # Current whole-house power consumption
                     dhw_is_active,  # DHW heating active - skip weather comp
                     self.dhw_heating_end,  # When DHW last stopped - for cooldown
+                    self.compressor_risk,  # Do not ask a saturated compressor for more heat
                 )
 
                 # Startup grace period: lockout + observation cycles
                 now = dt_util.now()
 
-                if now < self._startup_grace_timeout:
+                if explicit_command and decision.is_manual_override:
+                    _LOGGER.info("Explicit user command bypasses startup observation")
+                elif now < self._startup_grace_timeout:
                     # Phase 1: Time-based lockout
                     secs_left = int((self._startup_grace_timeout - now).total_seconds())
                     is_grace_period = True
@@ -965,6 +1215,22 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.offset,
             )
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
+        elif decision.is_emergency:
+            # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
+            # The volatile blocker damps price-driven flip-flopping; it must never defer a safety
+            # recovery. Blocking here would hold the previous (often negative) offset for up to
+            # 45 minutes while DM keeps falling and the immersion heater runs.
+            _LOGGER.warning(
+                "Emergency decision: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
+                (
+                    self._offset_volatility_tracker.last_offset
+                    if self._offset_volatility_tracker.last_offset is not None
+                    else 0.0
+                ),
+                decision.offset,
+                decision.reasoning,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.anti_windup_active:
             # Anti-windup is a safety mechanism — always apply immediately
             # Record the change so volatile tracker knows the new baseline
@@ -995,8 +1261,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Record the new offset for volatility tracking
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
 
-        # Update current state
-        self.current_offset = decision.offset
         self.last_decision_time = dt_util.utcnow()
 
         # Apply offset to the NIBE heating curve offset number entity
@@ -1006,66 +1270,48 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Accumulation logic: We track fractional offsets but only write to NIBE when
         # the integer part changes. This prevents oscillation when calculated offsets
         # hover around boundaries (e.g., 0.48 ↔ 0.52 both stay at 0°C in NIBE).
-        if is_grace_period:
+        if not apply:
+            # A read, not a control cycle. Decide, publish, write nothing.
+            _LOGGER.debug("Read-only refresh: decided %.2f°C, not applying", decision.offset)
+        elif is_grace_period:
             _LOGGER.info("Skipping offset application during startup grace period")
-        elif self.last_applied_offset is not None and int(decision.offset) == int(
-            self.last_applied_offset
-        ):
-            _LOGGER.debug(
-                "Offset %.2f°C → int(%d°C) matches last "
-                "applied int(%d°C), skipping adapter call",
-                decision.offset,
-                int(decision.offset),
-                int(self.last_applied_offset),
-            )
         else:
             try:
-                was_applied = await self.nibe.set_curve_offset(decision.offset)
-                if was_applied:
-                    _LOGGER.info("Applied offset %.2f°C to NIBE", decision.offset)
-                    # Track what NIBE actually has (integer) - synced from entity on restart
-                    self.last_applied_offset = float(int(decision.offset))
+                # Through the one guarded door: a coordinator whose entry has unloaded mid-refresh
+                # must not get the last word on the pump. See _write_curve_offset.
+                applied_offset = await self._write_curve_offset(
+                    decision.offset,
+                    force_write=explicit_command,
+                )
+                if applied_offset is not None:
+                    _LOGGER.info(
+                        "Applied offset %.2f°C as %d°C on NIBE",
+                        decision.offset,
+                        applied_offset,
+                    )
+                    self.last_applied_offset = float(applied_offset)
+                    self.current_offset = float(applied_offset)
+                    nibe_data.current_offset = float(applied_offset)
                     self.last_offset_timestamp = dt_util.utcnow()
                     self._learned_data_changed = True  # Trigger save on shutdown
+                    if decision.is_manual_override:
+                        self.engine.consume_manual_override()
                 else:
                     _LOGGER.debug(
                         "Offset %.2f°C unchanged (NIBE offset not changed)",
                         decision.offset,
                     )
+                    if explicit_command:
+                        raise HomeAssistantError(
+                            "The explicit heating offset did not reach the NIBE register"
+                        )
             except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
                 _LOGGER.error("Failed to apply offset to NIBE: %s", err)
-                # Continue anyway - next cycle will retry
+                if explicit_command:
+                    raise
+                # Automatic control retries on the next aligned cycle.
 
-        # Calculate actual spot savings for this cycle using real NIBE power
-        now_time = dt_util.now()
-        current_quarter = price_data.get_period_index(now_time) if price_data else None
-        if (
-            price_data
-            and hasattr(price_data, "today")
-            and price_data.today
-            and nibe_data
-            and nibe_data.power_kw is not None
-        ):
-            prices_today = [q.price for q in price_data.today]
-            if prices_today and current_quarter is not None:
-                average_price = sum(prices_today) / len(prices_today)
-                current_price = price_data.today[current_quarter].price
-
-                # Calculate savings using ACTUAL power consumption
-                self.savings_calculator.price_unit = getattr(self.gespot, "price_unit", None)
-                cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
-                    actual_power_kw=nibe_data.power_kw,
-                    current_price=current_price,
-                    average_price_today=average_price,
-                    cycle_minutes=UPDATE_INTERVAL_MINUTES,
-                )
-                if self.savings_calculator.is_sek_price_unit:
-                    self._daily_spot_savings += cycle_savings
-                else:
-                    _LOGGER.debug(
-                        "Skipping non-SEK spot-savings aggregation for price unit %s",
-                        self.savings_calculator.price_unit,
-                    )
+        self._accumulate_spot_savings(nibe_data, price_data)
 
         # Check for day change and save yesterday's peak
         now = dt_util.now()
@@ -1089,18 +1335,34 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
             self._daily_spot_savings = 0.0  # Reset for new day
 
+            # A new day may also be a new MONTH. The effect tariff bills a monthly peak, so
+            # last month's peaks must not carry over into this one - an instance that stays up
+            # across a month boundary would otherwise bill against a stale threshold.
+            month_changed = (now.year, now.month) != (
+                self._last_update_date.year,
+                self._last_update_date.month,
+            )
+            if month_changed:
+                self.effect.prune_peaks_for_current_month()
+                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
+                _LOGGER.info(
+                    "Month change detected: pruned previous month's peaks, "
+                    "monthly peak reset to %.2f kW",
+                    self.peak_this_month,
+                )
+
             # Reset daily peak for new day
             self.peak_today = 0.0
             self.peak_today_time = None
             self.peak_today_source = "unknown"
-            self.peak_today_quarter = None
+            self.peak_today_period = None
             self._last_update_date = now.date()
 
         # Update peak tracking
         await self._update_peak_tracking(nibe_data)
 
         # Record observations for learning (Phase 6)
-        await self._record_learning_observations(nibe_data, weather_data, decision.offset)
+        await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
 
         # Save state periodically
         await self.effect.async_save()
@@ -1250,11 +1512,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Apply DHW control based on optimizer decision (if hot water optimization enabled)
             if (
-                self.entry.data.get("enable_hot_water_optimization", False)
+                optimization_enabled
+                and self.entry.data.get("enable_hot_water_optimization", False)
                 and dhw_result is not None
                 and dhw_result.decision is not None
             ):
-                if is_grace_period:
+                if not apply:
+                    _LOGGER.debug("Read-only refresh: not applying DHW control")
+                elif is_grace_period:
                     _LOGGER.info("Skipping DHW control during startup grace period")
                 else:
                     await self._apply_dhw_control(
@@ -1317,7 +1582,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Apply control only if airflow optimization is enabled (like DHW)
                 airflow_enabled = self.entry.data.get(CONF_ENABLE_AIRFLOW_OPTIMIZATION, False)
                 if airflow_enabled:
-                    if is_grace_period:
+                    if not optimization_enabled:
+                        _LOGGER.debug("Optimization disabled - not applying airflow control")
+                    elif not apply:
+                        _LOGGER.debug("Read-only refresh: not applying airflow control")
+                    elif is_grace_period:
                         _LOGGER.info("Skipping airflow control during startup grace period")
                     else:
                         await self._apply_airflow_decision(airflow_decision)
@@ -1341,7 +1610,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "thermal_trend": temperature_trend_data,  # Temperature trend from predictor
             "outdoor_trend": outdoor_trend_data,  # Outdoor temperature trend
             "decision": decision,
-            "offset": decision.offset,
+            "offset": self.current_offset,
             "peak_today": self.peak_today,
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
@@ -1415,9 +1684,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if self.engine.climate_detector:
             climate_zone_name = self.engine.climate_detector.zone_info.name
         else:
-            # Show HA notification for missing climate detector
-            # HA dynamic component access (not in type stubs)
-            self.hass.components.persistent_notification.async_create(  # type: ignore[attr-defined]
+            # `hass.components` was removed from Home Assistant; the type: ignore that used to sit
+            # here claimed a stubs gap and was hiding a real AttributeError (audit F-068).
+            async_create(
+                self.hass,
                 "EffektGuard could not detect your climate zone. "
                 "Using balanced thermal debt thresholds. "
                 "Configure latitude in integration settings for optimal climate-aware operation.",
@@ -1578,53 +1848,88 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Ventilation control unavailable - no ventilation switch found")
             return
 
-        # Determine target state based on decision
+        now = dt_util.utcnow()
+
+        # Bound the fan in BOTH directions or it cycles forever: a decision oscillating around its
+        # threshold (what a marginal COP gain does) otherwise flips it every tick, and on an
+        # exhaust-air F750 each flip perturbs the source air the compressor draws from. The
+        # optimizer's own `duration_minutes` (15-60 min by deficit) is the minimum run time, and a
+        # minimum rest at normal speed bounds the other direction.
         if decision.should_enhance:
-            # Only turn on if not already enhanced
-            if not is_enhanced:
-                success = await self.nibe.set_enhanced_ventilation(True)
-                if success:
-                    # Track when we started enhanced mode
-                    self._airflow_enhance_start = dt_util.utcnow()
-                    _LOGGER.info(
-                        "🌀 Ventilation ENHANCED: ON for %d min (+%.2f kW gain) - %s",
-                        decision.duration_minutes,
-                        decision.expected_gain_kw,
-                        decision.reason,
-                    )
-            else:
-                _LOGGER.debug(
-                    "Ventilation already enhanced - %s",
-                    decision.reason,
-                )
-        else:
-            # Only reduce if currently enhanced and minimum duration passed
             if is_enhanced:
-                # Check minimum enhanced duration to prevent rapid cycling
-                if hasattr(self, "_airflow_enhance_start") and self._airflow_enhance_start:
-                    elapsed_minutes = (
-                        dt_util.utcnow() - self._airflow_enhance_start
-                    ).total_seconds() / 60
+                _LOGGER.debug("Ventilation already enhanced - %s", decision.reason)
+                return
 
-                    if elapsed_minutes < NIBE_VENTILATION_MIN_ENHANCED_DURATION:
-                        _LOGGER.debug(
-                            "Ventilation: keeping enhanced for %d more min (min duration)",
-                            int(NIBE_VENTILATION_MIN_ENHANCED_DURATION - elapsed_minutes),
-                        )
-                        return
-
-                success = await self.nibe.set_enhanced_ventilation(False)
-                if success:
-                    self._airflow_enhance_start = None
-                    _LOGGER.info(
-                        "🌀 Ventilation NORMAL: OFF - %s",
-                        decision.reason,
+            resting_since = self._airflow_normal_since
+            if resting_since is not None:
+                rested = (now - resting_since).total_seconds() / 60
+                if rested < NIBE_VENTILATION_MIN_REST_DURATION:
+                    _LOGGER.debug(
+                        "Ventilation: at normal for only %d of %d min - not re-enhancing yet",
+                        int(rested),
+                        NIBE_VENTILATION_MIN_REST_DURATION,
                     )
-            else:
-                _LOGGER.debug(
-                    "Ventilation at normal - %s",
+                    return
+
+            if await self._write_enhanced_ventilation(True):
+                self._airflow_enhance_start = now
+                self._airflow_normal_since = None
+                # The optimizer's own recommendation, floored so a decision that carries no
+                # duration still cannot produce a five-minute burst.
+                self._airflow_enhance_minutes = max(
+                    decision.duration_minutes, NIBE_VENTILATION_MIN_ENHANCED_DURATION
+                )
+                _LOGGER.info(
+                    "🌀 Ventilation ENHANCED: ON for at least %d min (+%.2f kW gain) - %s",
+                    self._airflow_enhance_minutes,
+                    decision.expected_gain_kw,
                     decision.reason,
                 )
+            return
+
+        if not is_enhanced:
+            _LOGGER.debug("Ventilation at normal - %s", decision.reason)
+            return
+
+        if self._airflow_enhance_start is not None:
+            elapsed = (now - self._airflow_enhance_start).total_seconds() / 60
+            if elapsed < self._airflow_enhance_minutes:
+                _LOGGER.debug(
+                    "Ventilation: keeping enhanced for %d more min (the optimizer asked for %d)",
+                    int(self._airflow_enhance_minutes - elapsed),
+                    self._airflow_enhance_minutes,
+                )
+                return
+
+        if await self._write_enhanced_ventilation(False):
+            self._airflow_enhance_start = None
+            self._airflow_normal_since = now
+            _LOGGER.info("🌀 Ventilation NORMAL: OFF - %s", decision.reason)
+
+    def _is_dhw_start_rate_limited(self, now_time: datetime) -> bool:
+        """True if a DHW boost was started or stopped too recently to start another.
+
+        Guards STARTS only. A stop must never be deferred - see _apply_dhw_control.
+
+        Args:
+            now_time: Current datetime
+
+        Returns:
+            True when a new DHW boost must not be started yet
+        """
+        if self._last_dhw_control_time is None:
+            return False
+
+        minutes_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
+        if minutes_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
+            _LOGGER.debug(
+                "DHW start rate limited: %.1f min since last change (min %d min)",
+                minutes_since_last,
+                DHW_CONTROL_MIN_INTERVAL_MINUTES,
+            )
+            return True
+
+        return False
 
     async def _apply_dhw_control(
         self, decision, current_dhw_temp: float, now_time: datetime
@@ -1641,11 +1946,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         # Check temporary lux entity
         if not self.temp_lux_entity:
-            _LOGGER.debug(
-                "DHW control disabled: No temporary lux entity "
-                "configured (switch.temporary_lux_50004)"
-            )
+            # A _LOGGER.debug is not telling anyone, and this is a whole feature silently doing
+            # nothing. Home Assistant's NIBE integration maps the temporary-lux register (50004)
+            # for the F-series only, so an S-series pump exposes no such entity - while the UI goes
+            # on showing a hot-water status, a recommendation and a SCHEDULED START TIME that can
+            # never fire. Exactly the case the price-source repair issue was created for.
+            self._raise_dhw_control_issue()
             return
+
+        self._clear_dhw_control_issue()
 
         # Get current state of temporary lux switch
         temp_lux_state = self.hass.states.get(self.temp_lux_entity)
@@ -1654,6 +1963,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return
 
         is_lux_on = temp_lux_state.state == "on"
+
+        # A user-commanded boost (boost_dhw) opens a window ordinary optimization must not
+        # close. Expiry closes it here, through the owned door; the safety abort below closes
+        # it too - only safety outranks the user.
+        if self._service_boost_until is not None:
+            if not is_lux_on:
+                # NIBE's own lux timeout, or the household, ended it first.
+                self._service_boost_until = None
+            elif now_time >= self._service_boost_until:
+                _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+                if await self._set_temporary_lux(False):
+                    self._last_dhw_control_time = now_time
+                self._service_boost_until = None
+                return
 
         # Use pre-calculated decision from _calculate_dhw_recommendation()
         # This avoids duplicate optimizer calls and log spam
@@ -1690,31 +2013,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW heating aborted early: %s. Stopping DHW to prioritize space heating.",
                     abort_reason,
                 )
-                try:
-                    await self.hass.services.async_call(
-                        "switch",
-                        "turn_off",
-                        {"entity_id": self.temp_lux_entity},
-                        blocking=True,
-                    )
+                # Stop through the owned door so `_lux_boost_is_ours` is cleared. Safety also
+                # outranks a user boost - the window closes with the switch.
+                self._service_boost_until = None
+                if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
-                except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                    _LOGGER.error("Failed to abort DHW heating: %s", err)
                 return  # Exit early - abort handled
 
-        # Rate limiting: Don't change lux state too frequently (minimum 1 hour)
-        if self._last_dhw_control_time is not None:
-            time_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
-            if time_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
-                _LOGGER.debug(
-                    "DHW control rate limited: %.1f min since last change (min %d min)",
-                    time_since_last,
-                    DHW_CONTROL_MIN_INTERVAL_MINUTES,
-                )
+        # Apply control decision.
+        #
+        # RATE LIMITING APPLIES TO STARTS ONLY - never to stops. Rate-limiting a stop would strand
+        # an in-progress DHW cycle (the limiter's clock is started by the turn-ON, so the interval
+        # runs from the start of the very cycle being stopped), holding the compressor away from
+        # space heating while thermal debt deepened. Stopping the boost cannot harm the pump, and
+        # oscillation stays bounded because the next START is still rate limited.
+        if decision.should_heat and not is_lux_on:
+            if self._is_dhw_start_rate_limited(now_time):
                 return
 
-        # Apply control decision
-        if decision.should_heat and not is_lux_on:
             # Turn ON temporary lux to boost DHW
             _LOGGER.info(
                 "DHW control: Activating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
@@ -1722,18 +2038,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_dhw_temp,
                 thermal_debt,
             )
-            try:
-                await self.hass.services.async_call(
-                    "switch",
-                    "turn_on",
-                    {"entity_id": self.temp_lux_entity},
-                    blocking=True,
-                )
+            # Through the one door, which is what records that this boost is ours - and therefore
+            # what lets the unload cleanup find it again. See _set_temporary_lux.
+            if await self._set_temporary_lux(True):
                 self._last_dhw_control_time = now_time
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to turn on temporary lux: %s", err)
 
         elif not decision.should_heat and is_lux_on:
+            if self._service_boost_until is not None:
+                _LOGGER.debug(
+                    "User DHW boost active until %s - price optimization does not cancel it",
+                    self._service_boost_until,
+                )
+                return
             # Turn OFF temporary lux to block/stop DHW
             _LOGGER.info(
                 "DHW control: Deactivating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
@@ -1741,16 +2057,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_dhw_temp,
                 thermal_debt,
             )
-            try:
-                await self.hass.services.async_call(
-                    "switch",
-                    "turn_off",
-                    {"entity_id": self.temp_lux_entity},
-                    blocking=True,
-                )
+            if await self._set_temporary_lux(False):
                 self._last_dhw_control_time = now_time
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to turn off temporary lux: %s", err)
         else:
             # No change needed
             _LOGGER.debug(
@@ -1758,6 +2066,47 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.should_heat,
                 is_lux_on,
                 decision.priority_reason,
+            )
+
+    def _accumulate_spot_savings(self, nibe_data, price_data) -> None:
+        """Add this cycle's spot-price savings to the running daily total.
+
+        Savings are reported to the owner as money, so they may only be computed from power that was
+        MEASURED. Without a power sensor, `power_kw` holds a curve fit floored at 1.0 kW even with
+        the compressor off, and it arrives in the same field as a real reading - so an estimate here
+        turns into kronor indistinguishable from earned ones. Same rule as the peak: never bill a guess.
+        """
+        if (
+            not price_data
+            or not getattr(price_data, "today", None)
+            or not nibe_data
+            or nibe_data.power_kw is None
+            or nibe_data.power_is_estimated
+        ):
+            return
+
+        current_quarter = price_data.get_period_index(dt_util.now())
+        if current_quarter is None:
+            return
+
+        prices_today = [quarter.price for quarter in price_data.today]
+        average_price = sum(prices_today) / len(prices_today)
+        current_price = price_data.today[current_quarter].price
+
+        self.savings_calculator.price_unit = getattr(self.gespot, "price_unit", None)
+        cycle_savings = self.savings_calculator.calculate_spot_savings_per_cycle(
+            actual_power_kw=nibe_data.power_kw,
+            current_price=current_price,
+            average_price_today=average_price,
+            cycle_minutes=UPDATE_INTERVAL_MINUTES,
+        )
+
+        if self.savings_calculator.is_sek_price_unit:
+            self._daily_spot_savings += cycle_savings
+        else:
+            _LOGGER.debug(
+                "Skipping non-SEK spot-savings aggregation for price unit %s",
+                self.savings_calculator.price_unit,
             )
 
     async def _update_peak_tracking(self, nibe_data) -> None:
@@ -1776,6 +2125,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.nibe.power_sensor_entity
             )
 
+            # Where this cycle's power reading came from. The billing guard at the end asks THIS,
+            # and nothing else: keying on whether a power entity is configured says nothing about
+            # whether it answered, and let a dropped-out meter's estimate be billed as a meter peak.
+            power_source = POWER_SOURCE_NONE
+
             # PRIORITY 1: External power meter (whole house including NIBE)
             # This is MOST IMPORTANT for peak billing - measures total house consumption
             # Used for: Monthly peak tracking (effect tariff billing)
@@ -1784,39 +2138,23 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 power_entity_id = self.nibe.power_sensor_entity
                 power_state = self.hass.states.get(power_entity_id)
 
-                # Only attempt to use external sensor if it's available
-                # Availability is tracked via event listener for fast startup detection
-                if power_state and power_state.state not in ["unknown", "unavailable"]:
-                    try:
-                        # Convert to kW only when the meter reports watts -
-                        # a kW meter must not be divided a second time
-                        # (a 6.0 kW whole-house meter would become 0.006 kW,
-                        # invalidating peak protection and peak records)
-                        power_unit = str(
-                            power_state.attributes.get("unit_of_measurement", "W")
-                        ).lower()
-                        current_power = float(power_state.state)
-                        if power_unit == "w":
-                            current_power = current_power / WATTS_PER_KILOWATT
-                        _LOGGER.debug(
-                            "📊 External power meter (whole house): %.3f kW from %s",
-                            current_power,
-                            power_entity_id,
-                        )
-                        # Mark sensor as available (in case event listener hasn't fired yet)
-                        if not self._power_sensor_available:
-                            self._power_sensor_available = True
-                            _LOGGER.debug("External power sensor marked as available")
-                    except (ValueError, TypeError) as e:
-                        _LOGGER.warning(
-                            "Failed to read power sensor %s (state: %s): %s",
-                            power_entity_id,
-                            power_state.state,
-                            e,
-                        )
+                # Unit handling lives in one place, shared with the NIBE adapter, which reads the
+                # same entity: an unrecognised or absent unit is refused rather than guessed.
+                current_power = power_kw_from_state(power_state)
+
+                if current_power is not None:
+                    power_source = POWER_SOURCE_EXTERNAL_METER
+                    _LOGGER.debug(
+                        "📊 External power meter (whole house): %.3f kW from %s",
+                        current_power,
+                        power_entity_id,
+                    )
+                    # Mark sensor as available (in case event listener hasn't fired yet)
+                    if not self._power_sensor_available:
+                        self._power_sensor_available = True
+                        _LOGGER.debug("External power sensor marked as available")
                 elif not self._power_sensor_available:
-                    # Sensor still not available - skip peak tracking this cycle
-                    # Event listener will trigger refresh when sensor becomes available
+                    # Never seen alive - wait for the listener rather than tracking peaks on nothing
                     _LOGGER.debug(
                         "External power sensor %s not yet available (state: %s) - "
                         "skipping peak tracking (listener active: %s)",
@@ -1825,6 +2163,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         self._power_sensor_listener is not None,
                     )
                     return  # Exit early, event listener will trigger refresh when ready
+                else:
+                    # It has answered before and is not answering now. Everything below still runs -
+                    # the decision layers need SOME power figure - but the source stays unbillable,
+                    # so nothing invented here reaches the tariff record, and a silence longer than
+                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole hour rather than billing
+                    # a stale reading stretched across it.
+                    _LOGGER.warning(
+                        "External power meter %s did not yield a reading (state: %s). This cycle is "
+                        "not billable, and if the silence exceeds %d minutes the whole hour is "
+                        "refused rather than billed on a stale reading.",
+                        power_entity_id,
+                        power_state.state if power_state else "None",
+                        MAX_BILLING_OBSERVATION_GAP_MINUTES,
+                    )
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
@@ -1837,6 +2189,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     nibe_data.phase3_current,
                 )
                 if current_power is not None:
+                    power_source = POWER_SOURCE_NIBE_CURRENTS
                     _LOGGER.debug(
                         "⚡ NIBE power from phase currents: %.3f kW "
                         "(L1=%.1fA, L2=%.1fA, L3=%.1fA)",
@@ -1853,6 +2206,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_power = self.effect.estimate_power_from_compressor(
                     nibe_data.compressor_hz, nibe_data.outdoor_temp
                 )
+                power_source = POWER_SOURCE_ESTIMATE
                 _LOGGER.debug(
                     "⚙️  Power estimated from compressor: %.2f kW (%d Hz, %.1f°C outdoor) "
                     "[ESTIMATE ONLY - not used for peak billing]",
@@ -1868,169 +2222,163 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 is_heating = getattr(nibe_data, "is_heating", False)
                 outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
+                power_source = POWER_SOURCE_ESTIMATE
                 _LOGGER.warning(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
                     current_power,
                 )
 
-            # SMART FALLBACK for grid import meters with solar/battery
-            # If meter shows unexpectedly low reading but compressor running significantly,
-            # the meter likely shows NET import (actual consumption minus solar export)
-            # In this case, use calculated/estimated heat pump power for peak tracking
-            if has_external_power_sensor and current_power < 0.5:
-                # Check if heat pump is actually working hard
-                compressor_hz = getattr(nibe_data, "compressor_hz", 0) or 0
-                is_heating = getattr(nibe_data, "is_heating", False)
+            # Do NOT override a low meter reading with a compressor-draw estimate on the assumption
+            # that solar is masking grid import. The grid bills grid IMPORT, which is exactly what
+            # the meter saw: if solar covers 4.7 kW of a 5.0 kW compressor, 0.3 kW was imported and
+            # 0.3 kW is charged. Substituting ~5.5 kW inflated the month's peak tenfold, and the
+            # effect tariff bills the top three quarters, so it would stand for weeks.
 
-                if is_heating and compressor_hz > 20:
-                    # Compressor running significantly but meter shows low reading
-                    # This indicates solar/battery offsetting grid import
-                    estimated_power = self.effect.estimate_power_from_compressor(
-                        compressor_hz, getattr(nibe_data, "outdoor_temp", 0.0)
-                    )
+            # Publish the instantaneous reading for the effect layer (see the decision site for why
+            # it must be current power and never peak_today). This runs after the decision, so the
+            # engine reads the previous cycle's value - at most UPDATE_INTERVAL_MINUTES old.
+            self.current_power_kw = current_power
 
-                    if estimated_power > 1.0:  # Estimated power seems reasonable
-                        _LOGGER.info(
-                            "Smart fallback: Using estimated power %.2f kW "
-                            "(meter shows %.2f kW - likely solar/"
-                            "battery offset, compressor: %d Hz)",
-                            estimated_power,
-                            current_power,
-                            compressor_hz,
-                        )
-                        current_power = estimated_power
-
-            # Determine measurement source for metadata
-            measurement_source = "unknown"
-            if has_external_power_sensor and current_power is not None:
-                # Check if this was from external meter or smart fallback
-                if has_external_power_sensor and current_power >= 0.5:
-                    measurement_source = "external_meter"
-                elif nibe_data.phase1_current is not None:
-                    measurement_source = "nibe_currents"
-                else:
-                    measurement_source = "estimate"
-            elif nibe_data.phase1_current is not None:
-                measurement_source = "nibe_currents"
-            else:
-                measurement_source = "estimate"
+            # The source is recorded where the value was produced, never reconstructed here from the
+            # config entry and the number's magnitude - which once filed a compressor estimate as
+            # "external_meter", making an invented peak look measured.
+            measurement_source = power_source
 
             # Get current timestamp for peak tracking
             now = dt_util.now()
-            quarter_of_day = get_current_quarter(now)
-            quarter_start = now.replace(
-                minute=now.minute - now.minute % QUARTER_INTERVAL_MINUTES,
-                second=0,
-                microsecond=0,
-            )
+            billing_period = get_current_billing_period(now)
 
             # Update daily peak (always track for display, even if estimated)
             if current_power > self.peak_today:
                 self.peak_today = current_power
                 self.peak_today_time = now
                 self.peak_today_source = measurement_source
-                self.peak_today_quarter = quarter_of_day
+                # The billing PERIOD this peak fell in - an hour. The sensor weights it through
+                # effective_tariff_power_kw, which now takes an hour, so it must be given one.
+                self.peak_today_period = billing_period
 
                 _LOGGER.info(
-                    "New daily peak: %.2f kW at %s (quarter %d, source: %s)",
+                    "New daily peak: %.2f kW at %s (billing hour %d, source: %s)",
                     current_power,
                     now.strftime("%H:%M:%S"),
-                    quarter_of_day,
+                    billing_period,
                     measurement_source,
                 )
 
-            # CRITICAL: Only record monthly peaks with REAL measurements
-            # Monthly peak billing requires accurate whole-house power measurement
-            # We MUST have either:
-            #   1. External whole-house power meter (best for billing) OR
-            #   2. NIBE phase currents (accurate NIBE-only, but missing other house loads)
-            # Estimates are NEVER used for monthly peak tracking - billing must be accurate
-            has_real_measurement = has_external_power_sensor or nibe_data.phase1_current is not None
-            if not has_real_measurement:
+            # Only record monthly peaks from REAL measurements: billing must be accurate. This asks
+            # where THIS cycle's number came from, not whether a power entity is configured - a
+            # meter that has gone unavailable still satisfies the latter, so the estimate that
+            # replaced it would be billed in the very cycle the log says it must not.
+            if power_source not in PEAK_CONTROL_POWER_SOURCES:
                 _LOGGER.debug(
-                    "Skipping monthly peak recording: No real power measurement available. "
-                    "Current reading %.2f kW is estimated (not suitable for billing). "
-                    "Configure external power meter for accurate peak tracking.",
+                    "Skipping monthly peak recording: %.2f kW came from %s, which is not a "
+                    "measurement. Peak protection must not be driven by a guess.",
                     current_power,
+                    power_source,
                 )
                 return
 
-            # Swedish effect tariffs bill the 15-minute MEAN power. Recording
-            # each instantaneous sample would register a short spike (e.g. a
-            # 9 kW start among 1 kW readings) as a full quarter peak. Instead,
-            # accumulate this quarter's samples and record the mean when the
-            # quarter completes.
-            peak_event = None
-            if quarter_start != self._quarter_power_start:
-                if (
-                    self._quarter_power_start is not None
-                    and self._quarter_power_samples
-                    and not self._quarter_power_partial
-                ):
-                    completed_start, previous_power = self._quarter_power_samples[0]
-                    quarter_end = completed_start + timedelta(minutes=QUARTER_INTERVAL_MINUTES)
-                    weighted_power = 0.0
-                    previous_time = completed_start
-                    for sample_time, sample_power in self._quarter_power_samples[1:]:
-                        weighted_power += (
-                            previous_power * (sample_time - previous_time).total_seconds()
-                        )
-                        previous_time = sample_time
-                        previous_power = sample_power
-                    weighted_power += previous_power * (quarter_end - previous_time).total_seconds()
-                    quarter_mean = weighted_power / (quarter_end - completed_start).total_seconds()
-                    # Stamp the event with the quarter it measures, not the
-                    # boundary-crossing time: at a month boundary "now" would
-                    # attribute the old month's last quarter to the new month
-                    peak_event = await self.effect.record_quarter_measurement(
-                        power_kw=quarter_mean,
-                        quarter=self._quarter_power_number,
-                        timestamp=completed_start,
-                    )
-                elif self._quarter_power_start is not None:
-                    _LOGGER.debug(
-                        "Discarding partial effect-tariff quarter %d (observation "
-                        "began mid-quarter)",
-                        self._quarter_power_number,
-                    )
+            # The billed quantity - the time-weighted mean over a billing hour - is defined once, in
+            # billing_period.py, so the coordinator and the simulator cannot diverge. Two copies
+            # once did, both wrong on the DST fall-back, and merged the repeated hour into one,
+            # deleting a 9 kW billing peak.
+            completed = self._billing_period.add(now, current_power, power_source)
 
-                # Only the first quarter after startup can be partial: it began
-                # before observation started (unless the first sample landed in
-                # the quarter's first minute). Later quarters anchor their first
-                # sample at the quarter boundary - the reading backfills at most
-                # one update cycle, mirroring the forward extrapolation to the
-                # boundary at the end of the quarter.
-                self._quarter_power_partial = self._quarter_power_start is None and bool(
-                    now.minute % QUARTER_INTERVAL_MINUTES
+            peak_event = None
+            if completed is not None:
+                peak_event = await self.effect.record_period_measurement(
+                    power_kw=completed.mean_power_kw,
+                    period=completed.billing_hour,
+                    timestamp=completed.started_at,
+                    # The hour's OWN provenance - every sample votes, not the closing cycle.
+                    source=completed.source,
                 )
-                self._quarter_power_start = quarter_start
-                self._quarter_power_number = quarter_of_day
-                anchor = now if self._quarter_power_partial else quarter_start
-                self._quarter_power_samples = [(anchor, current_power)]
-            else:
-                self._quarter_power_samples.append((now, current_power))
+
+            if (
+                peak_event
+                and not self.entry.data.get("enable_optimization", True)
+                and peak_event.is_billable
+            ):
+                # The unoptimised baseline, MEASURED: with optimization off the offset is held at
+                # 0.0 and the pump runs its own curve, so this is what the house does without
+                # EffektGuard. Nothing else calls update_baseline_peak; without it the savings
+                # calculator assumes baseline = peak * 1.176 and can never read zero. Must be
+                # `effective_power` (tariff-weighted, like the peak_this_month it is compared
+                # against) and billable - an unweighted or NIBE-only baseline reports weighting or
+                # unseen load as savings.
+                self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
-                self.peak_this_month = peak_event.effective_power
+                # The HIGHEST of the tracked peaks, never peak_event.effective_power:
+                # record_period_measurement returns an event for ANY new entry while the top-3
+                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW hour would drop the
+                # monthly peak to 2.0 and weaken the threshold for the rest of the month.
+                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.warning("Failed to update peak tracking: %s", err)
 
-    async def async_set_offset(self, offset: float) -> None:
+    async def _write_curve_offset(self, offset: float, *, force_write: bool = False) -> int | None:
+        """The ONE way this integration reaches the heat pump. Return the applied integer.
+
+        A coordinator that has been shut down is not a writer. `_do_aligned_refresh` runs on
+        `hass.async_create_task`, so HA cannot cancel it on unload and it stays mid-flight for
+        seconds awaiting the weather forecast; without this check it would drive the pump after
+        unload, leaving the reload's new coordinator a second writer.
+
+        tests/unit/coordinator/test_an_unloaded_integration_does_not_drive_the_heat_pump.py
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to write offset %.2f°C to the pump. The entry "
+                "is unloaded; an in-flight refresh does not get the last word.",
+                offset,
+            )
+            return None
+
+        return await self.nibe.set_curve_offset(offset, force_write=force_write)
+
+    async def _write_enhanced_ventilation(
+        self, enabled: bool, *, force_write: bool = False
+    ) -> bool:
+        """The ONE way this integration commands the exhaust fan. Returns whether it wrote.
+
+        Same race as the curve offset: written from the control loop, so it rides the same in-flight
+        refresh. Worse on a reload - the dead coordinator can switch the fan ON while the new one
+        starts up believing it is off, and nothing is left that will ever turn it off again.
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug(
+                "Coordinator is shut down - refusing to set enhanced ventilation to %s. The entry "
+                "is unloaded; the fan is not its to command.",
+                enabled,
+            )
+            return False
+
+        return await self.nibe.set_enhanced_ventilation(enabled, force_write=force_write)
+
+    async def async_set_offset(self, offset: float, *, force_write: bool = False) -> int | None:
         """Apply heating curve offset to NIBE system.
 
         Args:
             offset: Offset value in °C (-10 to +10)
+            force_write: Bypass ordinary write suppression for a safety transition.
+
+        Returns:
+            Integer applied to NIBE, or None when no write reached the pump.
         """
         try:
-            await self.nibe.set_curve_offset(offset)
-            self.current_offset = offset
-            self.last_applied_offset = offset
+            applied_offset = await self._write_curve_offset(offset, force_write=force_write)
+            if applied_offset is None:
+                return None
+            self.current_offset = float(applied_offset)
+            self.last_applied_offset = float(applied_offset)
             self.last_offset_timestamp = dt_util.utcnow()
             self._learned_data_changed = True  # Trigger save on shutdown
-            _LOGGER.info("Applied offset: %.2f°C", offset)
+            _LOGGER.info("Applied offset: %d°C", applied_offset)
+            return applied_offset
         except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to apply offset: %s", err)
             raise
@@ -2041,17 +2389,86 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Args:
             enabled: True to enable optimization, False to disable
         """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator is shut down - ignoring optimization mode change")
+            return
+
         if enabled:
             _LOGGER.info("Optimization enabled")
-            # Resume normal optimization
-            await self.async_request_refresh()
+            previous_data = dict(self.entry.data)
+            enabled_data = dict(previous_data)
+            enabled_data[CONF_ENABLE_OPTIMIZATION] = True
+            self.hass.config_entries.async_update_entry(self.entry, data=enabled_data)
+            try:
+                # Resume normal optimization now rather than waiting for the next aligned tick.
+                await self.async_refresh_and_apply()
+            except Exception:
+                self.hass.config_entries.async_update_entry(self.entry, data=previous_data)
+                raise
         else:
             _LOGGER.info("Optimization disabled - resetting offset to neutral")
-            # Reset offset to neutral (0.0)
-            try:
-                await self.async_set_offset(0.0)
-            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
-                _LOGGER.error("Failed to reset offset: %s", err)
+            async with self._control_lock:
+                applied_offset = await self.async_set_offset(0.0, force_write=True)
+                await self._cancel_our_dhw_boost()
+                is_enhanced = await self.nibe.is_enhanced_ventilation_active()
+                if is_enhanced is None and self.nibe.has_ventilation_control:
+                    # The fan may be enhanced and the switch cannot say. OFF must not be
+                    # displayed until every owned actuator is KNOWN neutral.
+                    raise HomeAssistantError(
+                        "Cannot confirm the NIBE ventilation is back to normal - "
+                        "the ventilation switch is unavailable"
+                    )
+                if is_enhanced:
+                    ventilation_stopped = await self._write_enhanced_ventilation(
+                        False,
+                        force_write=True,
+                    )
+                    if not ventilation_stopped:
+                        raise HomeAssistantError(
+                            "Could not return NIBE ventilation to its normal setting"
+                        )
+                    self._airflow_enhance_start = None
+                    self._airflow_normal_since = dt_util.utcnow()
+            if applied_offset != 0:
+                raise HomeAssistantError("Could not reset the NIBE heating offset to neutral")
+
+            disabled_data = dict(self.entry.data)
+            disabled_data[CONF_ENABLE_OPTIMIZATION] = False
+            self.hass.config_entries.async_update_entry(self.entry, data=disabled_data)
+
+    async def async_start_dhw_boost(self, duration_minutes: int, now_time: datetime) -> None:
+        """Start a user-commanded hot-water boost that price optimization may not cancel.
+
+        Only safety outranks the user: the thermal-debt abort still stops it, and so does
+        unload. The duration is real - EffektGuard turns the switch back off when it expires,
+        through the same owned door the cleanup uses - so the service argument means what it
+        says instead of being validated and discarded. NIBE's own lux timeout still applies
+        underneath; whichever ends first wins.
+        """
+        if not self.optimization_enabled:
+            raise HomeAssistantError(
+                "EffektGuard is OFF. Turn optimization on before boosting hot water."
+            )
+
+        if not await self._set_temporary_lux(True):
+            raise HomeAssistantError(
+                f"Could not start the hot-water boost on {self.temp_lux_entity}"
+            )
+        self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
+
+    async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
+        """Apply one explicit user heating command through the locked control path."""
+        if not self.entry.data.get("enable_optimization", True):
+            raise HomeAssistantError(
+                "EffektGuard is OFF. Turn optimization on before commanding a heating offset."
+            )
+
+        self.engine.set_manual_override(offset, duration_minutes)
+        try:
+            await self.async_refresh_and_apply(explicit_command=True)
+        except Exception:
+            self.engine.clear_manual_override()
+            raise
 
     async def async_update_config(self, options: "EffektGuardConfigDict") -> None:
         """Update configuration without full reload.
@@ -2072,7 +2489,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         if "tolerance" in options:
             self.engine.tolerance = float(options["tolerance"])
-            self.engine.tolerance_range = self.engine.tolerance * 0.4  # Recalculate range
+            # The constant, not a second copy of 0.4. A number that lives in two places is a
+            # number that will eventually disagree with itself.
+            self.engine.tolerance_range = self.engine.tolerance * TOLERANCE_RANGE_MULTIPLIER
             _LOGGER.debug(
                 "Updated tolerance: %.1f (range: %.1f°C)",
                 self.engine.tolerance,
@@ -2180,7 +2599,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._airflow_enhance_start = None
                 try:
                     if await self.nibe.is_enhanced_ventilation_active():
-                        await self.nibe.set_enhanced_ventilation(False)
+                        await self._write_enhanced_ventilation(False)
                         _LOGGER.info("Disabled enhanced ventilation on airflow optimizer disable")
                 except (AttributeError, ValueError, OSError) as err:
                     _LOGGER.warning("Failed to disable enhanced ventilation: %s", err)
@@ -2214,6 +2633,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         return self.peak_this_month
 
     @property
+    def optimization_enabled(self) -> bool:
+        """Whether the master control gate permits explicit and automatic writes."""
+        return self.entry.data.get(CONF_ENABLE_OPTIMIZATION, True)
+
+    @property
     def model_profile(self):
         """Get heat pump model profile.
 
@@ -2238,13 +2662,25 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             now = dt_util.utcnow()
 
-            # Record adaptive thermal observation
-            self.adaptive_learning.record_observation(
-                timestamp=now,
-                indoor_temp=nibe_data.indoor_temp,
-                outdoor_temp=nibe_data.outdoor_temp,
-                heating_offset=current_offset,
+            # Learning observes on its own clock (LEARNING_OBSERVATION_INTERVAL_MINUTES), not the
+            # control loop's: per-cycle indoor readings capture sensor quantisation, not the
+            # building's hours-long time constant. The thermal PREDICTOR below still wants every
+            # cycle - it tracks short-term trend, where five-minute resolution is the point (F-132).
+            since_last = (
+                None
+                if self._last_learning_observation is None
+                else now - self._last_learning_observation
             )
+            if since_last is None or since_last >= timedelta(
+                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            ):
+                self.adaptive_learning.record_observation(
+                    timestamp=now,
+                    indoor_temp=nibe_data.indoor_temp,
+                    outdoor_temp=nibe_data.outdoor_temp,
+                    heating_offset=current_offset,
+                )
+                self._last_learning_observation = now
 
             # Record thermal state for predictor
             self.thermal_predictor.record_state(
@@ -2300,7 +2736,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         try:
             learned_data = {
-                "version": STORAGE_VERSION,
+                "version": LEARNING_STORAGE_VERSION,
                 "last_updated": dt_util.utcnow().isoformat(),
             }
 
@@ -2398,7 +2834,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self.thermal_predictor:
                 existing_data["thermal_predictor"] = self.thermal_predictor.to_dict()
                 existing_data["last_updated"] = now.isoformat()
-                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+                existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
                 await self.learning_store.async_save(existing_data)
                 self._last_predictor_save = now
@@ -2431,7 +2867,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
                 }
                 existing_data["last_updated"] = dt_util.utcnow().isoformat()
-                existing_data["version"] = existing_data.get("version", STORAGE_VERSION)
+                existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
                 await self.learning_store.async_save(existing_data)
 

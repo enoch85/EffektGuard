@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from conftest import make_mock_async_all
 from custom_components.effektguard.adapters.nibe_adapter import NibeAdapter
@@ -31,6 +32,21 @@ def make_state(entity_id: str, state: str, attributes: dict | None = None) -> Ma
     mock.state = state
     mock.attributes = attributes or {}
     return mock
+
+
+def required_core_states() -> list[MagicMock]:
+    """The readings get_current_state() refuses to run without.
+
+    Outdoor temp, supply/flow temp and degree minutes are no longer substituted with
+    plausible constants when absent - the adapter raises UpdateFailed instead, so a broken
+    installation cannot be mistaken for a healthy one. Tests that exercise unrelated
+    behaviour (status parsing, priority, discovery ranking) must therefore supply them.
+    """
+    return [
+        make_state("sensor.bt1_outdoor_temperature_40004", "-3.2", TEMP_ATTRS),
+        make_state("sensor.bt2_supply_temp_s1_40008", "35.8", TEMP_ATTRS),
+        make_state("sensor.degree_minutes_16_bit_43005", "-120", {}),
+    ]
 
 
 def make_registry_entry(
@@ -421,8 +437,12 @@ class TestStartupRaces:
         ]
         hass = make_hass([], registry_entries, monkeypatch)
         adapter = NibeAdapter(hass, {})
-        # First cycle: only the stale registry entry exists
-        await adapter.get_current_state()
+
+        # First cycle: only the stale registry entry exists, so no reading resolves.
+        # Refusing here is correct - the adapter must not invent values - but discovery
+        # still runs and caches the registry-backed id.
+        with pytest.raises(UpdateFailed):
+            await adapter.get_current_state()
         assert adapter.entity_cache["outdoor_temp"] == "sensor.bt1_outdoor_temperature_40004"
 
         # Live entities appear; the next cycle must re-discover and displace
@@ -431,6 +451,7 @@ class TestStartupRaces:
                 make_state("sensor.bt1_outdoor_temperature_40004_2", "-3.2", TEMP_ATTRS),
                 make_state("sensor.bt50_room_temp_s1_40033", "21.3", TEMP_ATTRS),
                 make_state("sensor.bt2_supply_temp_s1_40008", "35.8", TEMP_ATTRS),
+                make_state("sensor.degree_minutes_16_bit_43005", "-120", {}),
             ],
             registry_entries,
             monkeypatch,
@@ -526,7 +547,7 @@ class TestStatusParsing:
     async def test_numeric_compressor_state_falls_back_to_frequency(self, monkeypatch):
         """Raw Modbus 43427 is a numeric enum the bool parser cannot read;
         is_heating must derive from compressor frequency instead."""
-        states = [
+        states = required_core_states() + [
             make_state("sensor.compressor_status_ep14_43427", "60", {}),
             make_state("sensor.compressor_frequency_43136", "62.0", {}),
         ]
@@ -542,7 +563,7 @@ class TestStatusParsing:
         """Raw Modbus priority 20 (Hot Water) with the compressor spinning:
         DHW production, not space heating - even though the numeric status
         enum is unreadable and the frequency fallback would fire."""
-        states = [
+        states = required_core_states() + [
             make_state("sensor.prio_43086", "20", {}),
             make_state("sensor.compressor_status_ep14_43427", "60", {}),
             make_state("sensor.compressor_frequency_43136", "62.0", {}),
@@ -557,7 +578,7 @@ class TestStatusParsing:
 
     async def test_numeric_heating_priority_is_heating(self, monkeypatch):
         """Raw Modbus priority 30 (Heat) with the compressor spinning."""
-        states = [
+        states = required_core_states() + [
             make_state("sensor.prio_43086", "30", {}),
             make_state("sensor.compressor_frequency_43136", "62.0", {}),
         ]
@@ -572,7 +593,7 @@ class TestStatusParsing:
     async def test_unknown_priority_leaves_status_reads_untouched(self, monkeypatch):
         """MyUplink priority enums are not fully documented (raw 31 observed):
         unknown values must not override the pattern-based status reads."""
-        states = [
+        states = required_core_states() + [
             make_state("sensor.gotham_city_priority", "31", {}),
             make_state("sensor.gotham_city_status_compressor", "Running", {}),
         ]
@@ -586,7 +607,7 @@ class TestStatusParsing:
         assert state.is_hot_water is False
 
     async def test_zero_frequency_is_not_heating_and_not_none(self, monkeypatch):
-        states = [
+        states = required_core_states() + [
             make_state("sensor.compressor_frequency_43136", "0.0", {}),
         ]
         hass = make_hass(states, [], monkeypatch)

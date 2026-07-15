@@ -21,6 +21,8 @@ PEAK cluster detection: Short EXPENSIVE/NORMAL periods sandwiched between
 PEAK periods are treated as part of the PEAK cluster (not volatile).
 """
 
+import time
+
 from dataclasses import dataclass
 
 from ..const import (
@@ -303,7 +305,6 @@ class OffsetVolatilityTracker:
             offset: The new offset value
             reason: Reason for the change (for logging)
         """
-        import time
 
         self._last_change = OffsetChangeInfo(
             offset=offset,
@@ -328,8 +329,6 @@ class OffsetVolatilityTracker:
         """
         if self._last_change is None:
             return False
-
-        import time
 
         last_offset = self._last_change.offset
         change_magnitude = abs(new_offset - last_offset)
@@ -377,8 +376,6 @@ class OffsetVolatilityTracker:
         """
         if self._last_change is None:
             return ""
-
-        import time
 
         time_since_last = time.time() - self._last_change.timestamp
         minutes_since = time_since_last / SECONDS_PER_MINUTE
