@@ -27,12 +27,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
 from ..const import (
+    NIBE_READING_MAX_AGE_MINUTES,
     CONF_ADDITIONAL_INDOOR_SENSORS,
     CONF_DEGREE_MINUTES_ENTITY,
     CONF_INDOOR_TEMP_METHOD,
@@ -42,10 +46,13 @@ from ..const import (
     DEFAULT_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP_METHOD,
     DOMAIN,
-    MAX_OFFSET,
-    MIN_OFFSET,
+    INDOOR_SENSOR_PLAUSIBLE_MAX,
+    INDOOR_SENSOR_PLAUSIBLE_MIN,
+    NIBE_OUTDOOR_PLAUSIBLE_MAX,
+    NIBE_OUTDOOR_PLAUSIBLE_MIN,
+    NIBE_WATER_PLAUSIBLE_MAX,
+    NIBE_WATER_PLAUSIBLE_MIN,
     NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
-    NIBE_DEFAULT_SUPPLY_TEMP,
     NIBE_DISCOVERY_CORE_KEYS,
     NIBE_DISCOVERY_EXCLUDE,
     NIBE_DISCOVERY_MAX_ATTEMPTS,
@@ -55,7 +62,6 @@ from ..const import (
     NIBE_DISCOVERY_RANK_MANUAL,
     NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
     NIBE_DISCOVERY_SLOW_RETRY_CYCLES,
-    NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD,
     NIBE_MANUAL_OVERRIDE_KEYS,
     NIBE_OFFSET_RESYNC_MINUTES,
     NIBE_POWER_FACTOR,
@@ -70,6 +76,8 @@ from ..const import (
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
+from ..utils.offset import integer_offset_for
+from ..utils.power import power_kw_from_state
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -101,6 +109,15 @@ class NibeState:
     phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
     compressor_hz: int | None = None  # Compressor frequency - optional
     power_kw: float | None = None  # Total power consumption in kW - optional
+    # True when power_kw is a temperature-derived estimate, not a measurement. It rides in the same
+    # field as a real reading, so anything that reports or bills consumption must check this first
+    # or it presents a guess as actual consumption.
+    power_is_estimated: bool = False
+    # False when no indoor sensor could be read and indoor_temp is the DEFAULT_INDOOR_TEMP
+    # placeholder. No room sensor (no BT50) is a legitimate NIBE setup - it runs on degree minutes
+    # and the heating curve - but comfort-reasoning layers must abstain rather than trust the
+    # placeholder, which equals the usual target and yields a deviation of exactly 0.0.
+    indoor_temp_valid: bool = True
 
     @property
     def flow_temp(self) -> float:
@@ -166,7 +183,6 @@ class NibeAdapter:
         # Fractional accumulator for precise offset tracking
         # NIBE only accepts integers, so we accumulate fractional parts
         # and apply them when they sum to ±1°C
-        self._fractional_accumulator: float = 0.0
         # Track last integer offset sent to NIBE (to avoid redundant writes)
         self._last_nibe_offset: int | None = None
 
@@ -216,28 +232,28 @@ class NibeAdapter:
         ):
             await self._discover_nibe_entities()
 
-        # Read temperature sensors
-        outdoor_temp = await self._read_entity_float(
-            self._entity_cache.get("outdoor_temp"), default=0.0
+        # --- REQUIRED readings -------------------------------------------------------
+        # These three drive every control decision. Never substitute a plausible constant for a
+        # missing OR implausible one - that makes a broken install indistinguishable from a healthy
+        # one and still writes an offset. (A Modbus sensor missing `scale: 0.1` reports deci-degrees
+        # raw: BT1's -3.2 C arrives as -32.0 C.) Refuse instead, and let the coordinator degrade -
+        # startup_pending before the first success, UpdateFailed after - so nothing is written.
+        outdoor_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("outdoor_temp")),
+            NIBE_OUTDOOR_PLAUSIBLE_MIN,
+            NIBE_OUTDOOR_PLAUSIBLE_MAX,
+            "outdoor temperature (BT1)",
+        )
+        supply_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("supply_temp")),
+            NIBE_WATER_PLAUSIBLE_MIN,
+            NIBE_WATER_PLAUSIBLE_MAX,
+            "supply temperature (BT25/BT63)",
         )
 
-        indoor_temp = await self._read_entity_float(
-            self._entity_cache.get("indoor_temp"), default=DEFAULT_INDOOR_TEMP
-        )
-
-        # Multi-sensor indoor temperature calculation
-        if self._additional_indoor_sensors:
-            indoor_temp = await self._calculate_multi_sensor_temperature(indoor_temp)
-
-        supply_temp = await self._read_entity_float(
-            self._entity_cache.get("supply_temp"), default=NIBE_DEFAULT_SUPPLY_TEMP
-        )
-        return_temp = await self._read_entity_float(
-            self._entity_cache.get("return_temp"), default=None
-        )
-
-        # Read degree minutes (GM/DM)
-        # First try optional configured sensor, then fall back to auto-discovery
+        # Degree minutes: configured sensor first, then auto-discovery. NEVER estimated -
+        # DM is the primary thermal-debt safety signal and every NIBE exposes it
+        # (register 40940 / 43005). Guessing it would drive the emergency layer on fiction.
         degree_minutes = None
         if self._degree_minutes_entity:
             degree_minutes = await self._read_entity_float(
@@ -250,7 +266,6 @@ class NibeAdapter:
                     degree_minutes,
                 )
 
-        # Fall back to auto-discovered sensor
         if degree_minutes is None:
             degree_minutes = await self._read_entity_float(
                 self._entity_cache.get("degree_minutes"), default=None
@@ -258,10 +273,56 @@ class NibeAdapter:
             if degree_minutes is not None:
                 _LOGGER.debug("Using auto-discovered degree minutes sensor: %.1f", degree_minutes)
 
-        # If still None, estimate from thermal model (will be implemented in thermal_model.py)
-        if degree_minutes is None:
-            degree_minutes = self._estimate_degree_minutes(indoor_temp, supply_temp, outdoor_temp)
-            _LOGGER.debug("Estimating degree minutes from thermal model: %.1f", degree_minutes)
+        missing = [
+            name
+            for name, value in (
+                ("outdoor temperature (BT1)", outdoor_temp),
+                ("supply/flow temperature (BT25/BT63)", supply_temp),
+                ("degree minutes", degree_minutes),
+            )
+            if value is None
+        ]
+        if missing:
+            raise UpdateFailed(
+                "Cannot read required NIBE sensors: "
+                + ", ".join(missing)
+                + ". EffektGuard will not control the heat pump on incomplete data. "
+                "Check that the source integration (myuplink / nibe_heatpump / modbus) is "
+                "loaded and its entities are available, or set the matching manual entity "
+                "overrides in the EffektGuard options."
+            )
+
+        # --- OPTIONAL readings -------------------------------------------------------
+        # Indoor temperature: no room sensor (no BT50) is legitimate - the pump runs on degree
+        # minutes and the heating curve. Keep the placeholder for display but mark it invalid so
+        # comfort layers abstain instead of reading a 0.0 deviation from a value that IS the target.
+        # Apply the plausibility band to the pump's own BT50 too, not just the user's extra sensors:
+        # a BT50 reporting 213.0 C (a scale typo for 21.3) once drove a -10.0 C command at critical
+        # weight. An implausible BT50 is treated as no room sensor, which is handled correctly.
+        measured_indoor = self._plausible(
+            await self._read_temperature(self._entity_cache.get("indoor_temp")),
+            INDOOR_SENSOR_PLAUSIBLE_MIN,
+            INDOOR_SENSOR_PLAUSIBLE_MAX,
+            "indoor temperature (BT50)",
+        )
+        indoor_temp_valid = measured_indoor is not None
+        indoor_temp = measured_indoor if indoor_temp_valid else DEFAULT_INDOOR_TEMP
+
+        # Pass the MEASURED value, never the placeholder: _calculate_multi_sensor_temperature's
+        # docstring forbids seeding the median with DEFAULT_INDOOR_TEMP, which would drag the
+        # combined reading toward the target and mask a real deviation.
+        if self._additional_indoor_sensors:
+            combined = await self._calculate_multi_sensor_temperature(measured_indoor)
+            if combined is not None:
+                indoor_temp = combined
+                indoor_temp_valid = True
+
+        return_temp = self._plausible(
+            await self._read_temperature(self._entity_cache.get("return_temp")),
+            NIBE_WATER_PLAUSIBLE_MIN,
+            NIBE_WATER_PLAUSIBLE_MAX,
+            "return temperature (BT3)",
+        )
 
         # Read current offset
         current_offset = await self._read_entity_float(
@@ -289,11 +350,9 @@ class NibeAdapter:
             is_hot_water = False
 
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
-        dhw_top_temp = await self._read_entity_float(
-            self._entity_cache.get("dhw_top_temp"), default=None
-        )
-        dhw_charging_temp = await self._read_entity_float(
-            self._entity_cache.get("dhw_charging_temp"), default=None
+        dhw_top_temp = await self._read_temperature(self._entity_cache.get("dhw_top_temp"))
+        dhw_charging_temp = await self._read_temperature(
+            self._entity_cache.get("dhw_charging_temp")
         )
 
         # Read DHW amount (hot water minutes available) - NIBE calculates this
@@ -344,10 +403,16 @@ class NibeAdapter:
                 phase3_current or 0.0,
             )
 
-        # Read actual power consumption (if available)
-        power_kw = await self.get_power_consumption()
+        # Read power consumption. It may be a measurement or a temperature-derived estimate, and
+        # the two are not interchangeable - the flag travels with the number so nothing has to
+        # guess later.
+        power_kw, power_is_estimated = await self.get_power_consumption()
         if power_kw is not None:
-            _LOGGER.debug("Power consumption: %.2f kW", power_kw)
+            _LOGGER.debug(
+                "Power consumption: %.2f kW (%s)",
+                power_kw,
+                "estimated from temperatures" if power_is_estimated else "measured",
+            )
 
         return NibeState(
             outdoor_temp=outdoor_temp,
@@ -367,30 +432,25 @@ class NibeAdapter:
             phase3_current=phase3_current,
             compressor_hz=int(compressor_hz) if compressor_hz is not None else None,
             power_kw=power_kw,
+            power_is_estimated=power_is_estimated,
+            indoor_temp_valid=indoor_temp_valid,
         )
 
-    async def set_curve_offset(self, offset: float) -> bool:
-        """Set heating curve offset via NIBE entity with fractional accumulation.
+    async def set_curve_offset(self, offset: float, *, force_write: bool = False) -> int | None:
+        """Set the heating curve offset via the NIBE offset entity.
 
-        The NIBE offset register (47011 on F-series) is integer-only, but the
-        optimization engine calculates precise fractional offsets (e.g., 0.35°C,
-        -1.24°C).
-
-        Solution: Accumulate fractional parts and apply when they sum to ±1°C.
-        This preserves the precision of gentle optimization while respecting
-        NIBE's integer-only constraint.
-
-        Example:
-            Cycle 1: Calculate 0.35°C → Send 0, accumulate +0.35
-            Cycle 2: Calculate 0.42°C → Delta +0.07, accumulator = +0.42
-            Cycle 3: Calculate 0.89°C → Delta +0.47, accumulator = +0.89
-            Cycle 4: Calculate 1.12°C → Delta +0.23, accumulator = +1.12 → Send +1
+        The NIBE offset register (47011 on the F-series) is integer-only, while the engine
+        calculates fractional offsets. The offset is ROUNDED to the nearest integer and written
+        only once it differs from what the register holds by a whole degree - a deadband, so the
+        register is not rewritten every five minutes as demand wanders across a rounding boundary.
+        See utils/offset.py.
 
         Args:
             offset: Calculated offset value in °C (e.g., -1.24, +0.87)
+            force_write: Bypass cooldown and deadband for a safety transition such as OFF.
 
         Returns:
-            True if offset was written to NIBE, False if deferred/accumulated
+            Integer written to NIBE, or None if the write was skipped or failed.
 
         Note:
             The target must be a writable number entity: a MyUplink offset
@@ -400,17 +460,19 @@ class NibeAdapter:
         """
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if self._last_write and now - self._last_write < timedelta(
-            minutes=SERVICE_RATE_LIMIT_MINUTES
+        if (
+            not force_write
+            and self._last_write
+            and now - self._last_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
         ):
             _LOGGER.debug("Skipping offset write, too soon since last write")
-            return False
+            return None
 
         # Get offset entity
         offset_entity = self._entity_cache.get("offset")
         if not offset_entity:
             _LOGGER.error("No offset entity found")
-            return False
+            return None
 
         # Check entity is available
         state = self.hass.states.get(offset_entity)
@@ -420,7 +482,7 @@ class NibeAdapter:
                 offset_entity,
                 state.state if state else "None",
             )
-            return False
+            return None
 
         # Sync with the entity's actual value on first call, and re-sync when
         # the entity disagrees with our bookkeeping and we have not written
@@ -440,66 +502,33 @@ class NibeAdapter:
             or (entity_offset != self._last_nibe_offset and resync_window_passed)
         ):
             self._last_nibe_offset = entity_offset
-            self._fractional_accumulator = offset - self._last_nibe_offset
             _LOGGER.info(
-                "✓ Synced with NIBE: current offset %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                "✓ Synced with NIBE: register holds %d°C (engine asked for %.2f°C)",
                 self._last_nibe_offset,
                 offset,
-                self._fractional_accumulator,
             )
         elif self._last_nibe_offset is None:
             self._last_nibe_offset = 0
-            self._fractional_accumulator = offset
 
-        # Fractional accumulation logic
-        # The accumulator tracks the total difference between what we've calculated
-        # and what NIBE actually has.
-        self._fractional_accumulator = offset - self._last_nibe_offset
+        # The integer the register should hold; the rounding, deadband and clamping live in
+        # utils/offset.py, shared with the simulation harness.
+        offset_to_apply = integer_offset_for(offset, self._last_nibe_offset)
 
         _LOGGER.debug(
-            "Offset calculation: calculated=%.2f°C, NIBE_current=%d°C, accumulator=%.2f°C",
+            "Offset: engine asked for %.2f°C, register holds %d°C -> writing %d°C",
             offset,
             self._last_nibe_offset,
-            self._fractional_accumulator,
+            offset_to_apply,
         )
 
-        # Determine what integer value to apply to NIBE
-        # Only write when accumulator crosses threshold
-        offset_to_apply = self._last_nibe_offset  # Start with current NIBE value
-
-        if abs(self._fractional_accumulator) >= NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD:
-            # Accumulator has crossed threshold, apply the integer part
-            accumulated_adjustment = int(self._fractional_accumulator)
-            offset_to_apply = self._last_nibe_offset + accumulated_adjustment
-
-            # Clamp to NIBE's valid range (MIN_OFFSET to MAX_OFFSET)
-            offset_to_apply = int(max(MIN_OFFSET, min(offset_to_apply, MAX_OFFSET)))
-
-            _LOGGER.info(
-                "✓ Accumulated fractional offset reached threshold: "
-                "applying %+d°C adjustment (accumulator: %.2f°C, new_offset: %d°C)",
-                accumulated_adjustment,
-                self._fractional_accumulator,
-                offset_to_apply,
-            )
-        else:
-            # Accumulator hasn't crossed threshold, keep current NIBE offset
-            _LOGGER.debug(
-                "Accumulator below threshold (%.2f°C), keeping NIBE at %d°C",
-                self._fractional_accumulator,
-                offset_to_apply,
-            )
-
         # Only write if integer part changed from last written value
-        if offset_to_apply == self._last_nibe_offset:
+        if not force_write and offset_to_apply == self._last_nibe_offset:
             _LOGGER.debug(
-                "Offset unchanged: %.2f°C → int(%d°C) = NIBE already at %d°C (accumulator: %.2f°C)",
+                "Offset unchanged: engine asked for %.2f°C, register already holds %d°C",
                 offset,
-                offset_to_apply,
                 self._last_nibe_offset,
-                self._fractional_accumulator,
             )
-            return False
+            return None
 
         # Respect the target entity's own limits when it exposes them
         # (a template number left at default min 0/max 100 would otherwise
@@ -523,8 +552,8 @@ class NibeAdapter:
                     clamped,
                 )
                 offset_to_apply = clamped
-                if offset_to_apply == self._last_nibe_offset:
-                    return False
+                if not force_write and offset_to_apply == self._last_nibe_offset:
+                    return None
 
         # Store old value for logging before updating
         old_offset = self._last_nibe_offset
@@ -546,19 +575,18 @@ class NibeAdapter:
             self._last_nibe_offset = offset_to_apply
 
             _LOGGER.info(
-                "✓ Applied offset to NIBE: %d°C → %d°C (calculated: %.2f°C, accumulator: %.2f°C)",
+                "✓ Applied offset to NIBE: %d°C → %d°C (engine asked for %.2f°C)",
                 old_offset,
                 offset_to_apply,
                 offset,
-                self._fractional_accumulator,
             )
-            return True
+            return offset_to_apply
 
         except (HomeAssistantError, AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
-            return False
+            return None
 
-    async def set_enhanced_ventilation(self, enabled: bool) -> bool:
+    async def set_enhanced_ventilation(self, enabled: bool, *, force_write: bool = False) -> bool:
         """Enable or disable enhanced ventilation for exhaust air heat pumps.
 
         NIBE F750/F730 "Increased Ventilation" is a switch entity that toggles
@@ -571,6 +599,7 @@ class NibeAdapter:
 
         Args:
             enabled: True to enable enhanced ventilation, False for normal
+            force_write: Bypass cooldown when disabling all EffektGuard control.
 
         Returns:
             True if ventilation was set, False if skipped/failed
@@ -602,12 +631,14 @@ class NibeAdapter:
                 "Ventilation already %s, skipping redundant call",
                 "ENHANCED" if enabled else "NORMAL",
             )
-            return False
+            return True
 
         # Rate limiting - minimum time between writes
         now = dt_util.utcnow()
-        if self._last_ventilation_write and now - self._last_ventilation_write < timedelta(
-            minutes=SERVICE_RATE_LIMIT_MINUTES
+        if (
+            not force_write
+            and self._last_ventilation_write
+            and now - self._last_ventilation_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
         ):
             remaining = (
                 timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES) - (now - self._last_ventilation_write)
@@ -635,6 +666,15 @@ class NibeAdapter:
         except (HomeAssistantError, AttributeError, OSError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to set enhanced ventilation: %s", err)
             return False
+
+    @property
+    def has_ventilation_control(self) -> bool:
+        """Whether an increased-ventilation switch is configured or was discovered.
+
+        Distinguishes "this pump has no fan to neutralize" from "the fan's switch is
+        momentarily unavailable" - the OFF transition must refuse the latter, not skip it.
+        """
+        return self._entity_cache.get("increased_ventilation") is not None
 
     async def is_enhanced_ventilation_active(self) -> bool | None:
         """Check if enhanced ventilation is currently active.
@@ -761,17 +801,33 @@ class NibeAdapter:
             unit = state.attributes.get("unit_of_measurement", "") if state else ""
             _LOGGER.info("  %s: %s = %s %s", key, entity_id, state_value, unit)
 
-        # Warn if critical sensors are missing
+        # Warn if sensors are missing.
+        # Indoor is OPTIONAL (a system without a room sensor runs on DM + the heating
+        # curve); the others are REQUIRED and get_current_state() refuses to run without
+        # them rather than substituting a plausible constant.
         if "indoor_temp" not in self._entity_cache:
-            _LOGGER.warning(
-                "No indoor temperature sensor (BT50) found! "
-                "Looking for entities with: bt50, room_temperature, or 40033. "
-                "Will use default fallback temperature (21°C)."
+            _LOGGER.info(
+                "No indoor temperature sensor (BT50) found. Comfort-based layers will "
+                "abstain; optimization continues on degree minutes and the heating curve. "
+                "Set the indoor temperature override in options if you do have one."
             )
         if "outdoor_temp" not in self._entity_cache:
-            _LOGGER.warning("No outdoor temperature sensor (BT1) found!")
-        if "degree_minutes" not in self._entity_cache:
-            _LOGGER.warning("No degree minutes sensor found, will estimate from thermal model")
+            _LOGGER.error(
+                "No outdoor temperature sensor (BT1) found - EffektGuard cannot optimize "
+                "without it. Looking for entities with: bt1, outdoor_temp, or 40004."
+            )
+        if "supply_temp" not in self._entity_cache:
+            _LOGGER.error(
+                "No supply/flow temperature sensor (BT25/BT63) found - EffektGuard cannot "
+                "optimize without it. Looking for: bt25, bt63, supply_temp, 40008, 40071."
+            )
+        if "degree_minutes" not in self._entity_cache and not self._degree_minutes_entity:
+            _LOGGER.error(
+                "No degree minutes sensor found - EffektGuard cannot protect against "
+                "thermal debt without it and will not control the pump. Looking for: "
+                "degree_minutes, gradminuter, 40940, 43005. Set the degree-minutes entity "
+                "override in options if your sensor is named differently."
+            )
 
     def _consider_candidate(
         self,
@@ -811,6 +867,23 @@ class NibeAdapter:
                 continue
 
             if key in NIBE_TEMPERATURE_KEYS:
+                # A measurement must come from a `sensor.`, not a `number.` (a setpoint the owner
+                # writes). A NIBE room-temperature setpoint is a `number.` with device_class
+                # temperature in °C - matching every attribute this gate checks and the
+                # `room_temperature` pattern - and binding it as the indoor measurement is silent
+                # and catastrophic: the reading equals the target, so the deviation is 0.0 forever
+                # and neither the comfort layer nor the 18 C safety floor ever fires. (Manual
+                # overrides seed the cache directly and bypass this.)
+                if not entity_id.startswith("sensor."):
+                    _LOGGER.debug(
+                        "Skipping %s candidate %s: a measurement must come from a sensor, and a "
+                        "`number.` entity is a setpoint - something the owner writes, not "
+                        "something the pump reports",
+                        key,
+                        entity_id,
+                    )
+                    continue
+
                 # Accept if device_class is temperature OR unit is °C/°F
                 # (handles Modbus sensors where only the unit is configured)
                 if device_class != "temperature" and unit not in ["°C", "°F", "C", "F"]:
@@ -863,6 +936,27 @@ class NibeAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             return default
 
+        # Reject a reading older than NIBE_READING_MAX_AGE_MINUTES: an available-but-stale sensor
+        # (e.g. an MQTT publisher that has stopped) is unchanged and worthless, and every other
+        # check here passes it (F-015). A stale reading is a reading we do not have - it returns the
+        # default, and a REQUIRED sensor coming back None raises UpdateFailed, leaving the pump on
+        # its last offset. Prefer `last_reported` (bumped on every write) over `last_updated` (moves
+        # only when the value changes, which a steady pump's does not). If neither is a datetime the
+        # age is unknowable, so fail OPEN and use the reading - this is an extra guard, and raising
+        # from the read path would be worse than the staleness it catches.
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if isinstance(reported, datetime):
+            age = dt_util.utcnow() - reported
+            if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
+                _LOGGER.warning(
+                    "%s last reported %.0f minutes ago (limit %d) - treating it as unread. Nothing "
+                    "has confirmed this value since, and the heat pump will not be driven on it.",
+                    entity_id,
+                    age.total_seconds() / 60,
+                    NIBE_READING_MAX_AGE_MINUTES,
+                )
+                return default
+
         try:
             value = float(state.state)
         except (ValueError, TypeError):
@@ -875,6 +969,114 @@ class NibeAdapter:
             return default
 
         return value
+
+    def _plausible(
+        self,
+        value: float | None,
+        minimum: float,
+        maximum: float,
+        description: str,
+    ) -> float | None:
+        """A reading outside the physically possible is not a reading. Return None.
+
+        A value that cannot be a temperature is a missing reading wearing a number: NIBE's Modbus
+        registers hold DECI-degrees, so a sensor missing `scale: 0.1` turns 21.3 C into 213.0 C.
+        Returning None routes it exactly like a missing sensor - a required one raises UpdateFailed
+        and nothing is written; an optional BT50 degrades to "no room sensor".
+
+        Args:
+            value: The reading, already converted to °C, or None.
+            minimum: Lowest value this sensor could physically report.
+            maximum: Highest value this sensor could physically report.
+            description: Human-readable sensor name, for the log line.
+
+        Returns:
+            The value, or None when it is outside the band.
+        """
+        if value is None:
+            return None
+
+        if minimum <= value <= maximum:
+            return value
+
+        _LOGGER.warning(
+            "%s reported %.1f°C, which is outside the possible range %.0f to %.0f°C. Treating it "
+            "as unread rather than controlling the heat pump on it. NIBE's Modbus registers hold "
+            "DECI-degrees: if you configured this sensor by hand, check it has `scale: 0.1`.",
+            description,
+            value,
+            minimum,
+            maximum,
+        )
+        return None
+
+    async def _read_temperature(
+        self,
+        entity_id: str | None,
+        default: float | None = None,
+    ) -> float | None:
+        """Read a temperature entity and normalise it to °C.
+
+        Every temperature in NibeState is °C, but discovery accepts a °F entity (see
+        _consider_candidate) and Home Assistant presents a temperature sensor in the user's own
+        unit. Without conversion, BT1 reading 32 (0 °C) was taken as +32 °C and BT25's 95 (35 °C) as
+        a 95 °C flow temperature, driving weather compensation to minimum offset in midwinter.
+
+        Args:
+            entity_id: Entity to read
+            default: Value to return when the entity is missing or unreadable
+
+        Returns:
+            Temperature in °C, or `default`
+        """
+        if not entity_id:
+            return default
+
+        state = self.hass.states.get(entity_id)
+        if not state or state.state in ["unknown", "unavailable"]:
+            return default
+
+        # Staleness guard, as in _read_entity_float: reject a reading older than
+        # NIBE_READING_MAX_AGE_MINUTES (prefer last_reported, fall back to last_updated), and fail
+        # OPEN when the age is unknowable. See _read_entity_float for the full rationale (F-015).
+        reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
+        if isinstance(reported, datetime):
+            age = dt_util.utcnow() - reported
+            if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
+                _LOGGER.warning(
+                    "%s last reported %.0f minutes ago (limit %d) - treating it as unread. Nothing "
+                    "has confirmed this value since, and the heat pump will not be driven on it.",
+                    entity_id,
+                    age.total_seconds() / 60,
+                    NIBE_READING_MAX_AGE_MINUTES,
+                )
+                return default
+
+        try:
+            value = float(state.state)
+        except (ValueError, TypeError):
+            _LOGGER.warning("Cannot parse temperature from %s: %s", entity_id, state.state)
+            return default
+
+        # The unknown-value marker is a RAW sensor value - check it before converting.
+        if value in NIBE_UNKNOWN_VALUE_MARKERS:
+            _LOGGER.debug("Ignoring unknown-value marker %s from %s", value, entity_id)
+            return default
+
+        unit = state.attributes.get("unit_of_measurement")
+        if unit is None or unit == UnitOfTemperature.CELSIUS:
+            return value
+
+        try:
+            return TemperatureConverter.convert(value, unit, UnitOfTemperature.CELSIUS)
+        except (HomeAssistantError, ValueError, TypeError):
+            _LOGGER.warning(
+                "Unrecognised temperature unit %r on %s - treating %.1f as °C",
+                unit,
+                entity_id,
+                value,
+            )
+            return value
 
     async def _read_entity_bool(
         self,
@@ -927,50 +1129,7 @@ class NibeAdapter:
             return "heating"
         return "other"
 
-    def _estimate_degree_minutes(
-        self, indoor_temp: float, supply_temp: float, outdoor_temp: float
-    ) -> float:
-        """Estimate degree minutes from temperatures when sensor unavailable.
-
-        Uses simplified thermal balance model:
-        DM ≈ (actual_flow - target_flow) × time_factor
-
-        This is a rough estimation. Real DM tracking from NIBE is much more accurate.
-
-        Args:
-            indoor_temp: Current indoor temperature (°C)
-            supply_temp: Current supply/flow temperature (°C)
-            outdoor_temp: Current outdoor temperature (°C)
-
-        Returns:
-            Estimated degree minutes (typically -500 to +500)
-
-        Note:
-            Negative DM = compressor needs to run (heat deficit)
-            Positive DM = recent heating surplus
-        """
-        # Calculate target flow temp using simplified heating curve
-        # Typical NIBE curve: Flow ≈ 20 + 1.5 × (20 - Outdoor)
-        target_flow = 20.0 + 1.5 * (20.0 - outdoor_temp)
-
-        # Calculate thermal imbalance
-        flow_error = supply_temp - target_flow
-
-        # Estimate DM based on flow error and indoor temp error
-        target_indoor = DEFAULT_INDOOR_TEMP  # Assumed target when not configured
-        indoor_error = indoor_temp - target_indoor
-
-        # Simplified estimation
-        # If too cold inside and flow too low → negative DM (needs heating)
-        # If warm enough and flow adequate → near zero DM
-        estimated_dm = flow_error * 10.0 + indoor_error * 50.0
-
-        # Clamp to reasonable range
-        estimated_dm = max(-800.0, min(estimated_dm, 500.0))
-
-        return estimated_dm
-
-    async def get_power_consumption(self) -> float | None:
+    async def get_power_consumption(self) -> tuple[float | None, bool]:
         """Get current power consumption of heat pump.
 
         Tries in order:
@@ -978,24 +1137,21 @@ class NibeAdapter:
         2. Estimation from supply temperature (least accurate)
 
         Returns:
-            Power consumption in kW, or None if unavailable
+            (power in kW or None, whether that number was estimated). The estimate is useful for
+            layers that only need a magnitude, and useless to anything that reports or bills
+            consumption - so callers are made to see which one they got.
         """
-        # Try configured power sensor
+        # Read via power_kw_from_state, the one shared helper the coordinator also uses, so both
+        # agree on what an absent unit means instead of answering the same sensor 1000x apart (W/kW).
         if self._power_sensor_entity:
-            power = await self._read_entity_float(self._power_sensor_entity, default=None)
+            power = power_kw_from_state(self.hass.states.get(self._power_sensor_entity))
             if power is not None:
-                # Convert W to kW if needed
-                state = self.hass.states.get(self._power_sensor_entity)
-                if state:
-                    unit = state.attributes.get("unit_of_measurement", "").lower()
-                    if unit == "w":
-                        power = power / 1000.0
                 _LOGGER.debug(
                     "Using configured power sensor: %s = %.2f kW",
                     self._power_sensor_entity,
                     power,
                 )
-                return power
+                return power, False
 
         # Fall back to estimation from supply temperature
         supply_temp = await self._read_entity_float(
@@ -1008,9 +1164,9 @@ class NibeAdapter:
         if supply_temp is not None and outdoor_temp is not None:
             estimated_power = self._estimate_power_from_temps(supply_temp, outdoor_temp)
             _LOGGER.debug("Estimating power from temperatures: %.2f kW", estimated_power)
-            return estimated_power
+            return estimated_power, True
 
-        return None
+        return None, False
 
     def calculate_power_from_currents(
         self,
@@ -1062,7 +1218,7 @@ class NibeAdapter:
 
         return power_kw
 
-    async def _calculate_multi_sensor_temperature(self, nibe_temp: float) -> float:
+    async def _calculate_multi_sensor_temperature(self, nibe_temp: float | None) -> float | None:
         """Calculate indoor temperature from NIBE sensor + additional sensors.
 
         Combines NIBE BT50 with additional room sensors for more accurate
@@ -1074,36 +1230,44 @@ class NibeAdapter:
         - Logs when all sensors become available
 
         Args:
-            nibe_temp: Temperature from NIBE BT50 sensor
+            nibe_temp: Temperature from NIBE BT50, or None when there is no room sensor.
+                A placeholder must NEVER be passed here - seeding the median with
+                DEFAULT_INDOOR_TEMP would drag the combined reading toward the target and
+                mask a real deviation.
 
         Returns:
-            Combined temperature using configured method (median/average)
+            Combined temperature using the configured method (median/average), or None
+            when no sensor produced a usable reading.
         """
-        # Start with NIBE sensor
-        temps = [nibe_temp]
+        # Start with the NIBE sensor, if there is one
+        temps = [nibe_temp] if nibe_temp is not None else []
 
-        # Read additional sensors
+        # Read additional sensors. _read_temperature normalises each to °C first - these
+        # are arbitrary user-chosen room sensors, so a °F one is entirely plausible, and
+        # the plausibility band below would otherwise reject every Fahrenheit reading.
         for entity_id in self._additional_indoor_sensors:
-            state = self.hass.states.get(entity_id)
-            if state and state.state not in ["unknown", "unavailable"]:
-                try:
-                    temp = float(state.state)
-                    # Sanity check (15-30°C range)
-                    if 15.0 <= temp <= 30.0:
-                        temps.append(temp)
-                    else:
-                        _LOGGER.warning(
-                            "Ignoring out-of-range temperature from %s: %.1f°C",
-                            entity_id,
-                            temp,
-                        )
-                except (ValueError, TypeError) as err:
-                    _LOGGER.debug("Failed to read sensor %s: %s", entity_id, err)
+            temp = await self._read_temperature(entity_id)
+            if temp is None:
+                continue
+
+            if INDOOR_SENSOR_PLAUSIBLE_MIN <= temp <= INDOOR_SENSOR_PLAUSIBLE_MAX:
+                temps.append(temp)
+            else:
+                _LOGGER.warning(
+                    "Ignoring out-of-range temperature from %s: %.1f°C (expected %.0f-%.0f°C)",
+                    entity_id,
+                    temp,
+                    INDOOR_SENSOR_PLAUSIBLE_MIN,
+                    INDOOR_SENSOR_PLAUSIBLE_MAX,
+                )
 
         # Calculate combined temperature
+        if not temps:
+            # Neither BT50 nor any additional sensor produced a reading
+            return None
+
         if len(temps) == 1:
-            # Only NIBE sensor available
-            return nibe_temp
+            return temps[0]
 
         if self._indoor_temp_method == "median":
             # Median is more robust to outliers (recommended)

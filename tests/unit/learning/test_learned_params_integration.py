@@ -12,7 +12,11 @@ import pytest
 
 from custom_components.effektguard.const import (
     LEARNING_CONFIDENCE_THRESHOLD,
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
+    SAMPLES_PER_HOUR,
+    UFHType,
+    UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.optimization.learning_types import (
     LearnedThermalParameters,
@@ -20,7 +24,6 @@ from custom_components.effektguard.optimization.learning_types import (
 from custom_components.effektguard.optimization.prediction_layer import (
     ThermalStatePredictor,
 )
-from custom_components.effektguard.const import UFHType
 
 
 @pytest.fixture
@@ -28,11 +31,13 @@ def predictor_with_history():
     """Create a ThermalStatePredictor with sufficient history for predictions."""
     predictor = ThermalStatePredictor()
 
-    # Add 120 observations (30 hours at 4 per hour) - more than 96 required
+    # Count and cadence are derived from constants (records one sample every UPDATE_INTERVAL_MINUTES)
+    # so the fixture cannot drift from the gate it is meant to clear.
+    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
     base_time = datetime.now()
-    for i in range(120):
+    for i in range(required + SAMPLES_PER_HOUR):
         predictor.record_state(
-            timestamp=base_time - timedelta(minutes=15 * i),
+            timestamp=base_time - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
             indoor_temp=21.0 + (i % 4) * 0.1,  # Small variation
             outdoor_temp=0.0,
             heating_offset=1.0,

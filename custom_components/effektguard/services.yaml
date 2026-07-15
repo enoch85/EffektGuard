@@ -53,23 +53,15 @@ boost_heating:
 
 boost_dhw:
   name: Boost DHW
-  description: Force DHW heating to target temperature (for immediate hot water needs)
+  description: >-
+    Start an immediate hot-water boost via NIBE temporary lux. The pump heats to its own lux
+    temperature; EffektGuard keeps the boost running for the requested duration (price
+    optimization will not cancel it - only the thermal-debt safety stop will) and then turns
+    it off.
   fields:
-    target_temp:
-      name: Target temperature
-      description: Target DHW temperature (40-70°C)
-      required: false
-      default: 55.0
-      example: 60.0
-      selector:
-        number:
-          min: 40.0
-          max: 70.0
-          step: 1.0
-          unit_of_measurement: "°C"
     duration:
       name: Duration
-      description: Maximum heating duration (minutes)
+      description: How long the boost may run before EffektGuard turns it off (minutes)
       required: false
       default: 90
       example: 120

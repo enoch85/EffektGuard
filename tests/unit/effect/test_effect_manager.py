@@ -13,7 +13,9 @@ import pytest_asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from custom_components.effektguard.const import POWER_SOURCE_EXTERNAL_METER
 from custom_components.effektguard.optimization.effect_layer import (
+    is_daytime_hour,
     EffectManager,
     EffectLayerDecision,
     PeakEvent,
@@ -47,7 +49,7 @@ class TestPeakEvent:
         timestamp = datetime(2025, 10, 14, 12, 30)
         peak = PeakEvent(
             timestamp=timestamp,
-            quarter_of_day=50,
+            period_of_day=50,
             actual_power=5.5,
             effective_power=5.5,
             is_daytime=True,
@@ -56,7 +58,7 @@ class TestPeakEvent:
         data = peak.to_dict()
 
         assert data["timestamp"] == timestamp.isoformat()
-        assert data["quarter_of_day"] == 50
+        assert data["period_of_day"] == 50
         assert data["actual_power"] == 5.5
         assert data["effective_power"] == 5.5
         assert data["is_daytime"] is True
@@ -66,45 +68,38 @@ class TestPeakEvent:
         timestamp = datetime(2025, 10, 14, 12, 30)
         data = {
             "timestamp": timestamp.isoformat(),
-            "quarter_of_day": 50,
+            "period_of_day": 12,
             "actual_power": 5.5,
             "effective_power": 5.5,
             "is_daytime": True,
+            "source": POWER_SOURCE_EXTERNAL_METER,
         }
 
         peak = PeakEvent.from_dict(data)
 
-        assert peak.quarter_of_day == 50
+        assert peak.period_of_day == 12
         assert peak.actual_power == 5.5
         assert peak.effective_power == 5.5
         assert peak.is_daytime is True
 
 
-class TestQuarterOfDayCalculation:
-    """Test 15-minute quarter calculation."""
+class TestTheBillingPeriodIsTheHour:
+    """The effect tariff is billed on the HOURLY mean, day 06:00-22:00 at full weight.
 
-    def test_daytime_quarters(self):
-        """Test daytime quarter range (06:00-22:00)."""
-        # 06:00 = quarter 24
-        assert 24 == (6 * 4) + (0 // 15)
-        # 22:00 = quarter 88
-        assert 88 == (22 * 4) + (0 // 15)
-        # 21:45 = quarter 87 (last daytime quarter)
-        assert 87 == (21 * 4) + (45 // 15)
+    Ellevio: "the measurement uses hourly averages"; Energimarknadsinspektionen:
+    "elnatsforetagen mater din elanvandning per timme".
+    """
 
-        # Verify daytime range
-        for quarter in range(24, 88):
-            hour = quarter // 4
-            assert 6 <= hour < 22, f"Quarter {quarter} should be daytime"
+    def test_daytime_runs_06_to_22(self):
+        for hour in range(6, 22):
+            assert is_daytime_hour(hour), f"{hour:02d}:00 is billed at the full rate"
 
-    def test_nighttime_quarters(self):
-        """Test nighttime quarter range (22:00-06:00)."""
-        # 22:00 = quarter 88 (first nighttime)
-        assert 88 == (22 * 4) + (0 // 15)
-        # 00:00 = quarter 0
-        assert 0 == (0 * 4) + (0 // 15)
-        # 05:45 = quarter 23 (last nighttime)
-        assert 23 == (5 * 4) + (45 // 15)
+    def test_the_night_discount_runs_22_to_06(self):
+        for hour in list(range(22, 24)) + list(range(0, 6)):
+            assert not is_daytime_hour(hour), (
+                f"{hour:02d}:00 falls in Ellevio's 22:00-06:00 window, where "
+                f"'raknas bara halva effekttoppen'"
+            )
 
 
 class TestEffectivePoweCalculation:
@@ -114,11 +109,11 @@ class TestEffectivePoweCalculation:
     async def test_daytime_full_weight(self, effect_manager):
         """Test daytime power at full weight (06:00-22:00)."""
         timestamp = datetime(2025, 10, 14, 12, 30)  # 12:30 = daytime
-        quarter = 50  # 12:30
+        billing_hour = 12  # 12:30
 
-        peak = await effect_manager.record_quarter_measurement(
+        peak = await effect_manager.record_period_measurement(
             power_kw=6.0,
-            quarter=quarter,
+            period=timestamp.hour,
             timestamp=timestamp,
         )
 
@@ -131,11 +126,11 @@ class TestEffectivePoweCalculation:
     async def test_nighttime_half_weight(self, effect_manager):
         """Test nighttime power at 50% weight (22:00-06:00)."""
         timestamp = datetime(2025, 10, 14, 23, 30)  # 23:30 = nighttime
-        quarter = 94  # 23:30
+        billing_hour = 23  # 23:30
 
-        peak = await effect_manager.record_quarter_measurement(
+        peak = await effect_manager.record_period_measurement(
             power_kw=6.0,
-            quarter=quarter,
+            period=timestamp.hour,
             timestamp=timestamp,
         )
 
@@ -152,11 +147,11 @@ class TestPeakTracking:
     async def test_records_first_peak(self, effect_manager):
         """Test recording first peak."""
         timestamp = datetime(2025, 10, 14, 12, 0)
-        quarter = 48
+        billing_hour = 12
 
-        peak = await effect_manager.record_quarter_measurement(
+        peak = await effect_manager.record_period_measurement(
             power_kw=5.0,
-            quarter=quarter,
+            period=timestamp.hour,
             timestamp=timestamp,
         )
 
@@ -167,12 +162,10 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_fills_top_three_peaks(self, effect_manager):
         """Test filling top 3 peaks."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
-
-        # Add 3 peaks with different powers
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
-        await effect_manager.record_quarter_measurement(6.0, 49, timestamp)
-        await effect_manager.record_quarter_measurement(7.0, 50, timestamp)
+        # The tariff counts at most one peak per day, so the top 3 come from three days.
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
         assert len(effect_manager._monthly_peaks) == 3
         # Should be sorted highest first
@@ -183,15 +176,15 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_replaces_lowest_peak(self, effect_manager):
         """Test replacing lowest peak when exceeding top 3."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
+        # Fill top 3 from three days - the tariff counts at most one peak per day
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
-        # Fill top 3
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
-        await effect_manager.record_quarter_measurement(6.0, 49, timestamp)
-        await effect_manager.record_quarter_measurement(7.0, 50, timestamp)
-
-        # Add higher peak - should replace 5.0
-        peak = await effect_manager.record_quarter_measurement(8.0, 51, timestamp)
+        # A fourth day beats the lowest counted day - should replace 5.0
+        peak = await effect_manager.record_period_measurement(
+            8.0, 12, datetime(2025, 10, 17, 12, 0)
+        )
 
         assert peak is not None
         assert len(effect_manager._monthly_peaks) == 3
@@ -204,15 +197,15 @@ class TestPeakTracking:
     @pytest.mark.asyncio
     async def test_ignores_lower_peak(self, effect_manager):
         """Test ignoring peak lower than top 3."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
+        # Fill top 3 from three days - the tariff counts at most one peak per day
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
+        await effect_manager.record_period_measurement(7.0, 12, datetime(2025, 10, 16, 12, 0))
 
-        # Fill top 3
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
-        await effect_manager.record_quarter_measurement(6.0, 49, timestamp)
-        await effect_manager.record_quarter_measurement(7.0, 50, timestamp)
-
-        # Try to add lower peak
-        peak = await effect_manager.record_quarter_measurement(4.0, 51, timestamp)
+        # A fourth day below all three counted days changes nothing
+        peak = await effect_manager.record_period_measurement(
+            4.0, 12, datetime(2025, 10, 17, 12, 0)
+        )
 
         assert peak is None  # Should not create new peak
         assert len(effect_manager._monthly_peaks) == 3
@@ -226,7 +219,7 @@ class TestPeakAvoidanceLogic:
         """Test no limit when no peaks recorded."""
         decision = effect_manager.should_limit_power(
             current_power=5.0,
-            current_quarter=48,  # Daytime
+            current_period=12,  # Daytime
         )
 
         assert decision.should_limit is False
@@ -239,12 +232,12 @@ class TestPeakAvoidanceLogic:
         timestamp = datetime(2025, 10, 14, 12, 0)
 
         # Set up peak at 5.0 kW
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         # Test with power exceeding peak
         decision = effect_manager.should_limit_power(
             current_power=6.0,  # Exceeds 5.0 kW peak
-            current_quarter=50,  # Daytime
+            current_period=12,  # Daytime
         )
 
         assert decision.should_limit is True
@@ -257,12 +250,12 @@ class TestPeakAvoidanceLogic:
         timestamp = datetime(2025, 10, 14, 12, 0)
 
         # Set up peak at 5.0 kW
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         # Test with power within 0.5 kW
         decision = effect_manager.should_limit_power(
             current_power=4.7,  # Within 0.5 kW (margin 0.3)
-            current_quarter=50,  # Daytime
+            current_period=12,  # Daytime
         )
 
         assert decision.should_limit is True
@@ -275,12 +268,12 @@ class TestPeakAvoidanceLogic:
         timestamp = datetime(2025, 10, 14, 12, 0)
 
         # Set up peak at 5.0 kW
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         # Test with power within 1.0 kW
         decision = effect_manager.should_limit_power(
             current_power=4.3,  # Within 1.0 kW (margin 0.7)
-            current_quarter=50,  # Daytime
+            current_period=12,  # Daytime
         )
 
         assert decision.should_limit is True
@@ -293,12 +286,12 @@ class TestPeakAvoidanceLogic:
         timestamp = datetime(2025, 10, 14, 12, 0)
 
         # Set up peak at 5.0 kW
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         # Test with power well below peak
         decision = effect_manager.should_limit_power(
             current_power=3.5,  # 1.5 kW margin
-            current_quarter=50,  # Daytime
+            current_period=12,  # Daytime
         )
 
         assert decision.should_limit is False
@@ -311,12 +304,12 @@ class TestPeakAvoidanceLogic:
         timestamp = datetime(2025, 10, 14, 12, 0)
 
         # Set up daytime peak at 5.0 kW effective
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         # Test nighttime power - 10.0 kW actual = 5.0 kW effective
         decision = effect_manager.should_limit_power(
             current_power=10.0,  # But effective = 5.0 (50% weight)
-            current_quarter=94,  # 23:30 = nighttime
+            current_period=23,  # 23:30 = nighttime
         )
 
         # Should match peak exactly (margin = 0)
@@ -331,11 +324,11 @@ class TestPeakProtectionOffset:
     async def test_returns_recommended_offset(self, effect_manager):
         """Test returns recommended offset when limiting."""
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         offset = effect_manager.get_peak_protection_offset(
             current_power=6.0,  # Exceeds peak
-            current_quarter=50,
+            current_period=12,  # the same DAYTIME hour the peak was recorded in
             base_offset=0.0,
         )
 
@@ -345,11 +338,11 @@ class TestPeakProtectionOffset:
     async def test_returns_zero_when_safe(self, effect_manager):
         """Test returns zero when safe margin."""
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, timestamp)
 
         offset = effect_manager.get_peak_protection_offset(
             current_power=3.0,  # Safe margin
-            current_quarter=50,
+            current_period=12,  # the same DAYTIME hour the peak was recorded in
             base_offset=0.0,
         )
 
@@ -366,7 +359,7 @@ class TestPersistentState:
 
         with patch.object(manager._store, "async_save") as mock_save:
             timestamp = datetime(2025, 10, 14, 12, 0)
-            await manager.record_quarter_measurement(5.0, 48, timestamp)
+            await manager.record_period_measurement(5.0, 12, timestamp)
 
             await manager.async_save()
 
@@ -387,10 +380,11 @@ class TestPersistentState:
             "peaks": [
                 {
                     "timestamp": timestamp.isoformat(),
-                    "quarter_of_day": 48,
+                    "period_of_day": 12,
                     "actual_power": 5.0,
                     "effective_power": 5.0,
                     "is_daytime": True,
+                    "source": POWER_SOURCE_EXTERNAL_METER,
                 }
             ]
         }
@@ -418,9 +412,8 @@ class TestMonthlySummary:
     @pytest.mark.asyncio
     async def test_summary_with_peaks(self, effect_manager):
         """Test summary with peaks."""
-        timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(5.0, 48, timestamp)
-        await effect_manager.record_quarter_measurement(6.0, 49, timestamp)
+        await effect_manager.record_period_measurement(5.0, 12, datetime(2025, 10, 14, 12, 0))
+        await effect_manager.record_period_measurement(6.0, 12, datetime(2025, 10, 15, 12, 0))
 
         summary = effect_manager.get_monthly_peak_summary()
 
@@ -467,9 +460,9 @@ class TestEvaluateLayer:
         """Exceeding peak returns critical offset."""
         # First record a peak so we have a threshold
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(8.0, 48, timestamp)
+        await effect_manager.record_period_measurement(8.0, 12, timestamp)
 
-        # Mock dt_util.now() to ensure daytime (quarter calculation is correct)
+        # Mock dt_util.now() to ensure daytime (billing_hour calculation is correct)
         with patch("custom_components.effektguard.utils.time_utils.dt_util") as mock_dt:
             mock_dt.now.return_value = datetime(2025, 10, 14, 12, 30)  # Daytime, Q50
 
@@ -490,7 +483,7 @@ class TestEvaluateLayer:
         """Rapid cooling trend triggers predictive peak avoidance."""
         # Record a peak
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_quarter_measurement(7.0, 48, timestamp)
+        await effect_manager.record_period_measurement(7.0, 12, timestamp)
 
         # Test with power close to peak AND rapid cooling (predicts power increase)
         decision = effect_manager.evaluate_layer(

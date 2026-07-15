@@ -77,10 +77,15 @@ climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm example
 outdoor_temp = -10.0
 dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
 
-# Thresholds automatically adapt to location and conditions:
-# Stockholm at -10°C: normal_min=-450, normal_max=-700, warning=-700, critical=-1500
-# Kiruna at -30°C: normal_min=-800, normal_max=-1200, warning=-1200, critical=-1500
-# Paris at 5°C: normal_min=-200, normal_max=-350, warning=-350, critical=-1500
+# Thresholds automatically adapt to location and conditions.
+# VERIFIED against ClimateZoneDetector.get_expected_dm_range(), 2026-07-12:
+# Stockholm (59.33) at -10°C: normal_min=-490,  normal_max=-740,  warning=-740,  critical=-1500
+# Kiruna    (67.86) at -30°C: normal_min=-1000, normal_max=-1400, warning=-1400, critical=-1500
+# Paris     (48.86) at  +5°C: normal_min=-100,  normal_max=-250,  warning=-250,  critical=-1500
+#
+# NOTE: normal_max == warning in every zone (DM_CRITICAL_T1_MARGIN is 0), so the WARNING band
+# has ZERO WIDTH and is unreachable. That is a known open finding, not a typo - do not "fix"
+# the table to hide it.
 
 if degree_minutes < dm_range["critical"]:  # Always -1500 (absolute maximum)
     # Emergency recovery mode
@@ -91,32 +96,42 @@ elif degree_minutes < dm_range["warning"]:  # Zone-specific warning threshold
 if degree_minutes < -500:  # DANGEROUS - ignores climate context!
 ```
 
-**Key Safety Constants:**
+**Key Safety Constants:** (these two are the only DM thresholds that are constants)
 ```python
 from .const import (
-    DM_THRESHOLD_START,              # -60 (normal compressor start)
-    DM_THRESHOLD_EXTENDED,           # -240 (extended runs, acceptable)
-    DM_THRESHOLD_AUX_LIMIT,          # -1500 (auxiliary heat limit, avoid exceeding)
+    DM_THRESHOLD_START,              # -60   (normal compressor start, NIBE menu 4.9.3)
+    DM_THRESHOLD_AUX_LIMIT,          # -1500 (auxiliary heat limit)
 )
-
-# Climate zone system provides context-aware thresholds:
-# - DM_THRESHOLD_WARNING: Climate/temp specific (e.g., -700 for Stockholm at -10°C)
-# - DM_THRESHOLD_AUX_LIMIT: Always -1500 (validated in Swedish forums)
 ```
+
+There is **no `DM_THRESHOLD_WARNING` and no `DM_THRESHOLD_EXTENDED`.** The warning threshold is
+**computed per climate zone and outdoor temperature**, not stored:
+
+```python
+dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
+dm_range["warning"]   # Stockholm at -10°C: -740  (NOT -700)
+dm_range["critical"]  # always -1500
+```
+
+⚠️ On the owner's F750 the pump's own **"start addition"** (menu 4.9.3) fires at **-700** by
+default - *before* EffektGuard's Stockholm warning threshold of -740 is ever reached. The
+auxiliary heater engages first and works DM back up. Do not reason about DM -1500 as if the
+elpatron were not there; see F-112/F-129 in the audit.
 
 ### Four-Layer Structure
 
 1. **Integration Layer** (`custom_components/effektguard/`): Home Assistant-specific
    - Config flow for user setup (`config_flow.py`)
-   - Entity creation (`climate.py`, `sensor.py`, `number.py`, etc.)
+   - Entity creation (`climate.py`, `sensor.py`, `switch.py` - those three platforms
+     only; Number and Select were deliberately removed, see PLATFORMS in `__init__.py`)
    - Coordinator for data updates (`coordinator.py`)
    - Service registration (`services.yaml`)
 
 2. **Optimization Engine** (`optimization/`): Pure Python logic
-   - Energy budget management (`effect_manager.py`)
-   - Thermal modeling (`thermal_model.py`)
+   - Energy budget management (`effect_layer.py`)
+   - Thermal modeling (`thermal_layer.py`)
    - Multi-layer decision engine (`decision_engine.py`)
-   - Price analysis (`price_analyzer.py`)
+   - Price analysis (`price_layer.py`)
    - All return domain objects, no HA dependencies
 
 3. **Data Adapters** (`adapters/`): External integration interfaces
@@ -125,11 +140,14 @@ from .const import (
    - Weather forecast reader (`weather_adapter.py`)
    - All read from existing HA entities, no direct API calls
 
-4. **Validation Layer** (`utils/validators.py`): Configuration safety
-   - Pump configuration detection (open-loop requires Auto mode)
-   - System type identification (open-loop vs buffered vs mixed)
-   - UFH type detection (concrete slab vs timber vs radiator)
-   - Critical warnings that block activation
+4. **Utilities** (`utils/`): `compressor_monitor.py` (frequency/wear risk), `emitter.py`
+   (EN 442 / EN 1264 emitter law), `time_utils.py`, `volatile_helpers.py`
+
+   There is **no validation layer**. Config-time validation lives in `config_flow.py`;
+   run-time safety lives in `DecisionEngine._safety_layer()` (the comfort floor/ceiling, a
+   method - not a file) and in `EmergencyLayer` in `optimization/thermal_layer.py` (degree-minute
+   thermal debt, tiered recovery). Do not go looking for `utils/validators.py` - it has never
+   existed.
 
 **Data Flow:**
 ```
@@ -138,7 +156,9 @@ Optimization Engine → Decision → Climate Entity → NIBE Offset Control
 ```
 
 **Cross-Cutting:**
-- **Safety** (`utils/safety.py`): Thermal debt tracking, emergency recovery
+- **Safety**: `DecisionEngine._safety_layer()` (comfort floor/ceiling) and `EmergencyLayer` in
+  `optimization/thermal_layer.py` (degree-minute thermal debt, tiered recovery).
+  There is no `utils/safety.py` and no `optimization/safety_layer.py`.
 - **Configuration** (`config_flow.py`): Validation, warnings, guided setup
 - **Constants** (`const.py`): All thresholds, defaults, entity IDs patterns
 
@@ -155,18 +175,24 @@ Before editing, use `read_file` for entire file. Understand heat pump context, i
 ```python
 # ✅ Do this
 from .const import (
-    DM_THRESHOLD_CRITICAL,
+    DM_THRESHOLD_AUX_LIMIT,
+    DEFAULT_CURVE_SENSITIVITY,
     UFH_CONCRETE_PREDICTION_HORIZON,
-    OPTIMAL_FLOW_DELTA_SPF_4,
 )
 
 if ufh_type == "concrete_slab":
-    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 12.0 hours
+    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 24.0 hours
 
 # ❌ Never this
 if ufh_type == "concrete_slab":
-    horizon = 12.0  # Hardcoded!
+    horizon = 24.0  # Hardcoded!
 ```
+
+Every name above is real; import them and see. This example used to name
+`DM_THRESHOLD_CRITICAL` and `OPTIMAL_FLOW_DELTA_SPF_4`, **neither of which exists**, and
+annotated the horizon as 12.0 when the constant is 24.0 - so the "correct" branch produced
+the same wrong number as the "hardcoded" one it was warning against. Check names against
+`const.py` before repeating them here.
 
 ### Safety Thresholds Are Non-Negotiable
 
@@ -226,8 +252,8 @@ grep -rE "\* -?[0-9]+\.[0-9]+" custom_components/effektguard/ | grep -v "const.p
 grep -r "0.4" custom_components/effektguard/  # Example: tolerance multiplier
 grep -r "WARNING_DEVIATION_THRESHOLD" custom_components/effektguard/  # Should be imported
 
-# Test imports
-python3 -c "from custom_components.effektguard.optimization.thermal_model import ThermalModel"
+# Test imports (every module in optimization/ is *_layer.py - there is no thermal_model.py)
+python3 -c "from custom_components.effektguard.optimization.thermal_layer import ThermalModel"
 
 # Run Black formatting
 black custom_components/effektguard/ --check --line-length 100
@@ -268,7 +294,7 @@ def check_deviation(deviation: float) -> str:
 ```
 
 **Constant Reuse Across Files:**
-- Production code (`decision_engine.py`, `thermal_model.py`, etc.) imports from `const.py`
+- Production code (`decision_engine.py`, `thermal_layer.py`, etc.) imports from `const.py`
 - Test code (`tests/`, `scripts/test_decision_scenarios.py`) imports SAME constants
 - NO duplicate definitions - single source of truth
 - If constant exists, use it everywhere applicable
@@ -307,7 +333,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 # Local (relative imports)
-from .const import DOMAIN, DM_THRESHOLD_CRITICAL
+from .const import DOMAIN, DM_THRESHOLD_AUX_LIMIT
 from .optimization.decision_engine import DecisionEngine
 ```
 
@@ -394,12 +420,14 @@ def calculate_preheating_target(
         Target indoor temperature for pre-heating phase (°C)
         
     Notes:
-        Based on research showing load shifting without battery is ineffective.
-        Uses moderate pre-heating to prevent thermal debt (DM < -500 catastrophic).
-        
+        Six hours is the slab's LAG, not its horizon: it is only ~19% charged at 14 h and
+        ~29% at 24 h (slow time constant ~70 h), so a cold snap has to be seen at least a
+        day out, not six hours out.
+
     References:
-        - Forum_Summary.md: stevedvo's thermal debt case study
-        - Enhancement_Proposals.md: Thermal model mathematics
+        - docs/research/03_concrete_slab_response.md: the two-node transient, why the
+          horizon is 24 h, and the OPEN pre-heat sizing question (owner decision)
+        - docs/research/01_degree_minutes.md: why DM cannot see under-heating we cause
     """
 ```
 
@@ -623,11 +651,15 @@ plt.savefig("docs/dev/debug_issue_description.png", dpi=150)
 - `const.py` - ALL constants and thresholds
 - `climate.py` - Main climate entity
 
-**Optimization:**
-- `optimization/decision_engine.py` - Multi-layer decision logic
-- `optimization/thermal_model.py` - Thermal calculations
-- `optimization/effect_manager.py` - Peak tracking (15-minute windows)
-- `optimization/price_analyzer.py` - Spot price classification
+**Optimization:** (every module here is `*_layer.py`, not `*_model/_manager/_analyzer.py`)
+- `optimization/decision_engine.py` - Multi-layer decision logic; also holds `_safety_layer()`
+- `optimization/thermal_layer.py` - `ThermalModel`, `EmergencyLayer` (DM debt), `ProactiveLayer`
+- `optimization/effect_layer.py` - Peak tracking (15-minute windows)
+- `optimization/price_layer.py` - Spot price classification
+- `optimization/comfort_layer.py`, `weather_layer.py`, `prediction_layer.py`
+- `optimization/adaptive_learning.py` - Observing only; does not drive control (see F-132)
+- `optimization/dhw_optimizer.py`, `airflow_optimizer.py`, `climate_zones.py`,
+  `savings_calculator.py`, `weather_learning.py`
 
 **Adapters:**
 - `adapters/nibe_adapter.py` - Read NIBE MyUplink entities
@@ -635,8 +667,13 @@ plt.savefig("docs/dev/debug_issue_description.png", dpi=150)
 - `adapters/weather_adapter.py` - Read weather forecast
 
 **Safety:**
-- `utils/validators.py` - Configuration validation
-- `utils/safety.py` - Thermal debt tracking
+- `DecisionEngine._safety_layer()` in `optimization/decision_engine.py` - comfort floor/ceiling
+- `EmergencyLayer` in `optimization/thermal_layer.py` - degree-minute thermal debt, tiered recovery
+- `utils/compressor_monitor.py` - compressor frequency and wear risk
+
+**Utilities:**
+- `utils/emitter.py` - EN 442 / EN 1264 emitter law
+- `utils/time_utils.py`, `utils/volatile_helpers.py`
 
 ---
 
@@ -682,7 +719,7 @@ Format: black applied"
 
 ❌ **Editing without full NIBE context** - Read research docs first
 ❌ **Hardcoding safety thresholds** - Use constants from `const.py`
-❌ **Guessing NIBE behavior** - Verify with Forum_Summary.md or similar
+❌ **Guessing NIBE behavior** - Verify against `docs/research/` (or the NIBE manual it cites)
 ❌ **Incomplete refactoring** - Update ALL callers including tests
 ❌ **Forgetting safety validation** - All optimization must respect thermal debt
 ❌ **Skipping Black formatting** - Always format before commit
@@ -711,65 +748,81 @@ DM_CRITICAL = -500  # Line 18
 DM_CRITICAL = -400  # Line 26 (different value!)
 
 # ✅ One definition in const.py
-DM_THRESHOLD_CRITICAL = -500  # stevedvo case study
+DM_THRESHOLD_AUX_LIMIT = -1500  # auxiliary heat limit
 ```
 
 ### Document NIBE-Specific Calculations
 
 ```python
-# ✅ Show NIBE research basis
-# Open-loop UFH prediction horizon (glyn.hudson case study)
-# Concrete slab: 6+ hours thermal lag observed
-# Requires 12-hour prediction for proper pre-heating
-UFH_CONCRETE_PREDICTION_HORIZON = 12.0  # hours
+# ✅ Show the research basis
+# Concrete slab: 6+ hours of conduction lag from pipe to floor surface, but the slab is only
+# ~19% charged at 14 h and ~29% at 24 h (slow time constant ~70 h). Six hours is the LAG;
+# twenty-four is the MINIMUM horizon. Confirmed on the owner's slab (2-node, 100 mm + 60 mm).
+UFH_CONCRETE_PREDICTION_HORIZON = 24.0  # hours
 
 # ❌ No context
-HORIZON = 12.0
+HORIZON = 24.0
 ```
+
+(This example used to say `12.0`, which is simply not the value - a doc that teaches you to
+document your reasoning while getting its own number wrong. Check `const.py`.)
 
 ### Reference Research Documents
 
 ```python
 # ✅ Good - traceable to research
-# Thermal debt threshold based on stevedvo's F2040 real-world failure
-# DM -500 caused: 15kW spikes, 10°K overshoot, catastrophic inefficiency
-# Swedish term: Gradminuter (GM), NIBE Menu 4.9.3
-# Swedish auxiliary optimization: -1000 to -1500 (prevents excessive aux heat)
-# Source: Forum_Summary.md, Swedish_NIBE_Forum_Findings.md
-DM_THRESHOLD_CRITICAL = -500
-DM_THRESHOLD_AUX_SWEDISH = -1500
+# Degree minutes: DM = integral(BT25 - S1) dt. Swedish: Gradminuter (GM), NIBE menu 4.9.3.
+# "start addition" (the immersion heater) defaults to -700 on the F750, range -2000..-30;
+# it engages there deliberately, to spare the compressor, and works DM back UP.
+# Source: NIBE F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3
+DM_THRESHOLD_AUX_LIMIT = -1500  # absolute floor, never to be reached in normal operation
 
 # ❌ Bad - no justification
-DM_THRESHOLD_CRITICAL = -500  # Don't go below this
+DM_THRESHOLD_AUX_LIMIT = -1500  # Don't go below this
 ```
 
 ### Black Formatting in Docstrings
 
 ```python
-# ✅ Formatted with Black
-def calculate_optimal_flow_temp(
-    self,
+# ✅ Formatted with Black. This is the real signature - see utils/emitter.py.
+def en442_flow_temp(
     indoor_setpoint: float,
     outdoor_temp: float,
-    heat_loss_coefficient: float = 180.0,
+    design_outdoor_temp: float,
+    design_flow_temp: float,
+    design_spread: float,
+    emitter_exponent: float,
 ) -> float:
-    """Calculate optimal flow temperature using André Kühne's formula.
-    
-    Validated across manufacturers: Vaillant, Daikin, Mitsubishi, NIBE.
-    
+    """Flow temperature the emitters need to hold ``indoor_setpoint`` at ``outdoor_temp``.
+
     Args:
-        indoor_setpoint: Target indoor temperature (°C)
-        outdoor_temp: Current outdoor temperature (°C)
-        heat_loss_coefficient: Building heat loss (W/°C), default 180.0
-        
+        indoor_setpoint: Target indoor temperature (C).
+        outdoor_temp: Current outdoor temperature (C).
+        design_outdoor_temp: Dimensioning outdoor temperature the emitters were sized for (C).
+        design_flow_temp: Supply temperature the system needs at ``design_outdoor_temp`` (C).
+        design_spread: Flow-return spread at the design load (C).
+        emitter_exponent: EN 442 exponent n (1.3 radiators, 1.1 underfloor).
+
     Returns:
-        Optimal flow temperature (°C)
-        
+        Required flow temperature (C). Never below ``indoor_setpoint``: water colder than the
+        room removes heat from it.
+
     References:
-        Mathematical_Enhancement_Summary.md: André Kühne's formula
-        Formula: TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
+        docs/research/02_emitter_law.md - EN 442-1 §3.31, EN 12831, EN 1264, and the
+        validation against NIBE's own published curve 9.
     """
 ```
+
+⚠️ **This example used to show "André Kühne's formula",
+`TFlow = 2.55 × (HC × (Tset − Tout))^0.78 + Tset`, and cite a research document that is not in
+this repository.** That model is **gone** (audit F-119/F-121) — it was being fed a **heat-loss
+coefficient** where the derivation requires a **dimensionless relative load**, so a dimensionally
+inconsistent input went into a structurally correct law and produced numbers that looked plausible
+and were not. It drove the flow temperature of a real heat pump. **Do not reintroduce it.** The
+flow temperature comes from the EN 442 emitter law, in `utils/emitter.py`.
+
+(The `0.78` was not wrong, incidentally — it is `1/n` for `n = 1.3`, the inverse emitter exponent.
+The structure was right; the input was not. `docs/research/02_emitter_law.md` shows the derivation.)
 
 ---
 
@@ -784,27 +837,69 @@ def calculate_optimal_flow_temp(
 - S1 = target flow temperature
 - Standard compressor start: DM -60
 - Extended runs: DM -240 (stevedvo custom setting, acceptable)
-- **CLIMATE-AWARE WARNING**: Varies by zone and outdoor temp
-  - Stockholm at -10°C: DM -700 warning threshold
-  - Kiruna at -30°C: DM -1200 warning threshold
-  - Paris at 5°C: DM -350 warning threshold
-- **AUXILIARY LIMIT: DM -1500** (validated in Swedish forums, avoid exceeding to prevent expensive aux heat)
-- Use `ClimateZoneDetector.get_expected_dm_range(outdoor_temp)` for context-aware thresholds
+- **CLIMATE-AWARE WARNING**: Varies by zone and outdoor temp. **Computed, never stored** — always
+  call `ClimateZoneDetector.get_expected_dm_range(outdoor_temp)`. Verified 2026-07-12:
+  - Stockholm at -10°C: DM **-740** warning threshold (normal -490 to -740)
+  - Kiruna at -30°C: DM **-1400** warning threshold (normal -1000 to -1400)
+  - Paris at 5°C: DM **-250** warning threshold (normal -100 to -250)
+- **AUXILIARY LIMIT: DM -1500** — the absolute floor. ⚠️ **It is NOT the number that governs a real
+  F750.** The pump's own "start addition" (menu 4.9.3) defaults to **-700**: the immersion heater
+  engages there, deliberately, to spare the compressor, and works DM back UP. So on the owner's pump
+  the elpatron fires *before* Stockholm's -740 warning is even reached, and DM -1500 describes a
+  régime a healthy F750 never enters. The -1500 figure itself is attributed to "Swedish forums" and
+  **is not sourced in this repository** — see `docs/research/01_degree_minutes.md`.
 
 **Pump Configuration:**
 - **Open-loop UFH**: MUST use Auto mode, 10% (ASHP) or 20% (GSHP) idle
 - **Buffered systems**: Intermittent mode acceptable
 - Wrong setting = 8-hour off periods (glyn.hudson case)
 
-**UFH Types:**
-- **Concrete slab**: 6+ hours thermal lag, 12h prediction horizon
-- **Timber**: 2-3 hours lag, 6h prediction horizon  
-- **Radiators**: <1 hour lag, 2h prediction horizon
+**UFH Types:** (the horizons are `UFH_*_PREDICTION_HORIZON` in `const.py` — check them there)
+- **Concrete slab**: 6+ hours thermal lag, **24h** prediction horizon
+- **Timber**: 2-3 hours lag, **12h** prediction horizon
+- **Radiators**: <1 hour lag, **6h** prediction horizon
 
-**Flow Temperature Targets (OEM Research):**
-- SPF 4.0+ systems: Flow = Outdoor + 27°C ±3°C
-- SPF 3.5+ systems: Flow = Outdoor + 30°C ±4°C
-- Most systems run 5-15°C below optimal (huge opportunity)
+⚠️ **Six hours is the LAG, not the horizon.** The slab is only ~19 % charged at fourteen hours (slow time constant ~70 h), so a
+12 h window cannot see the thing that actually drains it: a slow, deep, multi-day slide shows less
+than 4 °C of drop in any twelve hours and never triggers the pre-heat at all, while the sudden plunge
+that *does* trigger it is the case the pump's own curve already handles.
+See `docs/research/03_concrete_slab_response.md` and audit F-130.
+
+**Flow Temperature — the EN 442 emitter law (`utils/emitter.py`):**
+
+The flow temperature is **not** a linear offset from outdoor temperature. It follows the emitter's
+own characteristic curve:
+
+```
+balance = T_room − INTERNAL_GAINS_W / heat_loss_coefficient    demand reaches zero HERE, not at T_room
+φ       = (balance − T_out) / (balance − T_out_design)         dimensionless relative load
+T_flow  = T_room + ΔT_design · φ^(1/n) + spread_design / 2     n = 1.3 radiators, 1.1 UFH
+```
+
+Two things in that equation are easy to get wrong, and they are easy to get wrong **in cancelling
+ways** — which is how both errors survived in this repository for months:
+
+1. **The spread is CONSTANT — never scale it by φ.** A fixed-speed circulator gives constant mass
+   flow and a load-proportional spread; that is a wet boiler. A heat pump *modulates* its circulator
+   to hold the commissioned spread. Scaling it runs the curve too cool in mild weather and too hot
+   in cold, pivoting **invisibly on the design point**.
+2. **Internal gains are WATTS, never degrees, and NEVER fitted to a curve.** Divide them by the
+   house's own W/K. A fixed offset in degrees would make a leaky house get *more* credit for the
+   same fridge, which is backwards.
+
+⚠️ **Do not "validate" this against NIBE's published curve.** That was tried, and it produced a
+wrong constant twice. NIBE's curve 9 is **a straight line to within 0.19 °C** (its slopes even
+wobble the wrong way) so it cannot resolve curvature at all; and the constant-spread and
+balance-point terms are **the same basis function with opposite signs**, so any assumed spread
+manufactures a matching "gains" figure — even out of a curve with provably zero gains. NIBE
+interpolates its curves linearly; we follow EN 442. **The gap between them is the trim, not an
+error.** See `docs/research/02_emitter_law.md`, and the tests that prove both claims in
+`tests/validation/test_emitter_law_matches_openenergymonitor.py`.
+
+⚠️ **This section used to offer "SPF 4.0+ systems: Flow = Outdoor + 27 °C ±3 °C" as OEM research.**
+That is a LINEAR rule — the very thing the emitter law was chosen over — sitting in the document
+that tells contributors how to implement. There are no `OPTIMAL_FLOW_DELTA_SPF_*` constants: it
+described a model this codebase does not have.
 
 **MyUplink API:**
 - Update interval: ~60 seconds
@@ -813,11 +908,30 @@ def calculate_optimal_flow_temp(
 
 ### Always Check Research Before Implementing
 
-When implementing NIBE-specific features, reference:
-1. `IMPLEMENTATION_PLAN/02_Research/Forum_Summary.md` - Real F2040 cases
-2. `IMPLEMENTATION_PLAN/02_Research/Swedish_NIBE_Forum_Findings.md` - F750 optimizations
-3. `IMPLEMENTATION_PLAN/01_Algorithm/Setpoint_Optimizing_Algorithm.md` - Algorithm spec
-4. `IMPLEMENTATION_PLAN/03_API/MyUplink_Complete_Guide.md` - API details
+**`docs/research/` — in this repository, and citable:**
+
+1. `docs/research/01_degree_minutes.md` — what DM is; NIBE menu 4.9.3 (F750 Installer Manual
+   IHB GB 1301-1); why the **elpatron at -700**, not -1500, is the number that governs a real F750;
+   and why DM is structurally **blind to under-heating EffektGuard itself causes** (lowering the
+   offset lowers S1, so DM *improves* while the house cools).
+2. `docs/research/02_emitter_law.md` — EN 442-1 §3.23/§3.31, EN 12831, EN 1264. The flow-temperature
+   model, checked against NIBE's own published curve 9 (EN 442 with derived gains lands
+   +0.64 °C from it — and curve 9 is itself a straight line to within 0.19 °C, so it cannot
+   resolve curvature; the gap is the trim, not an error. See docs/research/02_emitter_law.md).
+3. `docs/research/03_concrete_slab_response.md` — the two-node transient. Why the horizon is 24 h and
+   the pre-heat is +2.0 °C.
+4. `docs/research/04_exhaust_air_recovery.md` — why "extra heat extracted" and "improved COP" are the
+   same joules, proven from NIBE's own S735 EN 14511 tables.
+
+Each note states plainly **what is not sourced**, so that nothing gets laundered into fact by being
+filed next to a standard.
+
+⚠️ **This list used to name four documents under `IMPLEMENTATION_PLAN/`. All four are gitignored and
+absent from the repository** — as are the other eleven research documents cited across the code
+(audit F-106). **Rule 13 above — "never guess NIBE behaviour, verify with research docs" — was
+therefore impossible to obey by anyone who cloned this repo.** A number with a confident citation to
+a document nobody has is worse than a number with no citation at all: it looks settled. If you add a
+constant, cite something a reader can actually open.
 
 ---
 
@@ -830,15 +944,30 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
     """Coordinate data updates for EffektGuard."""
-    
-    def __init__(self, hass: HomeAssistant, ...):
+
+    def __init__(self, hass: HomeAssistant, ..., entry: ConfigEntry):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,      # required: HA removes the ContextVar fallback in 2026.8
             name=DOMAIN,
-            update_interval=timedelta(minutes=5),
+            update_interval=None,    # NOT timedelta(minutes=5) - see below
         )
 ```
+
+⚠️ **`update_interval` is `None` on purpose.** This integration disables HA's own scheduler and
+drives itself from a clock-aligned timer (`_schedule_aligned_refresh`, every 5 min at :XX:10) so
+that updates land just after the sensors refresh and in step with the 15-minute price quarters.
+Two consequences you must not forget:
+
+- `_do_aligned_refresh` is the **sole owner** of that timer. If it ever returns without re-arming,
+  the coordinator is dead **permanently and silently** — `last_update_success` stays True and every
+  entity keeps serving its last value while the pump sits on the last offset written. That is why it
+  has a broad `except Exception` and a `finally`.
+- **`_async_update_data` is HA's READ hook and must NEVER write to the pump.** It is public,
+  debounced, and called by reloads, options changes and services. Writes belong to
+  `_drive_the_pump()`, which holds the control lock. (Audit F-063/F-131: `reset_peak_tracking` — a
+  service whose entire job is to clear a counter — used to drive the heat pump.)
 
 ### Config Flow for Setup
 
@@ -929,10 +1058,15 @@ When creating release notes via `gh release create`, use this exact format:
 - Comfort over cost (moderate optimization, not aggressive)
 - Real homes depend on this (heat pump health matters)
 
-**Research-Based:**
-- All thresholds from real NIBE failures and Swedish forum validation
-- Climate zone system: Adapts DM thresholds from Arctic (-30°C) to Mediterranean (5°C)
-- Mathematical formulas from OEM research (André Kühne, Timbones)
+**Research-Based** — and see `docs/research/`, which states plainly what is *not* sourced:
+- Flow temperature: the **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264), validated
+  against NIBE's own published curve. **Not** a fitted or linear formula.
+- Degree minutes and the auxiliary heater: the **NIBE F750 Installer Manual, IHB GB 1301-1**,
+  menu 4.9.3.
+- Climate zone system: adapts DM thresholds from Arctic (−30 °C) to Mediterranean (5 °C).
+- ⚠️ **Not everything is sourced.** The DM −1500 figure, the "20 % airflow COP" and the
+  `stevedvo` / `glyn.hudson` case studies rest on forum anecdote and on documents that are **not in
+  this repository**. They are marked as such where they appear. Do not launder them into fact.
 
 **Swedish-Specific:**
 - 15-minute effect tariff windows (quarterly measurement)
@@ -940,7 +1074,10 @@ When creating release notes via `gh release create`, use this exact format:
 - F750/F2040 focus with S-series support
 
 **Known Critical Issues:**
-- Climate-aware thermal debt thresholds (DM -1500 auxiliary limit, validated in Swedish forums)
+- Climate-aware thermal debt thresholds. ⚠️ **DM −1500 is the absolute floor, not the number that
+  governs a real F750** — the pump's own "start addition" fires at **−700** and works DM back up.
+  The −1500 figure is attributed to "Swedish forums" and is **not sourced in this repository**;
+  see `docs/research/01_degree_minutes.md`.
 - Open-loop pump Intermittent = 8-hour off periods
 - BT50 indoor sensor + UFH = instability (not recommended)
 - DHW during heating demand = thermal debt accumulation

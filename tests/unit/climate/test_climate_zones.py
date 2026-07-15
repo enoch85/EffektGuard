@@ -5,18 +5,18 @@ DM (Degree Minutes) thresholds for heat pump optimization.
 """
 
 from custom_components.effektguard.const import (
-    CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
-    CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
     CLIMATE_ZONE_COLD_WINTER_AVG,
+    CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_MODERATE_COLD_WINTER_AVG,
     CLIMATE_ZONE_STANDARD_WINTER_AVG,
+    CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
+    DM_THRESHOLD_AUX_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import (
     ClimateZoneDetector,
     ClimateZoneInfo,
     HEATING_CLIMATE_ZONES,
     ZONE_ORDER,
-    DM_ABSOLUTE_MAXIMUM,
 )
 
 
@@ -96,7 +96,7 @@ class TestDMRangeCalculations:
         assert dm_range["normal_min"] == -800
         assert dm_range["normal_max"] == -1200
         assert dm_range["warning"] == -1200
-        assert dm_range["critical"] == DM_ABSOLUTE_MAXIMUM
+        assert dm_range["critical"] == DM_THRESHOLD_AUX_LIMIT
 
     def test_cold_at_average(self):
         """Test Stockholm at winter average temperature."""
@@ -167,10 +167,10 @@ class TestDMRangeCalculations:
         dm_range = detector.get_expected_dm_range(CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG - 30.0)
 
         # Should stay above absolute maximum (less negative)
-        assert dm_range["normal_min"] > DM_ABSOLUTE_MAXIMUM
-        assert dm_range["normal_max"] > DM_ABSOLUTE_MAXIMUM
-        assert dm_range["warning"] > DM_ABSOLUTE_MAXIMUM
-        assert dm_range["critical"] == DM_ABSOLUTE_MAXIMUM
+        assert dm_range["normal_min"] > DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_max"] > DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["warning"] > DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["critical"] == DM_THRESHOLD_AUX_LIMIT
 
 
 class TestSafetyMargins:
@@ -259,8 +259,13 @@ class TestConstants:
             assert zone_key in HEATING_CLIMATE_ZONES
 
     def test_absolute_maximum_constant(self):
-        """Test DM_ABSOLUTE_MAXIMUM is defined correctly."""
-        assert DM_ABSOLUTE_MAXIMUM == -1500
+        """The absolute floor has ONE definition, and climate_zones publishes THAT one.
+
+        This used to assert DM_ABSOLUTE_MAXIMUM == -1500 - a test pinning the VALUE of a duplicate
+        constant, which is how the duplicate survived. What matters is that the threshold this
+        module publishes as `critical` is the same one the emergency tier fires on (F-076).
+        """
+        assert DM_THRESHOLD_AUX_LIMIT == -1500
 
     def test_zone_data_structure(self):
         """Test each zone has required fields."""
