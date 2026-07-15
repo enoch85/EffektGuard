@@ -66,18 +66,18 @@ class LoggingSparseBlock(ModbusSparseDataBlock):
 # F-series register ids are shared across F750/F1155 (verified: yozik04/nibe
 # f750.csv uses the same 40004/40013/43005/47011/48132 ids).
 REGISTERS_F750 = {
-    40004: s16(-32),   # BT1 outdoor -3.2 C (same site)
-    40008: s16(382),   # BT2 supply 38.2 C
-    40012: s16(320),   # BT3 return 32.0 C
-    40013: s16(512),   # BT7 HW top 51.2 C
-    40014: s16(460),   # BT6 HW charging 46.0 C
-    40033: s16(218),   # BT50 room 21.8 C
+    40004: s16(-32),  # BT1 outdoor -3.2 C (same site)
+    40008: s16(382),  # BT2 supply 38.2 C
+    40012: s16(320),  # BT3 return 32.0 C
+    40013: s16(512),  # BT7 HW top 51.2 C
+    40014: s16(460),  # BT6 HW charging 46.0 C
+    40033: s16(218),  # BT50 room 21.8 C
     43005: s16(-850),  # DM -85.0
-    43086: s16(30),    # Prio
-    43136: s16(450),   # Compressor 45.0 Hz
-    43427: s16(60),    # Running
-    47011: s16(0),     # Heat offset S1
-    48132: s16(0),     # Temporary Lux
+    43086: s16(30),  # Prio
+    43136: s16(450),  # Compressor 45.0 Hz
+    43427: s16(60),  # Running
+    47011: s16(0),  # Heat offset S1
+    48132: s16(0),  # Temporary Lux
 }
 
 
@@ -88,9 +88,7 @@ def main() -> None:
     device_f1155 = ModbusDeviceContext(hr=block, ir=block)
     block_f750 = LoggingSparseBlock({addr + 1: val for addr, val in REGISTERS_F750.items()})
     device_f750 = ModbusDeviceContext(hr=block_f750, ir=block_f750)
-    context = ModbusServerContext(
-        devices={1: device_f1155, 2: device_f750}, single=False
-    )
+    context = ModbusServerContext(devices={1: device_f1155, 2: device_f750}, single=False)
     LOG.info("Starting NIBE F1155 (unit 1) + F750 (unit 2) simulator on 127.0.0.1:5020")
     asyncio.run(StartAsyncTcpServer(context=context, address=("127.0.0.1", 5020)))
 

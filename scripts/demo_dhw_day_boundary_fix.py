@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test script to verify DHW day boundary fix."""
+
 from datetime import datetime, timedelta
 from custom_components.effektguard.const import DHW_NORMAL_RUNTIME_MINUTES
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
