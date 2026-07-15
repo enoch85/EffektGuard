@@ -137,15 +137,11 @@ HEATING_CLIMATE_ZONES: Final = {
 # Zone order for detection (coldest to mildest)
 ZONE_ORDER: Final = ["extreme_cold", "very_cold", "cold", "moderate_cold", "standard"]
 
-# The absolute safety limit lives in const.py as DM_THRESHOLD_AUX_LIMIT, and is imported above.
-# It used to be RESTATED here as DM_ABSOLUTE_MAXIMUM = -1500 - a second definition of the single
-# most safety-critical number in the project, in a second module. They were equal by coincidence,
-# not by construction. F-112 is open with the owner precisely because this number may be wrong; if
-# it changes, the EMERGENCY tier and the `critical` threshold published from here must move
-# together, or they disagree about when the house is in danger. (Audit F-076.)
-#
-# The buffers below keep the expected band clear of that floor, so a house sitting at the edge of
-# "normal" is not also sitting at the emergency trigger.
+# The absolute safety limit is imported from const.py (DM_THRESHOLD_AUX_LIMIT), never restated here:
+# a second copy could drift from the EMERGENCY tier and the `critical` threshold published here,
+# which must agree on when the house is in danger (F-112 is open because the number itself may be
+# wrong; audit F-076). The buffers below keep the expected band clear of that floor, so the edge of
+# "normal" is not also the emergency trigger.
 
 
 @dataclass
@@ -271,10 +267,9 @@ class ClimateZoneDetector:
           * At -10°C: DM -490 to -740 is normal
           * At   0°C: DM -290 to -540 is normal (8°C warmer than average = shallower)
 
-        This docstring previously cited -800/-1200 for Kiruna at -30°C and -450/-700 for
-        Stockholm at -10°C - the BASE ranges, i.e. the values before the temperature
-        adjustment this very method applies. docs/CLIMATE_ZONES.md repeated them, and every
-        one of its seventeen rows was wrong as a result.
+        The examples are the ADJUSTED ranges this method returns, not the base ranges before the
+        temperature adjustment; docs/CLIMATE_ZONES.md must match them row for row (checked by
+        tests/validation/test_climate_zones_doc_matches_the_code.py).
 
         Args:
             outdoor_temp: Current outdoor temperature (°C)

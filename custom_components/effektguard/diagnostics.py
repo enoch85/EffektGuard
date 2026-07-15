@@ -1,19 +1,13 @@
 """Diagnostics: what the decision actually saw.
 
-This integration commands a curve offset on a real heat pump from nine weighted layers, a
-climate-zone degree-minute band that is recomputed per house, a compressor-wear risk and a
-96-quarter price curve. When it gets that wrong, "the offset looked odd" is not a bug report.
+The dump carries the DECISION, not just entity states: the commanded offset, every layer's vote
+and weight, the NIBE state behind it, the degree-minute band actually in force, and whether the
+price and weather sources were live - a missing price source silently withdraws the whole price
+layer (F-123), leaving the offset inexplicable without that fact.
 
-So the dump carries the DECISION, not just the entity states: the offset it commanded, every
-layer's vote and weight behind it, the NIBE state it read it from, the degree-minute thresholds
-actually in force, and - the one people forget - whether the price and weather sources were even
-live. A missing price source silently withdraws the entire price layer (audit F-123), and without
-that fact the offset is inexplicable.
-
-What it must NOT carry is the home's coordinates. The decision engine holds the latitude, because
-that is how the climate zone is detected, and a diagnostics file is something the owner pastes into
-a public issue tracker. The climate ZONE is what the thresholds derive from, and it identifies
-nobody - so that is what goes in.
+It must NOT carry the home's coordinates: this file gets pasted into public issue trackers. The
+climate ZONE identifies nobody and is what the thresholds derive from, so the zone goes in and the
+latitude does not.
 """
 
 from __future__ import annotations
@@ -64,9 +58,8 @@ def _config(entry: ConfigEntry) -> dict[str, object]:
 def _sources(data: dict[str, object]) -> dict[str, str]:
     """Which inputs were actually available.
 
-    The single most useful line in the file. Price data of None is not a missing field - it means
-    the price layer abstained entirely and every price-driven vote is absent from the decision
-    below (F-123). Read the offset knowing that, or misread it.
+    Price data of None is not a missing field - the price layer abstained entirely and every
+    price-driven vote is absent from the decision below (F-123). Read the offset knowing that.
     """
     return {
         "price": "live" if data.get("price") is not None else "ABSENT - price layer abstained",
@@ -98,11 +91,7 @@ def _nibe(nibe: object) -> dict[str, object]:
 
 
 def _decision(decision: object) -> dict[str, object]:
-    """The offset, and the votes behind it.
-
-    An offset without its layer votes cannot be argued with - it is just a number someone disagrees
-    with. With them, the disagreement is about a specific layer's weight, which is a conversation.
-    """
+    """The offset, and the layer votes behind it - without which the offset cannot be argued with."""
     if decision is None:
         return {}
 
@@ -125,12 +114,10 @@ def _decision(decision: object) -> dict[str, object]:
 
 
 def _dm_thresholds(coordinator: object, nibe: object) -> dict[str, object]:
-    """The degree-minute band this house was actually being held to.
+    """The degree-minute band this house was actually held to.
 
-    Not the constants. The band is computed from the climate zone AND the outdoor temperature, so
-    quoting DM_THRESHOLD_AUX_LIMIT tells you nothing about what governed this decision.
-
-    The zone name goes in; the latitude it was derived from does not.
+    Computed from the climate zone AND outdoor temperature, so the DM constants say nothing about
+    what governed this decision. The zone name goes in; the latitude it derived from does not.
     """
     try:
         detector = coordinator.engine.climate_detector
@@ -138,9 +125,8 @@ def _dm_thresholds(coordinator: object, nibe: object) -> dict[str, object]:
         if detector is None or outdoor is None:
             return {}
 
-        # The band production ENFORCES is the zone range run through the thermal-mass buffer -
-        # a slab is helped ~1.3x sooner. Quoting the raw zone table here once told a slab-house
-        # owner "-414" while the code was intervening at -318.
+        # The enforced band is the zone range run through apply_thermal_mass_buffer (a high-mass
+        # slab is helped sooner); the raw zone table alone understates where the code intervenes.
         heating_type = getattr(coordinator.engine.emergency_layer, "heating_type", "radiator")
         zone_range = detector.get_expected_dm_range(float(outdoor))
         return {

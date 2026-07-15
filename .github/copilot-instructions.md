@@ -915,8 +915,9 @@ described a model this codebase does not have.
    and why DM is structurally **blind to under-heating EffektGuard itself causes** (lowering the
    offset lowers S1, so DM *improves* while the house cools).
 2. `docs/research/02_emitter_law.md` — EN 442-1 §3.23/§3.31, EN 12831, EN 1264. The flow-temperature
-   model, validated against NIBE's own published curve 9 (it lands 0.20 °C from it; a straight line
-   is out by 2.37 °C).
+   model, checked against NIBE's own published curve 9 (EN 442 with derived gains lands
+   +0.64 °C from it — and curve 9 is itself a straight line to within 0.19 °C, so it cannot
+   resolve curvature; the gap is the trim, not an error. See docs/research/02_emitter_law.md).
 3. `docs/research/03_concrete_slab_response.md` — the two-node transient. Why the horizon is 24 h and
    the pre-heat is +2.0 °C.
 4. `docs/research/04_exhaust_air_recovery.md` — why "extra heat extracted" and "improved COP" are the

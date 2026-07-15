@@ -117,14 +117,10 @@ class WeatherAdapter:
                 self._schedule_next_random_attempt()
             return None
 
-        # THE WEATHER ADAPTER READ FAHRENHEIT AS CELSIUS.
-        #
-        # A Home Assistant weather entity reports its temperatures in the user's configured unit
-        # system and declares which in `temperature_unit`. Nothing here ever looked. On an imperial
-        # install a -5 C cold snap arrives as "23", and 23 is what the weather, prediction and
-        # pre-heating layers were given - so the pre-heat is withdrawn at exactly the moment it is
-        # needed, while `nibe_adapter` (which DOES convert, via the same TemperatureConverter)
-        # correctly reports -5. The two primary temperature sources silently disagree by 28 degrees.
+        # A weather entity reports temperatures in the user's configured unit and declares which in
+        # `temperature_unit`; convert to Celsius. Without this, an imperial install feeds +23 where
+        # -5 C was meant (a 28-degree error) and withdraws the pre-heat exactly when it is needed,
+        # disagreeing with nibe_adapter, which does convert via the same TemperatureConverter.
         source_unit = state.attributes.get("temperature_unit") or UnitOfTemperature.CELSIUS
 
         def to_celsius(value: float) -> float:
@@ -218,15 +214,11 @@ class WeatherAdapter:
                 TypeError,
                 OSError,
             ) as err:
-                # HomeAssistantError is the important one, and it was missing.
-                # weather.get_forecasts raises it (via raise_unsupported_forecast) for any
-                # entity that does not implement the requested forecast type - a daily-only
-                # weather entity, for instance. ServiceNotFound and ServiceValidationError
-                # are subclasses, so they are covered too.
-                #
-                # Current HA weather entities do not publish a `forecast` state attribute, so
-                # this service-call path runs on EVERY update: an uncaught error here escapes
-                # the coordinator and kills its refresh task, stalling EffektGuard permanently.
+                # weather.get_forecasts raises HomeAssistantError (via raise_unsupported_forecast,
+                # plus its ServiceNotFound/ServiceValidationError subclasses) for any entity that
+                # does not implement hourly forecasts. This path runs on every update for entities
+                # with no `forecast` attribute, so an uncaught error here escapes the coordinator
+                # and kills its refresh task permanently.
                 _LOGGER.warning(
                     "Failed to get forecast via service call from %s: %s. "
                     "Weather-based optimization disabled; the rest of the optimization "
@@ -278,11 +270,10 @@ class WeatherAdapter:
                 _LOGGER.debug("Skipping invalid forecast entry: %s", err)
                 continue
 
-        # FUTURE ONLY, AND IN ORDER. Every layer slices this list positionally - `[:3]` for the
-        # cold-snap trigger, `[:24]` for unusual weather - and reads index N as "N hours from now".
-        # The entries the weather entity publishes are not necessarily future, or sorted: many
-        # integrations put the current period first, and one that has stalled holds a forecast whose
-        # every hour is in the past while its entity stays perfectly "available". See const.py.
+        # FUTURE ONLY, AND IN ORDER. Layers slice this list positionally (`[:3]`, `[:24]`) and read
+        # index N as "N hours from now", but a weather entity's entries are not guaranteed future or
+        # sorted - a stalled integration can stay "available" while every forecast hour is in the
+        # past. Drop past hours and sort so index N is again N hours ahead.
         cutoff = dt_util.utcnow() - timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS)
         stale = len(forecast_hours)
         forecast_hours = sorted(

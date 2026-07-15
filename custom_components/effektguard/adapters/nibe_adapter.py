@@ -52,10 +52,7 @@ from ..const import (
     NIBE_OUTDOOR_PLAUSIBLE_MIN,
     NIBE_WATER_PLAUSIBLE_MAX,
     NIBE_WATER_PLAUSIBLE_MIN,
-    MAX_OFFSET,
-    MIN_OFFSET,
     NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
-    NIBE_DEFAULT_SUPPLY_TEMP,
     NIBE_DISCOVERY_CORE_KEYS,
     NIBE_DISCOVERY_EXCLUDE,
     NIBE_DISCOVERY_MAX_ATTEMPTS,
@@ -65,7 +62,6 @@ from ..const import (
     NIBE_DISCOVERY_RANK_MANUAL,
     NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
     NIBE_DISCOVERY_SLOW_RETRY_CYCLES,
-    NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD,
     NIBE_MANUAL_OVERRIDE_KEYS,
     NIBE_OFFSET_RESYNC_MINUTES,
     NIBE_POWER_FACTOR,
@@ -113,18 +109,14 @@ class NibeState:
     phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
     compressor_hz: int | None = None  # Compressor frequency - optional
     power_kw: float | None = None  # Total power consumption in kW - optional
-    # True when power_kw was derived from supply and outdoor temperature rather than measured.
-    # The estimate is a coarse curve fit, floored at 1.0 kW even with the compressor off, and it
-    # is emitted in the SAME field as a real reading - so anything that reports power as fact, or
-    # bills against it, must consult this first. The savings calculator did not, and presented a
-    # number computed from a guess under the heading of actual consumption.
+    # True when power_kw is a temperature-derived estimate, not a measurement. It rides in the same
+    # field as a real reading, so anything that reports or bills consumption must check this first
+    # or it presents a guess as actual consumption.
     power_is_estimated: bool = False
-    # False when no indoor sensor could be read and indoor_temp is DEFAULT_INDOOR_TEMP
-    # rather than a measurement. A NIBE system without a room sensor (no BT50) is a
-    # LEGITIMATE configuration - the pump runs on degree minutes and the heating curve
-    # alone - so this is not an error. But any layer that reasons about comfort MUST
-    # abstain rather than trust the placeholder: DEFAULT_INDOOR_TEMP equals the usual
-    # target, which silently produces a temperature deviation of exactly 0.0.
+    # False when no indoor sensor could be read and indoor_temp is the DEFAULT_INDOOR_TEMP
+    # placeholder. No room sensor (no BT50) is a legitimate NIBE setup - it runs on degree minutes
+    # and the heating curve - but comfort-reasoning layers must abstain rather than trust the
+    # placeholder, which equals the usual target and yields a deviation of exactly 0.0.
     indoor_temp_valid: bool = True
 
     @property
@@ -242,15 +234,10 @@ class NibeAdapter:
 
         # --- REQUIRED readings -------------------------------------------------------
         # These three drive every control decision. Never substitute a plausible constant for a
-        # missing one: that makes a broken installation indistinguishable from a healthy one and
-        # still writes a curve offset to the pump. Refuse, and let the coordinator degrade
-        # (startup_pending before the first success, UpdateFailed after) - entities go
-        # unavailable and nothing is written.
-        # An IMPLAUSIBLE reading is not a reading either. NIBE's Modbus registers hold deci-degrees,
-        # so a hand-written YAML that omits `scale: 0.1` reports BT1's -32 as -32.0 C rather than
-        # -3.2 C - and a colder day as -105.0 C, which demands a 96.8 C flow temperature and pushes
-        # the degree-minute warning threshold to within fifty of the aux limit. These take the same
-        # path as a missing sensor: refuse, and let the coordinator degrade.
+        # missing OR implausible one - that makes a broken install indistinguishable from a healthy
+        # one and still writes an offset. (A Modbus sensor missing `scale: 0.1` reports deci-degrees
+        # raw: BT1's -3.2 C arrives as -32.0 C.) Refuse instead, and let the coordinator degrade -
+        # startup_pending before the first success, UpdateFailed after - so nothing is written.
         outdoor_temp = self._plausible(
             await self._read_temperature(self._entity_cache.get("outdoor_temp")),
             NIBE_OUTDOOR_PLAUSIBLE_MIN,
@@ -306,16 +293,12 @@ class NibeAdapter:
             )
 
         # --- OPTIONAL readings -------------------------------------------------------
-        # Indoor temperature: a NIBE without a room sensor (no BT50) is a legitimate
-        # configuration - it runs on degree minutes and the heating curve. Keep the
-        # placeholder for display, but mark it invalid so comfort-reasoning layers abstain
-        # instead of reading a deviation of exactly 0.0 from a value that IS the target.
-        # The plausibility band was applied to the ADDITIONAL sensors the user adds, and not to the
-        # one the HEAT PUMP sends - which is the only one exposed to a Modbus scaling typo. A BT50
-        # reporting 213.0 C instead of 21.3 C was taken at face value, and the comfort layer read a
-        # 192 C overshoot and commanded -10.0 C at critical weight. An implausible BT50 is treated
-        # as NO room sensor, which is a configuration this integration already handles properly:
-        # the comfort-reasoning layers abstain and the pump runs on degree minutes and its curve.
+        # Indoor temperature: no room sensor (no BT50) is legitimate - the pump runs on degree
+        # minutes and the heating curve. Keep the placeholder for display but mark it invalid so
+        # comfort layers abstain instead of reading a 0.0 deviation from a value that IS the target.
+        # Apply the plausibility band to the pump's own BT50 too, not just the user's extra sensors:
+        # a BT50 reporting 213.0 C (a scale typo for 21.3) once drove a -10.0 C command at critical
+        # weight. An implausible BT50 is treated as no room sensor, which is handled correctly.
         measured_indoor = self._plausible(
             await self._read_temperature(self._entity_cache.get("indoor_temp")),
             INDOOR_SENSOR_PLAUSIBLE_MIN,
@@ -325,14 +308,9 @@ class NibeAdapter:
         indoor_temp_valid = measured_indoor is not None
         indoor_temp = measured_indoor if indoor_temp_valid else DEFAULT_INDOOR_TEMP
 
-        # Multi-sensor indoor temperature calculation.
-        #
-        # Pass the MEASURED value, never `indoor_temp` - which is the placeholder when there is no
-        # BT50. `_calculate_multi_sensor_temperature`'s own docstring forbids exactly that: "A
-        # placeholder must NEVER be passed here - seeding the median with DEFAULT_INDOOR_TEMP would
-        # drag the combined reading toward the target and mask a real deviation." It was being
-        # passed anyway. With one added sensor reading 17.0 C in a house targeting 21.0, the median
-        # of [21.0, 17.0] is 19.0 - a two-degree mask, biased toward the target, on a cold house.
+        # Pass the MEASURED value, never the placeholder: _calculate_multi_sensor_temperature's
+        # docstring forbids seeding the median with DEFAULT_INDOOR_TEMP, which would drag the
+        # combined reading toward the target and mask a real deviation.
         if self._additional_indoor_sensors:
             combined = await self._calculate_multi_sensor_temperature(measured_indoor)
             if combined is not None:
@@ -459,19 +437,12 @@ class NibeAdapter:
         )
 
     async def set_curve_offset(self, offset: float, *, force_write: bool = False) -> int | None:
-        """Set heating curve offset via NIBE entity with fractional accumulation.
+        """Set the heating curve offset via the NIBE offset entity.
 
-        The NIBE offset register (47011 on F-series) is integer-only, but the
-        optimization engine calculates precise fractional offsets (e.g., 0.35°C,
-        -1.24°C).
-
-        The offset is ROUNDED to the nearest integer, and written only once it differs from
-        what the register holds by a whole degree - hysteresis, so the register is not rewritten
-        every five minutes as the demand wanders across a rounding boundary.
-
-        This never accumulated anything, despite the name it carried and the worked example that
-        used to be printed here. It is a deadband, and it used to TRUNCATE TOWARD ZERO on top of
-        that: int(-1.9) is -1, so the pump always did slightly less than the engine asked for.
+        The NIBE offset register (47011 on the F-series) is integer-only, while the engine
+        calculates fractional offsets. The offset is ROUNDED to the nearest integer and written
+        only once it differs from what the register holds by a whole degree - a deadband, so the
+        register is not rewritten every five minutes as demand wanders across a rounding boundary.
         See utils/offset.py.
 
         Args:
@@ -539,10 +510,8 @@ class NibeAdapter:
         elif self._last_nibe_offset is None:
             self._last_nibe_offset = 0
 
-        # The integer the register should hold. Shared with the simulation harness, which used to
-        # carry its own copy of this arithmetic - see utils/offset.py, and note that it ROUNDS
-        # rather than truncating: int(-1.9) is -1, so every offset used to come out smaller than
-        # the engine asked for, always in the same direction.
+        # The integer the register should hold; the rounding, deadband and clamping live in
+        # utils/offset.py, shared with the simulation harness.
         offset_to_apply = integer_offset_for(offset, self._last_nibe_offset)
 
         _LOGGER.debug(
@@ -898,27 +867,13 @@ class NibeAdapter:
                 continue
 
             if key in NIBE_TEMPERATURE_KEYS:
-                # A MEASUREMENT IS NOT A SETPOINT, AND ONLY THE DOMAIN CAN TELL THEM APART.
-                #
-                # A `number.` entity is by definition something the OWNER SETS. A NIBE room
-                # temperature SETPOINT is a `number.` with device_class=temperature and a unit of
-                # °C - which is every attribute this gate used to check - and its entity id can
-                # match the `room_temperature` discovery pattern. Bound as the indoor MEASUREMENT
-                # it is catastrophic and completely silent:
-                #
-                #   the target is read as the measurement, and indoor_temp_valid is set True,
-                #   so the deviation from target is EXACTLY 0.0 forever, whatever the house does.
-                #   The comfort layer never corrects. The 18 C safety floor can never fire either,
-                #   because the safety layer is reading the same setpoint. A house at 12 C in
-                #   January reports itself perfectly on target.
-                #
-                # The `offset` key below already applies the mirror-image rule - a write target
-                # must BE a number - so the distinction is one this file already understands. And
-                # NIBE_DISCOVERY_EXCLUDE carries `control_room_sensor`, which is this same problem
-                # being fought one entity id at a time.
-                #
-                # Manual entity overrides seed the cache directly and never reach this function, so
-                # an installation that really does expose a reading as a `number.` can still say so.
+                # A measurement must come from a `sensor.`, not a `number.` (a setpoint the owner
+                # writes). A NIBE room-temperature setpoint is a `number.` with device_class
+                # temperature in °C - matching every attribute this gate checks and the
+                # `room_temperature` pattern - and binding it as the indoor measurement is silent
+                # and catastrophic: the reading equals the target, so the deviation is 0.0 forever
+                # and neither the comfort layer nor the 18 C safety floor ever fires. (Manual
+                # overrides seed the cache directly and bypass this.)
                 if not entity_id.startswith("sensor."):
                     _LOGGER.debug(
                         "Skipping %s candidate %s: a measurement must come from a sensor, and a "
@@ -981,24 +936,14 @@ class NibeAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             return default
 
-        # Age is the only thing that distinguishes a reading from a memory. Home Assistant records
-        # `last_reported` on every state write, even when the value is unchanged, precisely so that
-        # "steady at -150 for twenty minutes" can be told apart from "nothing has said anything
-        # about the pump for twenty minutes". An MQTT sensor whose publisher has stopped is
-        # available, unchanged, and worthless - and every other check here passes it (audit F-015).
-        #
-        # A stale reading is not a special case: it is a reading we do not have. It returns the
-        # default, and a REQUIRED sensor that comes back None raises UpdateFailed - so the pump is
-        # left on its last offset rather than driven on a number nobody has confirmed for hours.
-        # `last_reported` arrived in HA 2024.7 and `last_updated` only moves when the VALUE changes,
-        # which a steady pump's does not - so prefer the former and fall back to the latter.
-        #
-        # If neither is a datetime, the age is simply unknowable, and the reading is used. That is a
-        # deliberate fail-OPEN: this check is an ADDITIONAL guard, so being unable to apply it leaves
-        # us exactly where we were before it existed - whereas raising from inside the adapter would
-        # take the whole update down. (The first version of this did precisely that: comparing a
-        # non-datetime gave "TypeError: '>' not supported between MagicMock and timedelta", and a
-        # crash in the read path is strictly worse than the staleness it was meant to catch.)
+        # Reject a reading older than NIBE_READING_MAX_AGE_MINUTES: an available-but-stale sensor
+        # (e.g. an MQTT publisher that has stopped) is unchanged and worthless, and every other
+        # check here passes it (F-015). A stale reading is a reading we do not have - it returns the
+        # default, and a REQUIRED sensor coming back None raises UpdateFailed, leaving the pump on
+        # its last offset. Prefer `last_reported` (bumped on every write) over `last_updated` (moves
+        # only when the value changes, which a steady pump's does not). If neither is a datetime the
+        # age is unknowable, so fail OPEN and use the reading - this is an extra guard, and raising
+        # from the read path would be worse than the staleness it catches.
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
         if isinstance(reported, datetime):
             age = dt_util.utcnow() - reported
@@ -1034,17 +979,10 @@ class NibeAdapter:
     ) -> float | None:
         """A reading outside the physically possible is not a reading. Return None.
 
-        `get_current_state` already refuses to substitute a plausible constant for a MISSING
-        sensor, "because that makes a broken installation indistinguishable from a healthy one and
-        still writes a curve offset to the pump". A value that cannot be a temperature is the same
-        thing wearing a number, and the mechanism is mundane: NIBE's Modbus registers hold
-        DECI-degrees, so a hand-written YAML that omits `scale: 0.1` turns BT50's 21.3 C into
-        213.0 C and BT1's -3.2 C into -32.0 C.
-
-        Returning None puts such a value on exactly the same path as a missing one: a required
-        sensor raises UpdateFailed and nothing is written to the pump; an optional one (BT50)
-        degrades to "no room sensor", which this integration already handles by having the
-        comfort-reasoning layers abstain.
+        A value that cannot be a temperature is a missing reading wearing a number: NIBE's Modbus
+        registers hold DECI-degrees, so a sensor missing `scale: 0.1` turns 21.3 C into 213.0 C.
+        Returning None routes it exactly like a missing sensor - a required one raises UpdateFailed
+        and nothing is written; an optional BT50 degrades to "no room sensor".
 
         Args:
             value: The reading, already converted to °C, or None.
@@ -1079,16 +1017,10 @@ class NibeAdapter:
     ) -> float | None:
         """Read a temperature entity and normalise it to °C.
 
-        Every temperature in NibeState is documented as °C, and the whole optimization
-        stack assumes it. But the unit was never checked: discovery ACCEPTS an entity whose
-        unit is °F (see _consider_candidate) and the read path then passed the raw number
-        straight through.
-
-        Home Assistant presents a `temperature` device-class sensor in the USER'S preferred
-        unit, so on an imperial install - or with a single entity overridden to °F - BT1
-        reading 32 (0 °C) was taken as +32 °C and BT25 reading 95 (35 °C) as a 95 °C flow
-        temperature. Weather compensation would then drive the offset to minimum in the
-        middle of winter.
+        Every temperature in NibeState is °C, but discovery accepts a °F entity (see
+        _consider_candidate) and Home Assistant presents a temperature sensor in the user's own
+        unit. Without conversion, BT1 reading 32 (0 °C) was taken as +32 °C and BT25's 95 (35 °C) as
+        a 95 °C flow temperature, driving weather compensation to minimum offset in midwinter.
 
         Args:
             entity_id: Entity to read
@@ -1104,24 +1036,9 @@ class NibeAdapter:
         if not state or state.state in ["unknown", "unavailable"]:
             return default
 
-        # Age is the only thing that distinguishes a reading from a memory. Home Assistant records
-        # `last_reported` on every state write, even when the value is unchanged, precisely so that
-        # "steady at -150 for twenty minutes" can be told apart from "nothing has said anything
-        # about the pump for twenty minutes". An MQTT sensor whose publisher has stopped is
-        # available, unchanged, and worthless - and every other check here passes it (audit F-015).
-        #
-        # A stale reading is not a special case: it is a reading we do not have. It returns the
-        # default, and a REQUIRED sensor that comes back None raises UpdateFailed - so the pump is
-        # left on its last offset rather than driven on a number nobody has confirmed for hours.
-        # `last_reported` arrived in HA 2024.7 and `last_updated` only moves when the VALUE changes,
-        # which a steady pump's does not - so prefer the former and fall back to the latter.
-        #
-        # If neither is a datetime, the age is simply unknowable, and the reading is used. That is a
-        # deliberate fail-OPEN: this check is an ADDITIONAL guard, so being unable to apply it leaves
-        # us exactly where we were before it existed - whereas raising from inside the adapter would
-        # take the whole update down. (The first version of this did precisely that: comparing a
-        # non-datetime gave "TypeError: '>' not supported between MagicMock and timedelta", and a
-        # crash in the read path is strictly worse than the staleness it was meant to catch.)
+        # Staleness guard, as in _read_entity_float: reject a reading older than
+        # NIBE_READING_MAX_AGE_MINUTES (prefer last_reported, fall back to last_updated), and fail
+        # OPEN when the age is unknowable. See _read_entity_float for the full rationale (F-015).
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
         if isinstance(reported, datetime):
             age = dt_util.utcnow() - reported
@@ -1224,9 +1141,8 @@ class NibeAdapter:
             layers that only need a magnitude, and useless to anything that reports or bills
             consumption - so callers are made to see which one they got.
         """
-        # Try configured power sensor. The unit is read through the one shared helper the
-        # coordinator also uses - the two used to disagree about what an absent unit meant, and
-        # answered the same sensor a factor of 1000 apart.
+        # Read via power_kw_from_state, the one shared helper the coordinator also uses, so both
+        # agree on what an absent unit means instead of answering the same sensor 1000x apart (W/kW).
         if self._power_sensor_entity:
             power = power_kw_from_state(self.hass.states.get(self._power_sensor_entity))
             if power is not None:

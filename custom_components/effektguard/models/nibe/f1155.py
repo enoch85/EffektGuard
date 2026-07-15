@@ -3,22 +3,10 @@
 Inverter-controlled GSHP - F-series ground source, predecessor of the S1155.
 Available in 3 sizes: 1.5-6 kW, 4-12 kW, 4-16 kW.
 
-Added for issue #18: F1155 owners connect via local Modbus (nibe_heatpump
-integration / MODBUS40) and previously had to pick the S1155 profile.
+F1155 owners connect via local Modbus (nibe_heatpump integration / MODBUS40).
 
-THE COP CURVE THAT USED TO BE HERE WAS AUTHORED, AND THIS DOCSTRING SAID SO IN PLAIN WORDS:
-
-    "Physics inherit from the S1155 (same GSHP family); COP curve SET SLIGHTLY BELOW the S1155
-     (older inverter platform, SCOP ~5.0)."
-
-Set. Not measured. And it was set against OUTDOOR temperature, for a machine whose heat source is
-brine from a borehole - NIBE's own capacity chart plots this pump's output against an x-axis
-labelled "Incoming brine temp, C", and there is no air-temperature rating point anywhere in its
-datasheet. The curve ran 5.3 at +7 C down to 3.3 at -30 C, describing a machine whose heat source
-freezes with the weather. A ground-source pump's does not.
-
-The real EN 14511 data is below, verbatim. It turns out the F1155 and the S1155 publish IDENTICAL
-figures at every size, so "slightly below the S1155" was not merely unsourced - it was wrong.
+Heat source is brine from a borehole, so performance is keyed on INCOMING BRINE temperature, not
+outdoor air. The F1155 and S1155 publish IDENTICAL EN 14511 data at every size (below, verbatim).
 """
 
 from dataclasses import dataclass
@@ -28,15 +16,10 @@ from ..registry import HeatPumpModelRegistry
 
 # F1155-12. EN 14511 rating points, VERBATIM.
 #
-# EVERY POINT IS KEYED ON INCOMING BRINE TEMPERATURE, not outdoor air. The datasheet's own
-# capacity chart plots output against an x-axis labelled "Incoming brine temp, C". This machine
-# does not know what the weather is doing, and the outdoor-keyed COP curve this profile used to
-# carry - 5.3 at +7 C falling to 3.3 at -30 C - described a machine that does not exist.
-#
-# All four points are at NOMINAL (50 Hz) frequency. NIBE publishes no min- or max-frequency COP for
-# these pumps, only the modulation envelope (the "Heating capacity (PH)" row). So the load
-# dependence of the efficiency is NOT measurable from this datasheet, and the model does not
-# pretend otherwise - see HouseConfig.exergy_efficiency.
+# Keyed on INCOMING BRINE temperature, not outdoor air (datasheet capacity chart x-axis is
+# "Incoming brine temp, C"). All four points are at NOMINAL (50 Hz) frequency; NIBE publishes no
+# min-/max-frequency COP for these pumps, only the modulation envelope ("Heating capacity (PH)"),
+# so load dependence of efficiency is NOT measurable here - see HouseConfig.exergy_efficiency.
 F1155_12_DATASHEET = (
     RatingPoint(
         "0/35 nominal (50 Hz), incoming brine 0 C",
@@ -113,16 +96,10 @@ class NibeF1155Profile(NibeS1155Profile):
     typical_cop_range: tuple[float, float] = (3.75, 6.12)  # published COPs, 0/45 .. 10/35
 
     def __post_init__(self):
-        """Initialize COP curve - S1155 shape shifted slightly down for the
-        older F-series inverter platform."""
-        # A DISPLAY PROXY ONLY, and it is now honest about that.
-        #
-        # This machine's COP is a function of BRINE temperature and flow temperature. It has no
-        # opinion about the weather. The curve that used to be here ran from 5.3 at +7 C outdoor
-        # down to 3.3 at -30 C, which described a machine whose heat source freezes with the air -
-        # and a ground-source pump's does not. Nothing computes from this; the simulator takes its
-        # COP from `datasheet_points`.
-        #
-        # What is left is a seasonal proxy for the dashboard, anchored on the two published W35/W45
-        # COPs at 0 C brine, because in a colder month the house asks for hotter water.
+        """Initialize display-only COP proxy.
+
+        Nothing computes from it: COP is a function of brine + flow temperature, not the weather,
+        and the simulator takes it from `datasheet_points`. The proxy is a dashboard seasonal curve
+        anchored on the two published W35/W45 COPs at 0 C brine.
+        """
         self.cop_curve = seasonal_cop_proxy(self.datasheet_points, source_temp_c=0.0)

@@ -77,10 +77,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="current_offset",
         translation_key="current_offset",
         icon="mdi:thermometer-lines",
-        # A heating-curve offset is an INTERVAL, not an absolute temperature. With
-        # device_class TEMPERATURE, Home Assistant applies absolute conversion, so an
-        # imperial user saw an offset of 0.0 C rendered as 32.0 F (and -2 C as 28.4 F) -
-        # and long-term statistics stored the converted value.
+        # A heating-curve offset is an INTERVAL, not an absolute temperature. device_class
+        # TEMPERATURE applies absolute conversion, so an imperial user saw 0.0 C as 32.0 F and
+        # statistics stored the converted value; TEMPERATURE_DELTA converts as an interval.
         device_class=SensorDeviceClass.TEMPERATURE_DELTA,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
@@ -144,12 +143,10 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="current_price",
         translation_key="current_price",
         icon="mdi:currency-eur",
-        # NOT device_class=MONETARY: the unit is read from the spot-price entity and is typically
-        # "öre/kWh", which is a RATE, not an amount of money. MONETARY also permits only TOTAL,
-        # which would have the recorder sum a price. MEASUREMENT is what a price is - the recorder
-        # keeps min/max/mean - and it is what gives this sensor long-term statistics at all. The
-        # comment here used to claim "monetary device_class doesn't support state_class", which is
-        # untrue (it supports TOTAL), and believing it left the sensor with no statistics (F-070).
+        # NOT device_class=MONETARY: the unit comes from the spot-price entity and is typically
+        # "öre/kWh", a RATE not an amount, and MONETARY permits only state_class TOTAL, which would
+        # have the recorder SUM a price. MEASUREMENT is what a price is and gives it min/max/mean
+        # long-term statistics (F-070).
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
             coordinator.data["price"].current_price
@@ -298,20 +295,15 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         key="savings_estimate",
         translation_key="savings_estimate",
         icon="mdi:cash-multiple",
-        # NOT device_class=MONETARY. Home Assistant permits exactly one state class with MONETARY -
-        # TOTAL - and TOTAL tells the recorder to keep a running SUM. This value is a forward-looking
-        # monthly PROJECTION that rises and falls with the forecast, so summing it produces a number
-        # that means nothing, in the Energy dashboard of all places (audit F-070).
+        # NOT device_class=MONETARY: MONETARY permits only state_class TOTAL, and TOTAL makes the
+        # recorder keep a running SUM - but this is a forward-looking monthly PROJECTION that rises
+        # and falls with the forecast, so summing it is meaningless (F-070).
         #
-        # The unit is SEK, and hardcoding it is CORRECT rather than a Swedish-centric oversight: the
-        # effect-tariff component is SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH, a Swedish grid tariff,
-        # and SavingsCalculator DROPS the spot component outright when the price unit is not
-        # SEK-compatible rather than guessing an exchange rate. The number really is kronor.
-        # (Do NOT "fix" this by deriving the unit from the spot-price entity: that entity reports
-        # öre/kWh, and labelling a SEK value "öre" is a 100x error.)
-        #
-        # What IS wrong is showing a Norwegian a SEK figure computed from a Swedish tariff at all.
-        # That is the tariff model, not the label - audit F-107, open with the owner.
+        # The unit is hardcoded SEK, correctly: the effect-tariff term is
+        # SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH and the spot component is dropped when the price
+        # unit is not SEK-compatible. Do NOT derive the unit from the spot entity, which reports
+        # öre/kWh - labelling a SEK value "öre" is a 100x error. (A non-Swedish user seeing a SEK
+        # figure from a Swedish tariff is a tariff-model issue, F-107, open with the owner.)
         native_unit_of_measurement="SEK",
         value_fn=lambda coordinator: (
             coordinator.data["savings"].monthly_estimate
@@ -915,11 +907,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                     if hasattr(savings, "optimized_cost"):
                         attrs["optimized_cost"] = savings.optimized_cost
                     if hasattr(savings, "effect_baseline_measured"):
-                        # ZERO MEANS TWO DIFFERENT THINGS and the owner cannot tell them apart from
-                        # the state alone: "we have never seen this house unoptimised, so we will
-                        # not invent a number", versus "we have, and we are saving you nothing".
-                        # The flag was computed and never surfaced - the same counted-and-ignored
-                        # habit that let the old fabricated figure go unnoticed for so long.
+                        # A zero effect saving is ambiguous: either the baseline has never been
+                        # measured (no unoptimised period seen) or it has and the saving really is
+                        # zero. Surface the flag so the two are distinguishable.
                         attrs["effect_baseline_measured"] = savings.effect_baseline_measured
                         if not savings.effect_baseline_measured:
                             attrs["effect_savings_note"] = (
@@ -950,9 +940,8 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_time"] = None
                 attrs["time_since_peak"] = "No peak recorded today"
 
-            # WHICH BILLING PERIOD - and the tariff's billing period is an HOUR, not a quarter.
-            # This used to report "peak_quarter" and a 15-minute clock time, because the whole
-            # integration believed the effect tariff billed quarter-hour means. It bills hourly.
+            # The effect tariff bills on the hourly mean, so report the billing HOUR
+            # (peak_today_period), not a 15-minute quarter.
             if self.coordinator.peak_today_period is not None:
                 attrs["peak_billing_hour"] = self.coordinator.peak_today_period
                 attrs["peak_billing_hour_time"] = f"{self.coordinator.peak_today_period:02d}:00"
@@ -973,18 +962,14 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             source = self.coordinator.peak_today_source
             attrs["measurement_description"] = source_descriptions.get(source, "Unknown source")
 
-            # What counts as billable is defined once, in const, and the coordinator's peak
-            # recorder tests the same set. These attributes previously carried their own hardcoded
-            # list, so what the owner was TOLD about a peak could disagree with whether it had in
-            # fact been recorded against the tariff.
+            # Billable sources are defined once (BILLABLE_POWER_SOURCES) and the coordinator's peak
+            # recorder tests the same set, so what the owner is told cannot disagree with what was
+            # recorded against the tariff.
             attrs["is_real_measurement"] = source in BILLABLE_POWER_SOURCES
 
-            # BOTH SIDES ARE WEIGHTED THE WAY THE TARIFF WEIGHTS THEM.
-            #
-            # `peak_this_month` is the EFFECTIVE peak - night quarters count half. `peak_today` is
-            # the raw kW the house drew. Comparing them directly told the owner that a 3.1 kW blip
-            # at 02:00 was about to set a new monthly peak against a 3.0 kW effective peak, when the
-            # tariff will bill that blip as 1.55 kW. The night weighting is not a peak.
+            # Compare like with like: peak_this_month is the EFFECTIVE (tariff-weighted) peak - night
+            # hours count half - while peak_today is raw kW. Weight peak_today the same way before
+            # comparing, or a 3.1 kW night blip (billed as 1.55 kW) is flagged as a new monthly peak.
             today_as_billed = (
                 effective_tariff_power_kw(
                     self.coordinator.peak_today, self.coordinator.peak_today_period
@@ -1379,8 +1364,6 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["flow_enhanced_m3h"] = self.coordinator.airflow_optimizer.flow_enhanced
 
         elif key == "airflow_thermal_gain":
-            # The decision-history statistics that used to accompany this attribute were
-            # deleted with AirflowOptimizer's bookkeeping; only the current mode remains.
             if "airflow_decision" in self.coordinator.data:
                 decision = self.coordinator.data["airflow_decision"]
                 if decision:

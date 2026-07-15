@@ -841,16 +841,12 @@ class IntelligentDHWScheduler:
                 # === LANE 1: SCHEDULED WINDOW - PRIORITY MODE ===
                 #
                 # This lane deliberately outranks the thermal-debt block (RULE 1) and the
-                # space-heating checks (RULES 2 and 4): it returns before any of them. That is the
-                # owner's choice - a shower they scheduled is a shower they want.
-                #
-                # It does not outrank safety, and it used to. Measured, before this gate: DM -1400
-                # with the house at 17.0 C - below the floor at which the safety layer commands
-                # maximum heat - and this lane still said heat the water.
+                # space-heating checks (RULES 2 and 4) - a scheduled shower is one the owner wants -
+                # but it does NOT outrank safety (this gate), which it once did.
                 unsafe = self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp)
                 if unsafe:
-                    # Not cancelled. OWED. Settled the moment the house is out of danger, even after
-                    # the window has closed - the owner still wants the shower.
+                    # Not cancelled. OWED, and settled once the house is out of danger, even after
+                    # the window has closed (see RULE 0.5).
                     self._scheduled_window_owed = True
                     _LOGGER.warning(
                         "Scheduled DHW refused for safety: %s. It will be heated as soon as the "
@@ -863,9 +859,8 @@ class IntelligentDHWScheduler:
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
-                        # The honest answer is "as soon as the house is safe", which has no clock
-                        # time. This is the project's estimate of when that is, and RULE 0.5 will
-                        # heat the moment it actually happens - whichever comes first.
+                        # Best estimate of when the house is safe again; RULE 0.5 heats the moment it
+                        # actually happens, whichever comes first.
                         recommended_start_time=self._find_next_dhw_opportunity(
                             current_time=current_time,
                             current_dhw_temp=current_dhw_temp,
@@ -961,13 +956,9 @@ class IntelligentDHWScheduler:
                                 None,
                             )
 
-                            # `is not None`, NOT truthiness: a price of exactly 0.00 is a real
-                            # Nordic price (~100 hours a year per SE bidding zone).
-                            #
-                            # The window must also be genuinely CHEAPER, and the ratio taken
-                            # against the MAGNITUDE. `(current - optimal) / current` inverts on
-                            # negative prices: current -50 ore against a WORSE window at -10 ore
-                            # yields +0.8, i.e. "80% savings" for deferring to a dearer quarter.
+                            # `is not None`, NOT truthiness (0.00 is a real Nordic price), and the
+                            # ratio is taken against the MAGNITUDE - `(current - optimal) / current`
+                            # inverts on negative prices. See price_savings_fraction.
                             price_savings_pct = price_savings_fraction(
                                 current_quarter_price, optimal_window.avg_price
                             )
@@ -1124,11 +1115,9 @@ class IntelligentDHWScheduler:
 
         # === RULE 0.5: A SCHEDULED WINDOW THAT SAFETY REFUSED, SETTLED ===
         #
-        # Safety can refuse a scheduled window, and when it does the shower is not cancelled - it is
-        # OWED. The owner asked for hot water at seven; the house was in danger at seven; the house is
-        # not in danger now. So heat it now, even though the window has closed, and even though the
-        # ordinary thermal-debt block below would otherwise refuse it: this is the same priority the
-        # window itself carried, honoured late rather than dropped in silence.
+        # When safety refuses a scheduled window (LANE 1), the shower is OWED, not cancelled. Once
+        # the house is safe again, heat it now - even after the window has closed and even though the
+        # ordinary thermal-debt block below would refuse it - carrying the window's own priority.
         if self._scheduled_window_owed:
             if current_dhw_temp >= self.user_target_temp:
                 # Settled - by this rule, or by the pump's own schedule. Either way, nothing is owed.
@@ -1340,45 +1329,25 @@ class IntelligentDHWScheduler:
 
         # === RULE 2.3: OPPORTUNISTIC HIGH-TEMPERATURE DHW CYCLE ===
         #
-        # ⚠️ THIS RULE DOES NOT, AND CANNOT, PERFORM A LEGIONELLA CYCLE. Read this before
-        # changing it.
+        # THIS RULE DOES NOT, AND CANNOT, PERFORM A LEGIONELLA CYCLE. It is an OPPORTUNISTIC top-up
+        # into a cheap window (cost optimisation), with no forced deadline on purpose - forcing a
+        # boost that can never reach the detection threshold would re-trigger the immersion heater
+        # indefinitely.
         #
-        # Hygiene is NOT EffektGuard's responsibility. NIBE performs it itself, via the
-        # built-in "periodic increase" function:
-        #   - Menu 2.9.1 (F-series) / 2.4 (S-series). NOT 4.9.5 - that is schedule blocking.
-        #   - Factory setting: ACTIVATED, every 14 days, stop temperature 55 C (range 55-70).
-        #   - It explicitly uses "the compressor AND the immersion heater".
-        #   - EffektGuard cannot block it: our only DHW actuator is the temporary-lux
-        #     switch, which does not touch NIBE's own schedule.
-        # (Source: NIBE F750 / F730 / F1155 installer manuals, menus 2.9.1 and 5.1.1;
-        #  register map 47046/47050/47051.)
+        # Hygiene is NIBE's own "periodic increase" (menu 2.9.1 F-series / 2.4 S-series; factory
+        # ACTIVATED every 14 days to 55 C, using compressor + immersion heater). EffektGuard cannot
+        # block it - our only DHW actuator is the temporary-lux switch, which does not touch NIBE's
+        # schedule. (Source: NIBE F750/F730/F1155 installer manuals, menus 2.9.1 and 5.1.1; register
+        # map 47046/47050/47051.)
         #
-        # Why our boost cannot reach Legionella temperature: temporary lux is not a
-        # setpoint. It switches the hot-water comfort mode to LUXURY for 3/6/12 h, so the
-        # tank is driven to the configured LUXURY STOP temperature. Factory values:
-        #   F750 54 C | F730 53 C | F1155 52 C   - all measured on BT6 (control sensor),
-        # and all BELOW DHW_LEGIONELLA_DETECT (55 C). NIBE deliberately made 55 C the floor
-        # of the anti-Legionella setpoint and the ceiling of the normal lux setpoint.
-        # The setpoints are installer-adjustable, so they are UNKNOWN to us at runtime.
+        # Our boost cannot reach 55 C: temporary lux drives the tank to the LUXURY STOP temperature
+        # (factory F750 54 / F730 53 / F1155 52 C, measured on BT6, all below DHW_LEGIONELLA_DETECT
+        # 55 C; installer-adjustable, so unknown at runtime). The BT7 >= 55 C detector is also
+        # unsound: BT7 is the DISPLAY sensor (setpoints act on BT6, CONTROL) and is optional on
+        # F1155/S1155, so a BT7 >= 55 C reading is most likely NIBE's own cycle, not ours.
         #
-        # Two further reasons the BT7 >= 55 C detector is unsound, both from the manuals:
-        #   - BT7 is "Temperature sensor, hot water, DISPLAY". BT6 is "...hot water,
-        #     CONTROL". Every setpoint above acts on BT6, not BT7.
-        #   - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
-        # In practice, therefore, a BT7 >= DHW_LEGIONELLA_DETECT observation is most likely
-        # to be NIBE's OWN periodic increase (which does target >= 55 C) happening to be
-        # visible - not evidence that anything EffektGuard did worked.
-        #
-        # What this rule actually is: an OPPORTUNISTIC top-up scheduled into a cheap window.
-        # It is a COST optimisation. It is NOT a hygiene guarantee, and no forced deadline
-        # exists here on purpose: forcing a boost that can never reach the detection
-        # threshold would re-trigger the immersion heater indefinitely.
-        #
-        # We also cannot observe or defer NIBE's own cycle: Home Assistant's myuplink
-        # integration excludes parameters 47050 (periodic-HW enable) and 47051 (interval)
-        # via PARAMETER_ID_TO_EXCLUDE_F730. If a high-temperature cycle has not been seen
-        # for far longer than NIBE's own interval, the most likely explanation is that the
-        # periodic-increase function was switched off on the pump. Warn - do not substitute.
+        # myuplink excludes params 47050/47051 (PARAMETER_ID_TO_EXCLUDE_F730), so we cannot observe
+        # NIBE's cycle; if none is seen far past its interval, warn (below) - do not substitute.
         days_since_legionella = None
         if self.last_legionella_boost:
             try:
@@ -1830,18 +1799,9 @@ class IntelligentDHWScheduler:
                         None,
                     )
 
-                    # `price_savings_fraction`, not the arithmetic inline. This site used to read
-                    #
-                    #     if current_quarter_price and optimal.avg_price < current_quarter_price:
-                    #         pct = (current - optimal) / current
-                    #
-                    # which is falsy on a price of exactly 0.00 (a real Nordic price, ~100 hours a
-                    # year per SE zone) and INVERTS on a negative one: current -10 ore against a
-                    # genuinely cheaper -60 ore window gives -5.00, fails the 15 % test, and heats
-                    # the hot water NOW instead of waiting to be PAID for it.
-                    #
-                    # The sibling comparison in this same file had already been fixed, comment and
-                    # all. This one had not, because the logic was copied rather than shared.
+                    # `price_savings_fraction`, not the arithmetic inline: the naive
+                    # `(current - optimal) / current` is falsy on a price of exactly 0.00 and inverts
+                    # on negative prices, heating hot water NOW instead of waiting to be PAID for it.
                     price_savings_pct = price_savings_fraction(
                         current_quarter_price, optimal_window.avg_price
                     )
@@ -2334,24 +2294,17 @@ class IntelligentDHWScheduler:
     def scheduled_dhw_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
         """Why a SCHEDULED hot-water cycle must not run, or None if it may.
 
-        A scheduled window outranks thermal debt and space-heating demand: a shower the owner asked
-        for is a shower the owner wants, and that is a deliberate priority. It does not outrank these
-        two, which are not comfort judgements but the points at which the house is in trouble:
+        A scheduled window outranks thermal debt and space-heating demand (deliberate priority), but
+        not the two points at which the house is in trouble:
 
-          * indoor below MIN_TEMP_LIMIT - the safety layer is already commanding maximum heat, and
-            hot water takes the compressor away from exactly that;
-          * degree minutes at the absolute limit - the immersion heater is engaging, and DHW must not
-            compete with the recovery.
+          * indoor below MIN_TEMP_LIMIT - the safety layer already commands maximum heat, which DHW
+            would take the compressor away from;
+          * degree minutes at the absolute limit - the immersion heater is engaging.
 
-        This is also what the scheduled path's ABORT conditions are built from, and they must stay the
-        same two tests. If a cycle can be started in a state that its own abort conditions reject, it
-        starts, aborts, is rate-limited for an hour, and starts again - heating no water and cycling
-        the compressor. That is what the scheduled path did: it began at DM -1400 while handing back
-        `thermal_debt < -1100` as an abort condition, and `indoor_temp < 20.5` - target minus half a
-        degree, a COMFORT threshold used to abort a cycle RULE 0 had just declared more important than
-        comfort.
-
-        If it may start, it may run. One predicate, both ends.
+        The scheduled path's ABORT conditions are built from these same two tests
+        (scheduled_dhw_abort_conditions): if a cycle can start in a state its own abort conditions
+        reject, it starts/aborts/rate-limits/restarts, cycling the compressor and heating no water.
+        One predicate, both ends.
         """
         if indoor_temp < MIN_TEMP_LIMIT:
             return (
@@ -2382,22 +2335,13 @@ class IntelligentDHWScheduler:
         """Return (block, abort) degree-minute thresholds for hot water.
 
         BLOCK is "do not START a DHW cycle below this". ABORT is "STOP a running cycle below this".
-        **Abort is always the deeper of the two, and it has to be.** Heating hot water takes the
-        compressor away from space heating, so degree minutes always sink during a cycle: an abort
-        shallower than the block means every cycle permitted to start near the block threshold is
-        aborted on the next tick, and the pump starts, stops, starts, stops.
+        **Abort is always the deeper of the two, and it has to be:** a cycle sinks degree minutes, so
+        an abort shallower than the block would abort every cycle on the next tick (start/stop/start).
+        Both come from one place here, abort DERIVED from whichever block the caller enforces.
 
-        The two used to be computed in three places from two different bases, and the one that ran
-        got it backwards - block came from `should_block_dhw` at `warning - T2_MARGIN`, while abort
-        was computed here as `warning - 80`, leaving abort 120 DM SHALLOWER than block. Three lines
-        above it, a comment explained that the code existed to prevent exactly that. The fallback
-        pair in const.py (`-340` block, `-500` abort) had the relationship right the whole time.
-
-        So both now come from one place, and abort is DERIVED from whichever block the caller
-        actually enforces. The two paths enforce different blocks - the shared EmergencyLayer refuses
-        at T2, the local-detector fallback refuses at `warning` - and that discrepancy is left exactly
-        as it is here. It is a real inconsistency, and it is a SEPARATE question from this one:
-        changing it would move when hot water is refused, which is a safety behaviour, not a bug fix.
+        The two paths enforce DIFFERENT blocks (shared EmergencyLayer at T2, local-detector fallback
+        at `warning`) - left as-is, because changing it would move when hot water is refused, a safety
+        behaviour and a separate question from this one.
         """
         if self.emergency_layer:
             # What should_block_dhw() actually enforces: "Block at T2 threshold or worse".
@@ -2409,14 +2353,10 @@ class IntelligentDHWScheduler:
         else:
             return DM_DHW_BLOCK_FALLBACK, DM_DHW_ABORT_FALLBACK
 
-        # A running cycle gives up a buffer deeper than the block, never past the absolute limit.
-        #
-        # The floor is the limit ITSELF, not limit + buffer. A first draft of this used the latter
-        # and re-created the very inversion it was written to remove: in the coldest zone the block
-        # already sits at -1400, so clamping abort up to -1340 put it 60 DM SHALLOWER than block
-        # again. Deep zones simply have less room between the block and the floor, and that is fine -
-        # at the limit the emergency layer owns the pump and DHW is refused outright, so an abort
-        # exactly there is the hardest possible stop rather than a threshold that undoes itself.
+        # A running cycle gives up a buffer deeper than the block, floored at the absolute limit
+        # ITSELF (not limit + buffer, which would re-create the inversion: in the coldest zone the
+        # block already sits near -1400, so clamping abort up to -1340 would put it shallower than
+        # block again). Deep zones have less room between block and floor, which is fine.
         abort = max(block - DM_DHW_ABORT_BUFFER, DM_THRESHOLD_AUX_LIMIT)
 
         return block, abort

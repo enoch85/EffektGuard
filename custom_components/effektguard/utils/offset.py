@@ -1,33 +1,18 @@
-"""Turning a fractional curve offset into the integer NIBE's register can hold.
+"""Turning a fractional curve offset into the integer NIBE's register (47011) can hold.
 
-NIBE's heating-curve offset register (47011 on the F-series) is integer-only, and the decision
-engine calculates fractional offsets. Something has to bridge the two, and it is the last thing
-that touches the number before it reaches the heat pump - so a bias here silently attenuates every
-decision the engine makes and every constant anyone has ever tuned.
+The last thing to touch the number before the heat pump, so a bias here silently attenuates every
+decision the engine makes. Two invariants:
 
-IT USED TO TRUNCATE TOWARD ZERO.
+  * ROUND, never truncate. `int(-1.9)` is -1: Python truncates toward zero, so `int()` always did
+    LESS than the engine asked (residual never re-applied) - a permanent one-directional shortfall.
+    round() bounds the error at 0.5 C and makes it unbiased.
+  * The sub-degree DEADBAND is hysteresis, not rounding: it stops MyUplink's rate-limited register
+    being rewritten as demand wanders across a boundary. Cost: a demand settling <1 C from current
+    is not expressed.
 
-    accumulated_adjustment = int(self._fractional_accumulator)
+Shared by the adapter and the simulation harness so the two cannot drift apart.
 
-`int(-1.9)` is `-1`, not `-2`. Python's `int()` truncates toward zero, so the error was never
-random: it was always in the direction of doing LESS than the engine asked for.
-
-    engine wants -1.9 C  ->  pump got -1   (0.9 C short)
-    engine wants +2.7 C  ->  pump got +2   (0.7 C short)
-
-and the residual was never re-applied, so the shortfall was permanent. Rounding to nearest bounds
-the error at 0.5 C and, more importantly, makes it unbiased.
-
-THE DEADBAND IS DELIBERATE, AND IT IS NOT ROUNDING.
-
-A write only happens once the demand differs from what the pump currently holds by a whole degree.
-That is hysteresis, not arithmetic: it stops the register being rewritten every five minutes as the
-demand wanders across a rounding boundary, and MyUplink's API is rate-limited. The cost is that a
-demand which settles at less than 1 C from the current value is not expressed at all.
-
-This module is shared by the adapter and by the simulation harness. The harness used to carry its
-own copy of this logic, which is exactly how a plant model and the code it is supposed to be
-testing drift apart without anyone noticing.
+tests/unit/utils/test_the_pump_does_what_the_engine_asked.py
 """
 
 from ..const import (

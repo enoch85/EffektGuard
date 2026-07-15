@@ -40,11 +40,10 @@ from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-# This entity DRIVES THE HEAT PUMP: async_set_hvac_mode reaches set_optimization_enabled(), which
-# calls async_refresh_and_apply() -> _drive_the_pump(). Home Assistant defaults a coordinator-based
-# integration to 0 (unlimited concurrent service calls); 1 makes HA serialise them. The control lock
-# in _drive_the_pump already serialises the write itself, so this is belt-and-braces - and it says
-# out loud that this entity touches hardware.
+# This entity DRIVES THE HEAT PUMP: async_set_hvac_mode -> set_optimization_enabled() ->
+# async_refresh_and_apply() -> _drive_the_pump(). HA defaults a coordinator-based platform to 0
+# (unlimited concurrent calls); 1 serialises them. The control lock in _drive_the_pump already
+# serialises the write, so this is belt-and-braces and flags that this entity touches hardware.
 PARALLEL_UPDATES = 1
 
 
@@ -59,8 +58,8 @@ async def async_setup_entry(
     async_add_entities([EffektGuardClimate(coordinator, entry)])
 
 
-# No RestoreEntity: the mode lives in the config entry, which survives a restart on its own and is
-# what the coordinator actually reads. Restoring the entity's own last state restored a copy of a copy.
+# No RestoreEntity: the mode lives in the config entry, which survives restart on its own and is
+# what the coordinator reads. Restoring the entity's own last state just shadowed that source.
 class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntity):
     """Climate entity for EffektGuard.
 
@@ -77,16 +76,11 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    # The lowest temperature this system permits IS the safety floor. It used to be a separate
-    # MIN_INDOOR_TEMP = 15.0, three degrees below MIN_TEMP_LIMIT - so the thermostat offered a
-    # setpoint the safety layer answers with an EMERGENCY and MAX_OFFSET. A user who dialled in
-    # 15 °C got a hard limit cycle: comfort cuts to -10 above 18 °C (a 3 °C "overshoot" against
-    # their target), safety boosts to +10 below it, and round again, on a real compressor - with
-    # is_emergency=True bypassing the volatility blocker that exists to stop precisely that.
-    # A setpoint the integration will fight is not a setpoint (audit F-085).
-    #
-    # If 18 °C is the wrong floor - for an away mode, a holiday - MIN_TEMP_LIMIT is the thing to
-    # change, deliberately, as a safety decision. Not a slider that quietly disagrees with it.
+    # The settable floor must not sit below the safety floor MIN_TEMP_LIMIT (18 C). A settable 15 C
+    # (the former MIN_INDOOR_TEMP) put the setpoint three degrees under it, so the comfort layer cut
+    # the offset to MIN_OFFSET above 18 C while the safety layer boosted MAX_OFFSET below it - a
+    # limit cycle on a real compressor. To move the floor, change MIN_TEMP_LIMIT, not this.
+    # See tests/unit/test_you_cannot_ask_for_a_temperature_the_system_will_fight.py.
     _attr_min_temp = MIN_TARGET_TEMP
     _attr_max_temp = MAX_INDOOR_TEMP
     _attr_target_temperature_step = TEMP_STEP
@@ -110,12 +104,11 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
 
     @property
     def hvac_mode(self) -> HVACMode:
-        """HEAT when the optimiser is running, OFF when it is not. A VIEW, not a second copy.
+        """HEAT when the optimiser is running, OFF when it is not - a VIEW of the config entry.
 
-        The coordinator's master gate is `entry.data["enable_optimization"]`. This used to be a
-        private `_attr_hvac_mode` instead, so OFF reset the offset once and the optimiser resumed at
-        the next tick while the thermostat still displayed OFF - and RestoreEntity carried that across
-        reboots. The switch entity writes the same key; both are views of it now.
+        The master gate is entry.data["enable_optimization"], which the switch entity writes too.
+        Storing hvac_mode privately instead let the thermostat keep displaying OFF while the
+        optimiser resumed at the next tick, so both entities read the gate directly now.
 
         tests/unit/test_the_thermostat_off_switch_actually_turns_it_off.py
         """

@@ -135,8 +135,7 @@ class CompressorHealthMonitor:
         if timestamp is None:
             timestamp = dt_util.now()
 
-        # Validate Hz reading against the machine's own ceiling - the clamp and the
-        # message used to disagree (clamped at 150 while warning about 0-120).
+        # Clamp and warning message both bound by COMPRESSOR_HZ_MAX, so they cannot disagree.
         if hz < 0 or hz > COMPRESSOR_HZ_MAX:
             _LOGGER.warning(
                 "Invalid compressor Hz reading: %d (expected 0-%d range)", hz, COMPRESSOR_HZ_MAX

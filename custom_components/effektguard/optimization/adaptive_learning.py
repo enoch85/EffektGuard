@@ -487,14 +487,10 @@ class AdaptiveThermalModel:
                 rate = obs.temp_change / obs.time_delta_hours
                 heating_rates.append(rate)
 
-        # A ratio of std to mean says how CONSISTENT a signal is. It says nothing at all when there
-        # is no signal - and it lies. With every reading identical, std collapses to 0 and the ratio
-        # reports perfect consistency: a flatlined sensor scored 1.0, above a house that was
-        # genuinely, measurably heating (F-132). The old `max(mean, 0.1)` was guarding the division
-        # and, in doing so, turned an absence of evidence into the strongest evidence there was.
-        #
-        # So the weak cases are answered before the ratio is ever taken. Both give ZERO, which is
-        # the honest answer to "how well do we know this building": not at all.
+        # The std/mean consistency ratio LIES when there is no signal: an identical (flatlined)
+        # reading collapses std to 0 and scores perfect consistency 1.0, above a house genuinely
+        # heating (F-132). So the weak cases are answered before the ratio is taken - both give
+        # ZERO, the honest answer to "how well do we know this building".
         mean_rate = float(np.mean(heating_rates)) if heating_rates else 0.0
 
         if len(heating_rates) <= LEARNING_MIN_HEATING_SAMPLES:
@@ -599,33 +595,17 @@ class AdaptiveThermalModel:
             Target indoor temperature for pre-heating phase (°C)
 
         References:
-            docs/research/01_degree_minutes.md - and note what it marks UNSOURCED: the
-            forum case studies this method's tuning descends from are anecdote, not
-            documents in this repository.
+            docs/research/01_degree_minutes.md - the forum case studies this method's tuning
+            descends from are marked UNSOURCED there (anecdote, not documents in this repository).
         """
-        # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING. Its own estimator says so:
-        #
-        #     "Estimate a RELATIVE cooling index (not a physical W/°C value)... It MUST NOT be used
-        #      as an absolute W/°C coefficient anywhere in the control path"
-        #
-        # and this is the control path. The line here used to be
-        #
-        #     heat_loss_coef = params.heat_loss_coefficient          # the relative index
-        #     ...
-        #     heat_loss_coef = 180.0  # W/°C typical house           # a physical coefficient
-        #
-        # - the same variable carrying two different UNITS on the two branches, fed straight into
-        # `heat_loss_coef / 1000.0` as if it were watts per kelvin.
-        #
-        # It never fired, and only by accident: `should_use_learned_parameters()` reads
-        # `learned_parameters["confidence"]`, and `update_learned_parameters()` returns the
-        # confidence on a dataclass without ever storing it in that dict. The gate is False
-        # forever. So a dead gate was the ONLY thing upholding the quarantine, and repairing it -
-        # which looks like an obvious one-line bug fix - would have silently armed the unit error.
-        # Two defects cancelling is not a working system; it is a trap for the next person.
-        #
-        # See test_learning_can_actually_learn.py: enabling learning at all is F-132b and is the
-        # owner's call. Making it SAFE to enable is not, and that is what this is.
+        # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING: the learning estimator produces a
+        # RELATIVE cooling index, not a physical W/°C value, and this is the control path. The old
+        # code carried that index and a literal 180.0 W/°C on the two branches of one variable (two
+        # units), both fed into `/ 1000.0` as if watts per kelvin. It never fired only because the
+        # gate is dead (should_use_learned_parameters reads a "confidence" key never stored), so
+        # repairing that gate would have silently armed the unit error. See
+        # test_learning_can_actually_learn.py; enabling learning is the owner's call (F-132b), making
+        # it SAFE to enable is this.
         params = self.update_learned_parameters()
 
         heat_loss_coef = DEFAULT_HEAT_LOSS_COEFFICIENT

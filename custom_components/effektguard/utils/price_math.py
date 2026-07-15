@@ -1,48 +1,22 @@
-"""How much cheaper is one price than another, when either of them may be zero or negative.
+"""How much cheaper one price is than another, when either may be zero or negative.
 
-Nordic spot prices go to zero and below. Exactly-zero quarters occur roughly a hundred hours a year
-per SE bidding zone, and negative prices - where the grid PAYS you to take the power - are routine
-on windy days. Both break the obvious arithmetic, and both broke it here.
+Nordic spot prices reach exactly 0.00 (~100 h/year per SE zone) and go negative on windy days,
+which breaks the naive `(current - optimal) / current` two ways: truthiness treats a real 0.00
+price as "no price" and skips the cheaper window, and a signed divisor inverts the fraction when
+the current price is negative, so genuinely cheaper windows score negative and are declined.
+Shared so the DHW optimizer's two comparisons cannot drift apart again.
 
-    if current_quarter_price and optimal_window.avg_price < current_quarter_price:
-        price_savings_pct = (current - optimal) / current
-
-Two failures, in three lines:
-
-**TRUTHINESS.** `if current_quarter_price` is False when the price is exactly 0.00. A real Nordic
-price, and the whole branch is skipped - so the hot water is heated NOW rather than deferred to a
-window where the grid would have paid for it.
-
-**A SIGNED DIVISOR.** Dividing by the price rather than its magnitude inverts the fraction whenever
-the current price is negative:
-
-    current  -10 ore, optimal  -60 ore  ->  (-10 - -60) / -10  =  -5.00
-    current  -50 ore, optimal  -60 ore  ->  (-50 - -60) / -50  =  -0.20
-
-Both are genuinely cheaper windows - the grid pays MORE in them - and both come out negative, fail
-the "at least 15 % cheaper" test, and are declined.
-
-The DHW optimizer had TWO of these comparisons. One had been fixed, comment and all. The other had
-not, because the logic was copied rather than shared. It lives here now, so there is one of it.
+tests/unit/utils/test_a_negative_price_is_still_a_price.py
 """
 
 
 def price_savings_fraction(current: float | None, candidate: float) -> float | None:
-    """How much cheaper `candidate` is than `current`, as a fraction of what `current` costs.
+    """How much cheaper `candidate` is than `current`, as a fraction of `current`'s magnitude.
 
-    Args:
-        current: The price right now. `None` means we do not have one - which is NOT the same as
-            zero, and the caller must not conflate them.
-        candidate: The price of the window being considered.
-
-    Returns:
-        The saving as a fraction in [0.0, 1.0+], or None when there is no current price, or when
-        `candidate` is not actually cheaper. A window that is not cheaper is never a saving,
-        however the arithmetic is arranged.
-
-        The denominator is the MAGNITUDE of the current price, so the sign of the result reflects
-        which price is lower and nothing else. When the current price is exactly zero any cheaper
-        (i.e. negative) window is a total saving, and 1.0 is returned rather than dividing by zero.
+    `current is None` means no current price (NOT zero) and returns None. A candidate that is not
+    cheaper returns None. The denominator is |current|, so the sign tracks which price is lower and
+    nothing else; when current is exactly 0.00 any cheaper (negative) window returns 1.0 rather than
+    dividing by zero.
     """
     if current is None:
         return None

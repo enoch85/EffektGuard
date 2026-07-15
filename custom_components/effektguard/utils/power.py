@@ -17,22 +17,13 @@ from ..const import KILOWATTS_PER_MEGAWATT, MILLIWATTS_PER_KILOWATT, WATTS_PER_K
 
 _LOGGER = logging.getLogger(__name__)
 
-# Every unit that IS a power, keyed on Home Assistant's OWN strings, CASE-SENSITIVELY.
+# Every unit that IS a power, keyed on HA's OWN strings, CASE-SENSITIVELY.
 #
-# Case matters here, and it is not a style preference: HA ships both `UnitOfPower.MILLIWATT` ("mW")
-# and `UnitOfPower.MEGA_WATT` ("MW"), and they differ ONLY in case. Case-folding the unit collapses
-# them onto each other, and this table would then read a milliwatt sensor as MEGAWATTS - a factor of
-# 10^9, classified billable, and persisted as the month's tariff peak.
-#
-# And the consequence is the OPPOSITE of the obvious one. A 5 000 000 kW peak does not throttle the
-# house; it makes every real quarter look safe against it ("Safe margin: 4999994 kW below peak"), so
-# `should_limit_power` returns OK and PEAK PROTECTION IS SILENTLY DISABLED FOR THE REST OF THE
-# MONTH - and the owner blows the real tariff peak that the feature exists to prevent. The effect
-# tariff bills the top three quarters, so it stands for weeks.
-#
-# Anything else - no unit, kWh, Wh, a percentage - is refused.
-# kWh is the one worth naming: it is one entry away in an entity dropdown, it is cumulative, and
-# read as power it reports a house drawing its own lifetime consumption.
+# `UnitOfPower.MILLIWATT` ("mW") and `UnitOfPower.MEGA_WATT` ("MW") differ ONLY in case, so folding
+# them reads a milliwatt sensor as megawatts (10^9x). That does not throttle the house - it makes
+# every real hour look safe against a 5 000 000 kW peak, silently disabling peak protection for the
+# rest of the month. Anything else (no unit, kWh, Wh, %) is refused; kWh is one dropdown entry away.
+# tests/unit/utils/test_milliwatts_are_not_megawatts.py
 POWER_UNIT_FACTORS_KW: dict[str, float] = {
     UnitOfPower.MILLIWATT: 1.0 / MILLIWATTS_PER_KILOWATT,
     UnitOfPower.WATT: 1.0 / WATTS_PER_KILOWATT,

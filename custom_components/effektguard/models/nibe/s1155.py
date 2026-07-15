@@ -14,15 +14,10 @@ from ..registry import HeatPumpModelRegistry
 
 # S1155-12. EN 14511 rating points, VERBATIM.
 #
-# EVERY POINT IS KEYED ON INCOMING BRINE TEMPERATURE, not outdoor air. The datasheet's own
-# capacity chart plots output against an x-axis labelled "Incoming brine temp, C". This machine
-# does not know what the weather is doing, and the outdoor-keyed COP curve this profile used to
-# carry - 5.3 at +7 C falling to 3.3 at -30 C - described a machine that does not exist.
-#
-# All four points are at NOMINAL (50 Hz) frequency. NIBE publishes no min- or max-frequency COP for
-# these pumps, only the modulation envelope (the "Heating capacity (PH)" row). So the load
-# dependence of the efficiency is NOT measurable from this datasheet, and the model does not
-# pretend otherwise - see HouseConfig.exergy_efficiency.
+# Keyed on INCOMING BRINE temperature, not outdoor air (datasheet capacity chart x-axis is
+# "Incoming brine temp, C"). All four points are at NOMINAL (50 Hz) frequency; NIBE publishes no
+# min-/max-frequency COP for these pumps, only the modulation envelope ("Heating capacity (PH)"),
+# so load dependence of efficiency is NOT measurable here - see HouseConfig.exergy_efficiency.
 S1155_12_DATASHEET = (
     RatingPoint(
         "0/35 nominal (50 Hz), incoming brine 0 C",
@@ -126,16 +121,9 @@ class NibeS1155Profile(HeatPumpProfile):
         VERIFIED: S1155 has high seasonal performance factor (SCOP).
         Source: NIBE official website
         """
-        # A DISPLAY PROXY ONLY, and it is now honest about that.
-        #
-        # This machine's COP is a function of BRINE temperature and flow temperature. It has no
-        # opinion about the weather. The curve that used to be here ran from 5.3 at +7 C outdoor
-        # down to 3.3 at -30 C, which described a machine whose heat source freezes with the air -
-        # and a ground-source pump's does not. Nothing computes from this; the simulator takes its
-        # COP from `datasheet_points`.
-        #
-        # What is left is a seasonal proxy for the dashboard, anchored on the two published W35/W45
-        # COPs at 0 C brine, because in a colder month the house asks for hotter water.
+        # DISPLAY PROXY ONLY. Nothing computes from it: COP is a function of brine + flow
+        # temperature, not the weather, and the simulator takes it from `datasheet_points`. This is
+        # a dashboard seasonal curve anchored on the two published W35/W45 COPs at 0 C brine.
         self.cop_curve = seasonal_cop_proxy(self.datasheet_points, source_temp_c=0.0)
 
     def validate_power_consumption(

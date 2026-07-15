@@ -1076,11 +1076,11 @@ class DecisionEngine:
                                                  point a cost layer has spent everything it was
                                                  lent and the comfort layer's demand is the floor.
 
-        Between them the floor is blended, so the control law is continuous. It used to be a
-        boolean at `inner`, and a boolean on a temperature threshold is a bang-bang controller:
-        indoor 20.80 C gave -10.00 and indoor 20.79 C gave +0.01. A real indoor sensor dithers by
-        more than a hundredth of a degree, so the house sat on that boundary flipping the curve
-        between its extremes, and every flip is a write to the pump.
+        Between them the floor is blended, so the control law is continuous - NOT a boolean at
+        `inner`, which is bang-bang on a temperature threshold: indoor 20.80 C giving -10.00 and
+        20.79 C giving +0.01. A real indoor sensor dithers by more than a hundredth of a degree, so
+        the house would sit on that boundary flipping the curve between its extremes, every flip a
+        write to the pump.
 
         Abstains (0.0) when there is no valid indoor reading: without one this cannot be measured,
         and degree minutes are structurally blind to it - DM = integral(BT25 - S1), so lowering the

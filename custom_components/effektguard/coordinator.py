@@ -406,12 +406,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         This gives sensors time to update before we read them, and aligns
         with 15-minute spot price intervals.
         """
-        # Never re-arm a coordinator that has been shut down.
-        #
-        # _do_aligned_refresh calls this from a `finally`, so an update already in flight
-        # when the entry unloads would otherwise schedule a fresh timer on a dead object -
-        # and the reload's new coordinator would arm its own. Two coordinators, one heat
-        # pump, conflicting curve offsets, forever.
+        # Never re-arm a coordinator that has been shut down. _do_aligned_refresh calls this from
+        # a `finally`, so an update in flight when the entry unloads would otherwise arm a fresh
+        # timer on a dead object - two coordinators driving one pump with conflicting offsets.
         if self._shutdown_requested:
             _LOGGER.debug("Coordinator shut down - not re-arming the aligned refresh")
             return
@@ -441,15 +438,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _do_aligned_refresh(self) -> None:
         """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        This is the sole owner of the retry timer: the base class's scheduler is disabled
-        (update_interval=None), so nothing else will ever re-arm it. That makes the broad
-        `except Exception` correct rather than sloppy - anything the update path can raise
-        (HomeAssistantError, an IndexError from a price lookup on a DST day, numpy errors from
-        the learning modules) would otherwise kill the task, and the failure is silent and
-        permanent: `last_update_success` stays True while the pump sits on the last offset
-        written, until Home Assistant is restarted.
-
-        The `finally` guarantees the loop survives any single bad cycle.
+        Sole owner of the retry timer: the base scheduler is disabled (update_interval=None), so
+        nothing else re-arms it. That is why the broad `except Exception` is correct - anything the
+        update path raises would otherwise kill the task silently and permanently
+        (`last_update_success` stays True while the pump holds its last offset until HA restarts).
+        The `finally` re-arms so the loop survives any single bad cycle.
         """
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
@@ -656,13 +649,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
     async def _set_temporary_lux(self, on: bool) -> bool:
-        """The ONE way this integration commands the hot-water boost, and the only place that records
-        WHO STARTED IT - which is what lets `_cancel_our_dhw_boost` tell ours from the household's.
-        Reaching the switch directly instead disowns a boost our own service started, leaving it to
-        run to NIBE's lux timeout on the immersion heater.
+        """Command the hot-water boost. The ONE place that records WHO STARTED IT.
 
-        Starting from a shut-down coordinator is refused, as for the curve offset and the fan.
-        STOPPING is not - that IS the cleanup, and it runs during shutdown.
+        That record is what lets `_cancel_our_dhw_boost` tell ours from the household's; reaching
+        the switch directly disowns a boost we started, leaving it to run to NIBE's lux timeout.
+        Starting from a shut-down coordinator is refused; STOPPING is not - it is the cleanup, and
+        runs during shutdown.
 
         tests/unit/test_a_hot_water_boost_we_started_is_a_hot_water_boost_we_stop.py
         """
@@ -733,13 +725,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         _LOGGER.debug("Shutting down EffektGuard coordinator")
 
-        # Base shutdown FIRST, and not optional: it sets `_shutdown_requested`, cancels the base
-        # refresh handle, and shuts down the debouncer. `_shutdown_requested` stops an in-flight
-        # `_do_aligned_refresh` (run on hass.async_create_task, so HA cannot cancel it on unload)
-        # from re-arming its timer in `finally` - which would leave a DEAD coordinator and the
-        # reload's live one both writing curve offsets to the same pump, one more writer per reload.
-        # The debouncer matters for the same reason: a trailing debounced refresh could fire after
-        # unload and write an offset.
+        # Base shutdown FIRST: it sets `_shutdown_requested` (which stops an in-flight
+        # _do_aligned_refresh from re-arming its timer, making the reload's coordinator the only
+        # writer) and shuts down the debouncer (a trailing debounced refresh could otherwise fire
+        # after unload and write an offset).
         await super().async_shutdown()
 
         try:
@@ -782,14 +771,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict[str, object]:
         """Home Assistant's READ hook. Reads the world and decides. It NEVER writes.
 
-        This is public, debounced, and called by anything that wants the coordinator refreshed: a
-        Home Assistant reload, an options change, and services that have no business touching
-        hardware. The heat-pump writes used to live in here, so `reset_peak_tracking` - a service
-        whose entire job is to clear a stored counter - drove the pump.
-
-        Writes belong to the control loop, and the control loop is `_do_aligned_refresh`: one
-        owner, on the clock. Services that genuinely mean to command the pump call
-        `async_refresh_and_apply`, and still take effect at once.
+        Public and debounced, so anything may refresh it (a reload, an options change, a
+        bookkeeping service). Writes belong to the control loop `_do_aligned_refresh`; services
+        that mean to command the pump call `async_refresh_and_apply`.
         """
         return await self._read_and_decide(apply=False)
 
@@ -806,21 +790,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _drive_the_pump(self, *, explicit_command: bool = False) -> dict[str, object]:
         """The write path. Its sole owner, and the only place `apply=True` is passed.
 
-        Two callers reach the pump - the aligned control loop every five minutes, and a service
-        that explicitly commands it - and both are long coroutines that await at every step, so
-        asyncio interleaves them freely. Without this lock:
+        The aligned control loop and an explicit-command service both reach the pump, and both
+        await freely; without _control_lock a forced offset and an in-flight aligned decision
+        race, and the older decision can overwrite the newer write (and corrupt _apply_offset's
+        read-then-write rate limiting). Reads are NOT serialised - they touch no hardware.
 
-            12:05:10  the aligned refresh reads the world and starts deciding
-            12:05:11  force_offset(+3) sets the override, decides, and writes +3
-            12:05:12  the aligned refresh - which snapshotted the engine BEFORE the override
-                      existed - finishes and writes +0.5
-
-        The forced offset is gone, overwritten by a decision that predates it. The same
-        interleaving corrupts _apply_offset's rate limiting, which reads last_offset_timestamp
-        and then writes it.
-
-        Reads are deliberately NOT serialised: they touch no hardware, and blocking Home
-        Assistant's refresh hook behind a write in progress would stall the entities for nothing.
+        tests/unit/coordinator/test_one_writer_at_a_time.py
         """
         async with self._control_lock:
             return await self._read_and_decide(
@@ -883,18 +858,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     def _clear_price_source_issue(self) -> None:
         """Prices are flowing again.
 
-        Deliberately NOT guarded on `_price_issue_active`. That flag lives on the coordinator and a
-        restart builds a new one with it False - while the repair issue, which Home Assistant
-        persists in its own registry, is still raised. Guarding the delete on it meant:
-
-            boot 1   no price source  -> issue raised, flag True
-            (the user configures GE-Spot and restarts)
-            boot 2   prices fine      -> flag is False again, the delete returns early, and the
-                                         issue stays raised. Forever, with nothing the user can do.
-
-        `async_delete_issue` is a no-op when there is nothing to delete, so there is no cost to
-        calling it. (Found on a live Home Assistant, not in the tests - the flag made the unit test
-        of the raise path pass perfectly well.)
+        Deliberately NOT guarded on `_price_issue_active`: that flag resets to False on restart
+        while the repair issue, which HA persists in its own registry, stays raised - so guarding
+        the delete would leave the issue up forever after a restart. `async_delete_issue` is a
+        no-op when nothing is raised.
         """
         async_delete_issue(self.hass, DOMAIN, PRICE_SOURCE_ISSUE_ID)
         self._price_issue_active = False
@@ -1064,15 +1031,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._report_no_price_source("the price entity returned no quarters")
                 price_data = None
         except (AttributeError, KeyError, ValueError, TypeError) as err:
-            # Do NOT fabricate. The old fallback returned 96 quarters all priced 1.0, and the
-            # decision engine WEIGHED them: they classify NORMAL, the price layer casts a real
-            # vote, and the aggregate is dragged down - +1.00 °C becomes +0.27 °C on a number
-            # nobody measured. The reasoning string then told the user "[Spot Price] ... NORMAL"
-            # as though a price had been analysed. (Audit F-123; same class as F-013/F-014, where
-            # the NIBE adapter invented degree minutes.)
-            #
-            # None is the honest answer, and the engine handles it: the price layer abstains and
-            # the thermal, comfort and safety layers decide on their own.
+            # Do NOT fabricate. A flat fallback (the old one returned 96 quarters priced 1.0)
+            # classifies NORMAL and casts a real price vote, dragging the aggregate offset down on
+            # a number nobody measured - +1.00 °C became +0.27 °C (F-123, same class as
+            # F-013/F-014). None is honest: the price layer abstains and the thermal, comfort and
+            # safety layers decide on their own.
             self._report_no_price_source(str(err))
             price_data = None
 
@@ -2047,9 +2010,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW heating aborted early: %s. Stopping DHW to prioritize space heating.",
                     abort_reason,
                 )
-                # The safety stop was the THIRD place that reached the lux switch on its own, and it
-                # left `_lux_boost_is_ours` set after switching the boost off. Through the door.
-                # Safety also outranks a user boost - the window closes with the switch.
+                # Stop through the owned door so `_lux_boost_is_ours` is cleared. Safety also
+                # outranks a user boost - the window closes with the switch.
                 self._service_boost_until = None
                 if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
@@ -2270,16 +2232,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # 0.3 kW is charged. Substituting ~5.5 kW inflated the month's peak tenfold, and the
             # effect tariff bills the top three quarters, so it would stand for weeks.
 
-            # Publish the instantaneous reading for the effect layer. The engine needs CURRENT power
-            # to judge how close this quarter is to the monthly peak, and must never be given
-            # peak_today - a daily MAXIMUM reset only at midnight, which a single morning spike would
-            # pin to CRITICAL all day. This runs after the decision, so the engine reads the previous
-            # cycle's value: at most UPDATE_INTERVAL_MINUTES old, a measurement, not a high-water mark.
+            # Publish the instantaneous reading for the effect layer (see the decision site for why
+            # it must be current power and never peak_today). This runs after the decision, so the
+            # engine reads the previous cycle's value - at most UPDATE_INTERVAL_MINUTES old.
             self.current_power_kw = current_power
 
             # The source is recorded where the value was produced, never reconstructed here from the
-            # config entry and the number's magnitude - which once filed a compressor estimate above
-            # 0.5 kW as "external_meter", making an invented peak look measured.
+            # config entry and the number's magnitude - which once filed a compressor estimate as
+            # "external_meter", making an invented peak look measured.
             measurement_source = power_source
 
             # Get current timestamp for peak tracking
@@ -2338,20 +2298,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 and peak_event.is_billable
             ):
                 # The unoptimised baseline, MEASURED: with optimization off the offset is held at
-                # 0.0 and the pump runs its own curve, so these quarters are what the house does
-                # without EffektGuard. Nothing else calls update_baseline_peak; without it the
-                # savings calculator assumes baseline = peak * 1.176 and can never read zero.
-                #
-                # It must be `effective_power` (tariff-weighted, like the peak_this_month it is
-                # compared against) and billable (guarded above): a baseline in unweighted or
-                # NIBE-only numbers reports the night weighting, or load it cannot see, as savings.
+                # 0.0 and the pump runs its own curve, so this is what the house does without
+                # EffektGuard. Nothing else calls update_baseline_peak; without it the savings
+                # calculator assumes baseline = peak * 1.176 and can never read zero. Must be
+                # `effective_power` (tariff-weighted, like the peak_this_month it is compared
+                # against) and billable - an unweighted or NIBE-only baseline reports weighting or
+                # unseen load as savings.
                 self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
                 # The HIGHEST of the tracked peaks, never peak_event.effective_power:
-                # record_quarter_measurement returns an event for ANY new entry while the top-3
-                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW quarter would
-                # drop the monthly peak to 2.0 and weaken the threshold for the rest of the month.
+                # record_period_measurement returns an event for ANY new entry while the top-3
+                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW hour would drop the
+                # monthly peak to 2.0 and weaken the threshold for the rest of the month.
                 self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
@@ -2362,15 +2321,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """The ONE way this integration reaches the heat pump. Return the applied integer.
 
         A coordinator that has been shut down is not a writer. `_do_aligned_refresh` runs on
-        `hass.async_create_task`, so HA cannot cancel it on unload, and it is mid-flight for seconds
-        awaiting the weather forecast; without the shutdown check here it would run to the end and
-        drive the pump after unload, leaving the reload's new coordinator a second writer.
-
-        The entry unloads on the reconfigure flow (swapping the power meter), a manual reload, a
-        removal, or a restart - NOT on an options change, which hot-reloads.
+        `hass.async_create_task`, so HA cannot cancel it on unload and it stays mid-flight for
+        seconds awaiting the weather forecast; without this check it would drive the pump after
+        unload, leaving the reload's new coordinator a second writer.
 
         tests/unit/coordinator/test_an_unloaded_integration_does_not_drive_the_heat_pump.py
-        tests/unit/test_which_things_actually_unload_the_entry.py
         """
         if self._shutdown_requested:
             _LOGGER.debug(
@@ -2704,14 +2659,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             now = dt_util.utcnow()
 
-            # Learning observes on its own clock, not the control loop's.
-            #
-            # The BT1 indoor sensor reports to 0.1 C. A house warming at a brisk 0.6 C/h moves
-            # 0.05 C in five minutes - half a sensor tick - so an observation per control cycle
-            # records the quantisation, not the building. The thermal PREDICTOR below still wants
-            # every cycle: it tracks short-term trend, where five-minute resolution is the point.
-            # The learner is asking a different question on a different timescale, and a building's
-            # time constant is hours (LEARNING_OBSERVATION_INTERVAL_MINUTES, audit F-132).
+            # Learning observes on its own clock (LEARNING_OBSERVATION_INTERVAL_MINUTES), not the
+            # control loop's: per-cycle indoor readings capture sensor quantisation, not the
+            # building's hours-long time constant. The thermal PREDICTOR below still wants every
+            # cycle - it tracks short-term trend, where five-minute resolution is the point (F-132).
             since_last = (
                 None
                 if self._last_learning_observation is None

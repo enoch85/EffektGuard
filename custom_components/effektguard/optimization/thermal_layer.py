@@ -299,20 +299,13 @@ class ThermalModel:
         self.insulation_quality = insulation_quality
 
     def get_prediction_horizon(self) -> float:
-        """How far ahead this house has to look to act in time.
+        """How far ahead this house must look to act in time - heavier fabric, longer lag.
 
-        The heavier the fabric, the longer the lag, and the further ahead it must see. A concrete
-        slab moves the room by a degree in a few hours but is only about a fifth charged at
-        fourteen - its slow time constant is ~70 h - so six hours is the LAG, and a day is the
-        MINIMUM horizon it has to plan over.
-        UFH_CONCRETE_PREDICTION_HORIZON says as much in its own comment.
-
-        This returned a flat 12.0 for every house. The pre-heat layer fires on a drop of
-        WEATHER_FORECAST_DROP_THRESHOLD seen inside the horizon, and a slab does not get into
-        thermal debt from a sudden plunge - the pump's curve catches that. It gets into debt from a
-        slow, deep slide, and a twelve-hour window cannot see one: a 15 C fall spread over two days
-        shows only 3.8 C in any twelve hours, under the trigger, so the pre-heat never fires at all.
-        At twenty-four hours it shows 7.5 C and there is still time to charge the slab.
+        A concrete slab's slow time constant (~70 h) makes six hours its LAG, not its horizon: a
+        flat 12 h window cannot see the slow, deep outdoor slide that actually drains it (only a
+        sudden plunge, which the pump's own curve already catches), so the pre-heat never fires.
+        Horizon is UFH-type-specific; see docs/research/03_concrete_slab_response.md and the
+        UFH_*_PREDICTION_HORIZON constants.
 
         Returns:
             Prediction horizon in hours.
@@ -327,25 +320,17 @@ class ThermalModel:
 def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
     """Move the degree-minute thresholds to suit how slowly this house responds.
 
-    The slower the emitter, the SOONER it must start recovering: heat put into a concrete slab
-    reaches the room hours later, so by the time the debt is deep enough to trouble a radiator
-    system, the slab has already committed hours of deficit it cannot take back.
+    The slower the emitter, the SOONER it must start recovering. Degree minutes are NEGATIVE, so the
+    buffer DIVIDES (multiplying would deepen the threshold and delay the response).
 
-    Degree minutes are NEGATIVE, so the buffer DIVIDES. Multiplying deepens the threshold and
-    delays the response - -540 * 1.3 = -702 made the six-hour slab wait 162 DM longer than a
-    radiator system that recovers in under an hour.
+    Shared by EmergencyLayer and ProactiveLayer on purpose: a threshold is a property of the house,
+    not the layer. When only one layer applied the buffer there was a band of DM in which neither
+    responded.
 
-    Shared by EmergencyLayer and ProactiveLayer on purpose. They used to compute their thresholds
-    separately, and only one of them applied the buffer, so between the proactive layer handing
-    over and the emergency layer picking up there was a band of degree minutes in which NEITHER
-    responded. A threshold is a property of the house, not of the layer that happens to read it.
-
-    THE DIVIDE CAN UNDO THE WARM-SIDE CEILING, so the ceiling is re-applied here rather than only
-    in `get_expected_dm_range`. In July the base warning is already at the ceiling (-110), and
-    -110 / 1.3 = -85 is back inside the band the compressor cycles through on its own - so a
-    concrete-slab house a fraction under target on a warm morning was told it was in thermal debt
-    and given +4.0 C of curve offset. Clamping the number BEFORE the last thing that changes it is
-    no clamp at all; the invariant has to hold on the value the layers actually read.
+    The divide can undo the warm-side ceiling, so keep_triggers_clear_of_the_compressor_band is
+    re-applied HERE, on the value the layers actually read - clamping before the last thing that
+    changes it is no clamp at all (e.g. -110 / 1.3 = -85, back inside the compressor's own cycling
+    band, once flagged a warm-morning slab house as in thermal debt).
 
     Args:
         base_thresholds: Climate-aware thresholds from ClimateZoneDetector
@@ -393,32 +378,13 @@ class EmergencyLayer:
     Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
     This is the hard safety limit validated by Swedish NIBE forums.
 
-    VOLATILE-PRICE SUPPRESSION - a deliberate smoothness/recovery trade-off. Documented
-    here because its interaction with thermal debt is easy to miss:
-
-        When the current spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS
-        (45 min ~ the compressor's ramp-up plus cool-down), the recovery tiers T1/T2/T3
-        have their offset ZEROED by should_skip_volatile_boost() and their weight cut to
-        VOLATILE_WEIGHT_REDUCTION (30%).
-
-        This is INTENTIONAL. Chasing brief price windows produced jumpy offsets and
-        compressor cycling; declining a boost that cannot complete inside the window is
-        how the curve is kept smooth.
-
-        The safety cost is real, and bounded. Measured (Stockholm, -15C outdoor, DM -1400):
-            is_volatile=False -> tier T3, offset +8.5, weight 0.91
-            is_volatile=True  -> tier T3, offset +0.0, weight 0.27
-        So during a volatile run, degree minutes may keep falling rather than recovering.
-
-        What bounds it: the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of
-        evaluate_layer returns BEFORE any volatile handling, so the EMERGENCY tier is
-        never suppressed - it always emits SAFETY_EMERGENCY_OFFSET at weight 1.0, and the
-        decision engine grants that tier absolute priority over every cost layer.
-
-        Consequence to keep in mind: on a volatile day the pump may coast down to the aux
-        limit (engaging the immersion heater) instead of recovering earlier at T2/T3. If
-        field data ever shows a DM spiral that coincides with short price runs, THIS is
-        the mechanism to look at first.
+    VOLATILE-PRICE SUPPRESSION (deliberate smoothness/recovery trade-off): when the current
+    spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS, should_skip_volatile_boost()
+    zeroes the T1/T2/T3 recovery offset and cuts weight to VOLATILE_WEIGHT_REDUCTION, to avoid
+    compressor cycling on brief windows. Cost: DM may keep falling during a volatile run. Bounded
+    because the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of evaluate_layer returns first, so the
+    EMERGENCY tier is never suppressed. If a DM spiral ever coincides with short price runs, look
+    here first.
     """
 
     def __init__(
@@ -701,11 +667,9 @@ class EmergencyLayer:
         outdoor_temp = nibe_state.outdoor_temp
         indoor_temp = nibe_state.indoor_temp
         current_offset = getattr(nibe_state, "current_offset", 0.0)
-        # dt_util.utcnow(), never datetime.now(). Every NibeState the adapter builds carries an
-        # AWARE timestamp, so this fallback does not fire today - but it feeds the anti-windup
-        # causation window, and mixing a naive datetime into that history raises TypeError inside
-        # the emergency layer, which is the one path that must never fail. A naive fallback in a
-        # safety path is a trap left for the first duck-typed caller.
+        # dt_util.utcnow(), never a naive datetime.now(): this fallback feeds the anti-windup
+        # causation window, and a naive datetime there raises TypeError inside the emergency layer -
+        # the one path that must never fail.
         timestamp = getattr(nibe_state, "timestamp", None) or dt_util.utcnow()
 
         # Track offset changes for causation detection (Jan 2026)
@@ -727,14 +691,11 @@ class EmergencyLayer:
         # ========================================
         # HARD LIMIT: DM -1500 absolute maximum (never exceed)
         # ========================================
-        # This check MUST come before every other branch in this method. The anti-windup
-        # cooldown, the anti-windup spiral response and the "too warm" case all return early,
-        # and any of them placed ahead of this one makes the hard limit unenforceable in
-        # precisely the situations it exists for - "too warm" trips at only tolerance_range
-        # over target, so a solar-gain morning during a debt spiral would silence it entirely.
-        #
-        # Past this threshold NIBE engages the auxiliary immersion heater. Declining to respond
-        # does not prevent that - it guarantees it.
+        # MUST come before every other branch: the anti-windup and "too warm" cases return early, so
+        # placing any of them first makes the hard limit unenforceable (e.g. "too warm" trips at only
+        # tolerance_range over target, silencing this on a solar-gain morning during a debt spiral).
+        # Past this threshold NIBE engages the aux immersion heater; declining to respond guarantees
+        # it rather than preventing it.
         if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
@@ -828,13 +789,10 @@ class EmergencyLayer:
                     dm_rate=dm_rate,
                 )
 
-        # Cases 1 and 2 both reason about indoor comfort, so both require a REAL indoor
-        # reading. On a system with no room sensor the adapter reports DEFAULT_INDOOR_TEMP,
-        # which equals the usual target and therefore yields temp_deviation == 0.0 exactly.
-        # Case 2's `temp_deviation >= 0` gate would then be permanently true and the whole
-        # thermal-debt layer would return weight 0.0 - i.e. no DM protection at all, on
-        # precisely the systems that depend on DM most. Skip both and go straight to the
-        # degree-minute tiers, which is how NIBE itself runs without a room sensor.
+        # Cases 1 and 2 reason about indoor comfort, so both need a REAL indoor reading. Without a
+        # room sensor the adapter reports DEFAULT_INDOOR_TEMP (== target), so temp_deviation == 0.0
+        # and Case 2's `>= 0` gate would permanently disable DM protection on exactly the systems
+        # that depend on it most. Skip both and use the degree-minute tiers, as NIBE does sensorless.
         indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
 
         # Case 1: Too warm (above tolerance)

@@ -468,14 +468,9 @@ class ThermalStatePredictor:
         Returns:
             PredictionLayerDecision with learned pre-heating recommendation
         """
-        # Skip until a full day of history exists.
-        #
-        # This gate used to read `< 96  # Less than 24 hours of data`, and the reason string it
-        # printed hardcoded the 96 as well. At a five-minute coordinator tick 96 samples is EIGHT
-        # hours, not twenty-four - so the learned pre-heating layer engaged on a third of the data
-        # it believed it had, and eight hours of a Swedish winter night is not a representative day.
-        # SAMPLES_PER_HOUR was already derived correctly, and already sized this predictor's own
-        # deque; the gate simply did not use it.
+        # Skip until a full day of history exists. Derive the sample count from SAMPLES_PER_HOUR: a
+        # hardcoded 96 is only EIGHT hours at the 5-minute tick, engaging the learned pre-heat on a
+        # third of a day - and eight hours of a Swedish winter night is not a representative day.
         required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
         if len(self.state_history) < required:
             return PredictionLayerDecision(

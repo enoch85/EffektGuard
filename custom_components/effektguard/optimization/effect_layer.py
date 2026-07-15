@@ -3,9 +3,8 @@
 Tracks HOURLY mean power and manages monthly peak avoidance to minimise effect tariff charges.
 
 Swedish effect tariff rules, as Ellevio actually publishes them:
-- Measured as HOURLY MEAN POWER. Not 15-minute windows, which is what this module used to say and
-  what it used to measure - a quarter-hour mean overstates the billed peak by up to fourfold, and
-  the effect layer throttled the heat pump to defend it.
+- Measured as HOURLY MEAN POWER, not 15-minute windows (a quarter-hour mean overstates the billed
+  peak by up to fourfold).
 - Daytime (06:00-22:00): full weight
 - Nighttime (22:00-06:00): "raknas bara halva effekttoppen" - half the peak counts
 - Monthly charge on the mean of the three highest hours, at most one per day
@@ -87,15 +86,9 @@ def is_daytime_hour(hour: int) -> bool:
 def effective_tariff_power_kw(power_kw: float, hour: int) -> float:
     """What the effect tariff will BILL this hour's mean power as. Night hours count half.
 
-    THE ONE DEFINITION. This was open-coded in two places here and needed a third in the sensor,
-    and a fourth thing - the savings baseline in the coordinator - compared an UNWEIGHTED peak
-    against a weighted one. The result was that a single 6 kW quarter at 02:00, with the optimiser
-    doing nothing whatsoever, reported 150 SEK/month of savings: the whole figure was this
-    weighting, applied to one side of a subtraction and not the other, and it was flagged as
-    "measured".
-
-    A quantity that is sometimes weighted and sometimes not is a quantity waiting to be compared
-    against itself. Everything that goes near a monthly peak comes through here.
+    THE ONE DEFINITION - everything that goes near a monthly peak comes through here. When the
+    weighting was open-coded, the savings baseline compared an UNWEIGHTED peak against a weighted
+    one and reported phantom savings (a night peak looked ~half off with the optimiser idle).
     """
     return power_kw if is_daytime_hour(hour) else power_kw * NIGHT_TARIFF_WEIGHT
 
@@ -149,10 +142,9 @@ class PeakEvent:
     actual_power: float  # kW
     effective_power: float  # kW (with day/night weighting)
     is_daytime: bool
-    # Where the number came from. A peak measured from NIBE's phase currents is a real measurement
-    # of the pump and a perfectly good CONTROL threshold, but it is not whole-house grid import and
-    # must never be reported to the owner as the month's billing peak. Carrying the provenance is
-    # what lets one history serve both purposes without lying about either.
+    # Where the number came from. A peak from NIBE's phase currents is a valid CONTROL threshold but
+    # is not whole-house grid import, so it must never be reported as the month's billing peak.
+    # Carrying provenance lets one history serve both purposes.
     source: str = POWER_SOURCE_EXTERNAL_METER
 
     @property
@@ -296,12 +288,11 @@ class EffectManager:
         timestamp: datetime,
         source: str = POWER_SOURCE_EXTERNAL_METER,
     ) -> PeakEvent | None:
-        """Record one completed BILLING PERIOD - which is an HOUR, and used to be a quarter-hour.
+        """Record one completed BILLING PERIOD - an HOUR, which is what the tariff bills.
 
-        The tariff bills the mean power over a whole hour. This module used to record quarter-hour
-        means and call them billing peaks, so a fifteen-minute hot-water cycle at 9 kW inside an
-        otherwise idle hour was recorded as a 9 kW peak where the meter bills 3 - and the effect
-        layer then throttled the heat pump to defend the difference.
+        The tariff bills the mean power over a whole hour, so a 15-minute 9 kW hot-water cycle in an
+        otherwise idle hour is a 3 kW billed peak, not 9 - recording the quarter-hour mean overstates
+        it and throttles the pump to defend the difference.
 
         Args:
             power_kw: MEAN power over the hour, in kW
@@ -323,12 +314,11 @@ class EffectManager:
             )
             return None
 
-        # And a plausibility CEILING, for the same reason the floor exists. This peak is persisted
-        # for a month and it is what every later hour is judged against, so a single impossible
-        # reading does not merely produce one wrong number - it makes every real hour look safe
-        # by comparison and takes peak protection offline until the month rolls over. A mis-scaled
-        # unit put 5 000 000 kW in here once. Nothing behind a domestic main fuse reaches
-        # PEAK_RECORDING_MAXIMUM, so no real house is ever refused.
+        # A plausibility CEILING, for the same reason the floor exists. A peak is persisted for a
+        # month and every later hour is judged against it, so one impossible reading (a mis-scaled
+        # unit once put 5 000 000 kW here) makes every real hour look safe and disables peak
+        # protection until the month rolls over. Nothing behind a domestic main fuse reaches
+        # PEAK_RECORDING_MAXIMUM, so no real house is refused.
         if power_kw > PEAK_RECORDING_MAXIMUM:
             _LOGGER.warning(
                 "Refusing to record %.0f kW as a tariff peak: no domestic supply can deliver it "
@@ -726,15 +716,12 @@ class EffectManager:
             and predicted_margin < EFFECT_MARGIN_PREDICTIVE
             and predicted_power_increase > 0
         ):
-            # PREDICTIVE: Will approach peak in next 15 min - act NOW
-            # This is the key innovation: prevent spike before it happens
+            # PREDICTIVE: Will approach peak in next 15 min - act NOW to prevent the spike.
             #
-            # Requires a peak to actually protect. On a fresh install there is no peak
-            # history, so current_peak is 0.0 and `predicted_margin = 0.0 - predicted_power`
-            # is ALWAYS negative - this branch fired on every cooling house from day one,
-            # voting -1.5 C at weight 0.85, which outranks BOTH T1 (0.65) and T2 (0.81)
-            # thermal-debt recovery. Missing input must produce abstention, never a
-            # heat-reducing vote.
+            # The `current_peak > 0` guard is required: with no peak history current_peak is 0.0, so
+            # `predicted_margin = 0.0 - predicted_power` is ALWAYS negative and this branch would fire
+            # on every cooling house from day one, voting a heat-reducing offset that outranks T1/T2
+            # recovery. Missing input must abstain, never vote to reduce heat.
             return EffectLayerDecision(
                 name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,

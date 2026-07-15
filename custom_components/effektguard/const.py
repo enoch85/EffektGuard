@@ -275,10 +275,8 @@ CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
 DM_THRESHOLD_AUX_LIMIT: Final = -1500  # Auxiliary heat threshold (prevent expensive elpatron)
 
-# How far the EXPECTED degree-minute band must stay clear of the absolute floor above.
-# A house whose "normal" range reached the emergency trigger would be normal and in danger at the
-# same time. These used to be bare `+ 100` / `+ 50` literals inside climate_zones.get_expected_dm_range
-# - magic numbers clamping the safety floor itself (audit F-076).
+# How far the EXPECTED degree-minute band must stay clear of the absolute floor above: a house whose
+# "normal" range reached the emergency trigger would be normal and in danger at once (audit F-076).
 DM_NORMAL_MIN_BUFFER: Final = 100  # DM - the shallow end of "normal" stays this clear of the floor
 DM_WARNING_BUFFER: Final = 50  # DM - normal_max and warning stay this clear of it
 
@@ -562,18 +560,12 @@ THERMAL_MASS_CONCRETE_UFH_THRESHOLD: Final = 1.5  # >= 1.5 = concrete underfloor
 THERMAL_MASS_TIMBER_UFH_THRESHOLD: Final = 1.2  # >= 1.2 = timber underfloor heating
 # Below 1.2 defaults to radiator heating
 
-# THE INNER BAND: how much of the owner's tolerance a cost layer may spend freely.
+# THE INNER BAND: how much of the owner's tolerance (in DEGREES) a cost layer may spend freely.
 #
-# The comment here used to read "Scales user tolerance setting (1-10) to actual temperature range;
-# Scale: 1-10 -> 0.4-4.0°C". There is no 1-10 setting. `tolerance` is DEGREES and always has been -
-# DEFAULT_TOLERANCE is 0.5, and MIN_TARGET_TEMP below is computed as MIN_TEMP_LIMIT + tolerance,
-# which only makes sense in degrees. The comment described a design that never shipped, and it hid
-# what the number actually does.
-#
-# What it does: an owner who asks for +/-0.5 C gets an INNER band of +/-0.2 C inside which the spot
-# and effect layers may coast the house around for free - the thermal battery - and a ramp from
-# there out to the +/-0.5 C they actually asked for, across which the comfort layer progressively
-# takes the floor back. See DecisionEngine._starvation_fraction.
+# An owner who asks for +/-0.5 C gets an INNER band of +/-0.2 C inside which the spot and effect
+# layers may coast the house around for free - the thermal battery - and a ramp out to the +/-0.5 C
+# they actually asked for, across which the comfort layer progressively takes the floor back.
+# See DecisionEngine._starvation_fraction.
 TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # of the owner's tolerance: 0.5 C -> a 0.2 C free band
 
 # Safety layer emergency offsets (Oct 19, 2025)
@@ -722,7 +714,7 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 # Home Assistant repair-issue id raised when there is no electricity price source at all.
 # Without prices the price layer abstains entirely - which is correct - but the user has
 # `enable_price_optimization` switched on and believes it is trading. A log line does not tell
-# them; a repair issue does. (Audit F-123: the old code invented 96 quarters at 1.0 öre instead.)
+# them; a repair issue does. (Audit F-123.)
 PRICE_SOURCE_ISSUE_ID: Final = "no_price_source"
 
 # EffektGuard drives hot water by toggling NIBE's temporary-lux switch. Home Assistant's own NIBE
@@ -738,24 +730,12 @@ PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 
-# THE FORECAST WAS NEVER FILTERED TO THE FUTURE, AND EVERY LAYER SLICES IT POSITIONALLY.
-#
-# `WeatherData.forecast_hours` is documented as "Next 24-48 hours", and every consumer reads it that
-# way - `forecast_hours[:3]` for the cold-snap trigger, `[:24]` for unusual-weather detection,
-# `[:horizon]` for the pre-heat. But the adapter appended EVERY entry the weather entity published,
-# including the ones already in the past. Many integrations publish the current period first, and a
-# weather integration that has stalled holds its last forecast for as long as it stays "available".
-#
-# So with a forecast that starts six hours ago, `forecast_hours[:3]` is the weather from six hours
-# AGO - and a cold snap an hour away sits outside every horizon anyone looks at. That is precisely
-# the case the pre-heat exists for: "we need to pre-heat super early if we know a cold snap is
-# coming, I mean like DAYS ahead."
-#
-# Entries whose hour has already ENDED are dropped. The current hour is kept - a period that began
-# 40 minutes ago is still the weather now - and `WeatherData.current_temp` carries the present
-# reading separately in any case. A forecast entirely in the past becomes an EMPTY one, which is
-# exactly right: the layers already abstain when there is no forecast, and a frozen forecast is not
-# a forecast.
+# `WeatherData.forecast_hours` MUST be filtered to the future, because every consumer slices it
+# POSITIONALLY (`[:3]`, `[:24]`, `[:horizon]`). A stalled weather integration holds a forecast that
+# starts hours ago, so an unfiltered `[:3]` reads weather from the past and a cold snap an hour away
+# falls outside every horizon - exactly the case pre-heat exists for. Entries whose hour has ENDED
+# are dropped; the current hour is kept (current_temp carries the present reading anyway), and an
+# all-past forecast becomes EMPTY, which the layers already treat as "no forecast".
 WEATHER_FORECAST_PERIOD_HOURS: Final = 1.0  # each forecast entry covers one hour
 WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
@@ -1098,8 +1078,8 @@ PREDICTION_LEARNED_PREHEAT_MIN_HOURS: Final = 24  # before acting on learned pre
 # LEARNING OBSERVES ON A DIFFERENT CLOCK FROM CONTROL, and it has to.
 #
 # Control runs every UPDATE_INTERVAL_MINUTES because the pump needs steering that often. Learning
-# used to piggy-back on the same tick, and could therefore never learn anything: the NIBE BT1 indoor
-# sensor reports to 0.1 C, and a house warming at a brisk 0.6 C/h moves 0.05 C in five minutes - half
+# used to piggy-back on the same tick, and could therefore never learn anything: the room
+# sensor (NIBE BT50) reports to 0.1 C, and a house warming at a brisk 0.6 C/h moves 0.05 C in five minutes - half
 # a sensor tick. Every observed rate quantised to 0.0 or 1.2 C/h with nothing in between, so the
 # scatter that `_calculate_confidence` scores was a measurement of the SAMPLING INTERVAL, not of the
 # building. Confidence sat at 0.467 against a 0.7 gate, on any house, forever (F-132).
@@ -1126,7 +1106,7 @@ LEARNING_MIN_OBSERVATIONS: Final = 96  # 96 hourly observations = 4 days before 
 LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
 
 # What it takes for the heating observations to carry any information at all.
-# The indoor sensor (NIBE BT1) reports to 0.1 C. A house that moved less than one sensor tick per
+# The room sensor (NIBE BT50) reports to 0.1 C. A house that moved less than one sensor tick per
 # hour WHILE ACTIVELY HEATING has told us nothing measurable about itself: the signal is below the
 # instrument's resolution. Such a run must score ZERO confidence, not perfect confidence - which is
 # what a std/mean ratio does when every reading is identical and std collapses to 0 (F-132).
@@ -1679,11 +1659,6 @@ SPACE_HEATING_DEMAND_LOW_THRESHOLD: Final = 0.5  # kW - Display threshold
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
 
 # THE SWEDISH EFFECT TARIFF, AS A REAL COMPANY ACTUALLY BILLS IT.
-#
-# Every number below used to be a guess. The rate was "50.0 # Conservative average", attributed to
-# "Ellevio ~55, Vattenfall/E.ON ~50" - figures that appear in no price list. The simulator
-# meanwhile used 81.25 and called it "fictional-but-typical". Two different numbers for one
-# quantity, neither sourced, and the one in the SEK figure shown to the owner was the wrong one.
 #
 # Ellevio publishes its model in full, and 81.25 is theirs:
 #

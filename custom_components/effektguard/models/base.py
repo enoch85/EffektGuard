@@ -29,27 +29,14 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class RatingPoint:
-    """One EN 14511 rating point, exactly as the manufacturer publishes it.
+    """One EN 14511 rating point, verbatim from the manufacturer - a measurement at a stated
+    condition, not a fitted curve. `condition` is the datasheet's own string, and
+    test_the_pump_models_match_their_datasheets reproduces the COP at every point.
 
-    THIS EXISTS BECAUSE THE PERFORMANCE NUMBERS IN THIS PACKAGE WERE INVENTED.
-
-    Every profile carried an outdoor-keyed `cop_curve` described in its own docstring as "Real-world
-    COP curve (tested and validated)" and sourced to "NIBE F750 datasheet". It was neither. The F750
-    and the F730 shipped byte-identical curves (5.0/4.5/4.0/3.5/3.0/2.7/2.3/2.0/1.8) despite being
-    different machines, and the number 5.0 - labelled "Best COP" - appears nowhere in either
-    datasheet. They were a template with the digits nudged, and the simulator computed a month of
-    kWh and SEK from them.
-
-    A rating point is not a curve. It is a measurement, taken at a stated condition, published by
-    the people who built the machine. Carrying them verbatim means the fiction cannot be re-entered
-    silently: `condition` is the datasheet's own string, and a test checks the model reproduces the
-    COP at every one of them.
-
-    NOTE `source_temp_c`: the temperature of the HEAT SOURCE, which is not the outdoor air for four
-    of the five machines here. A20(12) is 20 C extract air (an exhaust-air pump breathes the house).
-    B0 is 0 C brine (a ground-source pump does not care what the weather is doing). Only an
-    air/water pump like the F2040 has outdoor air as its source, and only for it is an
-    outdoor-keyed curve meaningful at all.
+    NOTE `source_temp_c` is the HEAT SOURCE temperature, which is NOT outdoor air for four of the
+    five machines: A20(12) is 20 C extract air (exhaust-air pump), B0 is 0 C brine (ground-source),
+    A7 is 7 C outdoor. Only an air/water pump like the F2040 has outdoor air as its source, so only
+    for it is an outdoor-keyed curve meaningful.
     """
 
     condition: str  # verbatim from the datasheet, e.g. "A20(12)W35, 252 m3/h, min compressor freq"
@@ -57,11 +44,10 @@ class RatingPoint:
     flow_temp_c: float  # W35 -> 35.0
     heat_output_kw: float  # PH, the specified heating output
     cop: float
-    # For an exhaust-air pump the VENTILATION RATE is part of the source condition, not a detail.
-    # The F750's two minimum-frequency points differ only in airflow (108 vs 252 m3/h): more air,
-    # more source heat, higher output AND higher COP. Treating them as a load pair made efficiency
-    # appear to RISE with compressor load, which is backwards, and the resulting fit extrapolated
-    # to COP 9.86 at full load. They have to be told apart, so the airflow is carried.
+    # Ventilation rate is part of an exhaust-air pump's source condition, not a detail. The F750's
+    # two minimum-frequency points differ only in airflow (108 vs 252 m3/h): more air -> higher
+    # output AND higher COP. Treated as a load pair, efficiency appears to RISE with load (backwards)
+    # and the fit extrapolates to COP 9.86 at full load, so the two must be told apart.
     airflow_m3h: float | None = None
 
 
@@ -70,18 +56,12 @@ def seasonal_cop_proxy(
 ) -> dict[int, float]:
     """A DISPLAY-ONLY seasonal COP curve, interpolated between a machine's published extremes.
 
-    NOTHING COMPUTES FROM THIS. The simulator takes COP from `datasheet_points` via the
-    exergy-efficiency model, which needs the SOURCE and FLOW temperatures and never the weather.
-    Four of these five machines do not have the outdoor air as their heat source at all - an
-    exhaust-air pump breathes 20 C house air, a ground-source pump sits in 0 C brine - so an
-    outdoor-keyed curve is not a physical claim about them. It is a dashboard proxy: in a colder
-    month the house asks for hotter water and a higher compressor frequency, and both cost
-    efficiency.
+    NOTHING COMPUTES FROM THIS - it is a dashboard proxy. The simulator takes COP from
+    `datasheet_points` via the exergy model, which uses SOURCE and FLOW temperatures, never the
+    weather (four of the five machines do not have outdoor air as their heat source).
 
-    `source_temp_c` filters to one source condition, which is how a brine machine is anchored on its
-    two published W35/W45 COPs at 0 C. Left None, every published point is used.
-
-    The four exhaust-air and ground-source profiles each carried their own copy of this arithmetic.
+    `source_temp_c` filters to one source condition (how a brine machine is anchored on its two
+    published W35/W45 COPs at 0 C). Left None, every published point is used.
     """
     cops = [
         point.cop
@@ -140,13 +120,11 @@ class HeatPumpProfile(ABC):
     # It cannot do that while the profile restates the number, so it references it (F-076).
     dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
 
-    # The DM at which THE PUMP ITSELF engages its additive heat, at factory settings -
-    # NIBE menu 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with
-    # the compressor start (S-series/F11xx). This is a fact about the HARDWARE, distinct from
-    # DM_THRESHOLD_AUX_LIMIT (EffektGuard's own emergency floor, audit F-112): a real pump's
-    # elpatron fires HERE and works DM back up, so a plant model that waits for -1500 delays
-    # auxiliary heat by hundreds of degree-minutes and misreports both aux energy and overshoot.
-    # Overridden per model with the value from its own installer manual.
+    # The DM at which THE PUMP ITSELF engages its additive heat, at factory settings - NIBE menu
+    # 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with the compressor
+    # start (S-series/F11xx). A HARDWARE fact, distinct from DM_THRESHOLD_AUX_LIMIT (EffektGuard's
+    # emergency floor, F-112): a real pump's elpatron fires HERE and works DM back up, so a plant
+    # model that waits for -1500 misreports both aux energy and overshoot. Overridden per model.
     aux_start_dm: float = -700.0
 
     # Exhaust air heat pump features
@@ -167,69 +145,50 @@ class HeatPumpProfile(ABC):
     heating_capacity_range_kw: tuple[float, float] = (0.0, 0.0)
 
     # The immersion heater's DELIVERY SETTING, from the datasheet. 0.0 means the machine has none.
-    #
-    # The simulator used a single AUX_STEP_KW = 3.0 for every house, which is no machine's actual
-    # setting - and the immersion burn is one of the headline numbers in the saturated-compressor
-    # finding. NIBE ships the F750 and F730 with a 6.5 kW heater set to 3.5 kW at delivery, and the
-    # F1155-12/S1155-12 with a 7 kW heater in seven automatic steps. The F2040 has NO heater at all:
-    # it is an outdoor monobloc, and the electric addition belongs to the indoor module it is paired
-    # with, which this package does not model.
+    # NIBE ships the F750/F730 with a 6.5 kW heater set to 3.5 kW at delivery, the F1155-12/S1155-12
+    # with a 7 kW heater in seven automatic steps, and the F2040 with none (outdoor monobloc - its
+    # electric addition lives in the paired indoor module, which this package does not model).
     immersion_heater_kw: float = 0.0
 
     # Pdesignh - the DESIGN HEAT LOAD this machine is certified for, from its own ErP declaration.
-    #
-    # It is the manufacturer's statement of how big a house the pump is for, and it is the only
-    # sourced way to size a simulated building. Without it the simulator paired a 12 kW ground-source
-    # pump with a 6 kW house - twice the machine the building needs - and then reported that
-    # ground-source houses "never engage the emergency ladder". Of course they don't. A pump with
-    # twice the capacity it needs cannot saturate, and a simulation that cannot saturate cannot
-    # test what happens when one does.
+    # The only sourced way to size a simulated building: an oversized pump (e.g. a 12 kW GSHP on a
+    # 6 kW house) cannot saturate, and a simulation that cannot saturate cannot test emergency
+    # behaviour.
     design_heat_load_kw: float = 0.0
 
-    # Pdesignh for the EN 14825 AVERAGE climate (design temperature -10 C). Tbiv and Psup below
-    # are declared FOR THAT climate, so any statement that combines them must use this figure -
-    # mixing the cold-climate Pdesignh with the average-climate Psup manufactured a compressor
-    # capacity that appears in no NIBE document.
+    # Pdesignh for the EN 14825 AVERAGE climate (design temperature -10 C). Tbiv and Psup below are
+    # declared FOR THAT climate, so any statement that combines them must use this figure, not the
+    # cold-climate Pdesignh.
     design_heat_load_average_kw: float = 0.0
 
     # Tbiv - the BIVALENT TEMPERATURE, from the ErP declaration. Below this outdoor temperature the
-    # heat pump cannot meet the design heat load on its own and supplementary heat is REQUIRED.
-    #
-    # This is not a defect. It is the design. A correctly-sized air-source system in Sweden is a
-    # bivalent system: NIBE declares Tbiv = -9 C for the F2040-8, with 1.1 kW of supplementary heat.
-    # The simulator used to assert that a healthy pump burns no resistive heat at all, which is a
-    # statement about a machine that does not exist. What can honestly be asked is whether the
-    # OPTIMISER burns more resistive heat than the pump's capacity deficit forces it to.
-    #
-    # 0.0 means "not declared" - the exhaust-air and ground-source machines are not bivalent in the
-    # same sense, because their heat source does not weaken with the weather.
+    # pump cannot meet the design heat load alone and supplementary heat is REQUIRED. This is the
+    # design, not a defect: a correctly-sized Swedish ASHP is bivalent (F2040-8: Tbiv -9 C, 1.1 kW
+    # supplementary). 0.0 = not declared (exhaust-air and ground-source machines are not bivalent in
+    # the same sense - their heat source does not weaken with the weather).
     bivalent_temp_c: float = 0.0
 
-    # Psup - the supplementary heat the ErP AVERAGE-climate declaration says this machine needs
-    # at that climate's design point (-10 C). For the F2040-8: Pdesignh(avg) 8.2 kW with Psup
-    # 1.1 kW, so the COMPRESSOR delivers 7.1 kW at -10 C. That is the only published statement
-    # about its capacity below -7 C, where the manual gives a graph and no numbers - and it is
-    # one COMPLETE declaration, not a splice of two.
+    # Psup - the supplementary heat the ErP AVERAGE-climate declaration says this machine needs at
+    # that climate's design point (-10 C). For the F2040-8: Pdesignh(avg) 8.2 kW with Psup 1.1 kW,
+    # so the COMPRESSOR delivers 7.1 kW at -10 C - the only published statement about its capacity
+    # below -7 C, and one COMPLETE declaration, not a splice of two.
     supplementary_heat_kw: float = 0.0
 
     @property
     def max_heat_output_kw(self) -> float:
         """The most heat this machine can make, from its own datasheet.
 
-        NOT `rated_power_kw[1]`, which was invented: the F750 carried 8.0 kW against a published
-        maximum of 4.994, and the simulator used it as the compressor's capacity ceiling. An
-        exhaust-air pump's output is bounded by the ventilation air it breathes, and no amount of
-        naming a model "8 kW" changes that.
+        NOT `rated_power_kw[1]`: the F750 carried 8.0 kW against a published maximum of 4.994. An
+        exhaust-air pump's output is bounded by the ventilation air it breathes.
         """
         if self.heating_capacity_range_kw[1] > 0.0:
             return self.heating_capacity_range_kw[1]
 
-        # The ErP declaration is also a published statement about the maximum. For the F2040-8
-        # the AVERAGE declaration says Pdesignh 8.2 kW with Psup 1.1 kW at -10 C, so the
-        # COMPRESSOR reaches 7.1 kW there - above its coldest tabulated rating point (6.60 kW at
-        # -7 C), because inverter capacity keeps rising as the weather cools. The rating points
-        # alone would understate it. One declaration, used whole: Tbiv and Psup belong to the
-        # average climate, so the average Pdesignh is the only figure they may be combined with.
+        # The ErP declaration is also a published statement about the maximum. For the F2040-8, the
+        # AVERAGE declaration (Pdesignh 8.2 kW, Psup 1.1 kW at -10 C) puts the COMPRESSOR at 7.1 kW -
+        # above its coldest tabulated rating point (6.60 kW at -7 C), because inverter capacity rises
+        # as the weather cools. Tbiv and Psup belong to the average climate, so it is the only
+        # Pdesignh they may be combined with.
         published = max(point.heat_output_kw for point in self.datasheet_points)
         if self.design_heat_load_average_kw > 0.0 and self.supplementary_heat_kw > 0.0:
             published = max(

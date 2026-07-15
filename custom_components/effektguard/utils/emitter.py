@@ -19,8 +19,7 @@ INTERNAL GAINS ARE WATTS, NEVER A CURVE FIT. Demand is linear in (balance - T_ou
 (T_room - T_out), so the caller passes a balance point DERIVED from watts
 (`indoor - gains_W / heat_loss_W_per_K`). It must never be fitted: the constant-spread term and
 the balance-point term are the same basis function with opposite signs, so any assumed spread
-manufactures a matching "gains" figure - even out of a curve with provably zero gains. Fitting it
-against NIBE's curve once produced exactly that spurious number and read it back as evidence.
+manufactures a matching "gains" figure - even out of a curve with provably zero gains.
 
 This is OpenEnergyMonitor's method (github.com/openenergymonitor/tools, weathercomp.js), not an
 invention; see docs/research/02_emitter_law.md and

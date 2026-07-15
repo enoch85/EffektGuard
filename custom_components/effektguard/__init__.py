@@ -21,7 +21,6 @@ from homeassistant.exceptions import (
     HomeAssistantError,
     ServiceValidationError,
 )
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -55,16 +54,12 @@ from .optimization.thermal_layer import ThermalModel
 
 _LOGGER = logging.getLogger(__name__)
 
-# Service-call cooldowns. Module scope is DELIBERATE - do not move this onto the coordinator.
-#
-# These rate-limit the two services that can actually hurt the machine: boost_heating commands
-# MAX_OFFSET (+10 °C) and boost_dhw fires the immersion heater through NIBE's temporary lux.
-# Anything the coordinator owns dies with the coordinator, and Home Assistant's reload button
-# unloads and re-creates it - so a cooldown held there would be cleared by a reload, and a user
-# could drive the pump to +10 °C, reload, and do it again. A cooldown a reload clears is not a
-# cooldown. (Audit F-075 filed this global as a leak; it is a guard. `single_config_entry` is true,
-# so there is no second entry for it to leak into. See
-# tests/unit/test_the_boost_cooldown_survives_a_reload.py.)
+# Service-call cooldowns at MODULE scope, deliberately. They rate-limit the two services that can
+# hurt the machine (boost_heating commands MAX_OFFSET; boost_dhw fires the immersion heater via
+# temporary lux). On the coordinator they would die with it, and HA's reload re-creates the
+# coordinator - so a user could boost to +10 C, reload to clear the cooldown, and boost again.
+# single_config_entry is true, so a module global cannot leak across entries.
+# See tests/unit/test_the_boost_cooldown_survives_a_reload.py.
 _service_last_called: dict[str, datetime] = {}
 
 
@@ -208,25 +203,16 @@ def _async_unregister_services(hass: HomeAssistant) -> None:
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle a config-entry update by hot-reloading the runtime settings.
+    """Handle a config-entry update by hot-reloading runtime settings.
 
-    Hot-reloading (rather than tearing the entry down) is what preserves:
-    - the startup grace period, whose reset would block offset application
-    - the entities, which would otherwise be recreated and flicker
-    - accumulated state: compressor stats, trends, the thermal predictor
+    Hot-reloading (not tearing the entry down) preserves the startup grace period whose reset
+    would block offset application, the entities that would otherwise flicker, and accumulated
+    state (compressor stats, trends, thermal predictor).
 
-    This listener fires on ANY change to the entry, not only on `entry.options`.
-    Home Assistant's `async_update_entry` notifies listeners whenever the entry
-    changed at all - it does not discriminate between `data` and `options` - and
-    `switch.py` writes feature flags straight into `entry.data`. (This docstring
-    used to assert the opposite, and reason from it; audit F-075.)
-
-    Handling only the runtime settings here is nonetheless correct:
-    - the switch flags are read from `entry.data` at the point of use, so they
-      take effect without anything being done here;
-    - entity selections change through the reconfigure flow, which calls
-      `async_update_reload_and_abort` and schedules a FULL reload - so the
-      adapters, which are built from `entry.data` at setup, are rebuilt.
+    HA fires this listener on ANY entry change - data or options - and switch.py writes feature
+    flags into entry.data. Handling only runtime settings is still correct: switch flags are read
+    from entry.data at the point of use, and entity selections go through the reconfigure flow,
+    which schedules a FULL reload that rebuilds the adapters.
     """
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if not coordinator:
@@ -260,9 +246,8 @@ async def _create_coordinator(
     nibe_adapter = NibeAdapter(hass, entry.data)
     gespot_adapter = GESpotAdapter(hass, entry.data)
 
-    # Weather adapter. `weather_entity` is only ever written to entry.data - by the config flow and
-    # by the reconfigure flow - never to entry.options, so the "check options first" branch that
-    # used to be here was dead code (audit F-075).
+    # weather_entity is written only to entry.data (config and reconfigure flows), never to
+    # entry.options, so the adapter is built from entry.data alone.
     weather_adapter = WeatherAdapter(hass, dict(entry.data))
 
     # Create optimization components
@@ -466,10 +451,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         duration = call.data.get(ATTR_DURATION, DHW_BOOST_DEFAULT_DURATION_MINUTES)
 
-        # `target_temp` is gone, deliberately: temporary lux is a SWITCH, the pump heats to its
-        # own lux temperature, and a parameter that is validated and then reaches nothing is a
-        # promise the service cannot keep. `duration` stays because it now does something real -
-        # the coordinator turns the boost off when the window ends.
+        # No target_temp: temporary lux is a switch and the pump heats to its own lux temperature,
+        # so there is nothing to set. duration is enforced here - the coordinator ends the boost.
         _LOGGER.info("Boost DHW service called: duration=%s minutes", duration)
 
         # Get temporary lux entity from config
@@ -483,9 +466,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
             )
 
-        # Through the coordinator's door, not straight at the switch - that is what records the
-        # boost as OURS (so unload stops it) and opens the user window (so the price optimizer
-        # does not cancel it on the next cycle, which is what it used to do).
+        # Go through the coordinator, not straight at the switch: that records the boost as OURS
+        # (so unload stops it) and opens the user window (so the price optimizer does not cancel it
+        # on the next cycle).
         try:
             await coordinator.async_start_dhw_boost(duration, dt_util.utcnow())
         except HomeAssistantError as err:
@@ -658,10 +641,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             SERVICE_CALCULATE_OPTIMAL_SCHEDULE,
             calculate_optimal_schedule_handler,
             schema=calculate_optimal_schedule_schema,
-            # SupportsResponse.OPTIONAL, not a bare True: HA compares this by IDENTITY, so `True`
-            # satisfies `is not SupportsResponse.NONE` but fails `is SupportsResponse.OPTIONAL`,
-            # and the service ends up advertised as response-REQUIRED (audit F-072). The handler
-            # returns a dict when it has data and nothing when it does not - that is OPTIONAL.
+            # SupportsResponse.OPTIONAL, not a bare True: HA compares this by identity, so True
+            # passes `is not SupportsResponse.NONE` but fails `is SupportsResponse.OPTIONAL`,
+            # advertising the service as response-REQUIRED. The handler returns a dict or nothing.
             supports_response=SupportsResponse.OPTIONAL,
         )
         _LOGGER.debug("Registered service: %s", SERVICE_CALCULATE_OPTIMAL_SCHEDULE)

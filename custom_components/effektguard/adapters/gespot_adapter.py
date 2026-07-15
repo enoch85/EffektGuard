@@ -45,19 +45,12 @@ QUARTER_DURATION: Final = timedelta(minutes=MINUTES_PER_QUARTER)
 class RawPricePeriod(TypedDict):
     """One interval as GE-Spot publishes it in `today_interval_prices`.
 
-    `time` is a timezone-aware datetime OBJECT on a live GE-Spot, not an ISO string - it is
-    built as `datetime(y, m, d, hour, minute, tzinfo=area_tz)` and put straight into the
-    entity's attributes. It is a string only when Home Assistant has restored the attribute
-    from JSON across a restart, so both forms have to be handled.
-
-    `value` is the price the owner is billed. `raw_value` is the market price before VAT and
-    tariffs, present only when GE-Spot has it; nothing here reads it, and it must never be
-    mistaken for the price - it runs around 60 % of `value`, and ranking quarters by it would
-    optimise against a number nobody pays.
-
-    A TypedDict is erased at runtime and enforces nothing, and this dict comes from another
-    integration's state attributes. It records the contract; `_parse_periods` validates every
-    field it uses and drops the interval when it cannot.
+    `time` is a timezone-aware datetime on a live GE-Spot and an ISO string only when Home
+    Assistant has restored the attribute from JSON across a restart; `_parse_periods` handles
+    both. `value` is the billed price; `raw_value` (NotRequired) is the pre-VAT market price,
+    which nothing reads and which must never be used as the price. The TypedDict enforces
+    nothing at runtime - `_parse_periods` validates every field and drops the interval if it
+    cannot.
     """
 
     time: datetime | str

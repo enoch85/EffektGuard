@@ -98,12 +98,7 @@ class NibeF730Profile(HeatPumpProfile):
     # an indirect approximation - adequate for relative decisions, NOT
     # validated for absolute energy/savings claims.
     def __post_init__(self):
-        """Initialize COP curve."""
-        # Same curve as F750 (same technology, different size)
-        # A DISPLAY PROXY, anchored on this machine's own two published endpoints. Nothing
-        # computes from it - see the note in f750.py, which shipped a byte-identical curve to this
-        # one despite being a different machine with a different published output. That is what
-        # gave the fiction away.
+        """Initialize display-only COP proxy. Nothing computes from it; see f750.py __post_init__."""
         self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 
     def validate_power_consumption(

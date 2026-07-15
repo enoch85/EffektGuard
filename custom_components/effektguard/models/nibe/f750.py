@@ -1,11 +1,8 @@
 """NIBE F750 heat pump profile.
 
 EXHAUST-AIR heat pump. Its heat source is the house's own ventilation air, not the outdoor air, and
-its output is bounded by the airflow it breathes.
-
-This file used to open with "8kW ASHP" and cite "NIBE official specifications and Swedish forum
-validation". It is not an ASHP, it cannot make 8 kW, and the numbers were not from the datasheet.
-See RatingPoint in models/base.py.
+its output is bounded by the airflow it breathes - it is not an ASHP and cannot make 8 kW.
+Performance derives from the EN 14511 rating points below; see RatingPoint in models/base.py.
 """
 
 from dataclasses import dataclass, field
@@ -53,20 +50,9 @@ F750_SOURCE = (
 class NibeF750Profile(HeatPumpProfile):
     """NIBE F750 EXHAUST-AIR heat pump.
 
-    THE PERFORMANCE FIGURES THAT USED TO BE IN THIS DOCSTRING WERE INVENTED. It claimed:
-
-        Rated: 8kW heat at 7C outdoor, 45C flow
-        Best COP: 5.0 at 7C outdoor ... Survival: 2.0 at -25C
-        **Source**: NIBE F750 datasheet, Swedish NIBE forum validation
-
-    NIBE's datasheet publishes three EN 14511 points and no others. Its maximum specified heating
-    output is 4.994 kW, not 8. The number 5.0 does not appear as a COP anywhere in it. And "at 7C
-    outdoor" is not a condition this machine's performance is measured at, because its heat source
-    is 20 C extract air from inside the house - the rating points say A20(12), and the outdoor air
-    never touches the evaporator.
-
-    What the datasheet actually says is in F750_DATASHEET above, verbatim, with the condition
-    strings. Everything the simulator believes is derived from those and from nothing else.
+    NIBE publishes three EN 14511 points (F750_DATASHEET) and no others. Maximum specified heating
+    output is 4.994 kW; the heat source is 20 C extract air (A20(12)), so outdoor air never touches
+    the evaporator. Everything the simulator believes derives from those points and nothing else.
 
     Pdesign 5 kW. Immersion heater 0.5-6.5 kW. SCOP(EN 14825) 4.5/4.7 average/cold at 35 C.
     """
@@ -117,27 +103,12 @@ class NibeF750Profile(HeatPumpProfile):
     enhanced_airflow_m3h: float = 252.0  # Maximum ventilation rate
 
     def __post_init__(self):
-        """The outdoor-keyed COP curve is a DISPLAY approximation and is labelled as one.
+        """DISPLAY-ONLY seasonal COP proxy for the dashboard. Nothing computes from it.
 
-        THIS FILE'S OWN COMMENT ALREADY SAID SO, and I used the curve for absolute energy claims
-        anyway:
-
-            "MODELING LIMITATION: this is an exhaust-air heat pump; its COP depends primarily on
-             exhaust-air (source) and flow (sink) temperatures, not outdoor temperature. The
-             outdoor-keyed curve below is an indirect approximation - adequate for relative
-             decisions, NOT validated for absolute energy/savings claims."
-
-        The simulator then produced a month of kWh and SEK from it and I published the savings.
-
-        Nothing computes from this curve any more. The simulator takes its COP from
-        `datasheet_points` via the exergy-efficiency model (see scripts/simulation/sim_harness.py),
-        which needs the SOURCE temperature - a constant 20 C for this machine - and the flow
-        temperature, and never the weather.
-
-        What survives here is an honest seasonal PROXY for the dashboard: as it gets colder the
-        house asks for hotter water and a higher compressor frequency, and both cost efficiency. It
-        is anchored on the two published endpoints (COP 4.72 at min frequency / W35, COP 2.43 at
-        max frequency / W45) instead of on invented numbers.
+        The simulator takes COP from `datasheet_points` via the exergy model
+        (scripts/simulation/sim_harness.py), which uses the SOURCE temperature (a constant 20 C for
+        this machine) and flow temperature, never the weather. The proxy is anchored on the two
+        published endpoints (COP 4.72 min-freq/W35, 2.43 max-freq/W45).
         """
         self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 

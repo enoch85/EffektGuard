@@ -213,11 +213,10 @@ class PriceAnalyzer:
 
         median = float(np.percentile(prices, PRICE_PERCENTILE_MEDIAN))
 
-        # A flat day carries no signal, and percentile RANK cannot detect one: rank is
-        # scale-invariant, so a 0.4 ore spread bands the same as a 130 ore one, throwing the pump
-        # around all day to chase four tenths of an ore. Compare the spread against the day's own
-        # price SCALE, not an absolute number of ore - PriceData carries no unit (GE-Spot publishes
-        # whatever the owner configured), so an ore threshold would be 100x wrong in SEK/kWh.
+        # A flat day carries no signal, and percentile RANK cannot detect one (rank is
+        # scale-invariant: a 0.4 ore spread bands like a 130 ore one). Compare the spread against the
+        # day's own price SCALE, not an absolute ore threshold - PriceData carries no unit (GE-Spot
+        # publishes whatever the owner configured), so an ore threshold would be 100x wrong.
         spread = p90 - p10
         scale = max(abs(median), abs(p10), abs(p90))
         if scale <= 0.0 or spread < scale * PRICE_FLAT_DAY_SPREAD_FRACTION:
@@ -229,14 +228,12 @@ class PriceAnalyzer:
             )
             return {index: QuarterClassification.NORMAL for index, _ in enumerate(periods)}
 
-        # Classify each period. A band must not merely be a RANK: on a high-wind day the
-        # distribution is a step, not a curve (e.g. 83 quarters at 120 ore, 13 at -10), so
-        # p25 == p75 == p90 == 120 and the 83 dearest quarters all satisfy `price <= p25`. On rank
-        # alone they classify CHEAP and the optimiser commands +4 C at the most expensive moment.
-        # The `price < p90` guard on the CHEAP band is the one that stops that (the spread check
-        # above has already guaranteed p90 > p10, so it is redundant on every other band). The dear
-        # side keeps its strict `>`: an inescapable plateau is the price of the day, not a PEAK to
-        # coast through.
+        # Classify each period. A band must not be a pure RANK: on a high-wind day the distribution
+        # is a step, not a curve (e.g. 83 quarters at 120 ore, 13 at -10), so p25 == p75 == p90 and
+        # the 83 dearest quarters all satisfy `price <= p25` - on rank alone they'd classify CHEAP
+        # and command +4 C at the most expensive moment. The `price < p90` guard on the CHEAP band
+        # stops that (the spread check above guarantees p90 > p10). The dear side keeps strict `>`:
+        # an inescapable plateau is the price of the day, not a PEAK to coast through.
         classifications = {}
         for index, period in enumerate(periods):
             price = period.price

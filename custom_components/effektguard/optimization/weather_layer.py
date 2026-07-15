@@ -161,9 +161,7 @@ class WeatherCompensationCalculator:
             design_spread: Flow-return spread at the design load (°C)
             internal_gains_w: Free heat from bodies, appliances and the sun (W). Set to 0.0 to
                 reproduce the UK reference tools (OpenEnergyMonitor's WeatherComp, Timbones'
-                spreadsheet), which model demand as linear in (room - outdoor) and carry no gains
-                term - useful for checking the emitter law against them without the demand models
-                differing too. A real house is not gains-free; see const.py.
+                spreadsheet), which carry no gains term. A real house is not gains-free; see const.py.
         """
         self.heat_loss_coefficient = heat_loss_coefficient
         self.radiator_rated_output = radiator_rated_output
@@ -205,15 +203,10 @@ class WeatherCompensationCalculator:
 
             balance = indoor_setpoint - internal_gains_W / heat_loss_W_per_K
 
-        Bodies, appliances and the sun supply a few hundred watts whatever the weather. Dividing
-        that by the house's own heat loss converts it to the degrees of outdoor temperature it is
-        worth - which is SMALLER for a leaky house, not larger. A fixed offset in degrees would
-        get that backwards, crediting a draughty house with more free heat than an insulated one
-        from the same fridge and the same occupants.
-
-        This is the only honest way to size the term: the balance point cannot be recovered by
-        fitting a heating curve, because the constant-spread term has the same shape and the
-        opposite sign (see `utils/emitter.py`).
+        Gains are watts divided by the house's own heat loss, so the same free heat is worth FEWER
+        degrees in a leaky house, not more; a fixed offset in degrees gets that backwards. The
+        balance point cannot be recovered by fitting a heating curve - the constant-spread term has
+        the same shape and opposite sign (see `utils/emitter.py`).
 
         Args:
             indoor_setpoint: Target indoor temperature (°C)
@@ -298,10 +291,9 @@ class WeatherCompensationCalculator:
         if self.radiator_rated_output is None or self.radiator_rated_output <= 0:
             return None
 
-        # The SAME balance point the design-point anchor uses. This path is the one the layer
-        # PREFERS (confidence 0.95), so a gains term that reached only the other anchor would
-        # have been a no-op for every installer who filled in their emitters' rated output - and
-        # would have left the two anchors of "the same law" disagreeing by up to 3.5 C.
+        # The SAME balance point the design-point anchor uses. This is the PREFERRED path
+        # (confidence 0.95), so a gains term applied to only the other anchor would leave the two
+        # anchors of "the same law" disagreeing for every installer who supplied a rated output.
         load = self.balance_point_temp(indoor_setpoint) - outdoor_temp
         if load <= 0:
             # Continuous limit as load -> 0, matching en442_flow_temp. See utils/emitter.py.
@@ -631,12 +623,9 @@ class WeatherPredictionLayer:
 
         Args:
             thermal_mass: Building thermal mass (0.5=light, 1.0=medium, 1.5=heavy)
-            forecast_horizon: How far ahead to scan, in hours. From the thermal model, because it
-                depends on what the house is built of. This layer took thermal_mass already and
-                used it ONLY to scale its weight - it scanned a fixed twelve hours whatever the
-                house was. A concrete slab is only about a fifth charged at fourteen hours, and
-                a 15 C fall spread over two days shows less than 4 C inside any twelve-hour window,
-                so the drop never crossed the trigger and the pre-heat never fired at all.
+            forecast_horizon: How far ahead to scan, in hours. Comes from the thermal model because
+                it depends on the fabric: a fixed 12 h window cannot see the slow, deep slide that
+                drains a slab, so the pre-heat never fires. See ThermalModel.get_prediction_horizon.
         """
         self.thermal_mass = thermal_mass
         self.forecast_horizon = forecast_horizon
@@ -867,18 +856,12 @@ class WeatherCompensationLayer:
                     reason=f"DHW cooldown ({minutes_since_dhw:.0f}/{DHW_WEATHER_COOLDOWN_MINUTES}min)",
                 )
 
-        # NO GUARD ON weather_data HERE, AND THERE MUST NOT BE ONE.
-        #
-        # This layer is the EN 442 emitter law - at this outdoor temperature, what flow temperature
-        # do the emitters need? Its inputs are below: the pump's own outdoor and flow sensors. It
-        # has never read the forecast. The forecast is used once, further down, for unusual-weather
-        # detection, and that use carries its own guard.
-        #
-        # It used to open with `if not weather_data ...: return weight=0.0, "No weather data"`, and
-        # a weather entity is vol.Optional in the config flow. So an install that simply left the
-        # dropdown blank silently switched off the primary control law - the one layer that votes on
-        # every cycle - and nothing said so. On the air-source F2040 that was 13x more immersion heat
-        # than the compressor's capacity deficit forced, and 1265 minutes above the comfort ceiling.
+        # NO GUARD ON weather_data HERE, AND THERE MUST NOT BE ONE. This layer is the EN 442 emitter
+        # law, driven by the pump's own outdoor and flow sensors (below), not by the forecast - the
+        # forecast is used only for unusual-weather detection further down, which carries its own
+        # guard. A weather entity is vol.Optional in the config flow, so guarding here silently
+        # switched off the primary control law (the one layer that votes every cycle) on any install
+        # that left the dropdown blank.
         current_outdoor = nibe_state.outdoor_temp
         current_flow = nibe_state.flow_temp
 
@@ -927,16 +910,11 @@ class WeatherCompensationLayer:
             unusual_severity=unusual_severity,
         )
 
-        # The safety margin is an ASYMMETRIC TOLERANCE, not an addition to the setpoint.
-        #
-        # [required, required + margin] is acceptable: inside it the curve is left alone. Below
-        # it the curve is running cold and is pulled up to what the emitter law demands. Above it
-        # the curve is pulled back down to the top of the band, never below.
-        #
-        # Adding the margin to the setpoint instead makes the correction strictly positive at
-        # every outdoor temperature, so a perfectly tuned curve is permanently told to add heat -
-        # a DC bias, which is the same defect as a permanent setback with the sign flipped. The
-        # margin means the curve MAY run warm in a hard winter, not that it must.
+        # The safety margin is an ASYMMETRIC TOLERANCE, not an addition to the setpoint. Inside the
+        # band [required, required + margin] the curve is left alone; below it the curve is pulled up
+        # to what the emitter law demands; above it, back down to the band top. Adding the margin to
+        # the setpoint instead makes the correction strictly positive everywhere - a DC bias that
+        # permanently tells a perfectly tuned curve to add heat.
         required_flow = flow_calc.flow_temp
         if current_flow < required_flow:
             adjusted_flow_temp = required_flow
