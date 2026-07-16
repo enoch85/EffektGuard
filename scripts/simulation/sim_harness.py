@@ -136,7 +136,11 @@ DST_SIM_DAYS = 3
 # 2026-10-25: at 03:00 CEST the clock goes back to 02:00 CET, so the day is 25 hours long and
 # the wall-clock hour 02 is metered twice. From the tz database, not from an assumption.
 DST_FALL_BACK_DAY = "2026-10-25"
-DST_FALL_BACK_PERIODS = 100  # 25 hours x 4 quarter-periods
+DST_FALL_BACK_PERIODS = 100
+
+# The --arctic scenario: a REAL January in Kiruna against REAL SE1 prices, same dates.
+STOCKHOLM_LATITUDE = 59.33
+KIRUNA_LATITUDE = 67.86  # 25 hours x 4 quarter-periods
 
 # CAPACITY AND COP NOW COME FROM THE DATASHEET. See HouseConfig.capacity_kw_at / cop_at.
 #
@@ -475,6 +479,19 @@ class HouseConfig:
         point the curve is HELD, because NIBE tabulates nothing there (only a graph), and holding
         is the honest thing to do with the end of the evidence.
         """
+        # BELOW THE PUBLISHED OPERATING FLOOR THERE IS NO MACHINE TO MODEL.
+        #
+        # The F2040 manual (IHB EN 1848-8/231846 p.65): "Min. / Max. air temp: -20 / 43 C". A hard
+        # edge, not a derating - strictly below it the unit does not run, and this model used to
+        # hold the -7 C capacity forever, making phantom compressor heat through 28% of a real
+        # Kiruna January. Only the F2040 carries a floor: NIBE publishes none for the brine and
+        # exhaust-air machines, whose sources the weather never touches, and inventing one would be
+        # exactly the unsourced physics this file exists to remove. AT the floor the machine is in
+        # range and every datasheet pin at -20.0 still holds.
+        floor = self.profile.min_operating_outdoor_c
+        if floor is not None and outdoor_temp < floor:
+            return 0.0
+
         # THE MODULATION ENVELOPE WINS WHERE THE DATASHEET PUBLISHES ONE.
         #
         # "Heating capacity (PH): 3 - 12 kW" is what an F1155-12 can actually deliver. Its 0/35
@@ -601,6 +618,23 @@ PROVENANCE: dict[str, str] = {
         "SOURCED: the F1155 and S1155 are rated at B0 - 0 C incoming brine. Their capacity chart's "
         "x-axis is labelled 'Incoming brine temp, C'. F1155 installer manual IHB EN 2008-5/331379."
     ),
+    "STOCKHOLM_LATITUDE": (
+        "SOURCED: geography (https://www.lantmateriet.se - Stockholm 59.33 N). The latitude every "
+        "non-arctic scenario has always run at; selects ClimateZoneDetector's Southern Nordics "
+        "band (56.0-60.5)."
+    ),
+    "KIRUNA_LATITUDE": (
+        "SOURCED: geography (Kiruna 67.86 N, inside the Arctic Circle). Weather: Open-Meteo ERA5 "
+        "(https://archive-api.open-meteo.com, Kiruna, January 2024). Prices: Nord Pool SE1 via "
+        "https://www.elprisetjustnu.se for the same dates. DVUT: Boverket 1991-2020 "
+        "(https://www.boverket.se, Kiruna 1-dygn -29.4 C). Selects the integration's "
+        "own Arctic climate zone (66.5-90.0 in climate_zones.py), which is the point of the "
+        "scenario - the zone logic runs for real. The paired weather file is Open-Meteo ERA5 for "
+        "Kiruna, January 2024 (min -36.8 C; 211 of 744 hours below the F2040's published -20 C "
+        "floor; SMHI: Kiruna Flygplats reached -36.7 C on 4-5 Jan, 7.3 C below the town's "
+        "Boverket DVUT 1-dygn of -29.4 C). Prices are the real Nord Pool SE1 days for the same "
+        "dates (elprisetjustnu.se), including the 5 Jan 2024 spike to 589 ore/kWh."
+    ),
     "DST_FALL_BACK_PERIODS": (
         "SOURCED: the IANA time zone database (https://www.iana.org/time-zones), zone "
         "Europe/Stockholm. On 2026-10-25 the offset goes from +02:00 to +01:00 at 03:00 local, so "
@@ -668,6 +702,18 @@ PROVENANCE: dict[str, str] = {
         "at 29.1-29.4 C)."
     ),
 }
+
+
+def compressor_available(house: "HouseConfig", outdoor_c: float) -> bool:
+    """Whether this machine's compressor can run at this outdoor temperature.
+
+    THE ONE RULE both the plant physics and the reported NibeState derive from. Zeroing capacity
+    alone left `compressor_on` True, so the plant reported compressor_hz > 0 and is_heating=True
+    to the DecisionEngine for a machine that was physically stopped - the engine under test was
+    being fed a lying plant state, and its decisions below -20 C were decisions about a fiction.
+    """
+    return house.capacity_kw_at(outdoor_c) > 0.0
+
 
 HOUSES = [
     HouseConfig(
@@ -839,8 +885,21 @@ def _synthetic_days(start: datetime, days: int):
     return times, temps, _to_gespot_shape(raw, ORE_PER_KWH_FROM_SEK_PER_MWH), GESPOT_UNIT_ORE
 
 
-def load_data(selftest: bool, live_se4: bool = False, dst: bool = False):
+def load_data(selftest: bool, live_se4: bool = False, dst: bool = False, arctic: bool = False):
     """Load real weather + prices, or synthetic data for --selftest / --dst."""
+    if arctic:
+        # A REAL arctic month: Kiruna, January 2024 (Open-Meteo ERA5 - min -36.8 C, 28% of the
+        # month below the F2040's published -20 C operating floor) against the REAL Nord Pool SE1
+        # prices for the SAME dates (elprisetjustnu.se), including the 5 January spike to
+        # 589 ore/kWh two days after the deepest cold. No re-stamping, no shape replay: the
+        # weather and the prices are the same real days.
+        weather = json.load(open(DATA_DIR / "weather_kiruna_jan2024.json"))
+        times = [datetime.fromisoformat(t).replace(tzinfo=TZ) for t in weather["hourly"]["time"]]
+        temps = weather["hourly"]["temperature_2m"]
+        payload = json.load(open(DATA_DIR / "prices_se1_jan2024.json"))
+        # Hourly ore/kWh entries; _to_gespot_shape expands each hour to four quarters.
+        return times, temps, _to_gespot_shape(payload["days"], 1.0), GESPOT_UNIT_ORE
+
     if dst:
         # The last Sunday of October 2026: at 03:00 CEST the clock goes back to 02:00 CET, so the
         # wall-clock hour 02 happens TWICE and the day is 25 hours long. This is the day on which
@@ -1029,6 +1088,7 @@ def build_engine(
     enable_price: bool = True,
     enable_weather: bool = True,
     tuned_curve: bool = False,
+    latitude: float = STOCKHOLM_LATITUDE,
 ):
     """Build the real DecisionEngine for this house.
 
@@ -1049,7 +1109,7 @@ def build_engine(
         "enable_weather_compensation": enable_weather,
         "enable_peak_protection": True,
         "enable_price_optimization": enable_price,
-        "latitude": 59.33,
+        "latitude": latitude,
         "heating_type": house.heating_type,
         "heat_loss_coefficient": house.hlc_w_per_k,
         "thermal_mass": house.thermal_mass,
@@ -1079,8 +1139,9 @@ def simulate(
     enable_weather: bool = True,
     tuned_curve: bool = False,
     forecast_available: bool = True,
+    latitude: float = STOCKHOLM_LATITUDE,
 ):
-    engine, effect = build_engine(house, mode, enable_price, enable_weather)
+    engine, effect = build_engine(house, mode, enable_price, enable_weather, latitude=latitude)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
@@ -1110,6 +1171,7 @@ def simulate(
         "comfort_minutes_below": 0,
         "comfort_minutes_above": 0,
         "compressor_starts": 0,
+        "compressor_blocked_hours": 0.0,
         "sign_flips": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
@@ -1201,6 +1263,14 @@ def simulate(
             q_emit_w = house.heat_output_w(flow, indoor)
 
             capacity_w = house.capacity_kw_at(tout) * 1000.0
+            # Below the machine's published operating floor the capacity is zero and everything
+            # here must agree with that - the physics above AND the state reported to the engine.
+            available = capacity_w > 0.0
+            if not available:
+                # Outside the machine's published operating range. Counted so a failed arctic run
+                # attributes itself: 'indoor fell to -13 C' next to '211 blocked hours' is the
+                # machine's envelope speaking, not the controller's.
+                stats["compressor_blocked_hours"] += STEP_MIN / 60.0
             if compressor_on:
                 # The compressor modulates toward the flow its curve is asking for, bounded by what it
                 # can actually deliver - which comes from the datasheet, not from an invented derating.
@@ -1286,7 +1356,10 @@ def simulate(
             dm = max(DM_INTEGRATOR_FLOOR, min(dm, DM_INTEGRATOR_CEILING))
             if not compressor_on and dm <= DM_START:
                 compressor_on = True
-                stats["compressor_starts"] += 1
+                # A start only counts if the machine can actually run: an F2040 below its -20 C
+                # floor "restarting" every hysteresis cycle would be phantom compressor wear.
+                if available:
+                    stats["compressor_starts"] += 1
             elif compressor_on and dm >= DM_STOP:
                 compressor_on = False
 
@@ -1310,7 +1383,11 @@ def simulate(
                 )
 
             power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
-            hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
+            hz = (
+                40 + int(min(50, max(0, (flow_target - indoor))))
+                if (compressor_on and available)
+                else 0
+            )
 
             # --- price/weather context (parsed by the REAL GE-Spot adapter) ---
             price_data = price_source.get(now)
@@ -1356,7 +1433,7 @@ def simulate(
                 return_temp=round(flow - 5.0, 1),
                 degree_minutes=round(dm, 0),
                 current_offset=float(offset_applied),
-                is_heating=compressor_on,
+                is_heating=compressor_on and available,
                 is_hot_water=False,
                 timestamp=now,
                 compressor_hz=hz,
@@ -1512,13 +1589,7 @@ def simulate(
             )
             stats["cost_sek"] += energy * cur_price_ore / 100.0
 
-            # EFFECT TARIFF BASIS: THE HOURLY MEAN. Not the quarter-hour, which is what this used to
-            # accumulate, and not the instantaneous sample, which is what it accumulated before that.
-            #
-            # Ellevio: "the measurement uses hourly averages". Energimarknadsinspektionen:
-            # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
-            # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
-            # 9 - so every tariff figure it produced was up to fourfold too high.
+            # EFFECT TARIFF BASIS: the owner's 15-minute period mean (BILLING_PERIOD_MINUTES).
             # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
             #
             # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
@@ -1853,12 +1924,13 @@ def main() -> int:
     undersized = "--undersized" in sys.argv
     no_forecast = "--no-forecast" in sys.argv
     dst = "--dst" in sys.argv
+    arctic = "--arctic" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
     # --dst spans the fall-back weekend: 3 days, one of them 25 hours long.
     days = DST_SIM_DAYS if dst else (2 if selftest else SIM_DAYS)
-    times, temps, price_days, unit = load_data(selftest, live_se4, dst)
+    times, temps, price_days, unit = load_data(selftest, live_se4, dst, arctic)
     if coldsnap:
         temps = apply_coldsnap(times, temps)
     OUT_DIR.mkdir(exist_ok=True)
@@ -1893,6 +1965,7 @@ def main() -> int:
             enable_weather=not no_weather,
             tuned_curve=tuned_curve,
             forecast_available=not no_forecast,
+            latitude=KIRUNA_LATITUDE if arctic else STOCKHOLM_LATITUDE,
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -1916,6 +1989,8 @@ def main() -> int:
             tag += "-noforecast"
         if dst:
             tag += "-dst"
+        if arctic:
+            tag += "-arctic"
         if tuned_curve:
             tag += "-tuned"
 
