@@ -27,6 +27,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    BILLING_PERIOD_MINUTES,
     BILLABLE_POWER_SOURCES,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
@@ -940,14 +941,18 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_time"] = None
                 attrs["time_since_peak"] = "No peak recorded today"
 
-            # The effect tariff bills on the hourly mean, so report the billing HOUR
-            # (peak_today_period), not a 15-minute quarter.
+            # The owner's tariff bills the 15-minute period mean, so report the billing PERIOD
+            # (0-95) and the wall-clock time it starts.
             if self.coordinator.peak_today_period is not None:
-                attrs["peak_billing_hour"] = self.coordinator.peak_today_period
-                attrs["peak_billing_hour_time"] = f"{self.coordinator.peak_today_period:02d}:00"
+                period = self.coordinator.peak_today_period
+                attrs["peak_billing_period"] = period
+                attrs["peak_billing_period_time"] = (
+                    f"{period * BILLING_PERIOD_MINUTES // 60:02d}:"
+                    f"{period * BILLING_PERIOD_MINUTES % 60:02d}"
+                )
             else:
-                attrs["peak_billing_hour"] = None
-                attrs["peak_billing_hour_time"] = None
+                attrs["peak_billing_period"] = None
+                attrs["peak_billing_period_time"] = None
 
             # How was it measured? (Trust/accuracy)
             attrs["measurement_source"] = self.coordinator.peak_today_source

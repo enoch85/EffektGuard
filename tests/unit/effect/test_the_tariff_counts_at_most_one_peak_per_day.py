@@ -27,7 +27,7 @@ def manager():
 async def _record(mgr, power_kw, day, hour):
     return await mgr.record_period_measurement(
         power_kw=power_kw,
-        period=hour,
+        period=hour * 4,
         timestamp=datetime(2026, 1, day, hour, 0),
         source=POWER_SOURCE_EXTERNAL_METER,
     )

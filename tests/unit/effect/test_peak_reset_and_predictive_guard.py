@@ -23,7 +23,7 @@ from custom_components.effektguard.const import (
 )
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
-DAYTIME_HOUR = DAYTIME_START_HOUR + 1  # 07:00 - avoids the 50% night weighting
+DAYTIME_PERIOD = (DAYTIME_START_HOUR + 1) * 4  # 07:00 quarter - avoids night weighting
 
 OCTOBER = datetime(2025, 10, 20, 7, 0)
 NOVEMBER = datetime(2025, 11, 3, 7, 0)
@@ -37,7 +37,7 @@ class TestMonthlyPeaksReset:
     async def test_last_months_peaks_do_not_survive_into_this_month(self, hass, monkeypatch):
         """An instance up across a month boundary carried October into November."""
         effect = EffectManager(hass)
-        await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
+        await effect.record_period_measurement(6.0, DAYTIME_PERIOD, OCTOBER)
         assert effect.get_monthly_peak_summary()["count"] == 1
 
         # Time moves into November. This is what the coordinator now calls on month change.
@@ -58,7 +58,7 @@ class TestMonthlyPeaksReset:
     async def test_this_months_peaks_are_kept(self, hass, monkeypatch):
         """Do not over-correct: pruning must not eat the current month."""
         effect = EffectManager(hass)
-        await effect.record_period_measurement(6.0, DAYTIME_HOUR, NOVEMBER)
+        await effect.record_period_measurement(6.0, DAYTIME_PERIOD, NOVEMBER)
 
         monkeypatch.setattr(
             "custom_components.effektguard.optimization.effect_layer.dt_util.now",
@@ -75,9 +75,11 @@ class TestMonthlyPeakIsTheHighest:
         """The coordinator must read `highest`, not the returned PeakEvent."""
         effect = EffectManager(hass)
 
-        await effect.record_period_measurement(6.0, DAYTIME_HOUR, OCTOBER)
+        await effect.record_period_measurement(6.0, DAYTIME_PERIOD, OCTOBER)
         event = await effect.record_period_measurement(
-            2.0, DAYTIME_HOUR + 4, OCTOBER + timedelta(days=1)
+            2.0,
+            DAYTIME_PERIOD + 4,  # one hour later, still daytime
+            OCTOBER + timedelta(days=1),
         )
 
         # The second, SMALLER hour (on its own day) still returns a PeakEvent (top-3 not full).
@@ -126,7 +128,7 @@ class TestPredictiveBranchNeedsAPeakHistory:
     async def test_predictive_still_fires_once_a_peak_exists(self, hass):
         """Do not over-correct: with real history the predictive branch must still work."""
         effect = EffectManager(hass)
-        await effect.record_period_measurement(3.0, DAYTIME_HOUR, OCTOBER)
+        await effect.record_period_measurement(3.0, DAYTIME_PERIOD, OCTOBER)
 
         decision = effect.evaluate_layer(
             current_peak=3.0,

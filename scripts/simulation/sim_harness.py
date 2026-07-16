@@ -136,7 +136,7 @@ DST_SIM_DAYS = 3
 # 2026-10-25: at 03:00 CEST the clock goes back to 02:00 CET, so the day is 25 hours long and
 # the wall-clock hour 02 is metered twice. From the tz database, not from an assumption.
 DST_FALL_BACK_DAY = "2026-10-25"
-DST_FALL_BACK_HOURS = 25
+DST_FALL_BACK_PERIODS = 100  # 25 hours x 4 quarter-periods
 
 # CAPACITY AND COP NOW COME FROM THE DATASHEET. See HouseConfig.capacity_kw_at / cop_at.
 #
@@ -601,13 +601,14 @@ PROVENANCE: dict[str, str] = {
         "SOURCED: the F1155 and S1155 are rated at B0 - 0 C incoming brine. Their capacity chart's "
         "x-axis is labelled 'Incoming brine temp, C'. F1155 installer manual IHB EN 2008-5/331379."
     ),
-    "DST_FALL_BACK_HOURS": (
+    "DST_FALL_BACK_PERIODS": (
         "SOURCED: the IANA time zone database (https://www.iana.org/time-zones), zone "
         "Europe/Stockholm. On 2026-10-25 the offset goes from +02:00 to +01:00 at 03:00 local, so "
-        "the wall-clock hour 02 is metered twice and the day is 25 hours long. EU Directive "
-        "2000/84/EC fixes the transition to the last Sunday of October across the union. Verified "
-        "by stepping the absolute time line through the zone rather than by assuming it: the "
-        "harness counts 25 distinct billing hours on that date and fails the run if it does not."
+        "the wall-clock hour 02 is metered twice and the day is 25 hours long - 100 fifteen-minute "
+        "billing periods at the owner's tariff cadence. EU Directive 2000/84/EC fixes the "
+        "transition to the last Sunday of October across the union. Verified by stepping the "
+        "absolute time line through the zone: the harness counts 100 distinct billing periods on "
+        "that date and fails the run if it does not."
     ),
     "EN14825_COLD_DESIGN_C": (
         "SOURCED: EN 14825 cold-climate reference design temperature. NIBE declares a Pdesignh at "
@@ -844,7 +845,7 @@ def load_data(selftest: bool, live_se4: bool = False, dst: bool = False):
         # The last Sunday of October 2026: at 03:00 CEST the clock goes back to 02:00 CET, so the
         # wall-clock hour 02 happens TWICE and the day is 25 hours long. This is the day on which
         # the coordinator used to DELETE a billing hour - see
-        # tests/unit/coordinator/test_the_billing_hour_survives_the_clocks_going_back.py - and the
+        # tests/unit/coordinator/test_the_billing_period_survives_the_clocks_going_back.py - and the
         # harness could not see it, because its own clock advanced by wall time and its tariff
         # periods were keyed on (date, hour), which those two hours share.
         return _synthetic_days(datetime(2026, 10, 24, tzinfo=TZ), 3)
@@ -1130,7 +1131,7 @@ def simulate(
     # spring-forward day 23. Counting them is how this harness proves it is actually TRAVERSING
     # the transition rather than merely surviving it - a flat night load is priced identically
     # whether the repeated hour is billed once or twice, so the tariff figure alone cannot tell.
-    billing_hours: dict = {}
+    billing_periods: dict = {}
     # Highest completed quarter-hour MEAN so far: what the coordinator publishes as
     # peak_this_month, and therefore what the effect layer is defending. Starts at
     # zero, as it does on a fresh install.
@@ -1546,8 +1547,8 @@ def simulate(
                 # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
                 # equal), so a set would silently merge them back into one and report 24 again - passing
                 # the check by making the same mistake it exists to catch.
-                billing_hours[completed.started_at.date()] = (
-                    billing_hours.get(completed.started_at.date(), 0) + 1
+                billing_periods[completed.started_at.date()] = (
+                    billing_periods.get(completed.started_at.date(), 0) + 1
                 )
 
                 day = completed.started_at.date()
@@ -1557,7 +1558,7 @@ def simulate(
                 # with night-shifted load - which is exactly where this optimiser puts load.
                 daily_billed[day] = max(
                     daily_billed.get(day, 0.0),
-                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_hour),
+                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_period),
                 )
                 running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
 
@@ -1576,7 +1577,7 @@ def simulate(
                 asyncio.run(
                     effect.record_period_measurement(
                         power_kw=completed.mean_power_kw,
-                        period=completed.billing_hour,
+                        period=completed.billing_period,
                         timestamp=completed.started_at,
                         source=POWER_SOURCE_EXTERNAL_METER,
                     )
@@ -1615,15 +1616,15 @@ def simulate(
         daily_peaks[day] = max(daily_peaks.get(day, 0.0), final.mean_power_kw)
         daily_billed[day] = max(
             daily_billed.get(day, 0.0),
-            effective_tariff_power_kw(final.mean_power_kw, final.billing_hour),
+            effective_tariff_power_kw(final.mean_power_kw, final.billing_period),
         )
-        billing_hours[day] = billing_hours.get(day, 0) + 1
+        billing_periods[day] = billing_periods.get(day, 0) + 1
     top3 = sorted(daily_billed.values(), reverse=True)[:3]
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
     stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)
-    stats["billing_hours_by_day"] = {
-        day.isoformat(): count for day, count in sorted(billing_hours.items())
+    stats["billing_periods_by_day"] = {
+        day.isoformat(): count for day, count in sorted(billing_periods.items())
     }
     stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
     stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)
@@ -1927,19 +1928,21 @@ def main() -> int:
             # THE DST RUN MUST BE ABLE TO FAIL, OR IT IS DECORATION.
             #
             # A green --dst run proves very little on its own: the October night load is flat and
-            # low, so merging the two 02:00 hours into one two-hour period produces the SAME mean,
+            # low, so merging the repeated 02:00 quarters produces the SAME mean,
             # the same tariff figure, and the same PASS. I checked - reverting the harness's period
             # key to the ambiguous `(date, hour)` moved not one of the reported numbers.
             #
-            # What the merge DOES change is how many billable hours the day contains. A fall-back
-            # day has 25. Count them, and the run can fail for the reason it exists.
-            hours_on_the_long_day = stats["billing_hours_by_day"].get(DST_FALL_BACK_DAY)
-            if hours_on_the_long_day != DST_FALL_BACK_HOURS:
+            # What the merge DOES change is how many billable periods the day contains. A
+            # fall-back day is 25 hours - 100 quarter-periods. Count them, and the run can fail
+            # for the reason it exists.
+            periods_on_the_long_day = stats["billing_periods_by_day"].get(DST_FALL_BACK_DAY)
+            if periods_on_the_long_day != DST_FALL_BACK_PERIODS:
                 failures.append(
-                    f"{DST_FALL_BACK_DAY} was billed as {hours_on_the_long_day} hours. The clocks "
-                    f"go back that night, so it is {DST_FALL_BACK_HOURS} hours long and every one "
-                    f"of them is separately metered. Billing 24 means the two 02:00 hours - which "
-                    f"print the same digits and are an hour apart - were merged into one."
+                    f"{DST_FALL_BACK_DAY} was billed as {periods_on_the_long_day} periods. The "
+                    f"clocks go back that night, so it is 25 hours - {DST_FALL_BACK_PERIODS} "
+                    f"fifteen-minute periods - and every one is separately metered. Billing 96 "
+                    f"means the repeated 02:00 quarters, which print the same digits and are an "
+                    f"hour apart, were merged."
                 )
 
         json.dump(

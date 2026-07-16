@@ -1022,10 +1022,11 @@ PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a s
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
-# The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that - it is NOT the
-# effect tariff's measurement period, which the comment here used to claim it was. See
-# BILLING_PERIOD_MINUTES below. Conflating the two is what made the integration defend a peak
-# nobody is billed for.
+# The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that. It is a DIFFERENT
+# concern from the effect tariff's measurement window (BILLING_PERIOD_MINUTES) even though the
+# owner's tariff measures over the same 15-minute quarter: one is what electricity costs, the other
+# is what the grid peak is billed on. They are kept as separate constants so a change to one model
+# cannot silently move the other.
 QUARTERS_PER_DAY: Final = 96  # Quarters in a normal (non-DST-transition) day
 # Native interval counts a day can have: 92 (spring DST), 96 (normal),
 # 100 (autumn DST). Anything else means the source delivered a data gap.
@@ -1130,9 +1131,11 @@ LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before co
 # Import is done at runtime to avoid circular dependencies - use the climate_zones module directly.
 
 # Storage. Two stores, two schemas, two lifecycles - so two versions.
-# Effect store v1 recorded 15-minute quarter peaks (`quarter_of_day`). The tariff bills the
-# HOURLY mean (see effect_layer.py), and a quarter-hour mean is not convertible to one, so
-# migration to v2 discards v1 records and the month's top-3 restarts from live measurement.
+# Effect store v1 recorded 15-minute quarter peaks (`quarter_of_day`) with no per-sample source.
+# The owner's tariff measures the same 15-minute quarter (see effect_layer.py), so a v1 record is
+# the SAME billed quantity - migration to v2 CONVERTS it (`quarter_of_day` -> `period_of_day`,
+# `source` -> POWER_SOURCE_NONE) rather than discarding it. The only field it cannot recover is
+# provenance, so a converted peak is treated as unbillable until fresh measurement replaces it.
 EFFECT_STORAGE_VERSION: Final = 2
 LEARNING_STORAGE_VERSION: Final = 1
 STORAGE_KEY: Final = f"{DOMAIN}_state"
@@ -1658,38 +1661,33 @@ SPACE_HEATING_DEMAND_MODERATE_THRESHOLD: Final = 2.0  # kW - Display threshold
 SPACE_HEATING_DEMAND_LOW_THRESHOLD: Final = 0.5  # kW - Display threshold
 SPACE_HEATING_DEMAND_DROP_HOURS: Final = 2.0  # Conservative estimate for demand to drop
 
-# THE SWEDISH EFFECT TARIFF, AS A REAL COMPANY ACTUALLY BILLS IT.
+# THE EFFECT-TARIFF RATE THE SIMULATOR PRICES AGAINST - ILLUSTRATIVE, AND SOURCED.
 #
-# Ellevio publishes its model in full, and 81.25 is theirs:
+# 81.25 is a real published figure (Ellevio, kr/kW/month) used so the simulation's SEK numbers are
+# in a plausible range. It is an EXAMPLE, not a claim that this is what any given owner pays: effect
+# charges are set per grid company, and there are thousands of DSOs.
 #
-#     "Genomsnittet av de tre hogsta effekttopparna under manaden" - the mean of the three highest
-#     peaks of the month, at most one per day, so on three different days. The measurement uses
-#     HOURLY AVERAGES. Between 22:00 and 06:00 "raknas bara halva effekttoppen" - only half the
-#     peak counts. 81,25 kr per kilowatt per manad.
-#     https://www.ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/
-#
-# REGULATORY STATUS, AND IT IS NOT SETTLED. On 13 March 2026 the government instructed
-# Energimarknadsinspektionen to repeal the requirement that grid companies levy effect charges at
-# all - the stated reason being that every DSO had built its own model, with different calculations,
-# different hours and different prices. EIFS 2022:1 was repealed in June 2026 and Ellevio dropped
-# its effect charge on 1 June 2026. Ei must propose a new, uniform model by 12 April 2027.
-#
-# Effect charges are NOT prohibited and several DSOs still levy them, so the feature is not dead -
-# but this rate is one company's, it is no longer that company's, and it is not configurable. That
-# is a product decision and it is the owner's.
+# OPERATOR MODELS VARY, AND THAT VARIABILITY IS FINDING F-107 (owner-gated). Every DSO built its own
+# model - different measurement windows, different hours, different prices, different rules about how
+# many peaks per day count. On 13 March 2026 the government instructed Energimarknadsinspektionen to
+# repeal the requirement to levy effect charges at all, precisely because the models had diverged;
+# EIFS 2022:1 was repealed in June 2026 and Ei must propose a uniform model by 12 April 2027. Effect
+# charges are NOT prohibited and several DSOs still levy them, so the feature is not dead - but no
+# single operator's rules are baked in as fact here.
 #     https://www.regeringen.se/pressmeddelanden/2026/03/krav-pa-inforande-av-effektavgifter-stoppas/
 #     https://ei.se/konsument/anvand-el-smartare/elnatsavtal-med-effektavgift
-SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 81.25  # Ellevio, kr/kW/month
+SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH: Final = 81.25  # illustrative example rate, kr/kW/month
 
-# THE TARIFF BILLS THE HOUR. IT DOES NOT BILL THE QUARTER-HOUR.
+# THE OWNER'S TARIFF MODEL: A 15-MINUTE MEASUREMENT WINDOW.
 #
-# The integration measured quarter-hour means and called them billing peaks, and the constant that
-# said so called itself "Swedish Effektavgift measurement period". Ellevio: "the measurement uses
-# hourly averages". Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+# This is a CONFIGURATION, not a universal fact. The owner runs 15-minute intervals, and that is
+# what this integration measures peaks over: the mean power across each quarter-hour. Operator
+# models differ (F-107) - some bill the hour, some the quarter - so nothing here should be read as
+# "the tariff bills the quarter" in general; it is "the owner's tariff bills the quarter".
 #
-# The difference is up to fourfold. A 15-minute hot-water cycle at 9 kW inside an otherwise idle
-# hour has an hourly mean of 3 kW - and EffektGuard recorded 9, then throttled the heat pump to
-# defend a peak that appears on no bill.
+# The quantity is the QUARTER-HOUR MEAN, not the instantaneous draw and not a sample count: HA's
+# update cycle jitters, so a quarter's samples are unevenly spaced and their time-weighted mean is
+# the quarter's mean power.
 # The outdoor temperatures the DISPLAY COP curve is tabulated at, and the span it interpolates over.
 # Nothing computes from that curve - the simulator takes COP from the datasheet rating points - it is
 # a dashboard proxy: in a colder month the house asks for hotter water, which costs efficiency. The
@@ -1698,19 +1696,25 @@ DISPLAY_COP_CURVE_TEMPS: Final = (7, 5, 0, -5, -10, -15, -20)
 DISPLAY_COP_CURVE_COLD_C: Final = -20.0
 DISPLAY_COP_CURVE_SPAN_K: Final = 27.0
 
-BILLING_PERIOD_MINUTES: Final = 60
-BILLING_PERIODS_PER_DAY: Final = 24
-# The longest silence between two meter readings that still leaves a billing hour MEASURED.
+BILLING_PERIOD_MINUTES: Final = 15
+BILLING_PERIODS_PER_DAY: Final = 96
+# The longest silence between two meter readings that still leaves a billing period MEASURED.
 #
-# The hourly mean extrapolates each reading forward until the next one arrives - right at the
-# five-minute cadence, absurd across a blackout (a 9 kW reading stretched over 50 unwatched minutes
-# billed an 8.33 kW hour from two samples).
+# The period mean extrapolates each reading forward until the next one arrives - right at the
+# five-minute cadence, absurd across a blackout (a 9 kW reading stretched over most of an unwatched
+# quarter-hour bills a peak that happened in no observed quarter).
 #
-# A JUDGEMENT, NOT A CITATION. No standard says how much of an hour must be seen. What is defensible
-# is the direction: missing a real peak costs some protection, inventing one costs a month of
-# throttling to defend a fiction - and the utility bills from ITS meter, not ours. Three update
-# intervals: one or two missed cycles is jitter; fifteen minutes of silence is an outage.
-MAX_BILLING_OBSERVATION_GAP_MINUTES: Final = 15
+# A LABELLED JUDGEMENT, NOT A CITATION. No standard says how much of a quarter must be seen. What is
+# defensible is the direction: missing a real peak costs some protection, inventing one costs a
+# month of throttling to defend a fiction - and the utility bills from ITS meter, not ours.
+#
+# At the 5-minute control cadence a fully observed 15-minute period holds three samples (the
+# boundary reading, :05 and :10), so its longest internal gap is one update interval. Ten minutes -
+# two update intervals - refuses a period that has lost MORE THAN HALF its samples (a single reading
+# left standing across two-thirds of the quarter or more) while still tolerating one dropped cycle.
+# It must stay strictly below BILLING_PERIOD_MINUTES, or a single-sample quarter (a 15-minute rest
+# to the boundary) could never be refused and the rule would not bite.
+MAX_BILLING_OBSERVATION_GAP_MINUTES: Final = 10
 
 # BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the
 # CURRENT peak - `baseline = peak * 1.176` - so the reported effect-tariff saving reduced to

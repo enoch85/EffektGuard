@@ -24,8 +24,10 @@ from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 # 02:00: the night weighting halves this quarter. The whole bug lives in that halving.
-NIGHT_HOUR = 2
-DAY_HOUR = 10
+NIGHT_HOUR = 2  # 02:00, inside the 22:00-06:00 half-weight window
+DAY_HOUR = 10  # 10:00, full weight
+NIGHT_PERIOD = NIGHT_HOUR * 4  # the billing quarter index for 02:00
+DAY_PERIOD = DAY_HOUR * 4  # the billing quarter index for 10:00
 SIX_KW_OF_CURRENT = 8.7  # amps per phase, 3-phase 230 V -> ~6.0 kW
 
 
@@ -94,8 +96,8 @@ async def _observe_a_whole_quarter(coord, monkeypatch, hour: int, power_kw: floa
 
     nibe_data = _metered_house(hour, power_kw)
 
-    # A whole BILLING HOUR, because that is what the tariff bills.
-    for h, m in [(hour, mm) for mm in range(0, 60, 5)] + [(hour + 1, 0)]:
+    # A whole 15-minute BILLING PERIOD, because that is what the owner's tariff bills.
+    for h, m in [(hour, mm) for mm in range(0, 15, 5)] + [(hour, 15)]:
         monkeypatch.setattr(
             dt_util,
             "now",
@@ -184,7 +186,7 @@ async def test_a_real_reduction_is_still_reported(coordinator, monkeypatch):
     optimised._monthly_peaks = []
     await optimised.record_period_measurement(
         power_kw=5.0,
-        period=DAY_HOUR,
+        period=DAY_PERIOD,
         timestamp=datetime(2026, 1, 20, DAY_HOUR, 0, tzinfo=timezone.utc),
         source="external_meter",
     )
@@ -244,8 +246,8 @@ async def test_the_heat_pumps_own_current_sensors_are_not_a_billing_baseline(mon
     pump_only.phase2_current = SIX_KW_OF_CURRENT
     pump_only.phase3_current = SIX_KW_OF_CURRENT
 
-    # A whole billing HOUR, because that is what the tariff bills.
-    for h, m in [(DAY_HOUR, mm) for mm in range(0, 60, 5)] + [(DAY_HOUR + 1, 0)]:
+    # A whole 15-minute billing PERIOD, the owner's tariff window.
+    for h, m in [(DAY_HOUR, mm) for mm in range(0, 15, 5)] + [(DAY_HOUR, 15)]:
         monkeypatch.setattr(
             dt_util,
             "now",
@@ -292,7 +294,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_night_blip_is_not_announced_as_a_new_monthly_peak(self):
         """3.1 kW at 02:00 is billed as 1.55 kW. It cannot beat a 3.0 kW effective monthly peak."""
-        coord = self._coordinator(peak_today=3.1, period=NIGHT_HOUR, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=3.1, period=NIGHT_PERIOD, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 
@@ -304,7 +306,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_daytime_peak_that_really_does_beat_the_month_is_still_announced(self):
         """The regression guard. Weighting both sides must not silence a genuine new peak."""
-        coord = self._coordinator(peak_today=6.0, period=DAY_HOUR, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=6.0, period=DAY_PERIOD, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 
@@ -314,7 +316,7 @@ class TestWhatTheOwnerIsTold:
 
     def test_a_night_peak_big_enough_to_win_on_its_billed_value_is_announced(self):
         """8.0 kW at 02:00 is billed as 4.0 kW, which does beat 3.0. The weighting cuts both ways."""
-        coord = self._coordinator(peak_today=8.0, period=NIGHT_HOUR, peak_this_month=3.0)
+        coord = self._coordinator(peak_today=8.0, period=NIGHT_PERIOD, peak_this_month=3.0)
 
         attrs = self._peak_today_sensor(coord).extra_state_attributes
 

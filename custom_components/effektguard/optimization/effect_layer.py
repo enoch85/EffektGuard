@@ -1,16 +1,18 @@
 """Effect tariff manager for Swedish Effektavgift optimization.
 
-Tracks HOURLY mean power and manages monthly peak avoidance to minimise effect tariff charges.
+Tracks the mean power of each billing PERIOD and manages monthly peak avoidance to minimise effect
+tariff charges.
 
-Swedish effect tariff rules, as Ellevio actually publishes them:
-- Measured as HOURLY MEAN POWER, not 15-minute windows (a quarter-hour mean overstates the billed
-  peak by up to fourfold).
-- Daytime (06:00-22:00): full weight
-- Nighttime (22:00-06:00): "raknas bara halva effekttoppen" - half the peak counts
-- Monthly charge on the mean of the three highest hours, at most one per day
-- 81,25 kr/kW/month
-  https://www.ellevio.se/abonnemang/ny-prismodell-baserad-pa-effekt/
-  Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme."
+This is the OWNER'S tariff model, not a universal fact - operator rules vary across thousands of
+DSOs (finding F-107, owner-gated). What the owner configures here:
+- Measured over a 15-minute PERIOD (BILLING_PERIOD_MINUTES): the time-weighted mean power of each
+  quarter-hour, not the instantaneous draw.
+- Daytime (06:00-22:00): full weight.
+- Nighttime (22:00-06:00): half the peak counts (NIGHT_TARIFF_WEIGHT). Predates the audit.
+- Monthly charge on the mean of the three highest periods (plain, date-blind top-3).
+
+The 81.25 kr/kW/month rate (SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) is Ellevio's published figure,
+kept as an illustrative example for the simulator - not a claim about what any given owner pays.
 """
 
 import logging
@@ -24,6 +26,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     BILLABLE_POWER_SOURCES,
+    BILLING_PERIOD_MINUTES,
     COMPRESSOR_HZ_MIN,
     COMPRESSOR_HZ_RANGE,
     COMPRESSOR_POWER_MAX_KW,
@@ -78,19 +81,25 @@ from ..utils.time_utils import get_current_billing_period
 _LOGGER = logging.getLogger(__name__)
 
 
-def is_daytime_hour(hour: int) -> bool:
-    """Whether this HOUR is billed at the full tariff rate. Ellevio's discount is 22:00-06:00."""
+def is_daytime_period(period: int) -> bool:
+    """Whether this billing PERIOD (0-95) is billed at the full tariff rate.
+
+    The night discount is a wall-clock window (22:00-06:00), so the quarter-index is folded down to
+    its hour to test it: period * BILLING_PERIOD_MINUTES // 60.
+    """
+    hour = period * BILLING_PERIOD_MINUTES // 60
     return DAYTIME_START_HOUR <= hour < DAYTIME_END_HOUR
 
 
-def effective_tariff_power_kw(power_kw: float, hour: int) -> float:
-    """What the effect tariff will BILL this hour's mean power as. Night hours count half.
+def effective_tariff_power_kw(power_kw: float, period: int) -> float:
+    """What the effect tariff will BILL this period's mean power as. Night periods count half.
 
-    THE ONE DEFINITION - everything that goes near a monthly peak comes through here. When the
-    weighting was open-coded, the savings baseline compared an UNWEIGHTED peak against a weighted
-    one and reported phantom savings (a night peak looked ~half off with the optimiser idle).
+    `period` is the 15-minute quarter of the day (0-95). THE ONE DEFINITION - everything that goes
+    near a monthly peak comes through here. When the weighting was open-coded, the savings baseline
+    compared an UNWEIGHTED peak against a weighted one and reported phantom savings (a night peak
+    looked ~half off with the optimiser idle).
     """
-    return power_kw if is_daytime_hour(hour) else power_kw * NIGHT_TARIFF_WEIGHT
+    return power_kw if is_daytime_period(period) else power_kw * NIGHT_TARIFF_WEIGHT
 
 
 class PeakEventDict(TypedDict):
@@ -119,8 +128,8 @@ class MonthlyPeakSummaryDict(TypedDict):
     """Summary of monthly peaks for display.
 
     `billable` is False as soon as ANY peak in the history came from something other than a
-    whole-house meter. The tariff is charged on the top three HOURS together, so one pump-only
-    hour in the set makes the whole figure something other than the bill - and the owner is told
+    whole-house meter. The tariff is charged on the top three PERIODS together, so one pump-only
+    period in the set makes the whole figure something other than the bill - and the owner is told
     that rather than shown a number that looks like money.
     """
 
@@ -132,13 +141,13 @@ class MonthlyPeakSummaryDict(TypedDict):
 
 @dataclass
 class PeakEvent:
-    """One billing period's mean power - an HOUR, which is what the tariff bills.
+    """One billing period's mean power - a 15-minute quarter, which is what the tariff bills.
 
     Tracks both actual and effective power (accounting for the 22:00-06:00 half-price window).
     """
 
     timestamp: datetime
-    period_of_day: int  # the billing HOUR, 0-23
+    period_of_day: int  # the billing period (quarter of the day), 0-95
     actual_power: float  # kW
     effective_power: float  # kW (with day/night weighting)
     is_daytime: bool
@@ -201,13 +210,15 @@ class EffectLayerDecision:
 
 
 class EffectStore(Store):
-    """Peak-history storage, with migration from the quarter-hour era.
+    """Peak-history storage, with migration from the version-1 schema.
 
-    Version 1 recorded 15-minute quarter peaks (``quarter_of_day``). The effect tariff bills
-    the HOURLY mean, so a quarter-hour record is not a billable quantity and cannot be
-    converted into one - migration discards them and the month's top-3 restarts from live
-    measurement. Parsing them instead is what broke setup for every upgrading install:
-    ``PeakEvent.from_dict`` raised ``KeyError: 'period_of_day'`` inside ``async_setup_entry``.
+    Version 1 recorded 15-minute quarter peaks (``quarter_of_day``) and carried no per-sample
+    ``source``. The owner's tariff measures the same 15-minute quarter, so a v1 record is the SAME
+    billed quantity: migration CONVERTS it (``quarter_of_day`` -> ``period_of_day``, ``source`` ->
+    POWER_SOURCE_NONE) rather than discarding it. Only provenance is unrecoverable, so a converted
+    peak is treated as unbillable until fresh measurement replaces it. Parsing a v1 record directly
+    is what broke setup for every upgrading install: ``PeakEvent.from_dict`` raised
+    ``KeyError: 'period_of_day'`` inside ``async_setup_entry``.
     """
 
     async def _async_migrate_func(
@@ -218,20 +229,36 @@ class EffectStore(Store):
     ) -> dict:
         """Migrate stored peak history to the current schema."""
         if old_major_version < EFFECT_STORAGE_VERSION:
-            discarded = len(old_data.get("peaks", [])) if isinstance(old_data, dict) else 0
-            if discarded:
-                _LOGGER.warning(
-                    "Discarding %d peak record(s) written by the 15-minute tariff model: the "
-                    "effect tariff bills the hourly mean, and a quarter-hour mean is not "
-                    "convertible to one. Peak tracking restarts from live measurement.",
-                    discarded,
+            if not isinstance(old_data, dict):
+                return {"peaks": []}
+            converted = []
+            for peak in old_data.get("peaks", []):
+                if not isinstance(peak, dict):
+                    continue
+                record = dict(peak)
+                # v1 keyed the quarter as `quarter_of_day`; the field is `period_of_day` now, the
+                # same 0-95 index. A record already carrying `period_of_day` passes through.
+                if "period_of_day" not in record and "quarter_of_day" in record:
+                    record["period_of_day"] = record.pop("quarter_of_day")
+                # v1 stored no provenance. It cannot be reconstructed, so the peak is marked
+                # unbillable and only counts as a control threshold until live data replaces it.
+                record.setdefault("source", POWER_SOURCE_NONE)
+                # A record missing the quarter index at all is unusable - drop it rather than crash.
+                if "period_of_day" not in record:
+                    continue
+                converted.append(record)
+            if converted:
+                _LOGGER.info(
+                    "Migrated %d peak record(s) from the version-1 store (quarter_of_day -> "
+                    "period_of_day, source unknown so marked unbillable).",
+                    len(converted),
                 )
-            return {"peaks": []}
+            return {"peaks": converted}
         return old_data if isinstance(old_data, dict) else {"peaks": []}
 
 
 class EffectManager:
-    """Manage effect tariff optimization on hourly billing periods."""
+    """Manage effect tariff optimization on 15-minute billing periods."""
 
     def __init__(self, hass: HomeAssistant):
         """Initialize effect manager.
@@ -330,12 +357,11 @@ class EffectManager:
             )
             return None
 
-        is_daytime = is_daytime_hour(period)
+        is_daytime = is_daytime_period(period)
         effective_power = effective_tariff_power_kw(power_kw, period)
 
-        # AT MOST ONE PEAK PER DAY. Ellevio: the monthly charge is the mean of the three highest
-        # hourly peaks, and "the three peaks must come from three different days" - only a day's
-        # highest hour counts. Date-blind top-3 let one cold Saturday fill all three slots, which
+        # AT MOST ONE PEAK PER DAY: the monthly charge is the mean of the three highest period
+        # peaks, one per day - only a day's highest period counts. Date-blind top-3 let one cold Saturday fill all three slots, which
         # overstates the bill and understates the margin the pump is then throttled against.
         # https://www.ellevio.se/abonnemang/elnatspriser/ny-prismodell-baserad-pa-effekt/
         same_day = next(

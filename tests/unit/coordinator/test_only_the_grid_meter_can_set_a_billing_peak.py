@@ -81,9 +81,9 @@ def _pump(compressor_hz: int = 0, currents: float | None = None) -> NibeState:
     )
 
 
-async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
-    """Samples through a whole HOUR, because that is the tariff's billing period."""
-    for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
+async def _run_a_complete_billing_period(coordinator, nibe_data, monkeypatch) -> None:
+    """Samples through one 15-minute PERIOD, the owner's tariff billing window."""
+    for hour, minute in [(10, m) for m in range(0, 15, 5)] + [(10, 15)]:
         monkeypatch.setattr(
             dt_util,
             "now",
@@ -114,7 +114,7 @@ async def test_nibe_phase_currents_still_drive_peak_protection(monkeypatch):
     """
     coordinator = _coordinator(power_entity=None)  # no whole-house meter, only NIBE currents
 
-    await _run_a_complete_billing_hour(
+    await _run_a_complete_billing_period(
         coordinator, _pump(compressor_hz=60, currents=10.0), monkeypatch
     )
 
@@ -169,7 +169,7 @@ async def test_an_estimate_drives_nothing_at_all(monkeypatch):
     coordinator = _coordinator(power_entity=None)
 
     # No meter, no phase currents: PRIORITY 3 falls through to a compressor-Hz estimate.
-    await _run_a_complete_billing_hour(
+    await _run_a_complete_billing_period(
         coordinator, _pump(compressor_hz=60, currents=None), monkeypatch
     )
 
@@ -186,7 +186,7 @@ async def test_a_meter_masked_by_solar_bills_what_the_grid_actually_delivered(mo
     coordinator = _coordinator(power_entity="sensor.house_power")
     _meter(coordinator.hass, "500")  # 500 W of grid import behind solar
 
-    await _run_a_complete_billing_hour(coordinator, _pump(compressor_hz=60), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump(compressor_hz=60), monkeypatch)
 
     coordinator.effect.record_period_measurement.assert_awaited_once()
     recorded = coordinator.effect.record_period_measurement.await_args.kwargs
@@ -208,7 +208,7 @@ async def test_a_working_meter_still_bills(monkeypatch):
     coordinator = _coordinator(power_entity="sensor.house_power")
     _meter(coordinator.hass, "4200")
 
-    await _run_a_complete_billing_hour(coordinator, _pump(compressor_hz=60), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump(compressor_hz=60), monkeypatch)
 
     coordinator.effect.record_period_measurement.assert_awaited_once()
     recorded = coordinator.effect.record_period_measurement.await_args.kwargs

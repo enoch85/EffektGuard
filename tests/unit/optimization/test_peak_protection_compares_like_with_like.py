@@ -24,31 +24,31 @@ def _t(minute: int, hour: int = 10) -> datetime:
     return datetime(2026, 1, 15, hour, minute, tzinfo=STOCKHOLM)
 
 
-def test_half_an_hour_of_low_draw_halves_a_spike():
+def test_accumulated_low_draw_dilutes_a_spike():
     acc = BillingPeriodAccumulator()
-    for minute in range(0, 35, 5):
+    for minute in (0, 5):
         acc.add(_t(minute), 2.0, POWER_SOURCE_EXTERNAL_METER)
 
-    # 9 kW starting at 10:30: the hour's mean, if it persists, is (2*30 + 9*30)/60.
-    projected = acc.projected_hour_mean(_t(30), 9.0)
+    # 9 kW starting at 10:10: the period's mean, if it persists, is (2*10 + 9*5)/15.
+    projected = acc.projected_period_mean(_t(10), 9.0)
 
-    assert projected == (2.0 * 30 + 9.0 * 30) / 60
+    assert projected == (2.0 * 10 + 9.0 * 5) / 15
 
 
-def test_an_empty_hour_projects_the_draw_itself():
+def test_an_empty_period_projects_the_draw_itself():
     acc = BillingPeriodAccumulator()
 
-    assert acc.projected_hour_mean(_t(0), 9.0) == 9.0
+    assert acc.projected_period_mean(_t(0), 9.0) == 9.0
 
 
-def test_a_spike_in_the_last_five_minutes_barely_moves_the_hour():
+def test_a_spike_in_the_last_five_minutes_only_partly_moves_the_period():
     acc = BillingPeriodAccumulator()
-    for minute in range(0, 60, 5):
+    for minute in (0, 5, 10):
         acc.add(_t(minute), 1.0, POWER_SOURCE_EXTERNAL_METER)
 
-    projected = acc.projected_hour_mean(_t(55), 9.0)
+    projected = acc.projected_period_mean(_t(10), 9.0)
 
-    assert projected == (1.0 * 55 + 9.0 * 5) / 60
+    assert projected == (1.0 * 10 + 9.0 * 5) / 15
 
 
 def test_the_coordinator_feeds_the_projection_to_the_engine():
@@ -58,8 +58,8 @@ def test_the_coordinator_feeds_the_projection_to_the_engine():
     from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
     src = inspect.getsource(EffektGuardCoordinator._read_and_decide)
-    assert "projected_hour_mean" in src, (
-        "The decision path no longer projects the billing hour. Handing the effect layer an "
-        "instantaneous reading compares a five-minute spike against an HOURLY-MEAN record - "
+    assert "projected_period_mean" in src, (
+        "The decision path no longer projects the billing period. Handing the effect layer an "
+        "instantaneous reading compares a five-minute spike against a PERIOD-MEAN record - "
         "the layer throttles the pump to defend a peak the meter would average away."
     )

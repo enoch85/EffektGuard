@@ -26,7 +26,7 @@ class TestCoordinatorPowerContract:
             "The decision engine is being fed peak_today (a daily MAXIMUM) as current power. "
             "One morning spike would pin the effect layer to CRITICAL until midnight."
         )
-        assert "projected_hour_mean" in update_src and "self.current_power_kw" in update_src, (
+        assert "projected_period_mean" in update_src and "self.current_power_kw" in update_src, (
             "The decision engine must be fed the live reading PROJECTED over the billing hour "
             "- the monthly record it is compared against is an hourly mean, so an instantaneous "
             "spike is not the same quantity. See "

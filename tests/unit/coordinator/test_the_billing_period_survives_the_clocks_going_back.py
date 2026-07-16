@@ -157,14 +157,10 @@ async def test_both_halves_of_the_repeated_hour_are_recorded(monkeypatch):
 
     recorded = _recorded(coordinator)
 
-    assert len(recorded) == 2, (
-        f"three real hours elapsed (02:00 CEST, 02:00 CET, 03:00 CET) and the coordinator completed "
-        f"{len(recorded)} of the first two: {recorded}. Each repeated hour is separately metered and "
-        f"separately billable."
-    )
-    assert [period for period, _ in recorded] == [2, 2], (
-        f"both completed hours are the local hour 2 - that is the point, they print the same digits. "
-        f"Got {recorded}."
+    two_oclock = [period for period, _ in recorded if 8 <= period <= 11]
+    assert two_oclock == [8, 9, 10, 11, 8, 9, 10, 11], (
+        f"the repeated 02:xx hour must yield its four quarters TWICE - they print the same digits "
+        f"and are an hour apart. Got {recorded}."
     )
     for _, mean in recorded:
         assert mean == pytest.approx(5.0, abs=0.01), (
@@ -184,9 +180,10 @@ async def test_the_spring_gap_does_not_invent_an_hour(monkeypatch):
     recorded = _recorded(coordinator)
     hours = [period for period, _ in recorded]
 
-    assert 2 not in hours, (
-        f"the coordinator billed an hour 2 on the spring-forward day: {recorded}. Wall-clock 02:00 "
-        f"does not exist that night - no meter recorded it, and no bill will contain it."
+    assert not any(8 <= h <= 11 for h in hours), (
+        f"the coordinator billed a 02:xx quarter (periods 8-11) on the spring-forward day: "
+        f"{recorded}. Wall-clock 02:00 does not exist that night - no meter recorded it, and no "
+        f"bill will contain it."
     )
     for _, mean in recorded:
         assert mean == pytest.approx(
@@ -234,6 +231,7 @@ async def test_an_ordinary_hour_is_unchanged(monkeypatch):
 
     recorded = _recorded(coordinator)
 
-    assert len(recorded) == 1 and recorded[0][1] == pytest.approx(
+    ten_oclock = [period for period, _ in recorded if 44 <= period <= 47]
+    assert ten_oclock == [44, 45, 46, 47] and recorded[0][1] == pytest.approx(
         6.0, abs=0.01
     ), f"a flat 6 kW hour on an ordinary day must record exactly one hour at 6.0 kW. Got {recorded}."

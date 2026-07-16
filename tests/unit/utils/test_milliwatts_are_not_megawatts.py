@@ -96,7 +96,7 @@ class TestTheSecondLineOfDefence:
 
         event = await manager.record_period_measurement(
             power_kw=what_the_old_code_produced,
-            period=10,
+            period=10 * 4,  # 10:00, a daytime quarter
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -119,14 +119,14 @@ class TestTheSecondLineOfDefence:
 
         await manager.record_period_measurement(
             power_kw=5_000_000.0,
-            period=10,
+            period=10 * 4,  # 10:00, a daytime quarter
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
         # A real quarter, after the bad one.
         await manager.record_period_measurement(
             power_kw=6.0,
-            period=10,
+            period=10 * 4,  # 10:00, a daytime quarter
             timestamp=datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -147,7 +147,7 @@ class TestTheSecondLineOfDefence:
 
         event = await manager.record_period_measurement(
             power_kw=power_kw,
-            period=10,
+            period=10 * 4,  # 10:00, a daytime quarter
             timestamp=datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
             source=POWER_SOURCE_EXTERNAL_METER,
         )

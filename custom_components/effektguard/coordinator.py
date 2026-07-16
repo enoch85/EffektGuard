@@ -1088,11 +1088,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
                 else:
-                    # LIKE FOR LIKE: the monthly record is an HOURLY MEAN, so the layer is
-                    # compared against the hour this cycle projects to, not the instant. A
-                    # five-minute oven spike early in the hour projects to almost nothing;
-                    # the same spike at :55 has already committed most of the hour.
-                    current_power_for_decision = self._billing_period.projected_hour_mean(
+                    # LIKE FOR LIKE: the monthly record is a PERIOD MEAN, so the layer is
+                    # compared against the 15-minute period this cycle projects to, not the
+                    # instant. A five-minute oven spike early in the period projects small;
+                    # the same spike at :12 has already committed most of the period.
+                    current_power_for_decision = self._billing_period.projected_period_mean(
                         dt_util.now(), self.current_power_kw
                     )
 
@@ -2289,9 +2289,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if completed is not None:
                 peak_event = await self.effect.record_period_measurement(
                     power_kw=completed.mean_power_kw,
-                    period=completed.billing_hour,
+                    period=completed.billing_period,
                     timestamp=completed.started_at,
-                    # The hour's OWN provenance - every sample votes, not the closing cycle.
+                    # The period's OWN provenance - every sample votes, not the closing cycle.
                     source=completed.source,
                 )
 

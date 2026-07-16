@@ -66,12 +66,12 @@ def _pump_running_but_unmetered() -> NibeState:
     )
 
 
-async def _run_a_complete_billing_hour(coordinator, nibe_data, monkeypatch) -> None:
-    """Samples from 10:00 through 11:00, so the HOUR is observed whole and recorded.
+async def _run_a_complete_billing_period(coordinator, nibe_data, monkeypatch) -> None:
+    """Samples one 15-minute period whole, so it completes and is recorded.
 
-    The Swedish effect tariff bills the HOURLY mean, so only a full hour completes a billing period.
+    The owner's effect tariff bills the 15-minute period mean (operator models vary - F-107).
     """
-    for hour, minute in [(10, m) for m in range(0, 60, 5)] + [(11, 0)]:
+    for hour, minute in [(10, m) for m in range(0, 15, 5)] + [(10, 15)]:
         monkeypatch.setattr(
             dt_util,
             "now",
@@ -97,7 +97,7 @@ async def test_a_meter_that_drops_out_does_not_keep_billing(
     dropped_out.attributes = {}
     coordinator.hass.states.get.return_value = dropped_out
 
-    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
     coordinator.effect.record_period_measurement.assert_not_awaited()
 
@@ -120,7 +120,7 @@ async def test_a_meter_reporting_garbage_does_not_keep_billing(
     garbage.attributes = {"unit_of_measurement": "W"}
     coordinator.hass.states.get.return_value = garbage
 
-    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
     coordinator.effect.record_period_measurement.assert_not_awaited()
 
@@ -143,7 +143,7 @@ async def test_an_estimate_is_never_stamped_as_a_meter_reading(
     dropped_out.attributes = {}
     coordinator.hass.states.get.return_value = dropped_out
 
-    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
     assert coordinator.peak_today_source != "external_meter", (
         f"A peak of {coordinator.peak_today:.2f} kW, estimated from compressor Hz because the meter "
@@ -167,7 +167,7 @@ async def test_a_working_meter_still_bills(coordinator_with_external_meter, monk
     working.attributes = {"unit_of_measurement": "W"}
     coordinator.hass.states.get.return_value = working
 
-    await _run_a_complete_billing_hour(coordinator, _pump_running_but_unmetered(), monkeypatch)
+    await _run_a_complete_billing_period(coordinator, _pump_running_but_unmetered(), monkeypatch)
 
     coordinator.effect.record_period_measurement.assert_awaited_once()
     recorded = coordinator.effect.record_period_measurement.await_args.kwargs

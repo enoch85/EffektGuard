@@ -67,7 +67,7 @@ async def test_peak_protection_actually_fires_for_a_house_with_no_meter():
     for day_offset, kw in enumerate((6.0, 5.5, 5.0)):
         await manager.record_period_measurement(
             power_kw=kw,
-            period=MIDDAY_HOUR,
+            period=MIDDAY_HOUR * 4,
             timestamp=JANUARY + timedelta(days=day_offset),
             source=POWER_SOURCE_NIBE_CURRENTS,
         )
@@ -79,7 +79,7 @@ async def test_peak_protection_actually_fires_for_a_house_with_no_meter():
     )
 
     # Now the pump goes past the lowest of the top three. Protection must engage.
-    decision = manager.should_limit_power(current_power=7.0, current_period=MIDDAY_HOUR)
+    decision = manager.should_limit_power(current_power=7.0, current_period=MIDDAY_HOUR * 4)
 
     assert decision.should_limit, (
         f"The house is drawing 7.0 kW against a recorded monthly peak of 5.0 kW and peak "
@@ -97,7 +97,7 @@ async def test_the_resulting_peak_is_flagged_as_not_a_bill():
 
     await manager.record_period_measurement(
         power_kw=6.0,
-        period=MIDDAY_HOUR,
+        period=MIDDAY_HOUR * 4,
         timestamp=JANUARY,
         source=POWER_SOURCE_NIBE_CURRENTS,
     )
@@ -118,11 +118,11 @@ async def test_one_unmetered_quarter_taints_the_whole_billing_figure():
     manager = _manager()
 
     await manager.record_period_measurement(
-        power_kw=6.0, period=MIDDAY_HOUR, timestamp=JANUARY, source=POWER_SOURCE_EXTERNAL_METER
+        power_kw=6.0, period=MIDDAY_HOUR * 4, timestamp=JANUARY, source=POWER_SOURCE_EXTERNAL_METER
     )
     await manager.record_period_measurement(
         power_kw=5.0,
-        period=MIDDAY_HOUR,
+        period=MIDDAY_HOUR * 4,
         timestamp=JANUARY + timedelta(days=1),
         source=POWER_SOURCE_NIBE_CURRENTS,
     )
@@ -145,7 +145,7 @@ async def test_a_metered_house_is_unaffected():
     for kw in (6.0, 5.5, 5.0):
         await manager.record_period_measurement(
             power_kw=kw,
-            period=MIDDAY_HOUR,
+            period=MIDDAY_HOUR * 4,
             timestamp=JANUARY,
             source=POWER_SOURCE_EXTERNAL_METER,
         )
@@ -153,4 +153,4 @@ async def test_a_metered_house_is_unaffected():
     summary = manager.get_monthly_peak_summary()
     assert summary["billable"] is True
     assert summary["highest"] == pytest.approx(6.0)
-    assert manager.should_limit_power(7.0, MIDDAY_HOUR).should_limit
+    assert manager.should_limit_power(7.0, MIDDAY_HOUR * 4).should_limit
