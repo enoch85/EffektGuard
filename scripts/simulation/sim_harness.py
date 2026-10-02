@@ -136,7 +136,11 @@ DST_SIM_DAYS = 3
 # 2026-10-25: at 03:00 CEST the clock goes back to 02:00 CET, so the day is 25 hours long and
 # the wall-clock hour 02 is metered twice. From the tz database, not from an assumption.
 DST_FALL_BACK_DAY = "2026-10-25"
-DST_FALL_BACK_HOURS = 25
+DST_FALL_BACK_PERIODS = 100
+
+# The --arctic scenario: a REAL January in Kiruna against REAL SE1 prices, same dates.
+STOCKHOLM_LATITUDE = 59.33
+KIRUNA_LATITUDE = 67.86  # 25 hours x 4 quarter-periods
 
 # CAPACITY AND COP NOW COME FROM THE DATASHEET. See HouseConfig.capacity_kw_at / cop_at.
 #
@@ -475,6 +479,19 @@ class HouseConfig:
         point the curve is HELD, because NIBE tabulates nothing there (only a graph), and holding
         is the honest thing to do with the end of the evidence.
         """
+        # BELOW THE PUBLISHED OPERATING FLOOR THERE IS NO MACHINE TO MODEL.
+        #
+        # The F2040 manual (IHB EN 1848-8/231846 p.65): "Min. / Max. air temp: -20 / 43 C". A hard
+        # edge, not a derating - strictly below it the unit does not run, and this model used to
+        # hold the -7 C capacity forever, making phantom compressor heat through 28% of a real
+        # Kiruna January. Only the F2040 carries a floor: NIBE publishes none for the brine and
+        # exhaust-air machines, whose sources the weather never touches, and inventing one would be
+        # exactly the unsourced physics this file exists to remove. AT the floor the machine is in
+        # range and every datasheet pin at -20.0 still holds.
+        floor = self.profile.min_operating_outdoor_c
+        if floor is not None and outdoor_temp < floor:
+            return 0.0
+
         # THE MODULATION ENVELOPE WINS WHERE THE DATASHEET PUBLISHES ONE.
         #
         # "Heating capacity (PH): 3 - 12 kW" is what an F1155-12 can actually deliver. Its 0/35
@@ -601,13 +618,31 @@ PROVENANCE: dict[str, str] = {
         "SOURCED: the F1155 and S1155 are rated at B0 - 0 C incoming brine. Their capacity chart's "
         "x-axis is labelled 'Incoming brine temp, C'. F1155 installer manual IHB EN 2008-5/331379."
     ),
-    "DST_FALL_BACK_HOURS": (
+    "STOCKHOLM_LATITUDE": (
+        "SOURCED: geography (https://www.lantmateriet.se - Stockholm 59.33 N). The latitude every "
+        "non-arctic scenario has always run at; selects ClimateZoneDetector's Southern Nordics "
+        "band (56.0-60.5)."
+    ),
+    "KIRUNA_LATITUDE": (
+        "SOURCED: geography (Kiruna 67.86 N, inside the Arctic Circle). Weather: Open-Meteo ERA5 "
+        "(https://archive-api.open-meteo.com, Kiruna, January 2024). Prices: Nord Pool SE1 via "
+        "https://www.elprisetjustnu.se for the same dates. DVUT: Boverket 1991-2020 "
+        "(https://www.boverket.se, Kiruna 1-dygn -29.4 C). Selects the integration's "
+        "own Arctic climate zone (66.5-90.0 in climate_zones.py), which is the point of the "
+        "scenario - the zone logic runs for real. The paired weather file is Open-Meteo ERA5 for "
+        "Kiruna, January 2024 (min -36.8 C; 211 of 744 hours below the F2040's published -20 C "
+        "floor; SMHI: Kiruna Flygplats reached -36.7 C on 4-5 Jan, 7.3 C below the town's "
+        "Boverket DVUT 1-dygn of -29.4 C). Prices are the real Nord Pool SE1 days for the same "
+        "dates (elprisetjustnu.se), including the 5 Jan 2024 spike to 589 ore/kWh."
+    ),
+    "DST_FALL_BACK_PERIODS": (
         "SOURCED: the IANA time zone database (https://www.iana.org/time-zones), zone "
         "Europe/Stockholm. On 2026-10-25 the offset goes from +02:00 to +01:00 at 03:00 local, so "
-        "the wall-clock hour 02 is metered twice and the day is 25 hours long. EU Directive "
-        "2000/84/EC fixes the transition to the last Sunday of October across the union. Verified "
-        "by stepping the absolute time line through the zone rather than by assuming it: the "
-        "harness counts 25 distinct billing hours on that date and fails the run if it does not."
+        "the wall-clock hour 02 is metered twice and the day is 25 hours long - 100 fifteen-minute "
+        "billing periods at the owner's tariff cadence. EU Directive 2000/84/EC fixes the "
+        "transition to the last Sunday of October across the union. Verified by stepping the "
+        "absolute time line through the zone: the harness counts 100 distinct billing periods on "
+        "that date and fails the run if it does not."
     ),
     "EN14825_COLD_DESIGN_C": (
         "SOURCED: EN 14825 cold-climate reference design temperature. NIBE declares a Pdesignh at "
@@ -667,6 +702,18 @@ PROVENANCE: dict[str, str] = {
         "at 29.1-29.4 C)."
     ),
 }
+
+
+def compressor_available(house: "HouseConfig", outdoor_c: float) -> bool:
+    """Whether this machine's compressor can run at this outdoor temperature.
+
+    THE ONE RULE both the plant physics and the reported NibeState derive from. Zeroing capacity
+    alone left `compressor_on` True, so the plant reported compressor_hz > 0 and is_heating=True
+    to the DecisionEngine for a machine that was physically stopped - the engine under test was
+    being fed a lying plant state, and its decisions below -20 C were decisions about a fiction.
+    """
+    return house.capacity_kw_at(outdoor_c) > 0.0
+
 
 HOUSES = [
     HouseConfig(
@@ -838,13 +885,26 @@ def _synthetic_days(start: datetime, days: int):
     return times, temps, _to_gespot_shape(raw, ORE_PER_KWH_FROM_SEK_PER_MWH), GESPOT_UNIT_ORE
 
 
-def load_data(selftest: bool, live_se4: bool = False, dst: bool = False):
+def load_data(selftest: bool, live_se4: bool = False, dst: bool = False, arctic: bool = False):
     """Load real weather + prices, or synthetic data for --selftest / --dst."""
+    if arctic:
+        # A REAL arctic month: Kiruna, January 2024 (Open-Meteo ERA5 - min -36.8 C, 28% of the
+        # month below the F2040's published -20 C operating floor) against the REAL Nord Pool SE1
+        # prices for the SAME dates (elprisetjustnu.se), including the 5 January spike to
+        # 589 ore/kWh two days after the deepest cold. No re-stamping, no shape replay: the
+        # weather and the prices are the same real days.
+        weather = json.load(open(DATA_DIR / "weather_kiruna_jan2024.json"))
+        times = [datetime.fromisoformat(t).replace(tzinfo=TZ) for t in weather["hourly"]["time"]]
+        temps = weather["hourly"]["temperature_2m"]
+        payload = json.load(open(DATA_DIR / "prices_se1_jan2024.json"))
+        # Hourly ore/kWh entries; _to_gespot_shape expands each hour to four quarters.
+        return times, temps, _to_gespot_shape(payload["days"], 1.0), GESPOT_UNIT_ORE
+
     if dst:
         # The last Sunday of October 2026: at 03:00 CEST the clock goes back to 02:00 CET, so the
         # wall-clock hour 02 happens TWICE and the day is 25 hours long. This is the day on which
-        # the coordinator used to DELETE a billing hour - see
-        # tests/unit/coordinator/test_the_billing_hour_survives_the_clocks_going_back.py - and the
+        # the coordinator used to DELETE a billing period - see
+        # tests/unit/coordinator/test_the_billing_period_survives_the_clocks_going_back.py - and the
         # harness could not see it, because its own clock advanced by wall time and its tariff
         # periods were keyed on (date, hour), which those two hours share.
         return _synthetic_days(datetime(2026, 10, 24, tzinfo=TZ), 3)
@@ -1028,6 +1088,7 @@ def build_engine(
     enable_price: bool = True,
     enable_weather: bool = True,
     tuned_curve: bool = False,
+    latitude: float = STOCKHOLM_LATITUDE,
 ):
     """Build the real DecisionEngine for this house.
 
@@ -1048,7 +1109,7 @@ def build_engine(
         "enable_weather_compensation": enable_weather,
         "enable_peak_protection": True,
         "enable_price_optimization": enable_price,
-        "latitude": 59.33,
+        "latitude": latitude,
         "heating_type": house.heating_type,
         "heat_loss_coefficient": house.hlc_w_per_k,
         "thermal_mass": house.thermal_mass,
@@ -1078,8 +1139,9 @@ def simulate(
     enable_weather: bool = True,
     tuned_curve: bool = False,
     forecast_available: bool = True,
+    latitude: float = STOCKHOLM_LATITUDE,
 ):
-    engine, effect = build_engine(house, mode, enable_price, enable_weather)
+    engine, effect = build_engine(house, mode, enable_price, enable_weather, latitude=latitude)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
@@ -1109,6 +1171,7 @@ def simulate(
         "comfort_minutes_below": 0,
         "comfort_minutes_above": 0,
         "compressor_starts": 0,
+        "compressor_blocked_hours": 0.0,
         "sign_flips": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
@@ -1124,13 +1187,13 @@ def simulate(
     billing = BillingPeriodAccumulator()
     daily_peaks: dict = {}  # date -> max HOURLY-mean kW (physical, for peak_kw_hourly_mean)
     daily_billed: dict = {}  # date -> max EFFECTIVE kW: what the tariff counts, night hours half
-    # date -> how many billing hours the PRODUCTION accumulator actually billed on it. A day is not
+    # date -> how many billing periods the PRODUCTION accumulator actually billed on it. A day is not
     # always 24 hours long,
     # and the tariff bills every hour the meter recorded: the fall-back day has 25 and the
     # spring-forward day 23. Counting them is how this harness proves it is actually TRAVERSING
     # the transition rather than merely surviving it - a flat night load is priced identically
     # whether the repeated hour is billed once or twice, so the tariff figure alone cannot tell.
-    billing_hours: dict = {}
+    billing_periods: dict = {}
     # Highest completed quarter-hour MEAN so far: what the coordinator publishes as
     # peak_this_month, and therefore what the effect layer is defending. Starts at
     # zero, as it does on a fresh install.
@@ -1145,7 +1208,7 @@ def simulate(
     # happened; across a fall-back it passes the repeated hour once instead of twice.
     #
     # So the harness could not have experienced a DST transition honestly even if pointed straight
-    # at one - and the coordinator bug that deleted a billing hour on the fall-back night (a peak of
+    # at one - and the coordinator bug that deleted a billing period on the fall-back night (a peak of
     # 9 kW recorded as 1) would have been invisible to it. Step UTC; derive local from it.
     start_absolute = start.astimezone(zoneinfo.ZoneInfo("UTC"))
 
@@ -1200,6 +1263,14 @@ def simulate(
             q_emit_w = house.heat_output_w(flow, indoor)
 
             capacity_w = house.capacity_kw_at(tout) * 1000.0
+            # Below the machine's published operating floor the capacity is zero and everything
+            # here must agree with that - the physics above AND the state reported to the engine.
+            available = capacity_w > 0.0
+            if not available:
+                # Outside the machine's published operating range. Counted so a failed arctic run
+                # attributes itself: 'indoor fell to -13 C' next to '211 blocked hours' is the
+                # machine's envelope speaking, not the controller's.
+                stats["compressor_blocked_hours"] += STEP_MIN / 60.0
             if compressor_on:
                 # The compressor modulates toward the flow its curve is asking for, bounded by what it
                 # can actually deliver - which comes from the datasheet, not from an invented derating.
@@ -1285,7 +1356,10 @@ def simulate(
             dm = max(DM_INTEGRATOR_FLOOR, min(dm, DM_INTEGRATOR_CEILING))
             if not compressor_on and dm <= DM_START:
                 compressor_on = True
-                stats["compressor_starts"] += 1
+                # A start only counts if the machine can actually run: an F2040 below its -20 C
+                # floor "restarting" every hysteresis cycle would be phantom compressor wear.
+                if available:
+                    stats["compressor_starts"] += 1
             elif compressor_on and dm >= DM_STOP:
                 compressor_on = False
 
@@ -1309,7 +1383,11 @@ def simulate(
                 )
 
             power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
-            hz = 40 + int(min(50, max(0, (flow_target - indoor)))) if compressor_on else 0
+            hz = (
+                40 + int(min(50, max(0, (flow_target - indoor))))
+                if (compressor_on and available)
+                else 0
+            )
 
             # --- price/weather context (parsed by the REAL GE-Spot adapter) ---
             price_data = price_source.get(now)
@@ -1355,7 +1433,7 @@ def simulate(
                 return_temp=round(flow - 5.0, 1),
                 degree_minutes=round(dm, 0),
                 current_offset=float(offset_applied),
-                is_heating=compressor_on,
+                is_heating=compressor_on and available,
                 is_hot_water=False,
                 timestamp=now,
                 compressor_hz=hz,
@@ -1511,13 +1589,7 @@ def simulate(
             )
             stats["cost_sek"] += energy * cur_price_ore / 100.0
 
-            # EFFECT TARIFF BASIS: THE HOURLY MEAN. Not the quarter-hour, which is what this used to
-            # accumulate, and not the instantaneous sample, which is what it accumulated before that.
-            #
-            # Ellevio: "the measurement uses hourly averages". Energimarknadsinspektionen:
-            # "elnatsforetagen mater din elanvandning per timme". A 15-minute hot-water cycle at 9 kW
-            # inside an otherwise idle hour has an hourly mean of 3 kW, and the harness was pricing the
-            # 9 - so every tariff figure it produced was up to fourfold too high.
+            # EFFECT TARIFF BASIS: the owner's 15-minute period mean (BILLING_PERIOD_MINUTES).
             # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
             #
             # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
@@ -1546,8 +1618,8 @@ def simulate(
                 # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
                 # equal), so a set would silently merge them back into one and report 24 again - passing
                 # the check by making the same mistake it exists to catch.
-                billing_hours[completed.started_at.date()] = (
-                    billing_hours.get(completed.started_at.date(), 0) + 1
+                billing_periods[completed.started_at.date()] = (
+                    billing_periods.get(completed.started_at.date(), 0) + 1
                 )
 
                 day = completed.started_at.date()
@@ -1557,7 +1629,7 @@ def simulate(
                 # with night-shifted load - which is exactly where this optimiser puts load.
                 daily_billed[day] = max(
                     daily_billed.get(day, 0.0),
-                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_hour),
+                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_period),
                 )
                 running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
 
@@ -1576,7 +1648,7 @@ def simulate(
                 asyncio.run(
                     effect.record_period_measurement(
                         power_kw=completed.mean_power_kw,
-                        period=completed.billing_hour,
+                        period=completed.billing_period,
                         timestamp=completed.started_at,
                         source=POWER_SOURCE_EXTERNAL_METER,
                     )
@@ -1615,15 +1687,15 @@ def simulate(
         daily_peaks[day] = max(daily_peaks.get(day, 0.0), final.mean_power_kw)
         daily_billed[day] = max(
             daily_billed.get(day, 0.0),
-            effective_tariff_power_kw(final.mean_power_kw, final.billing_hour),
+            effective_tariff_power_kw(final.mean_power_kw, final.billing_period),
         )
-        billing_hours[day] = billing_hours.get(day, 0) + 1
+        billing_periods[day] = billing_periods.get(day, 0) + 1
     top3 = sorted(daily_billed.values(), reverse=True)[:3]
     tariff_kw = sum(top3) / len(top3) if top3 else 0.0
     stats["peak_kw_hourly_mean"] = round(max(daily_peaks.values()), 2) if daily_peaks else 0.0
     stats["tariff_top3_kw"] = round(tariff_kw, 2)
-    stats["billing_hours_by_day"] = {
-        day.isoformat(): count for day, count in sorted(billing_hours.items())
+    stats["billing_periods_by_day"] = {
+        day.isoformat(): count for day, count in sorted(billing_periods.items())
     }
     stats["tariff_cost_sek"] = round(tariff_kw * EFFECT_TARIFF_SEK_PER_KW, 0)
     stats["total_cost_sek"] = round(stats["cost_sek"] + stats["tariff_cost_sek"], 0)
@@ -1852,12 +1924,13 @@ def main() -> int:
     undersized = "--undersized" in sys.argv
     no_forecast = "--no-forecast" in sys.argv
     dst = "--dst" in sys.argv
+    arctic = "--arctic" in sys.argv
     mode = "balanced"
     if "--mode" in sys.argv:
         mode = sys.argv[sys.argv.index("--mode") + 1]
     # --dst spans the fall-back weekend: 3 days, one of them 25 hours long.
     days = DST_SIM_DAYS if dst else (2 if selftest else SIM_DAYS)
-    times, temps, price_days, unit = load_data(selftest, live_se4, dst)
+    times, temps, price_days, unit = load_data(selftest, live_se4, dst, arctic)
     if coldsnap:
         temps = apply_coldsnap(times, temps)
     OUT_DIR.mkdir(exist_ok=True)
@@ -1892,6 +1965,7 @@ def main() -> int:
             enable_weather=not no_weather,
             tuned_curve=tuned_curve,
             forecast_available=not no_forecast,
+            latitude=KIRUNA_LATITUDE if arctic else STOCKHOLM_LATITUDE,
         )
         stats["price_unit_seen_by_adapter"] = price_source.unit
         tag = f"{house.name}{'-selftest' if selftest else ''}"
@@ -1915,6 +1989,8 @@ def main() -> int:
             tag += "-noforecast"
         if dst:
             tag += "-dst"
+        if arctic:
+            tag += "-arctic"
         if tuned_curve:
             tag += "-tuned"
 
@@ -1927,19 +2003,21 @@ def main() -> int:
             # THE DST RUN MUST BE ABLE TO FAIL, OR IT IS DECORATION.
             #
             # A green --dst run proves very little on its own: the October night load is flat and
-            # low, so merging the two 02:00 hours into one two-hour period produces the SAME mean,
+            # low, so merging the repeated 02:00 quarters produces the SAME mean,
             # the same tariff figure, and the same PASS. I checked - reverting the harness's period
             # key to the ambiguous `(date, hour)` moved not one of the reported numbers.
             #
-            # What the merge DOES change is how many billable hours the day contains. A fall-back
-            # day has 25. Count them, and the run can fail for the reason it exists.
-            hours_on_the_long_day = stats["billing_hours_by_day"].get(DST_FALL_BACK_DAY)
-            if hours_on_the_long_day != DST_FALL_BACK_HOURS:
+            # What the merge DOES change is how many billable periods the day contains. A
+            # fall-back day is 25 hours - 100 quarter-periods. Count them, and the run can fail
+            # for the reason it exists.
+            periods_on_the_long_day = stats["billing_periods_by_day"].get(DST_FALL_BACK_DAY)
+            if periods_on_the_long_day != DST_FALL_BACK_PERIODS:
                 failures.append(
-                    f"{DST_FALL_BACK_DAY} was billed as {hours_on_the_long_day} hours. The clocks "
-                    f"go back that night, so it is {DST_FALL_BACK_HOURS} hours long and every one "
-                    f"of them is separately metered. Billing 24 means the two 02:00 hours - which "
-                    f"print the same digits and are an hour apart - were merged into one."
+                    f"{DST_FALL_BACK_DAY} was billed as {periods_on_the_long_day} periods. The "
+                    f"clocks go back that night, so it is 25 hours - {DST_FALL_BACK_PERIODS} "
+                    f"fifteen-minute periods - and every one is separately metered. Billing 96 "
+                    f"means the repeated 02:00 quarters, which print the same digits and are an "
+                    f"hour apart, were merged."
                 )
 
         json.dump(
