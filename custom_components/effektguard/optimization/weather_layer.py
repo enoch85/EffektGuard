@@ -39,10 +39,10 @@ from ..const import (
     WEATHER_COMP_DEFER_DM_LIGHT,
     WEATHER_COMP_DEFER_DM_MODERATE,
     WEATHER_COMP_DEFER_DM_SIGNIFICANT,
-    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
-    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
-    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
-    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
+    WEATHER_COMP_DEFER_RETAIN_CRITICAL,
+    WEATHER_COMP_DEFER_RETAIN_LIGHT,
+    WEATHER_COMP_DEFER_RETAIN_MODERATE,
+    WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT,
     WEATHER_COMP_MAX_OFFSET,
     WEATHER_FORECAST_DROP_THRESHOLD,
     BALANCE_POINT_MAX_OFFSET,
@@ -944,23 +944,20 @@ class WeatherCompensationLayer:
         defer_factor = 1.0
         defer_reason = None
 
+        # The retained FRACTION of whatever weight the owner configured - see the
+        # WEATHER_COMP_DEFER_RETAIN_* block in const.py. Dividing an absolute weight by the
+        # default weight here cancelled the owner's own setting entirely.
         if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
-            # Critical debt: 39% reduction (0.49 → 0.30)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
             defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
-            # Significant debt: 29% reduction (0.49 → 0.35)
-            defer_factor = (
-                WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
-            )
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT
             defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
-            # Moderate debt: 18% reduction (0.49 → 0.40)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_MODERATE
             defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
-            # Light debt: 8% reduction (0.49 → 0.45)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_LIGHT
             defer_reason = f"Light debt (DM {degree_minutes:.0f})"
 
         final_weight = final_weight * defer_factor

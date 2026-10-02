@@ -527,13 +527,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         len(self.thermal_predictor.state_history),
                     )
 
-                # Restore weather patterns
+                # Restore weather patterns. Log the count load_from_dict REPORTS, not a key
+                # looked up hopefully: the previous line read summary["total_weeks"], which
+                # get_pattern_database_summary has never returned, so it logged the `0`
+                # default on every restart - including the restarts where nothing restored
+                # at all, which is what was actually happening.
                 if "weather_patterns" in learned_data:
-                    self.weather_learner.from_dict(learned_data["weather_patterns"])
+                    restored = self.weather_learner.load_from_dict(learned_data["weather_patterns"])
                     summary = self.weather_learner.get_pattern_database_summary()
                     _LOGGER.info(
-                        "Restored weather patterns: %d weeks of data",
-                        summary.get("total_weeks", 0),
+                        "Restored %d weather patterns across %d calendar periods",
+                        restored,
+                        summary.get("periods_covered", 0),
                     )
 
                 # Restore DHW optimizer state (critical for Legionella safety tracking)
@@ -2009,6 +2014,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 thermal_debt,
                 indoor_temp,
                 target_indoor,
+                current_dhw_temp,
             )
 
             if should_abort:
