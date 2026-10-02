@@ -1,12 +1,11 @@
-"""`integer_offset_for` must ROUND, not truncate, when bridging fractional offsets to NIBE's
-integer register.
+"""`integer_offset_for` applies whole demand-backed degrees: truncate, deadband, clamp.
 
-`int(-1.9)` is `-1`: truncation toward zero made every offset come out smaller than the engine
-asked, always in the same direction, permanently (the residual was never re-applied). Since this is
-the last thing to touch the number before the pump, that bias silently attenuates every decision and
-every tuned constant. Rounding bounds the error at 0.5 C and makes it unbiased. The 1 C deadband is
-deliberate hysteresis (MyUplink is rate-limited), and the value is clamped to the register range.
-Shared with the simulation harness so the plant model and the code cannot drift.
+Truncation (int(), main's original design) is deliberate: the caller recomputes pending
+demand every cycle as (calculated - register), so only the WHOLE degrees the demand covers
+are applied and the fraction stays pending - never lost, never over-applied. round() would
+write up to 0.5 C the engine did not ask for, then oscillate back when the recomputed demand
+reversed sign. The 1 C deadband is hysteresis for a rate-limited register; the result is
+clamped to the register's range. Shared with the simulation harness.
 """
 
 from __future__ import annotations
@@ -21,75 +20,65 @@ from custom_components.effektguard.const import (
 from custom_components.effektguard.utils.offset import integer_offset_for
 
 
-class TestTheBiasIsGone:
-    """The whole point: the error must not always point the same way."""
+class TestWholeDegreesOnly:
+    """Only the integer part of the demand reaches the register; the fraction stays pending."""
 
     @pytest.mark.parametrize(
         ("demand", "expected"),
         [
-            (-1.9, -2),  # int() gave -1
-            (-2.7, -3),  # int() gave -2
-            (+1.9, +2),  # int() gave +1
-            (+2.7, +3),  # int() gave +2
-            (-1.4, -1),
-            (+1.4, +1),
+            (-1.9, -1),  # the 0.9 stays pending, re-derived next cycle
+            (1.9, 1),
+            (-2.6, -2),
+            (2.6, 2),
+            (1.0, 1),  # exactly one degree is fully backed
+            (-1.0, -1),
         ],
     )
-    def test_the_offset_is_rounded_not_truncated(self, demand, expected):
-        applied = integer_offset_for(demand, current=0)
+    def test_truncation_applies_only_backed_degrees(self, demand, expected):
+        assert integer_offset_for(calculated=demand, current=0) == expected
 
-        assert applied == expected, (
-            f"The engine asked for {demand:+.1f} C and the pump was given {applied:+d} C. "
-            f"int({demand}) is {int(demand)} - Python truncates toward zero - so the pump always "
-            f"did LESS than it was told, in the same direction, permanently."
-        )
+    def test_truncation_is_symmetric_toward_zero(self):
+        assert integer_offset_for(1.9, 0) == -integer_offset_for(-1.9, 0)
 
-    def test_the_error_is_symmetric_around_zero(self):
-        """A biased quantiser silently retunes every constant in const.py."""
-        for magnitude in (1.1, 1.5, 1.9, 2.3, 2.5, 2.9, 3.4):
-            up = integer_offset_for(+magnitude, current=0)
-            down = integer_offset_for(-magnitude, current=0)
-            assert up == -down, (
-                f"A demand of +{magnitude} became {up:+d} but -{magnitude} became {down:+d}. "
-                f"The quantiser must not prefer one direction."
+    def test_the_register_is_never_pushed_past_the_demand(self):
+        """The property truncation buys: the pump never does MORE than the engine asked."""
+        for tenths in range(-100, 101):
+            calculated = tenths / 10.0
+            written = integer_offset_for(calculated, current=0)
+            assert abs(written) <= abs(calculated) + 1e-9, (
+                f"demand {calculated:+.1f} wrote {written:+d} - the register got more than "
+                f"the engine asked for, which truncation exists to prevent"
             )
 
-    def test_the_residual_error_never_exceeds_half_a_degree(self):
-        """The best an integer register can do. Truncation gave up to a full degree."""
-        for demand in [x / 10 for x in range(-100, 101)]:
-            applied = integer_offset_for(demand, current=0)
-            if applied != 0:  # outside the deadband
-                assert abs(demand - applied) <= 0.5 + 1e-9, (
-                    f"demand {demand:+.1f} -> {applied:+d}, an error of "
-                    f"{abs(demand - applied):.2f} C"
-                )
+    def test_the_pending_fraction_is_not_lost(self):
+        """Held demand converges as the fraction is re-derived against the updated register.
+
+        Cycle 1 at +2.6 from 0 writes +2 (0.6 pending). If the engine's demand grows to
+        +3.1, the recomputed pending demand (1.1) crosses a whole degree and writes +3.
+        Nothing was truncated away permanently.
+        """
+        first = integer_offset_for(2.6, current=0)
+        assert first == 2
+
+        second = integer_offset_for(3.1, current=first)
+        assert second == 3
 
 
 class TestTheDeadbandIsDeliberate:
-    """Hysteresis, not arithmetic. It stops the register churning; do not remove it by accident."""
-
     def test_a_demand_that_has_barely_moved_does_not_rewrite_the_register(self):
-        assert integer_offset_for(-2.4, current=-2) == -2
-        assert integer_offset_for(+0.9, current=0) == 0
+        assert integer_offset_for(2.4, current=2) == 2
 
     def test_the_threshold_is_a_whole_degree(self):
         assert NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD == 1.0
-        assert integer_offset_for(-0.99, current=0) == 0
-        assert integer_offset_for(-1.0, current=0) == -1
 
     def test_it_settles_rather_than_oscillating(self):
-        """Apply the same demand repeatedly: the register must reach a value and stay there."""
-        demand = -1.9
-        current = 0
-        seen = []
-        for _ in range(10):
-            current = integer_offset_for(demand, current)
-            seen.append(current)
-
-        assert seen[-3:] == [-2, -2, -2], f"the register never settled: {seen}"
+        """Demand wandering inside the deadband around the held value writes nothing."""
+        current = 2
+        for calculated in (2.3, 1.7, 2.4, 1.6, 2.0):
+            assert integer_offset_for(calculated, current) == current
 
 
-class TestTheRegisterCannotBeOverrun:
+class TestTheClamp:
     def test_the_offset_is_clamped_to_what_the_register_can_hold(self):
-        assert integer_offset_for(-50.0, current=0) == MIN_OFFSET
-        assert integer_offset_for(+50.0, current=0) == MAX_OFFSET
+        assert integer_offset_for(25.0, current=0) == MAX_OFFSET
+        assert integer_offset_for(-25.0, current=0) == MIN_OFFSET

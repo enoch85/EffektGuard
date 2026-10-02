@@ -1,4 +1,4 @@
-"""The billing hour must survive DST: the autumn fold must not delete a month's peak.
+"""The billing period must survive DST: the autumn fold must not delete a month's peak.
 
 When the clocks go back, wall-clock hour 02 happens twice (02:00 CEST, then 02:00 CET). PEP 495
 ignores `fold` when comparing two aware datetimes with the same tzinfo, so an hour-boundary check
@@ -41,7 +41,7 @@ def a_swedish_installation():
     """HA's `dt_util.as_local` resolves against the timezone HA is CONFIGURED with.
 
     The test harness leaves that at UTC, and the coordinator asks `as_local` which month a completed
-    billing hour belongs to. A test that does not set it is not testing a Swedish install - it is
+    billing period belongs to. A test that does not set it is not testing a Swedish install - it is
     testing a UTC one, where the month boundary cannot go wrong and the assertion would pass for the
     wrong reason. (It is set here rather than in a fixture because
     pytest-homeassistant-custom-component asserts at teardown that nobody has left the default zone
@@ -115,7 +115,7 @@ async def _drive(coordinator, monkeypatch, start_utc, minutes, power_at) -> None
 
 
 def _recorded(coordinator) -> list[tuple[int, float]]:
-    """(billing hour, mean kW) for every hour the coordinator actually recorded."""
+    """(billing period, mean kW) for every hour the coordinator actually recorded."""
     return [
         (call.kwargs["period"], round(call.kwargs["power_kw"], 2))
         for call in coordinator.effect.record_period_measurement.await_args_list
@@ -157,14 +157,10 @@ async def test_both_halves_of_the_repeated_hour_are_recorded(monkeypatch):
 
     recorded = _recorded(coordinator)
 
-    assert len(recorded) == 2, (
-        f"three real hours elapsed (02:00 CEST, 02:00 CET, 03:00 CET) and the coordinator completed "
-        f"{len(recorded)} of the first two: {recorded}. Each repeated hour is separately metered and "
-        f"separately billable."
-    )
-    assert [period for period, _ in recorded] == [2, 2], (
-        f"both completed hours are the local hour 2 - that is the point, they print the same digits. "
-        f"Got {recorded}."
+    two_oclock = [period for period, _ in recorded if 8 <= period <= 11]
+    assert two_oclock == [8, 9, 10, 11, 8, 9, 10, 11], (
+        f"the repeated 02:xx hour must yield its four quarters TWICE - they print the same digits "
+        f"and are an hour apart. Got {recorded}."
     )
     for _, mean in recorded:
         assert mean == pytest.approx(5.0, abs=0.01), (
@@ -184,9 +180,10 @@ async def test_the_spring_gap_does_not_invent_an_hour(monkeypatch):
     recorded = _recorded(coordinator)
     hours = [period for period, _ in recorded]
 
-    assert 2 not in hours, (
-        f"the coordinator billed an hour 2 on the spring-forward day: {recorded}. Wall-clock 02:00 "
-        f"does not exist that night - no meter recorded it, and no bill will contain it."
+    assert not any(8 <= h <= 11 for h in hours), (
+        f"the coordinator billed a 02:xx quarter (periods 8-11) on the spring-forward day: "
+        f"{recorded}. Wall-clock 02:00 does not exist that night - no meter recorded it, and no "
+        f"bill will contain it."
     )
     for _, mean in recorded:
         assert mean == pytest.approx(
@@ -199,7 +196,7 @@ async def test_the_first_hour_of_a_month_is_billed_to_that_month(monkeypatch):
     """The completed hour is stamped local, so it is bucketed into the right calendar month.
 
     The accumulator runs on the UTC time line, but the effect layer buckets peaks by calendar month
-    (`peak.timestamp.year, peak.timestamp.month`), a local-clock fact. In Stockholm the billing hour
+    (`peak.timestamp.year, peak.timestamp.month`), a local-clock fact. In Stockholm the billing period
     00:00-01:00 on 1 November is 23:00-00:00 on 31 October in UTC - hand the layer the raw UTC stamp
     and a November peak is filed against an already-billed October, while November loses its first
     hour.
@@ -234,6 +231,7 @@ async def test_an_ordinary_hour_is_unchanged(monkeypatch):
 
     recorded = _recorded(coordinator)
 
-    assert len(recorded) == 1 and recorded[0][1] == pytest.approx(
+    ten_oclock = [period for period, _ in recorded if 44 <= period <= 47]
+    assert ten_oclock == [44, 45, 46, 47] and recorded[0][1] == pytest.approx(
         6.0, abs=0.01
     ), f"a flat 6 kW hour on an ordinary day must record exactly one hour at 6.0 kW. Got {recorded}."

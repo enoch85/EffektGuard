@@ -4,7 +4,7 @@
 Feeding it to the engine as "current power" let one unrelated household spike (an oven, a
 kettle, an EV charger) pin the effect layer to CRITICAL (weight 1.0, offset -3.0 C) for the
 rest of the day, regardless of what the heat pump was drawing. The engine must instead
-receive the live reading PROJECTED over the billing hour, because the monthly record it is
+receive the live reading PROJECTED over the billing period, because the monthly record it is
 compared against is an hourly mean.
 """
 
@@ -26,8 +26,8 @@ class TestCoordinatorPowerContract:
             "The decision engine is being fed peak_today (a daily MAXIMUM) as current power. "
             "One morning spike would pin the effect layer to CRITICAL until midnight."
         )
-        assert "projected_hour_mean" in update_src and "self.current_power_kw" in update_src, (
-            "The decision engine must be fed the live reading PROJECTED over the billing hour "
+        assert "projected_period_mean" in update_src and "self.current_power_kw" in update_src, (
+            "The decision engine must be fed the live reading PROJECTED over the billing period "
             "- the monthly record it is compared against is an hourly mean, so an instantaneous "
             "spike is not the same quantity. See "
             "tests/unit/optimization/test_peak_protection_compares_like_with_like.py."

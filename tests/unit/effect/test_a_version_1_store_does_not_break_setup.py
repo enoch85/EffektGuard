@@ -11,7 +11,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.effektguard.const import EFFECT_STORAGE_VERSION, STORAGE_KEY
+from custom_components.effektguard.const import (
+    EFFECT_STORAGE_VERSION,
+    POWER_SOURCE_NONE,
+    STORAGE_KEY,
+)
 from custom_components.effektguard.optimization.effect_layer import EffectManager, EffectStore
 
 # A record exactly as main's PeakEvent.to_dict() wrote it: quarter_of_day, no source.
@@ -25,13 +29,26 @@ V1_QUARTER_RECORD = {
 
 
 @pytest.mark.asyncio
-async def test_migration_discards_quarter_hour_records():
-    """A v1 payload comes out of migration with its quarter-era peaks discarded, not crashed on."""
+async def test_migration_converts_quarter_records_and_marks_them_unbillable():
+    """A v1 quarter record IS the same billed quantity under the owner's 15-minute tariff.
+
+    Migration renames `quarter_of_day` -> `period_of_day` and keeps the peak as a control
+    threshold. What v1 never stored is PROVENANCE, and it cannot be reconstructed - so the
+    record is marked POWER_SOURCE_NONE (unbillable) until live measurement replaces it.
+    """
     store = EffectStore(MagicMock(), EFFECT_STORAGE_VERSION, STORAGE_KEY)
 
     migrated = await store._async_migrate_func(1, 1, {"peaks": [V1_QUARTER_RECORD]})
 
-    assert migrated == {"peaks": []}
+    assert len(migrated["peaks"]) == 1
+    record = migrated["peaks"][0]
+    assert record["period_of_day"] == V1_QUARTER_RECORD["quarter_of_day"]
+    assert "quarter_of_day" not in record
+    assert record["source"] == POWER_SOURCE_NONE, (
+        "a migrated peak has unknown provenance and must not be presented as a billable "
+        "meter measurement"
+    )
+    assert record["actual_power"] == V1_QUARTER_RECORD["actual_power"]
 
 
 @pytest.mark.asyncio
