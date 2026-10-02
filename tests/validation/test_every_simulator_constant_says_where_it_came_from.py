@@ -56,6 +56,15 @@ NOT_A_PHYSICAL_CLAIM = frozenset(
         "MIN_EXERGY_EFFICIENCY",
         "MAX_EXERGY_EFFICIENCY",
         "MIN_LIFT_K",
+        # The real-weather scenarios' own budgets (see SCENARIOS in the harness). Same kind as
+        # the entries above: what the SIMULATION demands of the controller in a given window,
+        # argued where each is defined, and describing no piece of hardware. The two physical
+        # claims that came with those scenarios - the heating-season stop and restart
+        # temperatures - are NOT here; they are in PROVENANCE, one SOURCED and one ASSUMED
+        # with its sensitivity measured.
+        "SCENARIO_COMFORT_BREACH_BUDGET_MIN",
+        "SCENARIO_SIGN_FLIPS_PER_DAY_BUDGET",
+        "SHOULDER_OVER_DELIVERY_BUDGET",
         # The reference battery controller: a comparison strategy, not a model of anything.
         "BATTERY_BAND",
         "BATTERY_CHARGE_OFFSET",
