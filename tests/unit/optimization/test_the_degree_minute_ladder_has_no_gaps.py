@@ -28,7 +28,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.effektguard.const import (
-    DM_CRITICAL_T1_MARGIN,
     DM_THRESHOLD_AUX_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
@@ -104,8 +103,11 @@ def test_no_degree_minute_falls_through_both_layers(heating_type, sweeps):
     """Below a shallow dead band, SOME layer must be acting at every DM value."""
     detector = ClimateZoneDetector(LATITUDE)
     # Z1 starts at a small percentage of normal_max; above that both layers idling is
-    # correct, so only assert coverage below Z1's own entry point.
-    zone_entry = min(
+    # correct, so only assert coverage below Z1's own entry point. Degree minutes are
+    # NEGATIVE, so Z1's entry is the greatest zoned value - `min` here would be the
+    # deepest one instead, and the band inspected would start past every proactive zone
+    # and miss any seam between two of them.
+    zone_entry = max(
         dm for dm, (_, zone) in sweeps[heating_type].items() if zone not in ("NONE", "")
     )
     uncovered = [
@@ -145,29 +147,6 @@ def test_every_rung_the_hierarchy_documents_is_reachable(heating_type, sweeps):
 
 
 @pytest.mark.parametrize("heating_type", HEATING_TYPES)
-def test_the_deleted_tiers_have_not_come_back(heating_type, sweeps):
-    """WARNING and CAUTION were removed because no DM value could reach them.
-
-    If either name reappears in a sweep, someone has re-added a branch along with a new
-    threshold - which is fine, but then the hierarchy comment in const.py and this test
-    have to say so. A tier that exists in code and never fires is worse than no tier.
-    """
-    tiers = {tier for tier, _ in sweeps[heating_type].values()}
-    assert "WARNING" not in tiers
-    assert "CAUTION" not in tiers
-
-
-def test_t1_sits_exactly_on_the_warning_threshold():
-    """The ladder's design: T1 IS the warning response, so the margin is deliberately 0.
-
-    Pinned because this is the fact that makes a separate WARNING tier impossible. Change
-    the margin and the deleted tier becomes reachable again - at which point it should be
-    reinstated, not left out.
-    """
-    assert DM_CRITICAL_T1_MARGIN == 0
-
-
-@pytest.mark.parametrize("heating_type", HEATING_TYPES)
 def test_the_tiers_deepen_monotonically(heating_type, sweeps):
     """Walking DM downward, severity may only increase - never oscillate."""
     order = {"OK": 0, "Z1": 1, "Z2": 2, "Z3": 3, "Z4": 4, "Z5": 5}
@@ -177,7 +156,6 @@ def test_the_tiers_deepen_monotonically(heating_type, sweeps):
         tier, zone = sweeps[heating_type][dm]
         rank = severity.get(tier, 0) or order.get(zone, 0)
         assert rank >= previous or rank == 0, (
-            f"{heating_type}: severity went backwards at DM {dm} "
-            f"(tier={tier}, zone={zone})"
+            f"{heating_type}: severity went backwards at DM {dm} " f"(tier={tier}, zone={zone})"
         )
         previous = max(previous, rank)

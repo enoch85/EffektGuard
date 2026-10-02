@@ -945,8 +945,9 @@ class WeatherCompensationLayer:
         defer_reason = None
 
         # The retained FRACTION of whatever weight the owner configured - see the
-        # WEATHER_COMP_DEFER_RETAIN_* block in const.py. Dividing an absolute weight by the
-        # default weight here cancelled the owner's own setting entirely.
+        # WEATHER_COMP_DEFER_RETAIN_* block in const.py. These were previously spelled as an
+        # absolute weight divided by the default weight, which computes the same fraction but
+        # reads as though it replaced the owner's setting.
         if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
             defer_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
             defer_reason = f"Critical debt (DM {degree_minutes:.0f})"

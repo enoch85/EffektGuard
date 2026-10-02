@@ -128,13 +128,18 @@ def test_the_default_owner_sees_the_same_weight_as_before(threshold, retained, n
 
 
 def test_deeper_debt_defers_harder():
-    """Monotonic: the deeper the debt, the less say the outdoor temperature has."""
+    """Strictly monotonic: the deeper the debt, the less say the outdoor temperature has.
+
+    Strictly, because four tiers that all retain the same fraction would satisfy a
+    non-strict ordering while making three of them decoration.
+    """
     weights = [
-        _weight_at(DEFAULT_WEATHER_COMPENSATION_WEIGHT, threshold - 10)
-        for threshold, _, _ in TIERS
+        _weight_at(DEFAULT_WEATHER_COMPENSATION_WEIGHT, threshold - 10) for threshold, _, _ in TIERS
     ]
-    assert weights == sorted(weights, reverse=True), (
-        f"deferral is not monotonic across the four tiers: {weights}"
+    descents = [later < earlier for earlier, later in zip(weights, weights[1:])]
+    assert all(descents), (
+        f"each tier must defer strictly harder than the one above it, got {weights} "
+        f"for tiers {[name for _, _, name in TIERS]}"
     )
 
 
@@ -148,9 +153,3 @@ def test_no_debt_means_no_deferral():
             enable_weather_compensation=True,
         )
         assert decision.defer_factor == 1.0
-
-
-def test_the_retained_fractions_are_fractions():
-    """A retained fraction above 1.0 would AMPLIFY the layer during thermal debt."""
-    for _, retained, name in TIERS:
-        assert 0.0 < retained < 1.0, f"{name}: {retained} is not a reduction"

@@ -184,7 +184,17 @@ STOCKHOLM_LATITUDE = 59.33
 # Budgets for the real-weather scenarios (see SCENARIOS). Each is a stated tolerance, not a
 # number tuned until the suite went green - a run that breaches one is reporting something.
 SCENARIO_COMFORT_BREACH_BUDGET_MIN = 60  # one hour below band across a 21-day month
-SCENARIO_SIGN_FLIPS_PER_DAY_BUDGET = 40.0  # offset reversals/day before it is chatter
+# How far below the band counts as being below the band. The room sensor reports to 0.1 C, so an
+# excursion shallower than that is not something the controller could see, a thermostat could act
+# on, or a person could feel - and counting it made three houses "fail" on dips of 0.025-0.044 C.
+# Minutes alone cannot tell a 0.05 C graze from a cold house; this is the depth gate, and
+# comfort_degree_minutes_below carries the magnitude.
+SCENARIO_COMFORT_BREACH_MIN_DEPTH_C = 0.1
+# A curve offset is a slow trim: it moves the flow setpoint, and the building answers over
+# hours. Reversing direction more often than once an hour is the controller arguing with
+# itself, not tracking the house - and every reversal is a Modbus write and a compressor
+# disturbance. One per hour, in the coordinator's own cycle units.
+SCENARIO_OFFSET_REVERSALS_PER_DAY_BUDGET = 24.0  # one per hour
 # Mild weather: how far delivered heat may exceed the house's own computed heat loss before
 # it is over-delivery rather than demand-following. 1.10 leaves room for the thermal mass
 # being charged at the start of the window and for the integration step, and no more.
@@ -652,6 +662,28 @@ PROVENANCE: dict[str, str] = {
         "space heating regardless of degree minutes. Menu 4.9.2 'auto mode settings', 'stop "
         "heating', factory 17 C, range -20..40 C. NIBE F750 IHB GB 1301-1."
     ),
+    "SCENARIO_COMFORT_BREACH_MIN_DEPTH_C": (
+        "ASSUMED: the NIBE BT50 room sensor reports to 0.1 C, which this repo relies on in "
+        "LEARNING_MIN_HEATING_RATE and records in the F-132 note in const.py, so an excursion "
+        "shallower than one sensor tick is below the instrument. Sensitivity, MEASURED on the "
+        "three excursions the whole scenario set produces (110, 1015 and 65 grazing minutes; "
+        "deepest 0.130 C; means 0.025-0.044 C) - breach minutes at each gate: 0.05 C -> 0, 375, "
+        "0; 0.1 C -> 0, 105, 0; 0.2 C -> 0, 0, 0. So the gate DOES move one reported statistic: "
+        "the F2040 in shoulder_may2024 keeps 105 minutes at 0.1 C and loses them at 0.2 C. It "
+        "is held at one sensor tick rather than at the value that would turn the run green. "
+        "Those 105 minutes change no verdict - shoulder_may2024 does not assert comfort_held - "
+        "so the gate's only effect on a result is autumn_volatile_oct2024, whose 65-minute "
+        "'breach' was 0.027 C deep and is now correctly not one. The other two excursions are "
+        "below the instrument at every gate."
+    ),
+    "SCENARIO_OFFSET_REVERSALS_PER_DAY_BUDGET": (
+        "ASSUMED: a curve offset trims the flow setpoint and the building answers over hours, "
+        "so one direction reversal per hour is already far faster than the process it drives. "
+        "Written in the coordinator's own cycle units (UPDATE_INTERVAL_MINUTES = 5 min, so 288 "
+        "cycles a day); the budget is 24/day. Sensitivity: at 24, 48 and 96/day the same four "
+        "of five houses breach it on thaw_freeze_mar2024 (79, 42, 30, 27/day measured) and the "
+        "same one passes (2/day), so the conclusion does not move with the number - see F-142."
+    ),
     "HEATING_SEASON_RESTART_OUTDOOR_C": (
         "ASSUMED: NIBE re-enters the heating season on a 24-hour FILTERED outdoor temperature, "
         "and the harness has only the instantaneous reading, so a 1 K hysteresis band below the "
@@ -902,6 +934,14 @@ SCENARIOS = {
                 "the same real event."
             ),
             expect=("comfort_held", "no_dm_past_aux_limit"),
+            known_open=(
+                "F-124 on the air-source F2040 only, exactly as in steady_winter_feb2024: 30.8 "
+                "kWh of immersion heat where the capacity deficit forced 20.4 kWh (1.5x), "
+                "inside the 1.4-1.7x band that commit measured. The other four houses hold "
+                "every invariant through Sweden's coldest wave since 1999 AND the 589 ore/kWh "
+                "spike it caused. Fixing it is a heat-pump policy question - what should a "
+                "machine do when it cannot meet its own curve - not a refactor."
+            ),
         ),
         Scenario(
             slug="steady_winter_feb2024",
@@ -936,6 +976,20 @@ SCENARIOS = {
                 "minutes swing hardest. The case a DM-chasing controller oscillates in."
             ),
             expect=("comfort_held", "offset_does_not_chatter", "no_dm_past_aux_limit"),
+            known_open=(
+                "F-142, CONTROLLER RESULT and the reason this window is in the set: the curve "
+                "offset limit-cycles. Four of the five houses reverse the register 27-79 times "
+                "a day, 95-99% of ALL writes are reversals, the mean reversal is 1.6-2.6 C, and "
+                "96% of them land on CONSECUTIVE 5-minute cycles - not on the 15-minute price "
+                "quarter and not on the daily freeze-thaw crossing, so neither prices nor "
+                "weather are pacing it. The engine is handed the register's own value as "
+                "`current_offset` each cycle, which closes a loop through the quantiser; the "
+                "1.0 C deadband in utils/offset.py cannot damp a swing that already exceeds it. "
+                "Comfort still holds (21.5-22.8 C, zero minutes out of band) and no aux fires, "
+                "so this costs compressor modulation and Modbus traffic rather than warmth. "
+                "Only the apartment_f730 is quiet, at 2 writes a day. NOT fixed here: the gain "
+                "that wants changing is a heat-pump control decision, not a refactor."
+            ),
         ),
         Scenario(
             slug="shoulder_may2024",
@@ -975,6 +1029,19 @@ SCENARIOS = {
                 "price layer has the most room to help and the most room to misfire."
             ),
             expect=("comfort_held", "no_dm_past_aux_limit"),
+            known_open=(
+                "PLANT BOUND, not a controller result, and the same mechanism as "
+                "shoulder_may2024: October source temperatures sit above the EN 14511 rating "
+                "points the exergy COP fit is anchored on, so the fit extrapolates and seasonal "
+                "COP comes out 1.27-1.61x the best published figure (F750 5.99 vs 4.72, F730 "
+                "7.19 vs 5.32, F2040 7.50 vs 4.65). The harness's own datasheet guard catches "
+                "it, which is the guard working. Every COST number in this run is therefore too "
+                "low; the CONTROL decisions - which layer voted, which offset was written - do "
+                "not depend on the COP model and are the part this window is read for. The "
+                "comfort side is clean: the 65-minute excursion this scenario used to fail on "
+                "was 0.027 C deep on average and 0.046 C at its worst, below what the room "
+                "sensor can report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C."
+            ),
         ),
     )
 }
@@ -1151,13 +1218,21 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
     if "offset_does_not_chatter" in scenario.expect:
         # A write is a Modbus round trip and a compressor disturbance. Freeze-thaw is where
         # a DM-chasing controller oscillates, so cap the reversals per day.
-        per_day = stats["sign_flips"] / max(SIM_DAYS, 1)
-        if per_day > SCENARIO_SIGN_FLIPS_PER_DAY_BUDGET:
+        # Divided by the days this SCENARIO covers, read off the run itself - SIM_DAYS is the
+        # default window length and is 31 while these scenarios are 21, which understated
+        # every rate by a third.
+        days = max(len(stats.get("billing_periods_by_day") or {}), 1)
+        reversals = stats["offset_reversals"]
+        per_day = reversals / days
+        if per_day > SCENARIO_OFFSET_REVERSALS_PER_DAY_BUDGET:
+            writes = max(stats.get("writes", 0), 1)
+            mean_size = stats["offset_reversal_degrees"] / max(reversals, 1)
             failures.append(
-                f"the offset reversed direction {stats['sign_flips']} times "
-                f"({per_day:.1f}/day, budget {SCENARIO_SIGN_FLIPS_PER_DAY_BUDGET}) across "
-                f"daily freeze-thaw crossings - that is the oscillation anti-windup exists "
-                f"to stop, and every reversal is a write the pump has to follow"
+                f"the offset reversed direction {reversals} times in {writes} writes over "
+                f"{days} days ({per_day:.1f}/day, budget "
+                f"{SCENARIO_OFFSET_REVERSALS_PER_DAY_BUDGET:.0f}/day), mean reversal "
+                f"{mean_size:.1f} C - that is the oscillation anti-windup exists to stop, and "
+                f"every reversal is a write the pump has to follow"
             )
 
     return failures
@@ -1486,12 +1561,15 @@ def simulate(
         "offset_max": 0,
         "exceptions": 0,
         "comfort_minutes_below": 0,
+        "comfort_degree_minutes_below": 0.0,
+        "comfort_minutes_grazing": 0,
         "comfort_minutes_above": 0,
         "compressor_starts": 0,
         "heating_season_stops": 0,
         "out_of_season_minutes": 0,
         "compressor_blocked_hours": 0.0,
-        "sign_flips": 0,
+        "offset_reversals": 0,
+        "offset_reversal_degrees": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
         "layer_votes": {},
@@ -1501,7 +1579,11 @@ def simulate(
         "datasheet_cop_x_heat": 0.0,
     }
     best_published_cop = max(p.cop for p in house.profile.datasheet_points)
-    last_offsets = []
+    # The register's last written value and the direction of that write, for the reversal
+    # count. Seeded from the starting register so the first write is a direction, not a
+    # reversal.
+    last_applied = offset_applied
+    last_direction = 0
     # The REAL one, from the integration. Not a copy of it.
     billing = BillingPeriodAccumulator()
     daily_peaks: dict = {}  # date -> max HOURLY-mean kW (physical, for peak_kw_hourly_mean)
@@ -1884,13 +1966,18 @@ def simulate(
                     }
                 )
 
-            last_offsets.append(offset_applied)
-            if len(last_offsets) > 9:
-                last_offsets.pop(0)
-                deltas = [b - a for a, b in zip(last_offsets, last_offsets[1:])]
-                flips = sum(1 for a, b in zip(deltas, deltas[1:]) if a * b < 0)
-                if flips >= 3:
-                    stats["sign_flips"] += 1
+            # A REVERSAL is one write that moves the register the opposite way from the
+            # previous write. The old metric counted ticks whose trailing 9-sample window held
+            # three or more reversals, which is a different quantity entirely - one chattery
+            # episode scored once per tick it spanned - while the failure message called it a
+            # count of reversals. Count the thing the message names.
+            if offset_applied != last_applied:
+                direction = offset_applied - last_applied
+                if last_direction and direction * last_direction < 0:
+                    stats["offset_reversals"] += 1
+                    stats["offset_reversal_degrees"] += abs(direction)
+                last_direction = direction
+                last_applied = offset_applied
 
             stats["indoor_min"] = min(stats["indoor_min"], indoor)
             stats["indoor_max"] = max(stats["indoor_max"], indoor)
@@ -1999,7 +2086,17 @@ def simulate(
                 )
 
             if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
-                stats["comfort_minutes_below"] += STEP_MIN
+                depth = TARGET_INDOOR - COMFORT_TOLERANCE - indoor
+                # Grazing the edge is recorded but is not a breach - see
+                # SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. Both numbers are kept so a shallow
+                # excursion is visible rather than silently dropped.
+                stats["comfort_minutes_grazing"] += STEP_MIN
+                if depth >= SCENARIO_COMFORT_BREACH_MIN_DEPTH_C:
+                    stats["comfort_minutes_below"] += STEP_MIN
+                # DEGREE-minutes too, not just minutes. A dip of 0.05 C held for an hour and a
+                # dip of 2 C held for an hour score the same in minutes, and only one of them
+                # is something a person could feel - or a room sensor could even report.
+                stats["comfort_degree_minutes_below"] += depth * STEP_MIN
             elif indoor > TARGET_INDOOR + OVERSHOOT_TOLERANCE:
                 stats["comfort_minutes_above"] += STEP_MIN
 

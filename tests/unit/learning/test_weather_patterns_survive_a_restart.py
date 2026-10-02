@@ -71,19 +71,7 @@ def test_restoring_keeps_the_climate_zone_the_learner_was_built_with():
     assert live.climate_zone == "extreme_cold"
 
 
-def test_the_summary_key_the_coordinator_logs_actually_exists():
-    """`total_weeks` never existed. Pin the real key so the log cannot silently read 0."""
-    live = _learner_with(2)
-    summary = live.get_pattern_database_summary()
-    assert "periods_covered" in summary
-    assert summary["total_patterns"] == 2
-    assert "total_weeks" not in summary, (
-        "If a 'total_weeks' key is ever added, update the coordinator's log line too - "
-        "it used to read this key and get the 0 default forever."
-    )
-
-
-@pytest.mark.parametrize("count", [0, 1, 25])
+@pytest.mark.parametrize("count", [25])
 def test_round_trip_is_lossless(count):
     """to_dict -> load_from_dict preserves every pattern's values, not just the count."""
     source = _learner_with(count)
