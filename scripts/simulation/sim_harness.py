@@ -114,8 +114,23 @@ DM_STOP = 0.0
 HEATING_SEASON_STOP_OUTDOOR_C = 17.0
 # Hysteresis on the season boundary, so a day oscillating around 17 C does not restart the
 # season every hour. NIBE filters the outdoor temperature over 24 h for this decision; a 1 K
-# band on the instantaneous reading is the cheap stand-in and is stated as such.
-HEATING_SEASON_RESTART_OUTDOOR_C = 14.0
+# band on the instantaneous reading is the cheap stand-in, and NIBE publishes no figure for
+# the band itself, so this is ASSUMED. Measured sensitivity, shoulder_may2024, band at
+# 14.0 / 16.0 / 16.5 C:
+#
+#   out_of_season_minutes   15340 / 11180 / 10490      <- SENSITIVE, 39% of the mean
+#   heat delivered, worst house                          6.8% spread (F2040, 344-369 kWh)
+#   heat delivered, other four                      1.0-5.6% spread
+#   comfort minutes above band, F730  14220 / 14550 / 14905
+#   comfort minutes above band, F750    2725 /  3210 /  3105
+#
+# So the number IS load-bearing for one REPORTED STATISTIC and is NOT load-bearing for
+# either CONCLUSION this scenario supports. out_of_season_minutes swings 39% and must not be
+# quoted as a measurement of anything. The two findings survive every band: the mild-weather
+# comfort breach persists within a few percent (the F730 is 14220-14905 minutes above its
+# band whatever the boundary does), and the recovery ladder keeps firing. Quote the findings;
+# do not quote the duration.
+HEATING_SEASON_RESTART_OUTDOOR_C = 16.0
 # THE F2040 HAS NO IMMERSION HEATER. It is an outdoor monobloc; its electric addition lives in the
 # indoor module it is paired with (a VVM or SMO), which this package does not model. Every other
 # machine's heater is on its profile, from its datasheet. This is the fallback for the F2040 alone,
@@ -641,10 +656,12 @@ PROVENANCE: dict[str, str] = {
         "ASSUMED: NIBE re-enters the heating season on a 24-hour FILTERED outdoor temperature, "
         "and the harness has only the instantaneous reading, so a 1 K hysteresis band below the "
         "stop temperature stands in for the filter. No published figure exists for the band "
-        "itself. Sensitivity measured on shoulder_may2024 by moving the band to 14.0 C and "
-        "16.5 C: see the note beside the constant. The conclusions that scenario supports - "
-        "the recovery ladder firing out of season, and the mild-weather comfort breaches - are "
-        "driven by the in-season hours, not by where the boundary sits, so they do not move."
+        "itself. SENSITIVITY MEASURED on shoulder_may2024 at 14.0 / 16.0 / 16.5 C, and the "
+        "answer is split: out_of_season_minutes swings 15340/11180/10490 - 39% of the mean, so "
+        "that statistic is load-bearing on this number and may not be quoted as a measurement. "
+        "The two CONCLUSIONS the scenario supports do not move: delivered heat shifts 1.0-6.8% "
+        "per house, and the mild-weather comfort breach persists at every band (F730 "
+        "14220-14905 minutes above its band, F750 2725-3210). Full table beside the constant."
     ),
     "COP_RATING_FLOW_C": (
         "SOURCED: EN 14511 rates heat pumps at W35. Every NIBE datasheet's rating points say so - "
