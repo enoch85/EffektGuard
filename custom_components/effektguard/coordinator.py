@@ -299,9 +299,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # _update_peak_tracking. None until the first successful measurement, in which
         # case peak protection stays disabled rather than acting on a guess.
         self.current_power_kw: float | None = None
-        # What the effect tariff bills: the time-weighted mean power over a billing HOUR (a
-        # quarter-hour mean overstates the billed peak up to fourfold). The arithmetic lives in
-        # billing_period.py, once, so the simulator runs the same object rather than a second copy.
+        # What the effect tariff bills: the time-weighted mean power over one billing period,
+        # BILLING_PERIOD_MINUTES long. That is a quarter-hour for the owner's tariff; an hourly
+        # mean is Ellevio's rule, not every Swedish operator's, so the length is a constant and
+        # not an assumption baked in here (F-107 tracks making it user-configurable). The
+        # arithmetic lives in billing_period.py, once, so the simulator runs the same object
+        # rather than a second copy.
         self._billing_period = BillingPeriodAccumulator()
         self.last_decision_time = None
         self._learned_data_changed = False  # Track if learning data needs saving
@@ -322,7 +325,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
         self.peak_today_source: str = "unknown"  # external_meter, nibe_currents, estimate
-        self.peak_today_period: int | None = None  # the billing HOUR (0-23) for the effect tariff
+        self.peak_today_period: int | None = None  # the billing period (0-95) for the effect tariff
         self.yesterday_peak: float = 0.0  # Yesterday's peak for comparison
 
         # DHW tracking (unified: is_hot_water OR temp_lux active)
@@ -1088,11 +1091,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
                 else:
-                    # LIKE FOR LIKE: the monthly record is an HOURLY MEAN, so the layer is
-                    # compared against the hour this cycle projects to, not the instant. A
-                    # five-minute oven spike early in the hour projects to almost nothing;
-                    # the same spike at :55 has already committed most of the hour.
-                    current_power_for_decision = self._billing_period.projected_hour_mean(
+                    # LIKE FOR LIKE: the monthly record is a PERIOD MEAN, so the layer is
+                    # compared against the 15-minute period this cycle projects to, not the
+                    # instant. A five-minute oven spike early in the period projects small;
+                    # the same spike at :12 has already committed most of the period.
+                    current_power_for_decision = self._billing_period.projected_period_mean(
                         dt_util.now(), self.current_power_kw
                     )
 
@@ -2259,7 +2262,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.peak_today_period = billing_period
 
                 _LOGGER.info(
-                    "New daily peak: %.2f kW at %s (billing hour %d, source: %s)",
+                    "New daily peak: %.2f kW at %s (billing period %d, source: %s)",
                     current_power,
                     now.strftime("%H:%M:%S"),
                     billing_period,
@@ -2279,7 +2282,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 return
 
-            # The billed quantity - the time-weighted mean over a billing hour - is defined once, in
+            # The billed quantity - the time-weighted mean over a billing period - is defined once, in
             # billing_period.py, so the coordinator and the simulator cannot diverge. Two copies
             # once did, both wrong on the DST fall-back, and merged the repeated hour into one,
             # deleting a 9 kW billing peak.
@@ -2289,9 +2292,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if completed is not None:
                 peak_event = await self.effect.record_period_measurement(
                     power_kw=completed.mean_power_kw,
-                    period=completed.billing_hour,
+                    period=completed.billing_period,
                     timestamp=completed.started_at,
-                    # The hour's OWN provenance - every sample votes, not the closing cycle.
+                    # The period's OWN provenance - every sample votes, not the closing cycle.
                     source=completed.source,
                 )
 

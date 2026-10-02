@@ -143,12 +143,12 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak at 5.0 kW (before outage)
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_period_measurement(5.0, 10, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10 * 4, timestamp)
 
         # Simulate system restart - storage persists
         # Current power: 4.2 kW (0.8 kW below peak)
-        billing_hour = 12  # Daytime
-        decision = effect_manager.should_limit_power(4.2, billing_hour)
+        billing_period = 12 * 4  # noon, daytime
+        decision = effect_manager.should_limit_power(4.2, billing_period)
 
         # Should be WARNING (between 0.5 and 1.0 kW margin)
         assert decision.severity == "WARNING"
@@ -164,10 +164,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_period_measurement(5.0, 10, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10 * 4, timestamp)
 
         # Current power: 4.7 kW (0.3 kW below peak - within 0.5 kW critical zone)
-        decision = effect_manager.should_limit_power(4.7, 12)
+        decision = effect_manager.should_limit_power(4.7, 12 * 4)
 
         assert decision.severity == "CRITICAL"
         assert decision.recommended_offset == -2.0
@@ -181,10 +181,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_period_measurement(5.0, 10, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10 * 4, timestamp)
 
         # Current power: 5.5 kW (exceeding peak by 0.5 kW)
-        decision = effect_manager.should_limit_power(5.5, 12)
+        decision = effect_manager.should_limit_power(5.5, 12 * 4)
 
         assert decision.severity == "CRITICAL"
         assert decision.recommended_offset == -3.0  # Maximum reduction
@@ -198,10 +198,10 @@ class TestPowerOutageRecovery:
         """
         # Set up monthly peak
         timestamp = datetime(2025, 10, 14, 10, 0)
-        await effect_manager.record_period_measurement(5.0, 10, timestamp)
+        await effect_manager.record_period_measurement(5.0, 10 * 4, timestamp)
 
         # Current power: 3.0 kW (2.0 kW below peak - safe)
-        decision = effect_manager.should_limit_power(3.0, 12)
+        decision = effect_manager.should_limit_power(3.0, 12 * 4)
 
         assert decision.severity == "OK"
         assert decision.should_limit is False
@@ -216,7 +216,7 @@ class TestPowerOutageRecovery:
         """
         # Set up daytime peak
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await effect_manager.record_period_measurement(5.0, 12, timestamp)  # Daytime
+        await effect_manager.record_period_measurement(5.0, 12 * 4, timestamp)  # Daytime
 
         # Nighttime: 8.0 kW actual = 4.0 kW effective (1.0 kW margin from peak)
         billing_hour = 23  # 23:30, nighttime
@@ -317,7 +317,7 @@ class TestSystemRobustness:
         """
         # Add peaks from previous month
         old_timestamp = datetime(2025, 9, 15, 12, 0)  # September
-        await effect_manager.record_period_measurement(5.0, 12, old_timestamp)
+        await effect_manager.record_period_measurement(5.0, 12 * 4, old_timestamp)
 
         # Simulate month cleanup
         effect_manager._clean_old_peaks()
@@ -347,7 +347,7 @@ class TestSystemRobustness:
 
         # Simulate saving peaks
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await manager.record_period_measurement(5.0, 12, timestamp)
+        await manager.record_period_measurement(5.0, 12 * 4, timestamp)
 
         stored_data = {"peaks": [p.to_dict() for p in manager._monthly_peaks]}
 

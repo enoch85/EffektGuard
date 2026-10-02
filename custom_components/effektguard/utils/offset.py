@@ -1,14 +1,14 @@
 """Turning a fractional curve offset into the integer NIBE's register (47011) can hold.
 
-The last thing to touch the number before the heat pump, so a bias here silently attenuates every
-decision the engine makes. Two invariants:
+TRUNCATE (int()), never round() - main's original design, and it is deliberate. The caller
+recomputes the pending demand every cycle as (calculated - register), so truncation applies
+only the WHOLE degrees the demand actually covers and leaves the fraction pending for the
+next cycle: nothing is lost, and the register never receives tenths the engine did not ask
+for. round() would over-apply by up to 0.5 C and then oscillate back as the recomputed
+demand reverses sign.
 
-  * ROUND, never truncate. `int(-1.9)` is -1: Python truncates toward zero, so `int()` always did
-    LESS than the engine asked (residual never re-applied) - a permanent one-directional shortfall.
-    round() bounds the error at 0.5 C and makes it unbiased.
-  * The sub-degree DEADBAND is hysteresis, not rounding: it stops MyUplink's rate-limited register
-    being rewritten as demand wanders across a boundary. Cost: a demand settling <1 C from current
-    is not expressed.
+The sub-degree DEADBAND is hysteresis, not rounding: it stops MyUplink's rate-limited
+register being rewritten as demand wanders across a boundary.
 
 Shared by the adapter and the simulation harness so the two cannot drift apart.
 
@@ -31,13 +31,13 @@ def integer_offset_for(calculated: float, current: int) -> int:
 
     Returns:
         The integer to write, clamped to the register's range. Equal to ``current`` when the
-        demand has not moved far enough to be worth a write.
+        demand has not crossed a whole degree yet - the fraction stays pending and is
+        re-derived next cycle.
     """
     demand = calculated - current
     if abs(demand) < NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD:
         return current
 
-    # round(), not int(). See the module docstring: int() truncates toward zero, so every offset
-    # came out smaller than the engine asked for, always in the same direction.
-    target = current + round(demand)
+    # int(), not round(): apply only the whole degrees the demand covers. See module docstring.
+    target = current + int(demand)
     return int(max(MIN_OFFSET, min(target, MAX_OFFSET)))

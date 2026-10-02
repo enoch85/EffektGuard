@@ -154,7 +154,7 @@ class TestEffectLayerIntegration:
         """Peak layer stays silent (weight 0.0) when power is comfortably under the monthly peak."""
         # Set up peak in effect manager
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12 * 4, timestamp)
 
         # Mock high current power to exceed peak
         mock_nibe_state.is_heating = True
@@ -193,7 +193,7 @@ class TestLayerPriority:
 
         # Set up peak to trigger protection
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12 * 4, timestamp)
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,
@@ -225,7 +225,7 @@ class TestLayerPriority:
 
         # Set up CRITICAL monthly peak to trigger protection
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_period_measurement(3.0, 12, timestamp)
+        await decision_engine.effect.record_period_measurement(3.0, 12 * 4, timestamp)
 
         decision = decision_engine.calculate_decision(
             nibe_state=mock_nibe_state,
@@ -254,9 +254,9 @@ class TestPeakProtectionScenarios:
         """Test peak avoidance during expensive daytime period."""
         # Set up monthly peaks
         timestamp = datetime(2025, 10, 14, 8, 0)  # Morning
-        await decision_engine.effect.record_period_measurement(5.0, 8, timestamp)
-        await decision_engine.effect.record_period_measurement(5.2, 8, timestamp)
-        await decision_engine.effect.record_period_measurement(5.5, 8, timestamp)
+        await decision_engine.effect.record_period_measurement(5.0, 8 * 4, timestamp)
+        await decision_engine.effect.record_period_measurement(5.2, 8 * 4, timestamp)
+        await decision_engine.effect.record_period_measurement(5.5, 8 * 4, timestamp)
 
         # Simulate approaching peak during daytime
         mock_nibe_state.timestamp = datetime(2025, 10, 14, 12, 0)
@@ -280,7 +280,7 @@ class TestPeakProtectionScenarios:
         """Test nighttime peak with 50% weighting."""
         # Set up daytime peaks
         timestamp = datetime(2025, 10, 14, 12, 0)
-        await decision_engine.effect.record_period_measurement(5.0, 12, timestamp)
+        await decision_engine.effect.record_period_measurement(5.0, 12 * 4, timestamp)
 
         # Simulate nighttime - can use more power due to 50% weight
         mock_nibe_state.timestamp = datetime(2025, 10, 14, 23, 0)  # 23:00

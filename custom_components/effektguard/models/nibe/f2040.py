@@ -117,6 +117,9 @@ class NibeF2040Profile(HeatPumpProfile):
     design_heat_load_kw: float = 9.0
     design_heat_load_average_kw: float = 8.2  # spec sheet, average/35
     immersion_heater_kw: float = 0.0
+    # The published operating floor (module constant above, manual p.65). Below it the plant
+    # model makes NO compressor heat: 28% of a real Kiruna January is below this line.
+    min_operating_outdoor_c: float | None = MIN_AIR_TEMP_C
     supports_aux_heating: bool = False
     supports_modulation: bool = True
     supports_weather_compensation: bool = True

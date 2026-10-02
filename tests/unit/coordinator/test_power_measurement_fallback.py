@@ -523,20 +523,20 @@ def coordinator():
     return coordinator
 
 
-class TestTheBillingPeriodMeanIsAnHour:
-    """The billing period is the HOUR, not the quarter-hour.
+class TestTheBillingPeriodMeanIsTheOwnersQuarter:
+    """The billing period is the owner's 15-minute quarter (operator models vary - F-107).
 
-    The Swedish effect tariff bills the mean power over an HOUR. Accumulating quarter-hours instead
-    recorded a 15-minute 9 kW hot-water cycle in an otherwise idle hour as a 9 kW billing peak where
-    the meter bills 3. These tests pin the mean rather than the spike, the time-weighting, and the
-    discarded partial startup period - over the correct (hourly) window.
+    Under this model a sustained 15-minute hot-water cycle at 9 kW genuinely IS a 9 kW billing
+    peak - the owner's meter bills the quarter mean, so there is no quiet 45 minutes to average it
+    away. What must still hold: each quarter bills its own time-weighted mean, and a quarter that
+    began before observation is discarded.
     """
 
     @pytest.mark.asyncio
     async def test_a_spike_is_averaged_over_the_whole_hour(
         self, coordinator_with_external_meter, monkeypatch
     ):
-        """THE BUG, in one test. A hot-water cycle is not a billing peak."""
+        """Each quarter bills ITS OWN mean: the hot-water quarter 9.0, the idle quarters 1.0."""
         from datetime import datetime, timezone
 
         from homeassistant.util import dt as dt_util
@@ -560,23 +560,20 @@ class TestTheBillingPeriodMeanIsAnHour:
             )
             await coordinator._update_peak_tracking(nibe_data)
 
-        coordinator.effect.record_period_measurement.assert_not_awaited()
-
-        # The next hour completes it.
+        # The next hour's first sample completes the last quarter.
         monkeypatch.setattr(
             dt_util, "now", lambda tz=None: datetime(2026, 1, 15, 11, 0, tzinfo=timezone.utc)
         )
         await coordinator._update_peak_tracking(nibe_data)
 
-        coordinator.effect.record_period_measurement.assert_awaited_once()
-        recorded = coordinator.effect.record_period_measurement.await_args.kwargs
-
-        assert recorded["period"] == 10, "the billing period is the HOUR, and this is hour 10"
-        # 9 kW for 15 minutes, 1 kW for 45: (9*15 + 1*45)/60 = 3.0 kW
-        assert recorded["power_kw"] == pytest.approx(3.0), (
-            f"The hour's mean power is 3.00 kW and that is what Ellevio bills. This recorded "
-            f"{recorded['power_kw']:.2f}. The 9 kW quarter is a hot-water cycle; the tariff "
-            f"averages it with the quiet 45 minutes around it."
+        recorded = [
+            (c.kwargs["period"], round(c.kwargs["power_kw"], 2))
+            for c in coordinator.effect.record_period_measurement.await_args_list
+        ]
+        assert recorded == [(40, 9.0), (41, 1.0), (42, 1.0), (43, 1.0)], (
+            f"hour 10 is quarters 40-43. The hot-water quarter bills its own 9.0 kW mean - under "
+            f"the owner's 15-minute tariff that IS the billed quantity - and the idle quarters "
+            f"bill 1.0. Got {recorded}."
         )
 
     @pytest.mark.asyncio
@@ -596,9 +593,9 @@ class TestTheBillingPeriodMeanIsAnHour:
         coordinator.hass.states.get.return_value = state
         nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
 
-        # First update lands at 10:07 - mid-hour. Hour 10 is partial and must be discarded; hour 11
-        # is observed from its start and must be recorded.
-        times = [(10, m) for m in range(7, 60, 5)] + [(11, m) for m in range(0, 60, 5)] + [(12, 0)]
+        # First update lands at 10:07 - mid-quarter. Quarter 40 is partial and must be discarded;
+        # quarter 41 (10:15) is observed from its start and must be recorded.
+        times = [(10, m) for m in (7, 12, 15, 20, 25, 30)]
         for hour, minute in times:
             monkeypatch.setattr(
                 dt_util,
@@ -612,7 +609,7 @@ class TestTheBillingPeriodMeanIsAnHour:
         coordinator.effect.record_period_measurement.assert_awaited_once()
         recorded = coordinator.effect.record_period_measurement.await_args.kwargs
 
-        assert recorded["period"] == 11, "hour 10 began before observation did, so it is discarded"
+        assert recorded["period"] == 41, "quarter 40 began before observation, so it is discarded"
         assert recorded["power_kw"] == pytest.approx(2.0)
 
     @pytest.mark.asyncio
@@ -632,7 +629,7 @@ class TestTheBillingPeriodMeanIsAnHour:
         coordinator.hass.states.get.return_value = state
         nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
 
-        for hour, minute in ((10, 40), (10, 45), (11, 0)):
+        for hour, minute in ((10, 40), (10, 42), (10, 45)):
             monkeypatch.setattr(
                 dt_util,
                 "now",
@@ -648,13 +645,13 @@ class TestTheBillingPeriodMeanIsAnHour:
     async def test_irregular_samples_use_a_time_weighted_mean(
         self, coordinator_with_external_meter, monkeypatch
     ):
-        """A sample that stands for 15 minutes must not weigh the same as one standing for 5.
+        """A sample that stands for ten minutes must not weigh the same as one standing for 5.
 
-        The hour's mean is time-weighted, not sample-counted. Demonstrated on an actually-observed
-        hour (every gap within MAX_BILLING_OBSERVATION_GAP_MINUTES), where the two formulas disagree:
+        The period's mean is time-weighted, not sample-counted. Demonstrated on an actually-observed
+        quarter (every gap within MAX_BILLING_OBSERVATION_GAP_MINUTES), where the formulas disagree:
 
-            time-weighted:   (1*45 + 9*15) / 60  = 3.0 kW   <- what the grid bills
-            sample-counted:  (1+1+1+9+9) / 5     = 4.2 kW
+            time-weighted:   (1*10 + 9*5) / 15  = 3.67 kW   <- what the grid bills
+            sample-counted:  (1+9) / 2          = 5.0 kW
         """
         from datetime import datetime, timezone
 
@@ -664,8 +661,8 @@ class TestTheBillingPeriodMeanIsAnHour:
         coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
         nibe_data = NibeState(5.0, 21.0, 35.0, 30.0, -50.0, 0.0, True, False, datetime.now())
 
-        # 1 kW standing for 45 minutes, then 9 kW for the last 15.
-        for watts, minute in (("1000", 0), ("1000", 15), ("1000", 30), ("9000", 45), ("9000", 55)):
+        # 1 kW standing for ten minutes, then 9 kW for the last five of the quarter.
+        for watts, minute in (("1000", 0), ("9000", 10)):
             state = MagicMock()
             state.state = watts
             state.attributes = {"unit_of_measurement": "W"}
@@ -680,12 +677,12 @@ class TestTheBillingPeriodMeanIsAnHour:
             await coordinator._update_peak_tracking(nibe_data)
 
         monkeypatch.setattr(
-            dt_util, "now", lambda tz=None: datetime(2026, 1, 15, 11, 0, tzinfo=timezone.utc)
+            dt_util, "now", lambda tz=None: datetime(2026, 1, 15, 10, 15, tzinfo=timezone.utc)
         )
         await coordinator._update_peak_tracking(nibe_data)
 
         recorded = coordinator.effect.record_period_measurement.await_args.kwargs
-        assert recorded["power_kw"] == pytest.approx((1 * 45 + 9 * 15) / 60), (
-            f"billed {recorded['power_kw']:.2f} kW. 1 kW stood for 45 minutes and 9 kW for fifteen: "
-            f"the hour's mean power is 3.0 kW. Counting the samples instead gives 4.2."
+        assert recorded["power_kw"] == pytest.approx((1 * 10 + 9 * 5) / 15), (
+            f"billed {recorded['power_kw']:.2f} kW. 1 kW stood for ten minutes and 9 kW for five: "
+            f"the period's mean power is 3.67 kW. Counting the samples instead gives 5.0."
         )

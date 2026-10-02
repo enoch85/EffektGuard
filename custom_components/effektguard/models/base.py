@@ -149,6 +149,14 @@ class HeatPumpProfile(ABC):
     # with a 7 kW heater in seven automatic steps, and the F2040 with none (outdoor monobloc - its
     # electric addition lives in the paired indoor module, which this package does not model).
     immersion_heater_kw: float = 0.0
+    # The machine's published minimum OUTDOOR operating temperature, or None where the
+    # manufacturer publishes none. Only meaningful for a machine whose heat source IS the outdoor
+    # air: the F2040 manual gives "Min. / Max. air temp: -20 / 43 C" (IHB EN 1848-8/231846 p.65),
+    # and below that floor the unit does not run - a hard edge, not a derating. NIBE publishes no
+    # outdoor floor for the brine or exhaust-air machines (their sources are 0 C brine and 20 C
+    # house air; their only compressor blocks are source-side, e.g. F730 exhaust < 6 C), so
+    # None here means NONE PUBLISHED, and no model may invent one.
+    min_operating_outdoor_c: float | None = None
 
     # Pdesignh - the DESIGN HEAT LOAD this machine is certified for, from its own ErP declaration.
     # The only sourced way to size a simulated building: an oversized pump (e.g. a 12 kW GSHP on a

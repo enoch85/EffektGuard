@@ -68,11 +68,9 @@ def resolve_period_index(price_data: object, now: Optional[datetime] = None) -> 
 
 
 def get_current_billing_period(now: Optional[datetime] = None) -> int:
-    """The effect tariff's billing period: the HOUR of the day, 0-23.
+    """The owner's effect-tariff billing period: the 15-minute quarter of the day, 0-95.
 
-    Not the quarter-hour. Ellevio: "the measurement uses hourly averages".
-    Energimarknadsinspektionen: "elnatsforetagen mater din elanvandning per timme".
+    The owner runs 15-minute measurement intervals, so the billing period is the quarter-hour, the
+    same cadence get_current_quarter returns. Operator models vary (F-107); this is the owner's.
     """
-    if now is None:
-        now = dt_util.now()
-    return now.hour
+    return get_current_quarter(now)
