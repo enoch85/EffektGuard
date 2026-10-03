@@ -300,12 +300,19 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         # recorder keep a running SUM - but this is a forward-looking monthly PROJECTION that rises
         # and falls with the forecast, so summing it is meaningless (F-070).
         #
+        # MEASUREMENT, though, and not nothing. Dropping the device class correctly took TOTAL with
+        # it, but dropping state_class ENTIRELY stopped long-term statistics for an entity that had
+        # them, which Home Assistant raises as "the entity no longer has a state class" and offers
+        # to delete the history for. A projection is a gauge: MEASUREMENT keeps min/mean/max and
+        # sums nothing, which is the statistic this value can actually support (F-144).
+        #
         # The unit is hardcoded SEK, correctly: the effect-tariff term is
         # SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH and the spot component is dropped when the price
         # unit is not SEK-compatible. Do NOT derive the unit from the spot entity, which reports
         # öre/kWh - labelling a SEK value "öre" is a 100x error. (A non-Swedish user seeing a SEK
         # figure from a Swedish tariff is a tariff-model issue, F-107, open with the owner.)
         native_unit_of_measurement="SEK",
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
             coordinator.data["savings"].monthly_estimate
             if coordinator.data

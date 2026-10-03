@@ -76,6 +76,27 @@ def test_the_price_sensor_produces_statistics():
     )
 
 
+def test_every_sensor_with_a_unit_records_statistics():
+    """The same defect as `current_price`, one sensor along: `savings_estimate` lost MONETARY,
+    correctly, and lost its state class with it - so Home Assistant stopped recording long-term
+    statistics for an entity that had them and raised "the entity no longer has a state class",
+    offering to delete the history (F-144).
+
+    Pinned as an invariant rather than a third per-sensor assertion: a measured quantity with a
+    unit is exactly the kind of thing someone plots, and dropping a device class must not silently
+    take the statistics with it.
+    """
+    missing = [
+        d.key for d in SENSORS if d.native_unit_of_measurement is not None and d.state_class is None
+    ]
+
+    assert not missing, (
+        f"{missing} declare a unit but no state class, so Home Assistant records no long-term "
+        f"statistics for them. For any entity that already had statistics this is a visible "
+        f"regression: HA raises a repair and offers to delete the history. A gauge is MEASUREMENT."
+    )
+
+
 def test_no_sensor_claims_monetary_without_earning_it():
     """Whatever else changes, MONETARY must come with the only state class HA allows for it."""
     for description in SENSORS:
