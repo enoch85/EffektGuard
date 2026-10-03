@@ -58,6 +58,9 @@ from custom_components.effektguard.const import (
 )
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 from custom_components.effektguard.utils.offset import integer_offset_for
+from custom_components.effektguard.utils.volatile_helpers import (
+    OffsetVolatilityTracker,
+)
 from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
@@ -976,20 +979,13 @@ SCENARIOS = {
                 "minutes swing hardest. The case a DM-chasing controller oscillates in."
             ),
             expect=("comfort_held", "offset_does_not_chatter", "no_dm_past_aux_limit"),
-            known_open=(
-                "F-142, CONTROLLER RESULT and the reason this window is in the set: the curve "
-                "offset limit-cycles. Four of the five houses reverse the register 27-79 times "
-                "a day, 95-99% of ALL writes are reversals, the mean reversal is 1.6-2.6 C, and "
-                "96% of them land on CONSECUTIVE 5-minute cycles - not on the 15-minute price "
-                "quarter and not on the daily freeze-thaw crossing, so neither prices nor "
-                "weather are pacing it. The engine is handed the register's own value as "
-                "`current_offset` each cycle, which closes a loop through the quantiser; the "
-                "1.0 C deadband in utils/offset.py cannot damp a swing that already exceeds it. "
-                "Comfort still holds (21.5-22.8 C, zero minutes out of band) and no aux fires, "
-                "so this costs compressor modulation and Modbus traffic rather than warmth. "
-                "Only the apartment_f730 is quiet, at 2 writes a day. NOT fixed here: the gain "
-                "that wants changing is a heat-pump control decision, not a refactor."
-            ),
+            # F-142 is CLOSED, and it was never a controller defect: the harness was not
+            # running the coordinator's own volatility gate, so it measured the engine's raw
+            # proposals and reported them as what the pump does. With the real
+            # OffsetVolatilityTracker in the loop the same window gives 8-16 reversals a day
+            # against a 24 budget, and 1571 of the F750's ~1916 attempted reversals are
+            # refused before they reach the register. The gate is load-bearing: weaken it and
+            # this window goes red again, which is what it is here to prove.
         ),
         Scenario(
             slug="shoulder_may2024",
@@ -1569,6 +1565,7 @@ def simulate(
         "out_of_season_minutes": 0,
         "compressor_blocked_hours": 0.0,
         "offset_reversals": 0,
+        "offset_reversals_blocked": 0,
         "offset_reversal_degrees": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
@@ -1579,6 +1576,16 @@ def simulate(
         "datasheet_cop_x_heat": 0.0,
     }
     best_published_cop = max(p.cop for p in house.profile.datasheet_points)
+    # THE REAL BLOCKER, not a copy of it. The coordinator runs every decision through this
+    # before the offset reaches the pump: a reversal of >= 2 C that moves toward or through
+    # zero, within VOLATILE_MIN_DURATION_MINUTES of the last change, is refused and the
+    # previous offset is kept. The harness used to skip it entirely, which measured the
+    # engine's raw output and reported it as what the pump does (F-142).
+    #
+    # Driven by simulated time: `time` is not monkeypatched here, only `dt_util`.
+    sim_clock = {"now": 0.0}
+    offset_volatility = OffsetVolatilityTracker(time_source=lambda: sim_clock["now"])
+
     # The register's last written value and the direction of that write, for the reversal
     # count. Seeded from the starting register so the first write is a direction, not a
     # reversal.
@@ -1908,6 +1915,15 @@ def simulate(
                         }
                     )
                     calc_offset = 0.0
+
+            # The coordinator's own volatility gate, in the same place it sits in production:
+            # after the layers have voted, before anything reaches the register.
+            sim_clock["now"] = now.timestamp()
+            if offset_volatility.is_reversal_volatile(calc_offset):
+                stats["offset_reversals_blocked"] += 1
+                calc_offset = offset_volatility.last_offset or 0.0
+            else:
+                offset_volatility.record_change(calc_offset, "sim")
 
             # The REAL quantisation the adapter uses, not a copy of it. This harness used to carry its
             # own transcription of that arithmetic - including the int() truncation - which is exactly

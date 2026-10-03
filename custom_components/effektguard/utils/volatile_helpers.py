@@ -23,6 +23,7 @@ PEAK periods are treated as part of the PEAK cluster (not volatile).
 
 import time
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..const import (
@@ -278,20 +279,37 @@ class OffsetVolatilityTracker:
     # Threshold for "large" offset change (°C difference)
     LARGE_CHANGE_THRESHOLD: float = 2.0
 
-    def __init__(self, min_duration_minutes: int | None = None):
+    def __init__(
+        self,
+        min_duration_minutes: int | None = None,
+        time_source: Callable[[], float] | None = None,
+    ):
         """Initialize tracker.
 
         Args:
             min_duration_minutes: Minimum time between reversals.
                                   Default uses VOLATILE_MIN_DURATION_MINUTES (45 min).
+            time_source: Epoch-seconds callable, for a caller whose clock is not the wall
+                         clock. Defaults to `time.time`, which is what production uses.
+                         The simulation harness drives this with SIMULATED time: the harness
+                         monkeypatches `dt_util`, not `time`, so against the real clock every
+                         reversal in a fast run looks like it happened within the window and
+                         the blocker would reject all of them. Injecting the clock is how the
+                         harness exercises THIS code rather than a transcription of it.
         """
         self._last_change: OffsetChangeInfo | None = None
+        self._time_source: Callable[[], float] | None = time_source
         # Use same min duration as price volatility (based on compressor dynamics)
         self._min_duration_minutes = (
             min_duration_minutes
             if min_duration_minutes is not None
             else VOLATILE_MIN_DURATION_MINUTES
         )
+
+    def _now(self) -> float:
+        """Epoch seconds. Resolved per call, not bound in __init__, so that a test patching
+        `time.time` still reaches it."""
+        return self._time_source() if self._time_source is not None else time.time()
 
     @property
     def last_offset(self) -> float | None:
@@ -308,7 +326,7 @@ class OffsetVolatilityTracker:
 
         self._last_change = OffsetChangeInfo(
             offset=offset,
-            timestamp=time.time(),
+            timestamp=self._now(),
             reason=reason,
         )
 
@@ -355,7 +373,7 @@ class OffsetVolatilityTracker:
             return False
 
         # Check time since last change
-        time_since_last = time.time() - self._last_change.timestamp
+        time_since_last = self._now() - self._last_change.timestamp
         min_duration_seconds = self._min_duration_minutes * SECONDS_PER_MINUTE
 
         # Tolerance prevents floating-point rounding from blocking at the displayed boundary
@@ -377,7 +395,7 @@ class OffsetVolatilityTracker:
         if self._last_change is None:
             return ""
 
-        time_since_last = time.time() - self._last_change.timestamp
+        time_since_last = self._now() - self._last_change.timestamp
         minutes_since = time_since_last / SECONDS_PER_MINUTE
 
         return (
