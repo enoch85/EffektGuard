@@ -89,8 +89,10 @@ from .optimization.climate_zones import ClimateZoneDetector
 climate_detector = ClimateZoneDetector(latitude=59.33)
 dm_range = climate_detector.get_expected_dm_range(outdoor_temp=-10.0)
 
-# Stockholm at -10°C: warning=-700, critical=-1500
-# Kiruna at -30°C: warning=-1200, critical=-1500
+# Ask the detector rather than quoting numbers here - a second copy drifts.
+# This block once said warning=-700 (Stockholm) and -1200 (Kiruna); both were stale.
+# Verified 2026-10-03: Stockholm @ -10 C -> warning=-740, Kiruna @ -30 C -> warning=-1400,
+# critical=-1500 in every zone.
 ```
 
 ### NIBE Degree Minutes (DM)

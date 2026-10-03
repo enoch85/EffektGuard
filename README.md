@@ -346,7 +346,7 @@ Production code affecting real homes. Contributions welcome, quality standards a
 - Black formatting (line length 100)
 - Test safety-critical code
 
-See `.github/copilot-instructions.md` for guidelines.
+See [CLAUDE.md](CLAUDE.md) for the index, and `docs/agent/` for the rules.
 
 ## License
 

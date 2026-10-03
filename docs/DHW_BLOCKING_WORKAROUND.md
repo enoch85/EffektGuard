@@ -275,7 +275,7 @@ EffektGuard's DHW control includes multiple safety layers:
 
 - `docs/DHW_OPTIMIZATION.md` - Full DHW optimization algorithm
 - `architecture/07_manual_override_services.md` - Manual control services  
-- `.github/copilot-instructions.md` - DHW control implementation guidelines
+- `docs/agent/PROJECT_NOTES.md` - DHW control implementation guidelines
 
 ## Version History
 

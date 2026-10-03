@@ -26,7 +26,7 @@ pytest tests/ -v             # Verify setup
 
 Read the architecture documentation:
 - `architecture/00_overview.md` - System overview
-- `.github/copilot-instructions.md` - Core principles and rules
+- [CLAUDE.md](../../CLAUDE.md) and `docs/agent/` - core principles and rules
 - `docs/CLIMATE_ZONES.md` - Climate-aware safety system
 
 ### 3. Check Existing Issues

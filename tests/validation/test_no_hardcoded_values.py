@@ -1,6 +1,6 @@
 """Enforce the constants-only rule: no NEW hardcoded numeric values in production code.
 
-The rule (.github/copilot-instructions.md, rules 3 and 4) puts every numeric threshold, tunable,
+The rule (docs/agent/PROJECT_NOTES.md, Conventions) puts every numeric threshold, tunable,
 physical constant, interval and safety limit in const.py, documented and reused. A hardcoded
 `weight >= 0.85` gate once stopped matching DM_CRITICAL_T2_WEIGHT after that constant was retuned
 to 0.81, letting a cost layer override thermal-debt recovery: the constant moved, the magic number

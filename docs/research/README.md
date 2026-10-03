@@ -2,7 +2,7 @@
 
 This directory holds the evidence for the numbers in `const.py`.
 
-`.github/copilot-instructions.md` carries a binding rule: **never guess NIBE behaviour, verify it
+`docs/agent/PROJECT_NOTES.md` carries a binding rule: **never guess NIBE behaviour, verify it
 against research.** For most of this project's life that rule could not be obeyed. The code and the
 docs cited **fifteen** research documents as the authority for safety-critical thresholds —
 `IMPLEMENTATION_PLAN/02_Research/Forum_Summary.md`, `Swedish_NIBE_Forum_Findings.md`,

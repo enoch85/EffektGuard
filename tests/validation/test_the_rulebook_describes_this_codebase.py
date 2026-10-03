@@ -1,8 +1,8 @@
 """The document every contributor is told to read first must not describe a codebase that is gone.
 
-`CLAUDE.md` sends every contributor to `.github/copilot-instructions.md` as "the single source of
-truth ... to be read at the start of every session", so a false claim there is an instruction, not
-a documentation nit. This test reads the rulebook and holds it to the code:
+`CLAUDE.md` is read at the start of every Claude Code session and routes to `docs/agent/`, so a
+false claim in any of them is an instruction, not a documentation nit. This test reads the whole
+rulebook - the entrypoint and every file it routes to - and holds it to the code:
 
   - it must not teach the removed Kuhne flow-temperature formula (F-119/F-121), nor a second, linear
     flow rule, as live models - both were replaced by the EN 442 emitter law;
@@ -25,8 +25,19 @@ from custom_components.effektguard import const
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 
 ROOT = Path(__file__).resolve().parents[2]
-RULEBOOK = ROOT / ".github" / "copilot-instructions.md"
-DOC = RULEBOOK.read_text(encoding="utf-8")
+
+# The entrypoint plus every file it routes to. Split out of a single 1089-line
+# .github/copilot-instructions.md, which already held the right answer on more than one point
+# and was still missed, because nothing routed a reader to the relevant section of a file that
+# long. The test follows the split so the guard does not shrink to whichever file it used to name.
+RULEBOOK_FILES = (
+    ROOT / "CLAUDE.md",
+    ROOT / "docs" / "agent" / "IMPLEMENTATION.md",
+    ROOT / "docs" / "agent" / "PROJECT_NOTES.md",
+    ROOT / "docs" / "agent" / "RELEASING.md",
+)
+RULEBOOK = RULEBOOK_FILES[0]
+DOC = "\n".join(f.read_text(encoding="utf-8") for f in RULEBOOK_FILES)
 
 # What the rulebook ASSERTS, as opposed to what it warns you against. A document that says
 # "do not reintroduce X" necessarily contains X, and must not trip the test that forbids X - the
