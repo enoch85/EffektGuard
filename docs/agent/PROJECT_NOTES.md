@@ -58,7 +58,7 @@ solved a problem. If you do fix one, the note must turn false in the same commit
 | F-124 | Air-source saturation trap: 1.4-1.7× the physically forced aux in deep cold | strict `xfail` + scenario `known_open` |
 | F-130b | Pre-heat sizing (0.83 → 2.0) | open with the owner |
 | F-132b | Learning confidence ceiling | strict `xfail` |
-| F-142 | Curve offset limit-cycles on freeze/thaw: 27-79 register reversals a day, 95-99 % of all writes, 96 % on consecutive 5-minute cycles. Costs modulation, not comfort | scenario `known_open` |
+| ~~F-142~~ | **Withdrawn 2026-10-03, and it was mine.** I reported the offset limit-cycling from a bench that never ran `OffsetVolatilityTracker`, so it measured the engine's raw proposals as writes. With the real gate: 8-16 reversals/day against a 24 budget, scenario passes. Kept here because the guard is load-bearing - weaken it and `thaw_freeze` goes red | closed in `eaa3986` |
 | F-143 | The DHW pre-schedule path (RULE 4.5) is near-unreachable: 25 of 45,030 input combinations, zero at the default heating rate | comment at the call site |
 | — | No heating-season concept of our own; the recovery ladder can fire at +20 °C and is harmless only because the pump's own menu 4.9.2 cutoff overrides it | scenario `known_open` |
 | — | Mild-weather COP extrapolates above the EN 14511 rating points, so shoulder-season **cost** figures are optimistic. Control decisions do not depend on it | scenario `known_open` |
