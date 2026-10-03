@@ -2,8 +2,9 @@
 """Test seasonal defaults for weather learning"""
 
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/workspaces/EffektGuard")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
