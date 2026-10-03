@@ -15,10 +15,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
+from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import TemperatureConverter
 
-from ..const import CONF_WEATHER_ENTITY
+from ..const import CONF_WEATHER_ENTITY, WEATHER_FORECAST_PERIOD_HOURS
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -114,6 +117,17 @@ class WeatherAdapter:
                 self._schedule_next_random_attempt()
             return None
 
+        # A weather entity reports temperatures in the user's configured unit and declares which in
+        # `temperature_unit`; convert to Celsius. Without this, an imperial install feeds +23 where
+        # -5 C was meant (a 28-degree error) and withdraws the pre-heat exactly when it is needed,
+        # disagreeing with nibe_adapter, which does convert via the same TemperatureConverter.
+        source_unit = state.attributes.get("temperature_unit") or UnitOfTemperature.CELSIUS
+
+        def to_celsius(value: float) -> float:
+            return TemperatureConverter.convert(
+                float(value), source_unit, UnitOfTemperature.CELSIUS
+            )
+
         # Get current temperature
         current_temp = state.attributes.get("temperature")
         if current_temp is None:
@@ -192,15 +206,27 @@ class WeatherAdapter:
                     )
                     # Schedule next random attempt
                     self._schedule_next_random_attempt()
-            except (AttributeError, KeyError, ValueError, TypeError, OSError) as err:
+            except (
+                HomeAssistantError,
+                AttributeError,
+                KeyError,
+                ValueError,
+                TypeError,
+                OSError,
+            ) as err:
+                # weather.get_forecasts raises HomeAssistantError (via raise_unsupported_forecast,
+                # plus its ServiceNotFound/ServiceValidationError subclasses) for any entity that
+                # does not implement hourly forecasts. This path runs on every update for entities
+                # with no `forecast` attribute, so an uncaught error here escapes the coordinator
+                # and kills its refresh task permanently.
                 _LOGGER.warning(
                     "Failed to get forecast via service call from %s: %s. "
-                    "Weather-based optimization disabled. "
-                    "This is normal for OpenWeatherMap free tier (no OneCall 3.0 access). "
-                    "Consider switching to Met.no for free forecast access.",
+                    "Weather-based optimization disabled; the rest of the optimization "
+                    "continues. Common causes: the entity provides no hourly forecast, or "
+                    "OpenWeatherMap free tier (no OneCall 3.0 access). Met.no provides a "
+                    "free hourly forecast.",
                     self._weather_entity,
                     err,
-                    exc_info=True,
                 )
                 # Schedule next random attempt after error
                 self._schedule_next_random_attempt()
@@ -236,7 +262,7 @@ class WeatherAdapter:
                 forecast_hours.append(
                     WeatherForecastHour(
                         datetime=dt,
-                        temperature=float(temp),
+                        temperature=to_celsius(temp),
                         condition=item.get("condition"),
                     )
                 )
@@ -244,8 +270,27 @@ class WeatherAdapter:
                 _LOGGER.debug("Skipping invalid forecast entry: %s", err)
                 continue
 
+        # FUTURE ONLY, AND IN ORDER. Layers slice this list positionally (`[:3]`, `[:24]`) and read
+        # index N as "N hours from now", but a weather entity's entries are not guaranteed future or
+        # sorted - a stalled integration can stay "available" while every forecast hour is in the
+        # past. Drop past hours and sort so index N is again N hours ahead.
+        cutoff = dt_util.utcnow() - timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS)
+        stale = len(forecast_hours)
+        forecast_hours = sorted(
+            (hour for hour in forecast_hours if hour.datetime > cutoff),
+            key=lambda hour: hour.datetime,
+        )
+        dropped = stale - len(forecast_hours)
+        if dropped:
+            _LOGGER.debug("Dropped %d forecast hours that had already passed", dropped)
+
         if not forecast_hours:
-            _LOGGER.warning("No valid forecast hours parsed")
+            _LOGGER.warning(
+                "Weather entity %s has no forecast hours left in the future - every period it "
+                "published has already passed. Treating it as no forecast at all rather than "
+                "pre-heating on weather from hours ago.",
+                self._weather_entity,
+            )
             return None
 
         # Validate forecast length
@@ -273,7 +318,7 @@ class WeatherAdapter:
         self._next_random_attempt = None
 
         return WeatherData(
-            current_temp=float(current_temp),
+            current_temp=to_celsius(current_temp),
             forecast_hours=forecast_hours,
             source_entity=self._weather_entity,
             source_method=source_method,

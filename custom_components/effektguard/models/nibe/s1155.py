@@ -9,9 +9,51 @@ Verified: October 2025, NIBE official website
 
 from dataclasses import dataclass
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
-from ..base import HeatPumpProfile, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
+
+# S1155-12. EN 14511 rating points, VERBATIM.
+#
+# Keyed on INCOMING BRINE temperature, not outdoor air (datasheet capacity chart x-axis is
+# "Incoming brine temp, C"). All four points are at NOMINAL (50 Hz) frequency; NIBE publishes no
+# min-/max-frequency COP for these pumps, only the modulation envelope ("Heating capacity (PH)"),
+# so load dependence of efficiency is NOT measurable here - see HouseConfig.exergy_efficiency.
+S1155_12_DATASHEET = (
+    RatingPoint(
+        "0/35 nominal (50 Hz), incoming brine 0 C",
+        source_temp_c=0.0,
+        flow_temp_c=35.0,
+        heat_output_kw=5.06,
+        cop=4.87,
+    ),
+    RatingPoint(
+        "0/45 nominal (50 Hz), incoming brine 0 C",
+        source_temp_c=0.0,
+        flow_temp_c=45.0,
+        heat_output_kw=4.78,
+        cop=3.75,
+    ),
+    RatingPoint(
+        "10/35 nominal (50 Hz), incoming brine 10 C",
+        source_temp_c=10.0,
+        flow_temp_c=35.0,
+        heat_output_kw=6.33,
+        cop=6.12,
+    ),
+    RatingPoint(
+        "10/45 nominal (50 Hz), incoming brine 10 C",
+        source_temp_c=10.0,
+        flow_temp_c=45.0,
+        heat_output_kw=5.98,
+        cop=4.59,
+    ),
+)
+S1155_12_SOURCE = (
+    "NIBE S1155 installer manual, Output data according to EN 14511, "
+    "S1155_12 column. https://installer.nibe.eu/ "
+    "(F1155: IHB EN 2008-5/331379 p.69; S1155: IHB EN 2001-1/531210 p.70. The two "
+    "publish IDENTICAL EN 14511 data at every size - same platform.)"
+)
 
 
 @HeatPumpModelRegistry.register("nibe_s1155")
@@ -37,24 +79,38 @@ class NibeS1155Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "S-series GSHP"
 
+    # SOURCED: S1155 register 40680 "start diff additional heat" factory default 400, applied
+    # below the compressor start (-60): the controller engages additive heat at about -460.
+    aux_start_dm: float = -460.0
+
     # Mid-range variant (3-12 kW) - VERIFIED from NIBE website
-    rated_power_kw: tuple[float, float] = (3.0, 12.0)  # Heat output
-    typical_electrical_range_kw: tuple[float, float] = (0.6, 2.5)  # Estimated from SCOP ~5.0
+    datasheet_points: tuple[RatingPoint, ...] = S1155_12_DATASHEET
+    datasheet_source: str = S1155_12_SOURCE
+    design_heat_load_kw: float = (
+        12.0  # Pdesignh - installer manual, S1155-12: "Rated heating output (Pdesignh) 12 kW"
+    )
+    immersion_heater_kw: float = (
+        7.0  # datasheet: 7 kW integrated electric heater, seven automatic steps
+    )
+    heating_capacity_range_kw: tuple[float, float] = (
+        3.0,
+        12.0,
+    )  # datasheet "Heating capacity (PH)"
+
+    rated_power_kw: tuple[float, float] = (3.0, 12.0)  # the PH modulation envelope, EN 14511
+    typical_electrical_range_kw: tuple[float, float] = (1.04, 2.5)  # PE at the rating points
     modulation_range: tuple[int, int] = (70, 120)
     modulation_type: str = "inverter"
 
-    typical_cop_range: tuple[float, float] = (3.5, 5.5)  # Higher than ASHP!
+    typical_cop_range: tuple[float, float] = (3.75, 6.12)  # published COPs, 0/45 .. 10/35
     optimal_flow_delta: float = 25.0  # Can run lower flow temps
     cop_curve: dict[float, float] = None
 
     supports_aux_heating: bool = True
     supports_modulation: bool = True
     supports_weather_compensation: bool = True
-    max_flow_temp: float = 58.0
+    max_flow_temp: float = 65.0  # "compressor provides a supply temperature up to 65 C"
     min_flow_temp: float = 18.0  # Can go lower with ground source
-
-    min_runtime_minutes: int = 30
-    min_rest_minutes: int = 10
 
     def __post_init__(self):
         """Initialize COP curve - GSHP has much better COP than ASHP.
@@ -65,36 +121,10 @@ class NibeS1155Profile(HeatPumpProfile):
         VERIFIED: S1155 has high seasonal performance factor (SCOP).
         Source: NIBE official website
         """
-        self.cop_curve = {
-            7: 5.5,  # Excellent in mild weather
-            5: 5.3,
-            0: 5.0,  # Still excellent in winter
-            -5: 4.8,  # Ground temp stable
-            -10: 4.5,  # Ground temp stable
-            -15: 4.3,
-            -20: 4.0,  # Still good in extreme cold
-            -25: 3.8,
-            -30: 3.5,  # Much better than ASHP at extreme temps
-        }
-
-    def calculate_optimal_flow_temp(
-        self, outdoor_temp: float, indoor_target: float, heat_demand_kw: float
-    ) -> float:
-        """Calculate optimal flow temp for S1155 GSHP."""
-        heat_loss_coefficient = 180.0  # W/°C typical house
-        temp_diff = indoor_target - outdoor_temp
-
-        flow_from_formula = (
-            KUEHNE_COEFFICIENT
-            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
-            + indoor_target
-        )
-
-        # GSHP can run lower flow temps for better COP
-        flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
-
-        optimal = min(flow_from_formula, flow_from_efficiency + 3.0)
-        return max(self.min_flow_temp, min(optimal, self.max_flow_temp))
+        # DISPLAY PROXY ONLY. Nothing computes from it: COP is a function of brine + flow
+        # temperature, not the weather, and the simulator takes it from `datasheet_points`. This is
+        # a dashboard seasonal curve anchored on the two published W35/W45 COPs at 0 C brine.
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points, source_temp_c=0.0)
 
     def validate_power_consumption(
         self, current_power_kw: float, outdoor_temp: float, flow_temp: float

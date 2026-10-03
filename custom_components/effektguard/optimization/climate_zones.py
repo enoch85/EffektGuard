@@ -25,6 +25,10 @@ from dataclasses import dataclass
 from typing import Final
 
 from ..const import (
+    DM_NORMAL_MIN_BUFFER,
+    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_START,
+    DM_WARNING_BUFFER,
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
     CLIMATE_ZONE_COLD_WINTER_AVG,
@@ -33,6 +37,47 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def keep_triggers_clear_of_the_compressor_band(
+    thresholds: dict[str, float],
+) -> dict[str, float]:
+    """No degree-minute TRIGGER may reach into the band the compressor cycles through anyway.
+
+    NIBE starts the compressor at DM_THRESHOLD_START (-60) and stops it at 0, so degree minutes
+    traverse that band on EVERY NORMAL CYCLE, in every season, on every heat pump. A threshold
+    inside it fires on healthy operation rather than on trouble. DM_WARNING_BUFFER keeps a margin
+    below the band for the ordinary undershoot that follows a compressor start.
+
+    THE THRESHOLDS ARE BUILT IN TWO STEPS AND BOTH CAN BREACH IT, which is why this is a function
+    and not two lines inside one of them:
+
+    1. `get_expected_dm_range` shifts the zone thresholds by `temp_delta * 20` and that shift was
+       unbounded above. In Stockholm the warning threshold climbed to -40 at +25 C - inside the
+       band - and to +60 at +30 C, i.e. POSITIVE, where every possible reading is a warning.
+
+    2. `apply_thermal_mass_buffer` then DIVIDES by up to 1.3. Clamping only in step 1 left the
+       invariant true of a number production never uses: -110 / 1.3 = -85, back inside the band,
+       and a concrete-slab house 0.2 C under target on a +25 C July morning was commanded +4.0 C
+       of curve offset by the T1 recovery tier. Clamping in step 1 alone is the bug I shipped and
+       then wrote a test for that could not see it, because the test called step 1.
+
+    Winter is untouched: a slab's warning threshold of -415 is far below the ceiling and `min`
+    leaves it exactly where it is. This is a ceiling on mild days, never a floor on cold ones.
+
+    `normal_min` is deliberately NOT clamped. Mind the naming - it is the SHALLOW end of the
+    normal band (`normal_min` > `normal_max`, both negative) and it describes where degree minutes
+    are ALLOWED to sit, rather than triggering anything. In mild weather they really do reach 0,
+    because that is where NIBE stops the compressor. `critical` is the hardware auxiliary-heat
+    limit and is nowhere near the band.
+    """
+    warm_ceiling = DM_THRESHOLD_START - DM_WARNING_BUFFER
+
+    return {
+        **thresholds,
+        "normal_max": min(thresholds["normal_max"], warm_ceiling),
+        "warning": min(thresholds["warning"], warm_ceiling),
+    }
 
 
 # Climate zones focused on heating needs (coldest to mildest)
@@ -92,9 +137,11 @@ HEATING_CLIMATE_ZONES: Final = {
 # Zone order for detection (coldest to mildest)
 ZONE_ORDER: Final = ["extreme_cold", "very_cold", "cold", "moderate_cold", "standard"]
 
-# Absolute safety limit - NEVER EXCEED regardless of climate
-# Source: Swedish NIBE forums - validated in real-world Nordic conditions
-DM_ABSOLUTE_MAXIMUM: Final = -1500
+# The absolute safety limit is imported from const.py (DM_THRESHOLD_AUX_LIMIT), never restated here:
+# a second copy could drift from the EMERGENCY tier and the `critical` threshold published here,
+# which must agree on when the house is in danger (F-112 is open because the number itself may be
+# wrong; audit F-076). The buffers below keep the expected band clear of that floor, so the edge of
+# "normal" is not also the emergency trigger.
 
 
 @dataclass
@@ -211,14 +258,18 @@ class ClimateZoneDetector:
         Base DM expectations come from climate zone, then adjust based on how much
         colder/warmer current temperature is compared to zone's winter average.
 
-        EXAMPLES:
-        - Kiruna (Extreme Cold, winter avg -30°C):
-          * At -30°C: DM -800 to -1200 is normal
-          * At -20°C: DM -600 to -1000 is normal (10°C warmer = shallower)
+        EXAMPLES (computed, not remembered - check them against the code if you change it):
+        - Kiruna (Extreme Cold, winter avg -20°C):
+          * At -30°C: DM -1000 to -1400 is normal
+          * At -20°C: DM  -800 to -1200 is normal (at the zone average, so the base range)
 
-        - Stockholm (Cold, winter avg -10°C):
-          * At -10°C: DM -450 to -700 is normal
-          * At 0°C: DM -250 to -450 is normal (10°C warmer = shallower)
+        - Stockholm (Cold, winter avg -8°C):
+          * At -10°C: DM -490 to -740 is normal
+          * At   0°C: DM -290 to -540 is normal (8°C warmer than average = shallower)
+
+        The examples are the ADJUSTED ranges this method returns, not the base ranges before the
+        temperature adjustment; docs/CLIMATE_ZONES.md must match them row for row (checked by
+        tests/validation/test_climate_zones_doc_matches_the_code.py).
 
         Args:
             outdoor_temp: Current outdoor temperature (°C)
@@ -240,20 +291,20 @@ class ClimateZoneDetector:
         normal_max = self.zone_info.dm_normal_max + adjustment
         warning = self.zone_info.dm_warning_threshold + adjustment
 
-        # Ensure we never expect DM beyond absolute maximum
-        # Leave 100 DM buffer before critical limit
-        normal_min = max(normal_min, DM_ABSOLUTE_MAXIMUM + 100)
-        normal_max = max(normal_max, DM_ABSOLUTE_MAXIMUM + 50)
-        warning = max(warning, DM_ABSOLUTE_MAXIMUM + 50)
+        # COLD SIDE: never expect degree minutes beyond the absolute limit.
+        normal_min = max(normal_min, DM_THRESHOLD_AUX_LIMIT + DM_NORMAL_MIN_BUFFER)
+        normal_max = max(normal_max, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
+        warning = max(warning, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
 
-        # Debug logging removed to reduce spam - this is called multiple times per update
-
-        return {
-            "normal_min": normal_min,
-            "normal_max": normal_max,
-            "warning": warning,
-            "critical": DM_ABSOLUTE_MAXIMUM,  # Always -1500
-        }
+        # WARM SIDE: see keep_triggers_clear_of_the_compressor_band. There was no clamp at all.
+        return keep_triggers_clear_of_the_compressor_band(
+            {
+                "normal_min": normal_min,
+                "normal_max": normal_max,
+                "warning": warning,
+                "critical": DM_THRESHOLD_AUX_LIMIT,
+            }
+        )
 
     def get_safety_margin(self) -> float:
         """Get flow temperature safety margin for this climate zone.

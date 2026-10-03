@@ -14,7 +14,7 @@ from custom_components.effektguard.adapters.gespot_adapter import (
     PriceData,
     QuarterPeriod,
 )
-from custom_components.effektguard.const import QUARTER_INTERVAL_MINUTES, QUARTERS_PER_DAY
+from custom_components.effektguard.const import MINUTES_PER_QUARTER, QUARTERS_PER_DAY
 from custom_components.effektguard.utils.time_utils import resolve_period_index
 
 
@@ -31,7 +31,7 @@ def make_raw_day(base: datetime, skip_hours: tuple[int, ...] = ()) -> list[dict]
             continue
         raw.append(
             {
-                "time": (base + timedelta(minutes=QUARTER_INTERVAL_MINUTES * quarter)).isoformat(),
+                "time": (base + timedelta(minutes=MINUTES_PER_QUARTER * quarter)).isoformat(),
                 "value": float(quarter),
             }
         )

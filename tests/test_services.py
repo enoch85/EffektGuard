@@ -11,7 +11,7 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.effektguard.const import (
@@ -46,6 +46,7 @@ def mock_coordinator(mock_hass):
 
     coordinator = MagicMock(spec=EffektGuardCoordinator)
     coordinator.hass = mock_hass
+    coordinator.optimization_enabled = True
 
     # Mock decision engine
     coordinator.engine = MagicMock(spec=DecisionEngine)
@@ -56,8 +57,11 @@ def mock_coordinator(mock_hass):
     coordinator.effect.reset_monthly_peaks = MagicMock()
     coordinator.effect.async_save = AsyncMock()
 
-    # Mock coordinator methods
+    # Two refresh paths: async_request_refresh reads/decides but writes nothing;
+    # async_refresh_and_apply drives the heat pump.
     coordinator.async_request_refresh = AsyncMock()
+    coordinator.async_refresh_and_apply = AsyncMock()
+    coordinator.async_apply_manual_override = AsyncMock()
 
     # Mock data for calculate_optimal_schedule
     coordinator.data = {
@@ -121,8 +125,11 @@ async def test_force_offset_sets_override(mock_hass, mock_coordinator):
     await handler(call)
 
     # Verify override was set
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(2.5, 60)
-    mock_coordinator.async_request_refresh.assert_called_once()
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(2.5, 60)
+
+    # Applied immediately via async_apply_manual_override; the handler does not call the write
+    # path directly, and does not settle for a plain refresh that would leave the override unwritten.
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
@@ -147,7 +154,7 @@ async def test_force_offset_with_zero_duration(mock_hass, mock_coordinator):
 
     await handler(call)
 
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(-3.0, 0)
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(-3.0, 0)
 
 
 async def test_force_offset_validates_range(mock_hass, mock_coordinator):
@@ -208,7 +215,11 @@ async def test_reset_peak_tracking_clears_peaks(mock_hass, mock_coordinator):
     # Verify peaks were reset
     mock_coordinator.effect.reset_monthly_peaks.assert_called_once()
     mock_coordinator.effect.async_save.assert_called_once()
+
+    # A plain refresh so entities catch up - resetting a counter must not write a curve
+    # offset to the pump.
     mock_coordinator.async_request_refresh.assert_called_once()
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 # ============================================================================
@@ -242,9 +253,9 @@ async def test_boost_heating_sets_max_offset(mock_hass, mock_coordinator):
 
     await handler(call)
 
-    # Should set MAX_OFFSET (+10°C)
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(MAX_OFFSET, 120)
-    mock_coordinator.async_request_refresh.assert_called_once()
+    # Should set MAX_OFFSET (+10°C) and drive the pump with it immediately.
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(MAX_OFFSET, 120)
+    mock_coordinator.async_refresh_and_apply.assert_not_called()
 
 
 async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
@@ -270,7 +281,7 @@ async def test_boost_heating_default_duration(mock_hass, mock_coordinator):
     await handler(call)
 
     # Should use default duration (120 minutes)
-    mock_coordinator.engine.set_manual_override.assert_called_once_with(MAX_OFFSET, 120)
+    mock_coordinator.async_apply_manual_override.assert_awaited_once_with(MAX_OFFSET, 120)
 
 
 # ============================================================================
@@ -284,13 +295,13 @@ async def test_calculate_optimal_schedule_service_registration(mock_hass):
 
     await _async_register_services(mock_hass)
 
-    # Should be registered with supports_response=True
+    # Registered with the SupportsResponse enum, not a bare True: HA compares supports_response
+    # by identity, and True is neither SupportsResponse.NONE nor SupportsResponse.OPTIONAL.
     calls = mock_hass.services.async_register.call_args_list
     schedule_call = next(call for call in calls if call[0][1] == SERVICE_CALCULATE_OPTIMAL_SCHEDULE)
 
-    # Verify supports_response is True
     assert "supports_response" in schedule_call[1]
-    assert schedule_call[1]["supports_response"] is True
+    assert schedule_call[1]["supports_response"] is SupportsResponse.OPTIONAL
 
 
 async def test_calculate_optimal_schedule_returns_24h_schedule(mock_hass, mock_coordinator):
@@ -512,14 +523,14 @@ def test_effect_manager_reset_monthly_peaks():
     effect._monthly_peaks = [
         PeakEvent(
             timestamp=datetime.now(),
-            quarter_of_day=50,
+            period_of_day=50,
             actual_power=5.0,
             effective_power=5.0,
             is_daytime=True,
         ),
         PeakEvent(
             timestamp=datetime.now(),
-            quarter_of_day=60,
+            period_of_day=60,
             actual_power=4.5,
             effective_power=4.5,
             is_daytime=True,

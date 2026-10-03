@@ -258,80 +258,10 @@ class TestOptionalFeaturesStatusSensor:
 
         sensor = next(s for s in SENSORS if s.key == "optional_features_status")
 
-        assert sensor.name == "Optional Features Status"
+        # Name is resolved by HA from the translation_key, not a hardcoded English name.
+        assert sensor.translation_key == "optional_features_status"
         assert sensor.icon == "mdi:feature-search-outline"
         assert sensor.value_fn is not None
-
-
-class TestOptionalFeaturesEstimation:
-    """Test estimation fallbacks for optional features."""
-
-    def test_degree_minutes_estimation_note(self):
-        """Test that missing DM sensor shows estimation note."""
-        # This will be implemented in adapters
-        # For now, just verify the sensor can show the status
-        from custom_components.effektguard.sensor import SENSORS
-
-        sensor = next(s for s in SENSORS if s.key == "optional_features_status")
-        assert sensor is not None
-
-    def test_power_estimation_note(self):
-        """Test that missing power sensor shows estimation note."""
-        from custom_components.effektguard.sensor import SENSORS
-
-        sensor = next(s for s in SENSORS if s.key == "optional_features_status")
-        assert sensor is not None
-
-
-class TestWeatherForecastValidation:
-    """Test weather forecast validation."""
-
-    def test_weather_with_sufficient_forecast(self, mock_hass):
-        """Test weather entity with 24h forecast (sufficient)."""
-        config_flow = EffektGuardConfigFlow()
-        config_flow.hass = mock_hass
-
-        weather_state = mock_hass.states.get("weather.home")
-        forecast = weather_state.attributes.get("forecast")
-
-        assert len(forecast) >= 12  # Minimum 12h required
-
-    def test_weather_with_short_forecast(self):
-        """Test weather entity with only 6h forecast (insufficient)."""
-        hass = MagicMock(spec=HomeAssistant)
-
-        # Short forecast
-        mock_state = MagicMock(
-            entity_id="weather.home",
-            attributes={"forecast": [{"datetime": "2025-10-14T12:00:00", "temperature": 15}] * 6},
-        )
-        mock_states_obj = MagicMock()
-        hass.states = mock_states_obj
-        mock_states_obj.get = lambda entity_id: mock_state
-
-        forecast = mock_state.attributes.get("forecast")
-
-        assert len(forecast) < 12  # Less than minimum
-
-
-class TestTomorrowPricesDetection:
-    """Test tomorrow prices detection from spot price integration."""
-
-    def test_gespot_with_tomorrow_prices(self):
-        """Test spot price integration with tomorrow prices available."""
-        # This will be implemented in gespot_adapter.py
-        # For now, verify the status sensor can detect it
-        from custom_components.effektguard.sensor import SENSORS
-
-        sensor = next(s for s in SENSORS if s.key == "optional_features_status")
-        assert sensor is not None
-
-    def test_gespot_without_tomorrow_prices(self):
-        """Test spot price integration with only today prices."""
-        from custom_components.effektguard.sensor import SENSORS
-
-        sensor = next(s for s in SENSORS if s.key == "optional_features_status")
-        assert sensor is not None
 
 
 if __name__ == "__main__":

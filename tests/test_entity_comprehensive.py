@@ -1,15 +1,7 @@
 """Comprehensive tests for all EffektGuard entities, sensors, and attributes.
 
-Tests verify:
-- All sensor entities are created and have correct configuration
-- All sensor attributes are properly defined
-- Climate entity functions correctly with proper attributes
-- Switch entities are created with correct configuration
-- All entity unique IDs, names, and device info are correct
-- Sensor value functions handle None/missing data gracefully
-- Extra state attributes are populated correctly
-
-This ensures complete entity coverage for production use.
+Guards sensor/switch/climate entity configuration, unique IDs and device info, sensor
+value functions (including None/missing data), and extra state attributes.
 """
 
 import pytest
@@ -238,9 +230,8 @@ class TestSensorEntityDefinitions:
         assert len(keys) == len(set(keys)), "Duplicate sensor keys found"
 
     def test_temperature_sensors_have_correct_config(self):
-        """Verify temperature sensors have proper device class and units."""
+        """Verify ABSOLUTE temperature sensors have proper device class and units."""
         temp_sensors = [
-            "current_offset",
             "supply_temperature",
             "outdoor_temperature",
             "indoor_temperature",
@@ -251,6 +242,21 @@ class TestSensorEntityDefinitions:
                 assert sensor.device_class == SensorDeviceClass.TEMPERATURE
                 assert sensor.native_unit_of_measurement == UnitOfTemperature.CELSIUS
                 assert sensor.state_class == SensorStateClass.MEASUREMENT
+
+    def test_curve_offset_is_a_temperature_delta_not_a_temperature(self):
+        """current_offset is a curve INTERVAL: device_class TEMPERATURE_DELTA, not TEMPERATURE.
+
+        TEMPERATURE would make HA convert it absolutely (0 C -> 32 F for non-metric users);
+        TEMPERATURE_DELTA is the correct class and still permits MEASUREMENT.
+        """
+        offset = next(s for s in SENSORS if s.key == "current_offset")
+
+        assert offset.device_class == SensorDeviceClass.TEMPERATURE_DELTA, (
+            "current_offset is a temperature DELTA. Declaring it TEMPERATURE makes HA "
+            "convert it absolutely - 0 C becomes 32 F for any non-metric user."
+        )
+        assert offset.native_unit_of_measurement == UnitOfTemperature.CELSIUS
+        assert offset.state_class == SensorStateClass.MEASUREMENT
 
     def test_power_sensors_have_correct_config(self):
         """Verify power sensors have proper device class and units."""
@@ -310,11 +316,12 @@ class TestSensorValueFunctions:
     """Test sensor value functions with real data."""
 
     def test_current_offset_sensor(self, mock_coordinator_with_data, mock_config_entry):
-        """Test current_offset sensor reads decision offset."""
+        """Test current_offset sensor reads the offset applied to NIBE."""
         sensor_desc = next(s for s in SENSORS if s.key == "current_offset")
         sensor = EffektGuardSensor(mock_coordinator_with_data, mock_config_entry, sensor_desc)
+        mock_coordinator_with_data.current_offset = 3.0
 
-        assert sensor.native_value == 2.0
+        assert sensor.native_value == 3.0
 
     def test_degree_minutes_sensor(self, mock_coordinator_with_data, mock_config_entry):
         """Test degree_minutes sensor reads NIBE data."""

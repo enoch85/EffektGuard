@@ -338,7 +338,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         _optional_entity_field(
             schema_dict,
             CONF_NIBE_TEMP_LUX_ENTITY,
-            selector.EntitySelector(selector.EntitySelectorConfig(domain="switch")),
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
+            ),
             auto_detected_temp_lux,
         )
 
@@ -698,7 +700,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         _optional_entity_field(
             schema_dict,
             CONF_NIBE_TEMP_LUX_ENTITY,
-            selector.EntitySelector(selector.EntitySelectorConfig(domain="switch")),
+            selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=["switch", "input_boolean"])
+            ),
             entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY),
         )
         _optional_entity_field(

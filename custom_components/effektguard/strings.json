@@ -147,6 +147,9 @@
           }
         }
       }
+    },
+    "error": {
+      "invalid_dhw_config": "Invalid hot water setting: {reason}"
     }
   },
   "entity": {
@@ -169,6 +172,80 @@
       "airflow_optimization": {
         "name": "Airflow Optimization"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Current Offset"
+      },
+      "degree_minutes": {
+        "name": "Degree Minutes"
+      },
+      "supply_temperature": {
+        "name": "Supply Temperature"
+      },
+      "outdoor_temperature": {
+        "name": "Outdoor Temperature"
+      },
+      "indoor_temperature": {
+        "name": "Indoor Temperature"
+      },
+      "current_price": {
+        "name": "Current Electricity Price"
+      },
+      "peak_today": {
+        "name": "Peak Today"
+      },
+      "peak_this_month": {
+        "name": "Peak This Month"
+      },
+      "nibe_power": {
+        "name": "NIBE Power"
+      },
+      "compressor_frequency": {
+        "name": "Compressor Frequency"
+      },
+      "compressor_health": {
+        "name": "Compressor Health Status"
+      },
+      "optimization_reasoning": {
+        "name": "Optimization Reasoning"
+      },
+      "quarter_of_day": {
+        "name": "Quarter of Day"
+      },
+      "price_period_classification": {
+        "name": "Price Period Classification"
+      },
+      "temperature_trend": {
+        "name": "Indoor Temperature Trend"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Outdoor Temperature Trend"
+      },
+      "savings_estimate": {
+        "name": "Estimated Monthly Savings"
+      },
+      "optional_features_status": {
+        "name": "Optional Features Status"
+      },
+      "heat_pump_model": {
+        "name": "Heat Pump Model"
+      },
+      "dhw_status": {
+        "name": "DHW Status"
+      },
+      "dhw_recommendation": {
+        "name": "DHW Recommendation"
+      },
+      "dhw_next_boost_time": {
+        "name": "DHW Scheduled Start"
+      },
+      "airflow_enhancement": {
+        "name": "Airflow Enhancement"
+      },
+      "airflow_thermal_gain": {
+        "name": "Airflow Thermal Gain"
+      }
     }
   },
   "services": {
@@ -179,6 +256,16 @@
     "boost_hot_water": {
       "name": "Boost Hot Water",
       "description": "Start immediate hot water heating cycle"
+    }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "No electricity price source",
+      "description": "EffektGuard has no electricity price data, so price optimisation is not running - the heating curve is being managed on comfort and safety alone. Configure a spot-price entity (GE-Spot, Nord Pool or similar) in the integration's options to enable it."
+    },
+    "no_dhw_control_entity": {
+      "title": "No hot-water control entity",
+      "description": "EffektGuard drives hot water by toggling NIBE's temporary-lux switch, and no such entity was found. Home Assistant's NIBE integration exposes that register (50004) for F-series pumps only, so an S-series pump has no equivalent - hot-water optimisation is NOT running, and any scheduled boost shown by its sensors will not happen. Space-heating optimisation is unaffected."
     }
   }
 }

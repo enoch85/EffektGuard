@@ -31,7 +31,9 @@ from ..const import (
     PRICE_OFFSET_PEAK,
     PRICE_OFFSET_VERY_CHEAP,
     PRICE_PERCENTILE_CHEAP,
+    PRICE_FLAT_DAY_SPREAD_FRACTION,
     PRICE_PERCENTILE_EXPENSIVE,
+    PRICE_PERCENTILE_MEDIAN,
     PRICE_PERCENTILE_NORMAL,
     PRICE_PERCENTILE_VERY_CHEAP,
     PRICE_PRE_PEAK_OFFSET,
@@ -61,7 +63,6 @@ __all__ = [
     "PriceForecast",
     "PriceLayerDecision",
     "QuarterPeriod",
-    "get_fallback_prices",
 ]
 
 
@@ -116,36 +117,6 @@ class PriceForecast:
 
     # Cluster detection
     in_peak_cluster: bool  # True when EXPENSIVE sandwiched between PEAKs
-
-
-def get_fallback_prices() -> PriceData:
-    """Get fallback price data when spot price unavailable.
-
-    Returns neutral price classification to maintain safe operation
-    without optimization. All periods are set to price=1.0 (normalized).
-
-    Moved from coordinator._get_fallback_prices for shared reuse.
-
-    Returns:
-        PriceData with 96 neutral-priced quarters for today, empty tomorrow
-    """
-    _LOGGER.debug("Creating fallback price data (no optimization)")
-
-    # Create neutral periods - all classified as "normal"
-    fallback_periods = []
-    base_date = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    for quarter in range(96):  # 96 quarters per day (15-min intervals)
-        hour = quarter // 4
-        minute = (quarter % 4) * MINUTES_PER_QUARTER
-        start_time = base_date.replace(hour=hour, minute=minute)
-        fallback_periods.append(QuarterPeriod(start_time=start_time, price=1.0))
-
-    return PriceData(
-        today=fallback_periods,
-        tomorrow=[],
-        has_tomorrow=False,
-    )
 
 
 @dataclass
@@ -240,31 +211,42 @@ class PriceAnalyzer:
             p90,
         )
 
-        # Special case: Uniform prices (all equal) - happens with fallback mode
-        # When spot price unavailable, fallback creates 96 periods with price=1.0
-        # Without variance, classification is meaningless - mark all as NORMAL
-        if p25 == p90:  # No price variance
+        median = float(np.percentile(prices, PRICE_PERCENTILE_MEDIAN))
+
+        # A flat day carries no signal, and percentile RANK cannot detect one (rank is
+        # scale-invariant: a 0.4 ore spread bands like a 130 ore one). Compare the spread against the
+        # day's own price SCALE, not an absolute ore threshold - PriceData carries no unit (GE-Spot
+        # publishes whatever the owner configured), so an ore threshold would be 100x wrong.
+        spread = p90 - p10
+        scale = max(abs(median), abs(p10), abs(p90))
+        if scale <= 0.0 or spread < scale * PRICE_FLAT_DAY_SPREAD_FRACTION:
             _LOGGER.info(
-                "Uniform prices detected (%.3f), classifying all periods as NORMAL (no optimization)",
-                p25,
+                "Price spread %.3f is negligible against a scale of %.3f - classifying every "
+                "period NORMAL rather than chasing ranking noise",
+                spread,
+                scale,
             )
             return {index: QuarterClassification.NORMAL for index, _ in enumerate(periods)}
 
-        # Classify each period
-        # Order: VERY_CHEAP (bottom 10%) -> CHEAP (10-25%) -> NORMAL (25-75%) ->
-        #        EXPENSIVE (75-90%) -> PEAK (top 10%)
+        # Classify each period. A band must not be a pure RANK: on a high-wind day the distribution
+        # is a step, not a curve (e.g. 83 quarters at 120 ore, 13 at -10), so p25 == p75 == p90 and
+        # the 83 dearest quarters all satisfy `price <= p25` - on rank alone they'd classify CHEAP
+        # and command +4 C at the most expensive moment. The `price < p90` guard on the CHEAP band
+        # stops that (the spread check above guarantees p90 > p10). The dear side keeps strict `>`:
+        # an inescapable plateau is the price of the day, not a PEAK to coast through.
         classifications = {}
         for index, period in enumerate(periods):
-            if period.price <= p10:
+            price = period.price
+            if price <= p10:
                 classification = QuarterClassification.VERY_CHEAP
-            elif period.price <= p25:
+            elif price <= p25 and price < p90:
                 classification = QuarterClassification.CHEAP
-            elif period.price <= p75:
-                classification = QuarterClassification.NORMAL
-            elif period.price <= p90:
+            elif price > p90:
+                classification = QuarterClassification.PEAK
+            elif price > p75:
                 classification = QuarterClassification.EXPENSIVE
             else:
-                classification = QuarterClassification.PEAK
+                classification = QuarterClassification.NORMAL
 
             classifications[index] = classification
 

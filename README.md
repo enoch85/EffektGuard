@@ -40,30 +40,50 @@ Currently supports NIBE heat pumps via MyUplink integration, with plans to add s
 - **Proactive debt prevention** - trend-based future DM prediction
 - **Effect tariff** (peak avoidance) - predictive 15-min protection
 - **Prediction/Learning** (self-tuning) - learned thermal model for pre-heating
-- **Weather compensation** (mathematical flow temp) - André Kühne + Timbones formulas
+- **Weather compensation** (mathematical flow temp) - the **EN 442 emitter law**
 - **Weather prediction** (pre-heating) - time-aware cold snap protection
 - **Spot price** (cost reduction) - forward-looking optimization with adaptive horizon
 - **Comfort** (tolerance) - reactive temperature correction
 
 ### 🌍 Global Climate Adaptation
-Automatic latitude-based zone detection (Arctic to Mediterranean):
-- **Extreme Cold** (66.5°N+): Kiruna, Tromsø - DM -800 to -1200 normal
-- **Very Cold** (60.5-66.5°N): Luleå, Umeå - DM -600 to -1000 normal  
-- **Cold** (56-60.5°N): Stockholm, Oslo, Helsinki - DM -450 to -700 normal
-- **Moderate Cold** (54.5-56°N): Copenhagen, Malmö - DM -300 to -500 normal
-- **Standard** (<54.5°N): Paris, London - DM -200 to -350 normal
+Automatic latitude-based zone detection (Arctic to Mediterranean). The ranges below are each zone's
+**base** range — what is normal **at that zone's own winter average**. They shift with the outdoor
+temperature, by 20 DM per degree:
 
-**No configuration needed** - uses Home Assistant latitude. DM -1500 absolute maximum enforced globally.
+| Zone | Latitude | Winter avg | Base normal DM |
+|---|---|---|---|
+| **Extreme Cold** | 66.5°N+ | −20 °C | −800 to −1200 |
+| **Very Cold** | 60.5–66.5°N | −12 °C | −600 to −1000 |
+| **Cold** | 56–60.5°N | −8 °C | −450 to −700 |
+| **Moderate Cold** | 54.5–56°N | −1 °C | −300 to −500 |
+| **Standard** | <54.5°N | 0 °C | −200 to −350 |
 
-### 🧠 Self-Learning Capability
-Learns your building over 7-14 days:
+So Stockholm's normal range is −450 to −700 **at −8 °C**, and −490 to −740 at −10 °C. Quoting the
+base range as if it applied at every temperature is how four of this project's own documents came
+to be wrong; see `docs/CLIMATE_ZONES.md` for the full tables.
+
+**No configuration needed** — uses Home Assistant's latitude.
+
+**DM −1500 is the absolute floor**, enforced globally. ⚠️ It is *not* the number that governs a real
+F750: the pump's own "start addition" (menu 4.9.3) fires at **−700**, so the immersion heater engages
+and works DM back up long before −1500 is approached. See `docs/research/01_degree_minutes.md`.
+
+### 🧠 Self-Learning Capability (observing only — not yet driving your pump)
+EffektGuard continuously observes your building and estimates:
 - **UFH type detection** - concrete slab (6h lag) vs timber (2-3h lag) vs radiators (<1h lag)
 - **Thermal mass** - building heat storage capacity (kWh/°C)
 - **Heat loss coefficient** - envelope performance (W/°C)
 - **Heating efficiency** - system response to offset changes (°C/°C)
 - **Weather patterns** - seasonal adaptation with unusual weather detection
 
-Predictive pre-heating uses learned parameters for intelligent load shifting.
+**These estimates do not currently influence control.** Learned parameters are used for
+pre-heating only once the model's confidence exceeds 70%, and confidence cannot presently
+reach that: the indoor temperature is read to 0.1 °C every 5 minutes, and a building's
+response over 5 minutes is smaller than the sensor's own resolution. Nothing reliable can be
+learned from that, so nothing is claimed from it.
+
+Control today is physics-based and deterministic — the heating curve, the EN 442 emitter law,
+weather compensation and the degree-minute safety net — none of which depends on learning.
 
 ### ⚡ Effect Tariff Optimization
 Native 15-minute (quarterly) integration:
@@ -82,7 +102,8 @@ Multi-factor forward-looking optimization combining:
 
 ### 🌡️ Weather Compensation (Mathematical)
 Physics-based flow temperature optimization:
-- **André Kühne formula** - validated across manufacturers (Vaillant, Daikin, NIBE, etc.)
+- **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264) - validated against NIBE's own
+  published curve 9: it lands **0.20 °C** from it, where a straight line is out by **2.37 °C**
 - **Timbones method** - radiator-specific calculations (BS EN442)
 - **UFH adjustments** - concrete slab (-8°C), timber (-5°C)
 - **Climate-aware margins** - automatic safety headroom by zone
@@ -272,22 +293,36 @@ Native quarterly (15-min) price periods:
 - **Auto-discovery** - finds price entity automatically
 
 ### Weather Compensation Math
+
+The flow temperature follows the **EN 442 emitter law** (`utils/emitter.py`) — the emitter's own
+characteristic curve, not a linear offset from outdoor temperature:
+
 ```python
-# André Kühne formula (universal)
-TFlow = 2.55 × (HC × (Tset - Tout))^0.78 + Tset
+# Demand reaches zero at the BALANCE POINT, not at room temperature:
+# bodies, appliances and the sun cover the losses until several degrees below the setpoint.
+balance = T_room - INTERNAL_GAINS_W / heat_loss_coefficient
 
-# Timbones method (radiator-specific)  
-TFlow = ((Pin / Pout)^(1/1.3) × (DTout / DTin)) × (Tset - Tout) + Tset
+phi     = (balance - T_out) / (balance - T_out_design)   # dimensionless relative load
+T_flow  = T_room + dT_design * phi**(1/n) + spread/2     # n = 1.3 radiators, 1.1 UFH
 ```
-Combined with climate-aware safety margins (0.0-2.5°C by zone).
 
-### Self-Learning Timeline
-- **Day 1-3**: Low confidence (0.0-0.3), conservative defaults
-- **Day 4-7**: Medium confidence (0.3-0.7), starts using learned params
-- **Day 8-14**: High confidence (0.7-1.0), fully optimized
-- **Ongoing**: Continuous refinement, seasonal adaptation
+The spread is held **constant** — a heat pump modulates its circulator, it does not run a
+fixed-speed pump. Combined with climate-aware safety margins (0.0–2.5 °C by zone).
 
-672 observations (1 week @ 15-min) minimum for reliable learning.
+### Self-Learning Status
+
+Observations are recorded every 5 minutes into a rolling 672-entry window — **56 hours**, not
+the week the window was sized for. Confidence is scored from observation count, data
+consistency and time span, and learned parameters are used for pre-heating only above 70%.
+
+At the present observation cadence that threshold is not reachable, and the integration says so
+rather than pretending otherwise: a 0.1 °C indoor sensor sampled every 5 minutes quantises the
+building's response into steps of 1.2 °C/h, which is larger than any real heating rate. The
+consistency term is therefore honestly zero and confidence settles around 0.47.
+
+**Learning does not drive your heat pump today.** Making it do so means sampling slowly enough
+for the signal to exceed the sensor's resolution — a deliberate change, not a tuning tweak,
+because it would put a learned model in the control path of real heating equipment.
 
 ## Documentation
 

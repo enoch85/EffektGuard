@@ -33,7 +33,6 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 )
 from custom_components.effektguard.adapters.gespot_adapter import QuarterPeriod
 
-
 # ==============================================================================
 # TEST FIXTURES AND HELPERS
 # ==============================================================================

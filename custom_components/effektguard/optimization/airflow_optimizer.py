@@ -5,18 +5,27 @@ Original work based on thermodynamic first principles.
 Calculates optimal airflow rates for exhaust air heat pump systems.
 
 Physics basis:
-- Heat extraction: Q = ṁ × cp × ΔT
-- COP relationship: COP ∝ T_evap / (T_cond - T_evap)
-- Energy balance: Net gain = Heat gain - Ventilation penalty
+- Heat extraction:  Q = ṁ × cp × ΔT
+- Ventilation cost: the building must reheat every extra cubic metre from outdoor to indoor
+- Energy balance:   Q_cond = P_el + Q_evap, so d(Q_cond) = d(Q_evap) = P_el × d(COP) at constant
+                    electrical input. The extra extraction and the "COP improvement" are the same
+                    joules; only one of them may be counted.
 
-When Enhanced Airflow Helps:
-| Outdoor °C | Min Compressor % | Expected Gain |
-|------------|-----------------|---------------|
-| +10        | 50%             | +1.3 kW       |
-| 0          | 50%             | +0.9 kW       |
-| -5         | 62%             | +0.7 kW       |
-| -10        | 75%             | +0.4 kW       |
-| < -15      | Don't enhance   | Negative      |
+Net gain = (extra heat extracted) - (extra air to reheat), and it turns negative below an outdoor
+temperature of (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP):
+
+| Outdoor °C | Net gain |
+|------------|----------|
+| +15        | +0.22 kW |
+| +12        | +0.12 kW |
+| +9         |   0.00   |  <- break-even
+| +5         | -0.14 kW |
+| 0          | -0.29 kW |
+| -10        | -0.65 kW |
+
+Enhancement therefore pays only in mild weather, and is a net thermal LOSS across the Swedish
+heating season. The evaporator recovers only AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air while
+the building has to warm all of it the whole way.
 
 Author: Original work
 License: MIT
@@ -29,13 +38,12 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, NamedTuple
 
+from homeassistant.util import dt as dt_util
+
 from ..const import (
     AIRFLOW_AIR_DENSITY,
-    AIRFLOW_BASE_COP,
     AIRFLOW_COMPRESSOR_BASE_THRESHOLD,
-    AIRFLOW_COMPRESSOR_INPUT_KW,
     AIRFLOW_COMPRESSOR_SLOPE,
-    AIRFLOW_COP_IMPROVEMENT_FACTOR,
     AIRFLOW_DEFAULT_ENHANCED,
     AIRFLOW_DEFAULT_STANDARD,
     AIRFLOW_DEFICIT_LARGE_THRESHOLD,
@@ -99,9 +107,15 @@ class FlowDecision:
     timestamp: datetime | None = None
 
     def __post_init__(self):
-        """Set timestamp if not provided."""
+        """Set timestamp if not provided.
+
+        `dt_util.utcnow()`, never `datetime.now()`. Home Assistant works in aware UTC; a naive
+        datetime cannot be compared with an aware one at all (TypeError), and if it could, the box
+        runs UTC while `datetime.now()` returns local time - so the arithmetic would be wrong by the
+        UTC offset, which in a Swedish summer is two hours.
+        """
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            self.timestamp = dt_util.utcnow()
 
     @property
     def should_enhance(self) -> bool:
@@ -155,60 +169,45 @@ def evaporator_heat_extraction(
     return m_dot * AIRFLOW_SPECIFIC_HEAT * temp_drop
 
 
-def estimate_cop_improvement(base_cop: float = AIRFLOW_BASE_COP) -> float:
-    """Estimate COP with enhanced airflow.
-
-    More air → warmer evaporator → better COP.
-    Empirically ~20% improvement at enhanced flow.
-
-    Args:
-        base_cop: Base COP without enhancement
-
-    Returns:
-        Enhanced COP
-    """
-    return base_cop * AIRFLOW_COP_IMPROVEMENT_FACTOR
-
-
 def calculate_net_thermal_gain(
     flow_standard: float,
     flow_enhanced: float,
     temp_indoor: float,
     temp_outdoor: float,
-    compressor_input_kw: float = AIRFLOW_COMPRESSOR_INPUT_KW,
 ) -> float:
     """Calculate net thermal gain from enhanced airflow (kW).
 
-    Net Benefit = (Extra heat extracted) + (COP improvement) - (Ventilation penalty)
+    Net gain = (extra heat extracted at the evaporator) - (extra air the building must reheat).
+    There is no third term: "improved COP" is the same joules as the extra evaporator heat, not a
+    separate benefit. In steady state Q_cond = P_el + Q_evap, so at constant electrical input
+    d(Q_cond) = d(Q_evap) = P_el * d(COP) - an identity; adding P_el * d(COP) counts the heat twice.
+    NIBE's S735 EN 14511 table confirms it: over the 90 -> 252 m³/h step the heat-output rise,
+    dQ_evap and P_el*dCOP agree within 0.02 kW. See docs/research/04_exhaust_air_recovery.md.
+
+    Consequence: enhancement pays only above an outdoor temperature of
+    (indoor - AIRFLOW_EVAPORATOR_TEMP_DROP), around +9 °C - the evaporator recovers only
+    AIRFLOW_EVAPORATOR_TEMP_DROP from the extra air while the building reheats every cubic metre of
+    it from outdoor to indoor. Below break-even (the whole Swedish heating season) this returns
+    negative, a net thermal LOSS.
 
     Args:
         flow_standard: Standard airflow rate in m³/h
         flow_enhanced: Enhanced airflow rate in m³/h
         temp_indoor: Indoor temperature in °C
         temp_outdoor: Outdoor temperature in °C
-        compressor_input_kw: Compressor electrical input in kW
 
     Returns:
         Net thermal gain in kW (positive = beneficial to enhance)
     """
-    # Additional heat extraction
     q_extract_std = evaporator_heat_extraction(flow_standard)
     q_extract_enh = evaporator_heat_extraction(flow_enhanced)
     delta_extraction = q_extract_enh - q_extract_std
 
-    # COP improvement benefit
-    cop_std = AIRFLOW_BASE_COP
-    cop_enh = estimate_cop_improvement(cop_std)
-    heat_output_std = compressor_input_kw * cop_std
-    heat_output_enh = compressor_input_kw * cop_enh
-    delta_cop_benefit = heat_output_enh - heat_output_std
-
-    # Ventilation penalty
     loss_std = ventilation_heat_loss(flow_standard, temp_indoor, temp_outdoor)
     loss_enh = ventilation_heat_loss(flow_enhanced, temp_indoor, temp_outdoor)
     delta_penalty = loss_enh - loss_std
 
-    return delta_extraction + delta_cop_benefit - delta_penalty
+    return delta_extraction - delta_penalty
 
 
 def minimum_compressor_threshold(temp_outdoor: float) -> float:
@@ -410,8 +409,6 @@ class AirflowOptimizer:
         flow_standard: Standard airflow rate in m³/h
         flow_enhanced: Enhanced airflow rate in m³/h
         current_decision: Most recent flow decision
-        enhancement_active: Whether enhanced mode is currently active
-        enhancement_end_time: When current enhancement should end
     """
 
     def __init__(
@@ -428,9 +425,6 @@ class AirflowOptimizer:
         self.flow_standard = flow_standard
         self.flow_enhanced = flow_enhanced
         self.current_decision: FlowDecision | None = None
-        self.enhancement_active = False
-        self.enhancement_end_time: datetime | None = None
-        self._decision_history: list[FlowDecision] = []
 
     def evaluate(
         self,
@@ -464,11 +458,6 @@ class AirflowOptimizer:
 
         # Update state
         self.current_decision = decision
-
-        # Maintain history (keep last 24 hours worth at 5-min intervals = 288 entries)
-        self._decision_history.append(decision)
-        if len(self._decision_history) > 288:
-            self._decision_history = self._decision_history[-288:]
 
         return decision
 
@@ -511,32 +500,3 @@ class AirflowOptimizer:
             compressor_pct=compressor_pct,
             trend_indoor=trend_indoor,
         )
-
-    def get_enhancement_stats(self) -> dict:
-        """Get statistics about enhancement recommendations.
-
-        Returns:
-            Dictionary with enhancement statistics
-        """
-        if not self._decision_history:
-            return {
-                "total_decisions": 0,
-                "enhance_recommendations": 0,
-                "enhance_percentage": 0.0,
-                "average_gain_kw": 0.0,
-            }
-
-        enhance_decisions = [d for d in self._decision_history if d.should_enhance]
-        enhance_count = len(enhance_decisions)
-        total = len(self._decision_history)
-
-        return {
-            "total_decisions": total,
-            "enhance_recommendations": enhance_count,
-            "enhance_percentage": (enhance_count / total) * 100 if total > 0 else 0.0,
-            "average_gain_kw": (
-                sum(d.expected_gain_kw for d in enhance_decisions) / enhance_count
-                if enhance_count > 0
-                else 0.0
-            ),
-        }

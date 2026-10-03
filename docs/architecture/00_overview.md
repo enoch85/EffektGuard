@@ -31,7 +31,7 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 
 ### 1. Context-Aware Safety System
 - **Not fixed thresholds** - adapts degree minutes limits based on climate zone + outdoor temperature
-- Stockholm (-10°C, Cold zone): Expects DM -450 to -700, warning at -700
+- Stockholm (-10°C, Cold zone): Expects DM -490 to -740, warning at -740
 - Kiruna (-25°C, Extreme Cold zone): Expects DM -900 to -1300, warning at -1300
 - **Absolute maximum -1500 DM** never exceeded regardless of conditions
 - **T2 thermal recovery damping** prevents overshoot when solar gain or natural warming detected

@@ -132,18 +132,30 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
         self, user_input: "EffektGuardConfigDict | None" = None
     ) -> FlowResult:
         """Manage runtime options."""
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
+
         if user_input is not None:
-            validated_input = self._validate_and_convert_dhw_config(user_input)
+            try:
+                validated_input = self._validate_and_convert_dhw_config(user_input)
+            except vol.Invalid as err:
+                # _validate_and_convert_dhw_config raises with a message that names the field and
+                # its permitted range. Letting it escape the step throws that away: Home Assistant
+                # renders an escaped exception as "Unknown error occurred", so the user is told
+                # that something failed but not what, and their input is discarded (audit F-075).
+                _LOGGER.warning("Rejected options: %s", err)
+                errors["base"] = "invalid_dhw_config"
+                placeholders["reason"] = str(err)
+            else:
+                # Preserve ALL existing options not in the form
+                # This is critical for values set by other entities (e.g., target_indoor_temp from
+                # climate) and for options from entry.data that should persist
+                for key, value in self.config_entry.options.items():
+                    if key not in validated_input:
+                        _LOGGER.debug("Preserving option %s = %s", key, value)
+                        validated_input[key] = value
 
-            # Preserve ALL existing options not in the form
-            # This is critical for values set by other entities (e.g., target_indoor_temp from climate)
-            # and for options from entry.data that should persist
-            for key, value in self.config_entry.options.items():
-                if key not in validated_input:
-                    _LOGGER.debug("Preserving option %s = %s", key, value)
-                    validated_input[key] = value
-
-            return self.async_create_entry(title="", data=validated_input)
+                return self.async_create_entry(title="", data=validated_input)
 
         # Get current values for defaults
         morning_hour = self.config_entry.options.get("dhw_morning_hour", DEFAULT_DHW_MORNING_HOUR)
@@ -335,4 +347,9 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 {"collapsed": False},
             )
 
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema_dict))
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
+            description_placeholders=placeholders or None,
+        )

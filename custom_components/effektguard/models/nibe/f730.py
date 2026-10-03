@@ -5,9 +5,43 @@
 
 from dataclasses import dataclass
 
-from ...const import KUEHNE_COEFFICIENT, KUEHNE_POWER, WATTS_PER_KILOWATT
-from ..base import HeatPumpProfile, ValidationResult
+from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
+
+# NIBE F730 product data sheet, "Output data according to EN 14511". VERBATIM.
+# The only three performance figures NIBE publishes for this machine.
+F730_DATASHEET = (
+    RatingPoint(
+        "A20(12)W35, exhaust air flow 90 m3/h (25 l/s) min compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=35.0,
+        heat_output_kw=1.27,
+        cop=4.79,
+        airflow_m3h=90.0,
+    ),
+    RatingPoint(
+        "A20(12)W35, exhaust air flow 252 m3/h (70 l/s) min compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=35.0,
+        heat_output_kw=1.53,
+        cop=5.32,
+        airflow_m3h=252.0,
+    ),
+    RatingPoint(
+        "A20(12)W45, exhaust air flow 252 m3/h (70 l/s) max compressor frequency",
+        source_temp_c=20.0,
+        flow_temp_c=45.0,
+        heat_output_kw=5.35,
+        cop=2.43,
+        airflow_m3h=252.0,
+    ),
+)
+F730_SOURCE = (
+    "NIBE F730 product data sheet 639853 CIL EN 1904-1, 'Output data according to EN 14511'. "
+    "https://assetstore.nibe.se/hcms/v2.3/entity/document/22472/storage/MDIyNDcyLzAvbWFzdGVy "
+    "(NOTE: the 1x230 V variant, IHB EN 2003-3/531384, publishes DIFFERENT points and a 3.5 kW "
+    "immersion heater. This profile is the 3x400 V machine.)"
+)
 
 
 @HeatPumpModelRegistry.register("nibe_f730")
@@ -24,12 +58,25 @@ class NibeF730Profile(HeatPumpProfile):
     manufacturer: str = "NIBE"
     model_type: str = "F-series ASHP"
 
-    rated_power_kw: tuple[float, float] = (1.5, 6.0)
+    # SOURCED: F730 Installer Manual, menu 4.9.3 "start addition" factory default -700,
+    # same additive-heat control as the F750.
+    aux_start_dm: float = -700.0
+
+    datasheet_points: tuple[RatingPoint, ...] = F730_DATASHEET
+    datasheet_source: str = F730_SOURCE
+
+    design_heat_load_kw: float = 5.0  # Pdesignh - datasheet "Nominal heating output (Pdesign) kW 5"
+    immersion_heater_kw: float = 3.5  # datasheet: "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
+    heating_capacity_range_kw: tuple[float, float] = (
+        1.27,
+        5.35,
+    )  # the max-compressor-frequency point IS the maximum
+    rated_power_kw: tuple[float, float] = (1.27, 5.35)  # PH min..max, EN 14511
     typical_electrical_range_kw: tuple[float, float] = (1.0, 4.5)
     modulation_range: tuple[int, int] = (70, 120)
     modulation_type: str = "inverter"
 
-    typical_cop_range: tuple[float, float] = (2.0, 5.0)
+    typical_cop_range: tuple[float, float] = (2.43, 5.32)  # the published COPs
     optimal_flow_delta: float = 27.0
     cop_curve: dict[float, float] = None
 
@@ -38,9 +85,6 @@ class NibeF730Profile(HeatPumpProfile):
     supports_weather_compensation: bool = True
     max_flow_temp: float = 58.0
     min_flow_temp: float = 20.0
-
-    min_runtime_minutes: int = 30
-    min_rest_minutes: int = 10
 
     # Exhaust air heat pump features
     # F730 is an EAHP - supports airflow optimization for heat extraction
@@ -54,36 +98,8 @@ class NibeF730Profile(HeatPumpProfile):
     # an indirect approximation - adequate for relative decisions, NOT
     # validated for absolute energy/savings claims.
     def __post_init__(self):
-        """Initialize COP curve."""
-        # Same curve as F750 (same technology, different size)
-        self.cop_curve = {
-            7: 5.0,
-            5: 4.5,
-            0: 4.0,
-            -5: 3.5,
-            -10: 3.0,
-            -15: 2.7,
-            -20: 2.3,
-            -25: 2.0,
-            -30: 1.8,
-        }
-
-    def calculate_optimal_flow_temp(
-        self, outdoor_temp: float, indoor_target: float, heat_demand_kw: float
-    ) -> float:
-        """Calculate optimal flow temp for F730."""
-        heat_loss_coefficient = 150.0  # W/°C smaller house
-        temp_diff = indoor_target - outdoor_temp
-
-        flow_from_formula = (
-            KUEHNE_COEFFICIENT
-            * (heat_loss_coefficient / WATTS_PER_KILOWATT * temp_diff) ** KUEHNE_POWER
-            + indoor_target
-        )
-        flow_from_efficiency = outdoor_temp + self.optimal_flow_delta
-
-        optimal = min(flow_from_formula, flow_from_efficiency + 3.0)
-        return max(self.min_flow_temp, min(optimal, self.max_flow_temp))
+        """Initialize display-only COP proxy. Nothing computes from it; see f750.py __post_init__."""
+        self.cop_curve = seasonal_cop_proxy(self.datasheet_points)
 
     def validate_power_consumption(
         self, current_power_kw: float, outdoor_temp: float, flow_temp: float

@@ -21,16 +21,16 @@ from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_ENABLE_OPTIMIZATION,
     CONF_OPTIMIZATION_MODE,
     CONF_TARGET_INDOOR_TEMP,
     DEFAULT_INDOOR_TEMP,
     DOMAIN,
     MAX_INDOOR_TEMP,
-    MIN_INDOOR_TEMP,
+    MIN_TARGET_TEMP,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
@@ -39,6 +39,12 @@ from .const import (
 from .coordinator import EffektGuardCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# This entity DRIVES THE HEAT PUMP: async_set_hvac_mode -> set_optimization_enabled() ->
+# async_refresh_and_apply() -> _drive_the_pump(). HA defaults a coordinator-based platform to 0
+# (unlimited concurrent calls); 1 serialises them. The control lock in _drive_the_pump already
+# serialises the write, so this is belt-and-braces and flags that this entity touches hardware.
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
@@ -52,7 +58,9 @@ async def async_setup_entry(
     async_add_entities([EffektGuardClimate(coordinator, entry)])
 
 
-class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntity, ClimateEntity):
+# No RestoreEntity: the mode lives in the config entry, which survives restart on its own and is
+# what the coordinator reads. Restoring the entity's own last state just shadowed that source.
+class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntity):
     """Climate entity for EffektGuard.
 
     Main user interface displaying current optimization status and allowing
@@ -68,7 +76,12 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntit
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
-    _attr_min_temp = MIN_INDOOR_TEMP
+    # The settable floor must not sit below the safety floor MIN_TEMP_LIMIT (18 C). A settable 15 C
+    # (the former MIN_INDOOR_TEMP) put the setpoint three degrees under it, so the comfort layer cut
+    # the offset to MIN_OFFSET above 18 C while the safety layer boosted MAX_OFFSET below it - a
+    # limit cycle on a real compressor. To move the floor, change MIN_TEMP_LIMIT, not this.
+    # See tests/unit/test_you_cannot_ask_for_a_temperature_the_system_will_fight.py.
+    _attr_min_temp = MIN_TARGET_TEMP
     _attr_max_temp = MAX_INDOOR_TEMP
     _attr_target_temperature_step = TEMP_STEP
 
@@ -87,34 +100,20 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntit
             model="Heat Pump Optimizer",
         )
         self._entry = entry
-        self._attr_hvac_mode = HVACMode.HEAT
         self._attr_preset_mode = PRESET_NONE
 
-    async def async_added_to_hass(self) -> None:
-        """Run when entity about to be added to hass.
+    @property
+    def hvac_mode(self) -> HVACMode:
+        """HEAT when the optimiser is running, OFF when it is not - a VIEW of the config entry.
 
-        Restore previous state to maintain HVAC mode across restarts.
+        The master gate is entry.data["enable_optimization"], which the switch entity writes too.
+        Storing hvac_mode privately instead let the thermostat keep displaying OFF while the
+        optimiser resumed at the next tick, so both entities read the gate directly now.
+
+        tests/unit/test_the_thermostat_off_switch_actually_turns_it_off.py
         """
-        await super().async_added_to_hass()
-
-        # Restore previous state if available
-        if (last_state := await self.async_get_last_state()) is not None:
-            # Restore HVAC mode if valid
-            if last_state.state in [mode.value for mode in self._attr_hvac_modes]:
-                try:
-                    self._attr_hvac_mode = HVACMode(last_state.state)
-                    _LOGGER.debug(
-                        "Restored HVAC mode: %s from previous state", self._attr_hvac_mode
-                    )
-                except ValueError:
-                    _LOGGER.warning(
-                        "Invalid HVAC mode '%s' in restored state, using default HEAT",
-                        last_state.state,
-                    )
-                    self._attr_hvac_mode = HVACMode.HEAT
-            else:
-                _LOGGER.debug("No valid HVAC mode to restore, using default HEAT")
-                self._attr_hvac_mode = HVACMode.HEAT
+        enabled = self._entry.data.get(CONF_ENABLE_OPTIMIZATION, True)
+        return HVACMode.HEAT if enabled else HVACMode.OFF
 
     @property
     def current_temperature(self) -> float | None:
@@ -188,14 +187,11 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntit
             hvac_mode = HVACMode(hvac_mode)
 
         _LOGGER.info("Setting HVAC mode to %s", hvac_mode)
-        self._attr_hvac_mode = hvac_mode
+        enabled = hvac_mode != HVACMode.OFF
 
-        if hvac_mode == HVACMode.OFF:
-            # Disable optimization, reset offset to neutral
-            await self.coordinator.set_optimization_enabled(False)
-        else:
-            # Enable optimization
-            await self.coordinator.set_optimization_enabled(True)
+        # The coordinator changes the persisted gate only after the hardware transition succeeds,
+        # so the entity cannot display OFF while NIBE still holds a non-neutral offset.
+        await self.coordinator.set_optimization_enabled(enabled)
 
         self.async_write_ha_state()
 
@@ -280,7 +276,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], RestoreEntit
             # Current offset applied
             if "decision" in self.coordinator.data:
                 decision = self.coordinator.data["decision"]
-                attrs["current_offset"] = decision.offset
+                attrs["current_offset"] = self.coordinator.current_offset
                 attrs["optimization_reasoning"] = decision.reasoning
 
             # NIBE state

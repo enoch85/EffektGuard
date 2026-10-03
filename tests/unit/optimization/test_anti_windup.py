@@ -1,27 +1,10 @@
-"""Tests for anti-windup protection in EmergencyLayer.
+"""Anti-windup protection in EmergencyLayer.
 
-Context: DM oscillation occurs when offset is raised during thermal debt recovery,
-but heat hasn't yet reached the thermal mass (UFH concrete slab has 6+ hour lag).
-Raising offset makes DM go MORE negative initially because:
-  - S1 target rises immediately
-  - BT25 (actual) takes hours to catch up
-  - DM = ∫(BT25 - S1) dt accumulates larger negative values
-
-Without anti-windup, the system "chases" thermal debt:
-  1. DM at -300 → apply +2°C offset
-  2. S1 target rises, but BT25 lags → DM drops to -500
-  3. "Not working!" → raise to +3°C → DM drops to -700
-  4. Eventually heat arrives → BT25 overshoots S1 → DM swings to +100
-  5. System backs off → slab cools → cycle repeats
-
-Anti-windup solution:
-  If DM is dropping WHILE current_offset is already positive:
-  → Heat is "in transit" through thermal mass
-  → Don't escalate offset further - cap at current level
-
-Reference:
-  - Wikipedia: Integral Windup
-  - Dec 9, 2025 debug.log analysis
+DM = integral(BT25 - S1) dt. Raising the offset lifts S1 immediately, but BT25 (actual flow)
+lags for hours through a concrete slab, so DM first goes MORE negative. Without anti-windup the
+layer reads that as "not working", escalates the offset further, and oscillates once the heat
+finally arrives. Anti-windup: when DM is dropping while current_offset is already positive, heat
+is in transit - hold the offset rather than escalate it.
 """
 
 import pytest
@@ -304,13 +287,14 @@ class TestAntiWindupIntegration:
             tolerance_range=0.5,
         )
 
-        # Anti-windup should have prevented escalation or reduced offset (Jan 2026)
+        # Anti-windup should have prevented escalation or reduced the offset.
         if decision.anti_windup_active:
-            # With severe dm_rate (-1200/h in this test), offset may be REDUCED
-            # Jan 2026 enhancement: At -1200/h, reduction = 1200/100 = 12°C
-            # So offset goes from +2 to -10 (capped at MIN_OFFSET)
+            # With a severe dm_rate (-1200/h here) the offset may be REDUCED: reduction = 1200/100
+            # = 12°C, so +2 goes to -10 (capped at MIN_OFFSET).
             # Offset should be <= current_offset (kept or reduced, never raised)
-            assert decision.offset <= 2.0, f"Anti-windup should prevent raise, got {decision.offset}"
+            assert (
+                decision.offset <= 2.0
+            ), f"Anti-windup should prevent raise, got {decision.offset}"
             # New format options:
             # - Mild: "DM dropping -XX/h while offset +X°C - not raising"
             # - Severe: "DM dropping -XX/h - reducing offset by X°C..."
@@ -322,21 +306,11 @@ class TestAntiWindupIntegration:
 
 
 class TestAntiWindupRealScenario:
-    """Test real-world scenario from Dec 9, 2025 debug.log."""
+    """A logged DM-chasing oscillation, reproduced and prevented."""
 
     def test_prevents_dm_chasing_scenario(self, emergency_layer, nibe_state_factory):
-        """Reproduce and prevent the DM oscillation scenario.
-
-        Real scenario observed:
-        1. DM at -347 (pre-existing at startup)
-        2. DHW heating causes DM to drop to -711
-        3. System applies recovery offset
-        4. DM drops further to -800+ (heat in transit)
-        5. Eventually DM swings to +100 (overshoot)
-
-        With anti-windup:
-        - When DM is dropping despite positive offset, don't escalate
-        - Wait for heat to arrive through thermal mass
+        """Across a run of steadily dropping DM values with a positive offset held, the layer must
+        not escalate the offset on every step - anti-windup caps it while heat is in transit.
         """
         layer = emergency_layer
 
@@ -383,13 +357,9 @@ class TestAntiWindupRealScenario:
 
 
 class TestCausationWindow:
-    """Test causation window feature for anti-windup (Jan 2026).
-
-    The causation window distinguishes between:
-    - Self-induced spiral: We raised offset recently → DM dropping → our fault
-    - Environmental drop: Offset stable for hours → DM dropping → cold snap arrived
-
-    Anti-windup should only trigger for self-induced spirals.
+    """The causation window separates a self-induced spiral (offset raised recently, then DM
+    dropping) from an environmental drop (offset stable for hours, then DM dropping). Anti-windup
+    should trigger only for self-induced spirals.
     """
 
     def test_tracks_offset_raises(self, emergency_layer):
@@ -452,9 +422,7 @@ class TestCausationWindow:
         assert layer._last_offset_raise_time is None
         assert layer._raised_offset_recently(now) is False
 
-    def test_anti_windup_triggers_for_recent_raise(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_anti_windup_triggers_for_recent_raise(self, emergency_layer, nibe_state_factory):
         """Anti-windup triggers when offset was raised recently and DM dropping."""
         layer = emergency_layer
         now = datetime.now()
@@ -487,9 +455,7 @@ class TestCausationWindow:
         assert decision.anti_windup_active is True
         assert decision.tier == "ANTI_WINDUP"
 
-    def test_anti_windup_skipped_for_old_offset(
-        self, emergency_layer, nibe_state_factory
-    ):
+    def test_anti_windup_skipped_for_old_offset(self, emergency_layer, nibe_state_factory):
         """Anti-windup skipped when offset was raised long ago (environmental drop)."""
         layer = emergency_layer
         now = datetime.now()

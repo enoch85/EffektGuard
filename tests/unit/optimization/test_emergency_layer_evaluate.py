@@ -252,23 +252,12 @@ class TestEmergencyLayerTiers:
 class TestEmergencyLayerThermalMass:
     """Test thermal mass adjusted thresholds."""
 
-    def test_concrete_slab_tighter_thresholds(self):
-        """Test that concrete slab has tighter thresholds.
+    def test_concrete_slab_responds_before_a_radiator_system(self):
+        """A concrete slab must respond to thermal debt SOONER than a radiator system.
 
-        At 0°C in Stockholm:
-        - Radiator warning: -540 (no adjustment)
-        - Concrete warning: -702 (1.3× adjustment)
-
-        Using DM -600 should be WARNING for radiator but within normal for concrete
-        (because concrete thresholds are multiplied, making them MORE negative).
-
-        Wait, that's backwards - concrete has TIGHTER thresholds meaning it triggers
-        WARNING at LESS negative values. Let me check:
-        - Base warning: -540
-        - Concrete: -540 × 1.3 = -702 (MORE negative = later warning)
-
-        Actually the multiplier makes it MORE negative (later warning), not tighter.
-        Let me test at -580 which should be WARNING for radiator but OK for concrete.
+        At 0 C in Stockholm the radiator warns at -540 (buffer 1.0) and concrete at -540/1.3 = -415.
+        DM -450 is past concrete's threshold but not a radiator's: the slab is already recovering
+        while the radiator system has no need to act yet.
         """
         layer_radiator = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
@@ -281,11 +270,11 @@ class TestEmergencyLayerThermalMass:
             heating_type="concrete_ufh",
         )
 
-        # DM -580 at 0°C:
-        # - Radiator warning at -540, so -580 is beyond warning → triggers response
-        # - Concrete warning at -702, so -580 is within normal → no response
+        # DM -450 at 0 C:
+        # - Concrete warns at -415, so -450 is past it -> the slab starts recovering
+        # - Radiator warns at -540, so -450 is still within normal -> no need to act yet
         nibe_state = MockNibeState(
-            degree_minutes=-580,
+            degree_minutes=-450,
             outdoor_temp=0.0,
             indoor_temp=20.0,
         )
@@ -306,11 +295,15 @@ class TestEmergencyLayerThermalMass:
             tolerance_range=0.5,
         )
 
-        # Radiator should have higher tier or more aggressive response
-        # Concrete should still be OK or CAUTION
-        assert result_radiator.tier in ("WARNING", "CAUTION", "T1", "T2", "T3")
-        # Concrete's adjusted threshold is -702, so -580 should be within normal
-        assert result_concrete.tier in ("OK", "CAUTION")
+        # The slab is already recovering; the radiator system has not needed to start.
+        assert result_concrete.tier in ("WARNING", "CAUTION", "T1", "T2", "T3"), (
+            f"Concrete warns at -415 and DM is -450: the slab must be responding, not idle. "
+            f"Got tier {result_concrete.tier}."
+        )
+        assert result_radiator.tier in ("OK", "CAUTION"), (
+            f"A radiator system warns at -540 and DM is only -450: it has no need to act yet. "
+            f"Got tier {result_radiator.tier}."
+        )
 
 
 class TestEmergencyLayerShouldBlockDhw:

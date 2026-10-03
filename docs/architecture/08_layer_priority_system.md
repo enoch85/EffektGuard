@@ -103,34 +103,55 @@ Provides **responsive temperature correction**:
 
 ### Aggregation Algorithm
 
-#### Critical Layer Override
+> ⚠️ **This section previously reproduced a version of `_aggregate_layers` that no longer
+> exists, and whose behaviour was a bug.** It showed a single "critical layer override" whose
+> tie-break was `if abs(max_offset) > abs(min_offset)`. With the emergency layer asking for
+> **+10.0** at DM −1520 and a cost layer at critical weight asking for **−10.0**, `abs(+10) >
+> abs(−10)` is **False** — so it returned **−10.0: maximum cooling, in a thermal-debt
+> emergency.** The stated philosophy ("take the stronger absolute vote… when in doubt, protect
+> the heat pump") *was* the defect. Do not restore it. What follows is the algorithm that runs.
+
+`_aggregate_layers` is an ordered cascade, not a vote. The invariant it exists to enforce:
+
+> **A cost layer (spot price, effect tariff) must NEVER reduce heating while the thermal-debt
+> layer is actively recovering.**
+
 ```python
-def _aggregate_layers(self, layers: list[LayerDecision]) -> float:
-    # Separate critical layers (weight = 1.0)
-    critical_layers = [layer for layer in layers if layer.weight >= 1.0]
-    
-    if critical_layers:
-        # Take the strongest critical vote
-        max_offset = max(layer.offset for layer in critical_layers)
-        min_offset = min(layer.offset for layer in critical_layers)
-        
-        # Choose more conservative (safety-oriented) option
-        if abs(max_offset) > abs(min_offset):
-            return max_offset
-        else:
-            return min_offset
+# 1. Safety layer - indoor below MIN_TEMP_LIMIT. Absolute; nothing else is consulted.
+if safety_layer and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
+    return clamp(safety_layer.offset)
+
+# 2. EMERGENCY tier - DM past DM_THRESHOLD_AUX_LIMIT. Absolute.
+#    Suppressing recovery to protect the effect tariff does not avoid the peak: it
+#    guarantees a bigger one from the immersion heater, while the debt deepens.
+if emergency_layer and emergency_layer.tier == DM_TIER_EMERGENCY:
+    return clamp(emergency_layer.offset)
+
+# 3. Recovery tiers T1/T2/T3 - debt past the climate-aware warning threshold.
+#    A critical cost layer may MODERATE the response, never reverse it.
+if emergency_layer and emergency_layer.tier in DM_RECOVERY_TIERS:
+    floor = DM_CRITICAL_PEAK_AWARE_OFFSETS[emergency_layer.tier]   # by TIER, not by weight
+    if has_critical_cost_layer(layers):
+        return clamp(floor)                       # peak-aware compromise
+    return clamp(max(weighted_average(layers), floor))   # never below the tier's floor
+
+# 4. Any remaining critical layers, with no recovery in progress.
+critical = [l for l in layers if l.weight >= LAYER_WEIGHT_SAFETY]
+if critical:
+    hi, lo = max(l.offset for l in critical), min(l.offset for l in critical)
+    return clamp(hi if abs(hi) >= abs(lo) else lo)   # `>=`, so an exact tie HEATS
+
+# 5. Everything else: weighted average.
+return clamp(weighted_average(layers))
 ```
 
-#### Weighted Average Calculation
-```python
-    # Otherwise, weighted average of all layers
-    total_weight = sum(layer.weight for layer in layers)
-    if total_weight == 0:
-        return 0.0
-    
-    weighted_sum = sum(layer.offset * layer.weight for layer in layers)
-    return weighted_sum / total_weight
-```
+Two details that look like nits and are not:
+
+- **Tiers are read from `EmergencyLayerDecision.tier`, never inferred from a weight or an offset
+  magnitude.** Damping mutates the offset and a weight is a tuning knob, so inferring from either
+  lets a damped or retuned tier fall through into the cost-layer override path.
+- **The tie-break at step 4 is `>=`, not `>`.** `SAFETY_EMERGENCY_OFFSET` (+10) and
+  `PRICE_OFFSET_PEAK` (−10) tie by construction, and `>` returned the negative vote.
 
 ### Layer Weight Rationale
 
@@ -195,14 +216,12 @@ Final Decision: +5.0°C
 
 #### Critical Layer Override
 ```
-Safety:     +5.0°C × 1.0 = 5.00   (too cold: 17°C indoor)
-Emergency:  +2.0°C × 0.8 = 1.60   (moderate thermal debt)
-Effect:     -1.0°C × 0.65 = -0.65 (warning state)
-[All other layers ignored due to critical safety override]
+Safety:     +5.0°C  weight 1.0   (too cold: 17°C indoor)
+Emergency:  +2.0°C  weight 0.8   (moderate thermal debt)
+Effect:     -1.0°C  weight 0.65  (warning state)
 
-Critical Override:
-- Safety has weight 1.0 (critical)
-- Takes complete precedence
+Step 1 of the cascade matches: the safety layer is at LAYER_WEIGHT_SAFETY.
+It RETURNS. No weighted average is computed and no other layer is consulted.
 
 Final Decision: +5.0°C
 ```
@@ -212,11 +231,20 @@ Final Decision: +5.0°C
 ### Conflict Resolution Strategy
 
 #### Critical Layer Conflicts
-When multiple critical layers disagree:
+The cascade decides by **priority**, not by magnitude. Safety, then the EMERGENCY tier, then the
+recovery tiers, then any other critical layer, then the weighted average — the first one that
+matches returns.
 
-1. **Take the stronger absolute vote**: `max(abs(offset))`
-2. **Rationale**: More urgent situations take precedence
-3. **Safety philosophy**: When in doubt, protect the heat pump
+Only step 4 compares two critical layers directly, and it prefers the **heating** vote on an
+exact tie (`abs(hi) >= abs(lo)`). "Take the stronger absolute vote" is **not** the rule, and was
+never a safe one: the strongest absolute vote in a thermal-debt emergency can be a cost layer
+demanding −10.0.
+
+⚠️ **Both cost layers promote themselves to critical weight.** The price layer (in PEAK quarters)
+and the effect layer (at the monthly peak) reach `LAYER_WEIGHT_SAFETY`. That is why steps 2 and 3
+exist at all: without them, a critical cost layer would sit in step 4 alongside the emergency
+layer and could win. An earlier version of this document asserted that only Safety and Effect ever
+reach 1.0 — it does not hold, and reasoning from it produced real defects.
 
 #### Advisory Layer Balance
 Non-critical layers achieve **natural balance** through weighted averaging:

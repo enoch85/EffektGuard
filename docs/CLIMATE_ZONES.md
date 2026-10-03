@@ -32,9 +32,9 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 | Outdoor Temp | Normal DM Range | Warning Threshold |
 |--------------|----------------|-------------------|
-| -30°C        | -800 to -1200  | -1200             |
-| -20°C        | -600 to -1000  | -1000             |
-| -10°C        | -400 to -800   | -800              |
+| -30°C        | -1000 to -1400 | -1400             |
+| -20°C        | -800 to -1200  | -1200             |
+| -10°C        | -600 to -1000  | -1000             |
 
 **Safety margin:** +2.5°C additional flow temperature headroom
 
@@ -47,7 +47,7 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 **Examples:** Luleå (SWE), Umeå (SWE), Oulu (FIN), Trondheim (NOR)
 
 **Winter characteristics:**
-- Average winter low: -15°C
+- Average winter low: -12°C
 - Heavy heating demands
 - Extended compressor run times
 
@@ -55,10 +55,10 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 | Outdoor Temp | Normal DM Range | Warning Threshold |
 |--------------|----------------|-------------------|
-| -20°C        | -700 to -1100  | -1100             |
-| -15°C        | -600 to -1000  | -1000             |
-| -10°C        | -500 to -900   | -900              |
-| -5°C         | -400 to -800   | -800              |
+| -20°C        | -760 to -1160  | -1160             |
+| -15°C        | -660 to -1060  | -1060             |
+| -10°C        | -560 to -960   | -960              |
+| -5°C         | -460 to -860   | -860              |
 
 **Safety margin:** +1.5°C additional flow temperature headroom
 
@@ -69,7 +69,7 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 **Examples:** Stockholm (SWE), Oslo (NOR), Göteborg (SWE), Helsinki (FIN)
 
 **Winter characteristics:**
-- Average winter low: -10°C
+- Average winter low: -8°C
 - Substantial heating demands
 - Standard Nordic winter operation
 
@@ -77,10 +77,10 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 | Outdoor Temp | Normal DM Range | Warning Threshold |
 |--------------|----------------|-------------------|
-| -15°C        | -550 to -800   | -800              |
-| -10°C        | -450 to -700   | -700              |
-| -5°C         | -350 to -600   | -600              |
-| 0°C          | -250 to -500   | -500              |
+| -15°C        | -590 to -840   | -840              |
+| -10°C        | -490 to -740   | -740              |
+| -5°C         | -390 to -640   | -640              |
+| 0°C          | -290 to -540   | -540              |
 
 **Safety margin:** +1.0°C additional flow temperature headroom
 
@@ -101,9 +101,9 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 | Outdoor Temp | Normal DM Range | Warning Threshold |
 |--------------|----------------|-------------------|
-| -5°C         | -400 to -600   | -600              |
-| 0°C          | -300 to -500   | -500              |
-| 5°C          | -200 to -400   | -400              |
+| -5°C         | -380 to -580   | -580              |
+| 0°C          | -280 to -480   | -480              |
+| 5°C          | -180 to -380   | -380              |
 
 **Safety margin:** +0.5°C additional flow temperature headroom
 
@@ -114,7 +114,7 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 **Examples:** Paris (FRA), London (UK), Berlin (GER), and all other locations
 
 **Winter characteristics:**
-- Average winter low: +5°C
+- Average winter low: 0°C
 - Minimal heating demands
 - Mild climate, less optimization benefit
 
@@ -122,9 +122,9 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 | Outdoor Temp | Normal DM Range | Warning Threshold |
 |--------------|----------------|-------------------|
-| 0°C          | -350 to -550   | -550              |
-| 5°C          | -200 to -350   | -350              |
-| 10°C+        | Minimal        | -200              |
+| 0°C          | -200 to -350   | -350              |
+| 5°C          | -100 to -250   | -250              |
+| 10°C         | 0 to -150      | -150              |
 
 **Safety margin:** No additional headroom needed
 
@@ -136,20 +136,35 @@ EffektGuard automatically detects: **Cold Zone** (56-60.5°N)
 
 The base DM thresholds adjust dynamically based on current outdoor temperature:
 
-**Formula:** `adjustment = (zone_avg_winter_low - outdoor_temp) × 20 DM/°C`
+**Formula:** `adjustment = (outdoor_temp - zone_avg_winter_low) × 20 DM/°C`
 
-**Example (Stockholm - Cold Zone, winter avg -10°C):**
-- Zone winter average: -10°C
-- Current outdoor: -20°C
-- Difference: 10°C colder than average
-- Adjustment: 10 × 20 = -200 DM deeper threshold
-- Base warning: -700 DM
-- **Adjusted: -900 DM** (allows deeper DM in colder weather)
+Colder than the zone average ⇒ the difference is negative ⇒ the threshold moves **deeper**.
+Warmer ⇒ positive ⇒ **shallower**. (`climate_zones.py:231` — `temp_delta = outdoor_temp -
+self.zone_info.winter_avg_low`. This document previously stated the subtraction the other way
+round, which yields the opposite sign, and then wrote the correct number anyway — so the formula
+and its own worked example disagreed. If you are deriving a threshold by hand, use the code.)
+
+**Example (Stockholm — Cold Zone, winter avg −8°C):**
+- Zone winter average: **−8°C**
+- Current outdoor: −20°C
+- `temp_delta` = −20 − (−8) = **−12°C** (colder than average)
+- Adjustment: −12 × 20 = **−240 DM** (deeper threshold)
+- Base warning: −700 DM
+- **Adjusted: −940 DM** (allows deeper DM in colder weather)
 
 **Conversely at 0°C:**
-- 10°C warmer than average
-- Adjustment: +200 DM shallower threshold
-- **Adjusted: -500 DM** (tighter tolerance in mild weather)
+- `temp_delta` = 0 − (−8) = **+8°C** (warmer than average)
+- Adjustment: +8 × 20 = **+160 DM** (shallower threshold)
+- **Adjusted: −540 DM** (tighter tolerance in mild weather)
+
+**⚠️ The WARNING band has zero width.** In every zone `normal_max == warning`
+(`DM_CRITICAL_T1_MARGIN` is 0), so a DM that is "past normal" is already "past warning". The
+intermediate WARNING/CAUTION states are unreachable. This is a known open finding — do not
+"correct" the tables to conceal it.
+
+**⚠️ On a NIBE F750 the pump acts first.** Its own "start addition" (menu 4.9.3) defaults to
+**−700**, so the immersion heater engages *before* Stockholm's −740 warning threshold is ever
+reached, and works DM back up. Do not reason about −1500 as though the elpatron were not there.
 
 ### Absolute Safety Limit
 
@@ -248,7 +263,7 @@ Not currently needed - the automatic detection is very accurate. If you have a m
 ### Does this replace weather compensation?
 
 No! Climate zones work **with** weather compensation:
-- **Weather compensation** (André Kühne formula): Calculates optimal flow temperature
+- **Weather compensation** (the EN 442 emitter law): Calculates optimal flow temperature
 - **Climate zones**: Add safety margins and set DM expectations
 - **Together**: Maximum efficiency with appropriate safety buffers
 

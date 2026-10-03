@@ -14,7 +14,6 @@ from typing import Optional
 from ..const import (
     BASELINE_EMA_WEIGHT_NEW,
     BASELINE_EMA_WEIGHT_OLD,
-    BASELINE_PEAK_MULTIPLIER,
     DAYS_PER_MONTH,
     ORE_TO_SEK_CONVERSION,
     PRICE_MAINUNIT_PREFIXES,
@@ -34,6 +33,10 @@ class SavingsEstimate:
     spot_savings: float  # Savings from spot price optimization (SEK)
     baseline_cost: float  # Estimated cost without optimization (SEK)
     optimized_cost: float  # Estimated cost with optimization (SEK)
+    # False when no unoptimized baseline peak has ever been observed, so the effect-tariff half of
+    # this estimate is not a measurement and is reported as zero rather than guessed. See
+    # estimate_monthly_savings.
+    effect_baseline_measured: bool = False
 
 
 class SavingsCalculator:
@@ -45,27 +48,38 @@ class SavingsCalculator:
     - Observed peak reductions and price avoidance
     """
 
-    def price_to_main_unit_factor(self) -> float:
-        """Factor converting the configured price unit to the main currency.
+    def price_to_main_unit_factor(self) -> float | None:
+        """Factor converting the configured price unit to the main currency, or None.
 
-        GE-Spot preserves the user's display unit: öre/cent-style sub-units
-        divide by 100; SEK/EUR-style main units pass through. Unknown units
-        keep the historical öre/kWh assumption so existing Swedish setups
-        are unaffected, with a one-time log.
+        Sub-units (öre/cent) divide by 100; main units (SEK/EUR/NOK/DKK) pass through.
+
+        An unrecognised or absent unit returns None - we do NOT guess. The old fallback
+        assumed öre/kWh, but EVERY price integration publishes `<currency>/kWh` by default:
+
+            Nord Pool (HA core)         -> SEK/kWh   (no cents option exists at all)
+            custom-components/nordpool  -> SEK/kWh   (öre only if price_in_cents: true)
+            GE-Spot                     -> SEK/kWh   (öre only if display format = subunit)
+
+        So the öre assumption was 100x WRONG against all three. It fired whenever
+        `price_unit` was None - which it is until the first successful price read. Reporting
+        a savings figure that is 100x too large is worse than reporting none: skip the
+        accumulation instead.
         """
         unit = (self.price_unit or "").lower().replace(" ", "")
         if unit.startswith(PRICE_SUBUNIT_PREFIXES):
             return 1.0 / ORE_TO_SEK_CONVERSION
         if unit.startswith(PRICE_MAINUNIT_PREFIXES):
             return 1.0
+
         if not self._unknown_unit_logged:
             self._unknown_unit_logged = True
-            _LOGGER.info(
-                "Price unit '%s' not recognized - assuming öre/kWh-style "
-                "sub-unit for savings math (ranking is unaffected)",
+            _LOGGER.warning(
+                "Price unit %r not recognised - skipping monetary savings for this cycle "
+                "rather than guessing. Price-based OPTIMIZATION is unaffected (it ranks "
+                "prices and does not need the unit).",
                 self.price_unit,
             )
-        return 1.0 / ORE_TO_SEK_CONVERSION
+        return None
 
     @property
     def is_sek_price_unit(self) -> bool:
@@ -112,16 +126,30 @@ class SavingsCalculator:
         Returns:
             SavingsEstimate with breakdown
         """
-        # Estimate baseline peak if not provided
-        if baseline_peak_kw is None:
-            # Conservative estimate: optimization typically reduces peak by 10-15%
-            # Using 15% reduction assumption from const.py
-            baseline_peak_kw = current_peak_kw * BASELINE_PEAK_MULTIPLIER
+        # THE EFFECT-TARIFF SAVING WAS FABRICATED, AND IT COULD NOT READ ZERO.
+        #
+        # With no observed baseline the code assumed one:
+        #
+        #     baseline_peak_kw = current_peak_kw * BASELINE_PEAK_MULTIPLIER   # 1.176
+        #
+        # and `update_baseline_peak` - the only thing that could ever set a real baseline - had NO
+        # production caller, so the assumption fired every single time. The arithmetic then reduces
+        # to `effect_savings = 0.176 * current_peak * tariff`: a number computed from the peak
+        # itself, which means a HIGHER peak reported MORE "savings", and the sensor could never
+        # read zero however badly the optimiser was doing. It was unfalsifiable.
+        #
+        # This module already refuses to guess a price unit for exactly this reason. The same rule
+        # applies here: with no baseline there is no measured saving, and zero is the honest number.
+        # The coordinator now feeds `update_baseline_peak` from the quarters recorded while the
+        # optimisation switch is OFF - the offset is held at 0.0 then, so those peaks genuinely are
+        # what the house does unoptimised.
+        effect_baseline_measured = baseline_peak_kw is not None
 
-        # Calculate effect tariff savings
-        # Reduction in peak × monthly cost per kW
+        if not effect_baseline_measured:
+            baseline_peak_kw = current_peak_kw
+
         peak_reduction_kw = baseline_peak_kw - current_peak_kw
-        effect_savings = max(0, peak_reduction_kw * self.effect_tariff_sek_per_kw_month)
+        effect_savings = max(0.0, peak_reduction_kw * self.effect_tariff_sek_per_kw_month)
 
         # Calculate spot price savings (30 days)
         spot_savings = average_spot_savings_per_day * DAYS_PER_MONTH
@@ -150,6 +178,7 @@ class SavingsCalculator:
             spot_savings=round(spot_savings, 0),
             baseline_cost=round(baseline_cost, 0),
             optimized_cost=round(optimized_cost, 0),
+            effect_baseline_measured=effect_baseline_measured,
         )
 
     def calculate_spot_savings_per_cycle(
@@ -190,8 +219,12 @@ class SavingsCalculator:
         cycle_hours = cycle_minutes / 60.0
         energy_kwh = actual_power_kw * cycle_hours
 
-        # Actual cost at current price
+        # Actual cost at current price. An unrecognised unit yields None - report no
+        # savings rather than a figure that could be 100x out.
         to_main = self.price_to_main_unit_factor()
+        if to_main is None:
+            return 0.0
+
         actual_cost = energy_kwh * current_price * to_main
 
         # What it would have cost at average price (baseline)

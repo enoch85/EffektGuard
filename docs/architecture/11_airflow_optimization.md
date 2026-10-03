@@ -14,44 +14,69 @@ The trade-off is **ventilation penalty** — more cold outdoor air enters and mu
 
 ## The Physics
 
+> ⚠️ **This page used to add a "+20% COP improvement" term worth +1.32 kW, and concluded a net
+> gain of +1.03 kW. That term double-counts.** Extracting more heat from more air and "improving
+> the COP" are not two benefits; they are the same joules described twice. In steady state the
+> first law gives `Q_cond = P_el + Q_evap`, so at constant electrical input
+> `d(Q_cond) = d(Q_evap) = P_el · d(COP)` — an identity. Adding `P_el · d(COP)` to `d(Q_evap)`
+> counts the same heat again. NIBE's own S735 manual publishes four points at identical conditions
+> with exhaust airflow as the only variable, and they confirm it.
+
 ```
-Net Benefit = (Extra heat extracted) + (COP improvement) - (Ventilation penalty)
+Net gain = (extra heat extracted at the evaporator) - (extra fresh air the building must reheat)
 ```
 
-| Component | Formula | Typical Value |
-|-----------|---------|---------------|
+There is no third term.
+
+| Component | Formula | At 0°C outdoor |
+|-----------|---------|----------------|
 | Heat extraction | Q = ṁ × cp × ΔT | +0.41 kW |
-| COP improvement | 20% × baseline output | +1.32 kW |
-| Ventilation penalty | ṁ × cp × (T_in - T_out) | -0.70 kW (at 0°C) |
-| **Net gain** | | **+1.03 kW** |
+| Ventilation penalty | ṁ × cp × (T_in − T_out) | −0.70 kW |
+| **Net gain** | | **-0.31 kW** |
+
+**The net gain is negative, and it gets worse as it gets colder** (-0.65 kW at −10 °C) —
+because the penalty scales with (T_in − T_out) while the extraction does not. `calculate_net_thermal_gain()`
+returns this number and `airflow_optimizer` refuses to enhance when it is ≤ 0, so **on an
+exhaust-air pump this feature does not currently fire at all.** That is the correct behaviour for
+the physics as written; whether the feature survives at all is audit finding F-032, open with the
+owner. Do not "restore" the COP term to make the numbers look better.
 
 ### Physical Constants
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| Air density | 1.2 kg/m³ | At ~20°C |
-| Specific heat | 1.005 kJ/kg·K | Air at constant pressure |
-| Evaporator ΔT | 12°C | Typical temp drop through evaporator |
-| COP improvement | 20% | Empirical gain from warmer evaporator |
-| Standard flow | 150 m³/h | NIBE F750 normal ventilation |
-| Enhanced flow | 252 m³/h | NIBE F750 maximum ventilation |
+| `AIRFLOW_AIR_DENSITY` | 1.2 kg/m³ | At ~20°C |
+| `AIRFLOW_SPECIFIC_HEAT` | 1.005 kJ/kg·K | Air at constant pressure |
+| `AIRFLOW_DEFAULT_STANDARD` | 150 m³/h | NIBE F750 normal ventilation |
+| `AIRFLOW_DEFAULT_ENHANCED` | 252 m³/h | NIBE F750 maximum ventilation |
 
 ## When Enhanced Airflow Helps
 
 ### ✅ Beneficial (Green Zone)
 
-| Outdoor Temp | Min Compressor | Expected Gain | Max Duration |
-|--------------|----------------|---------------|--------------|
-| +5°C to +10°C | ≥50% | +1.0 to +1.4 kW | Until recovered |
-| 0°C to +5°C | ≥50% | +0.8 to +1.1 kW | 45-60 min |
-| -5°C to 0°C | ≥62% | +0.5 to +0.9 kW | 30-45 min |
+| Outdoor Temp | Min Compressor | Net Thermal Gain | Enhances? |
+|--------------|----------------|------------------|-----------|
+| +10°C | ≥61% | **+0.03 kW** | never fires |
+| +5°C | ≥61% | **-0.14 kW** | never fires |
+| +0°C | ≥61% | **-0.31 kW** | never fires |
+| -5°C | ≥74% | **-0.48 kW** | never fires |
+| -10°C | ≥86% | **-0.65 kW** | never fires |
+| -15°C | ≥98% | **-0.82 kW** | never fires |
+
+**Every row at or below +5 °C is negative.** The only positive gain is **+0.03 kW at +10 °C** -
+and enhanced airflow is a cold-weather recovery measure, so the single temperature at which it
+helps is the one at which nobody needs it. The penalty scales with (T_in − T_out); the extraction
+does not.
+
+`AIRFLOW_COMPRESSOR_BASE_THRESHOLD` is **61.0**, not the 50.0 this page used to print, so the
+compressor thresholds were wrong as well. The gains above are what `calculate_net_thermal_gain()`
+returns once the double-counted COP term is removed, and `airflow_optimizer` declines to enhance at
+a gain ≤ 0 - so in the cold, where this feature exists to help, **it does not fire**. Whether it
+survives at all is audit finding F-032, open with the owner. Do not restore the COP term to make
+the table look better.
 
 ### ⚠️ Marginal (Yellow Zone)
 
-| Outdoor Temp | Min Compressor | Expected Gain | Max Duration |
-|--------------|----------------|---------------|--------------|
-| -10°C to -5°C | ≥75% | +0.3 to +0.6 kW | 20-30 min |
-| -15°C to -10°C | ≥87% | +0.1 to +0.3 kW | 15-20 min |
 
 ### ❌ Don't Use (Red Zone)
 
@@ -176,7 +201,7 @@ AIRFLOW_INDOOR_DEFICIT_MIN = 0.2  # Minimum deficit to trigger
 AIRFLOW_TREND_WARMING_THRESHOLD = 0.1  # °C/h - already warming
 
 # Compressor threshold formula
-AIRFLOW_COMPRESSOR_BASE_THRESHOLD = 50.0  # % at 0°C outdoor
+AIRFLOW_COMPRESSOR_BASE_THRESHOLD = 61.0  # % base threshold at 0°C (81 Hz)  <- NOT 50.0
 AIRFLOW_COMPRESSOR_SLOPE = -2.5  # % per °C below 0
 
 # Duration limits (minutes)

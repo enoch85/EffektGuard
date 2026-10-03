@@ -1,5 +1,38 @@
 # Scenario 6: Phase 6 Learning Integration
 
+> ## ⚠️ THIS DESCRIBES A SUBSYSTEM THAT DOES NOT CURRENTLY DRIVE YOUR HEAT PUMP
+>
+> Everything below is wired up and runs. Observations are recorded, parameters are computed, and
+> the prediction layer *would* consume them at weight 0.65. It does not, because the confidence
+> gate is never passed — and until recently, when it *was* passed, it was passed for the wrong
+> reason.
+>
+> **Confidence never reaches 70% at the real observation cadence.** The coordinator records one
+> observation per aligned refresh — every **5 minutes** — while `LEARNING_OBSERVATION_WINDOW`
+> (672) and `LEARNING_MIN_OBSERVATIONS` (96) are both sized for **15-minute** samples. So the
+> "672 observations = 1 week" below is really **56 hours**, the window is a rolling one, and
+> `time_confidence` is capped at 0.33 forever. Meanwhile the indoor sensor reads to 0.1 °C, and
+> over 5 minutes a building's response is smaller than that — the deltas quantise into steps of
+> 1.2 °C/h, larger than any real heating rate, so the consistency term is honestly zero.
+> Confidence settles at **0.47** against the 0.70 gate.
+>
+> **There is no "Day 1-3 → Day 4-7 → Day 8-14" timeline.** The observation window rolls. Day 90
+> sees exactly what day 3 saw.
+>
+> Before the fix in `d111114`, the consistency term scored a **flatlined sensor** at 1.000 —
+> `std/mean` collapses to 0 when every reading is identical — so a house that had taught the model
+> nothing, or a *failed* indoor sensor, earned maximum confidence, learning engaged, and the pump
+> was driven from a flat line. It engaged on day 4, disengaged by day 7, engaged again on day 60.
+> A degenerate signal now scores zero.
+>
+> **Control today is deterministic** — the heating curve, the EN 442 emitter law, weather
+> compensation, and the degree-minute safety net. None of it depends on learning.
+>
+> Making learning genuinely work means sampling slowly enough that the signal exceeds the sensor's
+> resolution (≥30 min clears the gate; hourly is comfortably clear). That is a deliberate decision
+> about putting a never-validated learned model into the control path of real heating equipment,
+> and it is **open with the owner** — audit finding **F-132**.
+
 **Description**: Self-learning thermal prediction and adaptive behavior.
 
 ```mermaid
@@ -23,7 +56,7 @@ flowchart TD
 
     subgraph "Thermal Prediction"
         L[ThermalStatePredictor]
-        M[672 Observations<br/>1 week × 96 quarters]
+        M[672 Observations<br/>56 h at the real 5-min cadence]
         N[Confidence ≥ 70%<br/>Use learned params]
         O[Predict Temperature<br/>6-hour horizon]
     end

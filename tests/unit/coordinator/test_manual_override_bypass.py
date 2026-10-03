@@ -1,11 +1,8 @@
 """Manual force_offset commands must bypass the volatile-reversal blocker.
 
-Live-reproduced regression risk: after a +4°C offset, a user-commanded
-effektguard.force_offset with offset 0 was accepted by the service and the
-decision engine, but the coordinator's volatility blocker deferred it as a
-volatile reversal and kept the previous +4°C for 45 minutes. User commands
-are authoritative and must apply immediately; the blocker still applies to
-automatic decisions.
+After a +4°C offset, a user-commanded force_offset(0) must apply immediately: the volatility
+blocker previously deferred it as a volatile reversal and kept +4°C for 45 minutes. User commands
+are authoritative; the blocker still applies to automatic decisions.
 """
 
 from __future__ import annotations
@@ -28,6 +25,9 @@ def _make_minimal_hass() -> MagicMock:
     hass.config = MagicMock()
     hass.config.latitude = 59.3
     hass.config.config_dir = "/tmp/test"
+    # A real Store computes its path via hass.config.path(); an unstubbed MagicMock there
+    # makes os.makedirs create a literal ./MagicMock/... directory in the repo root.
+    hass.config.path = MagicMock(side_effect=lambda *parts: "/".join(("/tmp/test", *parts)))
     hass.loop = MagicMock()
     hass.loop.call_soon_threadsafe = MagicMock()
     hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
@@ -64,7 +64,7 @@ def _make_coordinator(decision: OptimizationDecision) -> EffektGuardCoordinator:
     )
     nibe = MagicMock()
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
-    nibe.set_curve_offset = AsyncMock(return_value=True)
+    nibe.set_curve_offset = AsyncMock(side_effect=lambda offset, **_: round(offset))
     nibe.power_sensor_entity = None
     nibe._power_sensor_entity = None
 
@@ -114,10 +114,10 @@ async def test_manual_reduction_applies_immediately_after_raise():
     )
     coordinator = _make_coordinator(manual)
 
-    await coordinator._async_update_data()
+    await coordinator._drive_the_pump()
 
     assert coordinator.current_offset == 0.0
-    coordinator.nibe.set_curve_offset.assert_awaited_with(0.0)
+    coordinator.nibe.set_curve_offset.assert_awaited_with(0.0, force_write=False)
     # The tracker adopted the manual value as the new baseline
     assert coordinator._offset_volatility_tracker.last_offset == 0.0
 
@@ -133,7 +133,7 @@ async def test_automatic_reversal_still_blocked():
     )
     coordinator = _make_coordinator(automatic)
 
-    await coordinator._async_update_data()
+    await coordinator._drive_the_pump()
 
     # Blocked: previous +4°C retained
     assert coordinator.current_offset == 4.0

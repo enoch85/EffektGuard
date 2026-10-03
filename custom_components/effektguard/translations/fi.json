@@ -90,40 +90,17 @@
     "step": {
       "init": {
         "title": "EffektGuard-asetukset",
-        "description": "Määritä optimointikäyttäytyminen ja rakennuksen ominaisuudet.\n\n**Muutokset tulevat voimaan välittömästi** ilman uudelleenkäynnistystä. Käytä **Määritä uudelleen** muuttaaksesi sensoreita.",
-        "data": {
-          "optimization_mode": "Optimointitila"
-        },
-        "data_description": {
-          "optimization_mode": "**Mukavuus**: Tiukka lämpötilan hallinta, minimaalinen hintojen optimointi, priorisoi vakaan lämmityksen. **Tasapainotettu**: Kohtalainen optimointi sallien pieniä lämpötilavaihteluita kustannussäästöjä varten. **Säästöt**: Maksimaalinen hintojen optimointi suuremmilla lämpötilavaihteluilla halpojen/kalliiden jaksojen aikana"
-        },
         "sections": {
-          "comfort_settings": {
-            "name": "Mukavuusasetukset",
-            "description": "Hienosäädä lämpötilan mukavuustoleranssia",
+          "optimization_settings": {
+            "name": "Optimointiasetukset",
+            "description": "Valitse optimointitila ja lämpötilan toleranssi",
             "data": {
+              "optimization_mode": "Optimointitila",
               "tolerance": "Lämpötilatoleranssi"
             },
             "data_description": {
+              "optimization_mode": "**Mukavuus**: Tiukka lämpötilan hallinta, minimaalinen hintojen optimointi, priorisoi vakaan lämmityksen. **Tasapainotettu**: Kohtalainen optimointi sallien pieniä lämpötilavaihteluita kustannussäästöjä varten. **Säästöt**: Maksimaalinen hintojen optimointi suuremmilla lämpötilavaihteluilla halpojen/kalliiden jaksojen aikana",
               "tolerance": "Ohjaa sallittua lämpötilapoikkeamaa tavoitteesta (±0,2°C katvealue ylläpidetään aina). Korkeammat arvot sallivat aggressiivisemman kustannusoptimoinnin mutta suuremmat lämpötilavaihtelut"
-            }
-          },
-          "dhw_settings": {
-            "name": "Lämpimän veden asetukset",
-            "description": "Aikatauluta milloin lämmin vesi lämmitetään",
-            "data": {
-              "dhw_target_temp": "Lämpimän veden tavoitelämpötila",
-              "dhw_morning_enabled": "Aamun lämmin vesi",
-              "dhw_morning_hour": "Aamun aloitusaika",
-              "dhw_evening_enabled": "Illan lämmin vesi",
-              "dhw_evening_hour": "Illan aloitusaika"
-            },
-            "data_description": {
-              "dhw_target_temp": "Tavoitelämpötila lämpimälle vedelle (45-60°C)",
-              "dhw_morning_enabled": "Ota käyttöön aamun lämpimän veden lämmitys",
-              "dhw_morning_hour": "Aamun kysyntäjakson aloitusaika",
-              "dhw_evening_enabled": "Ota käyttöön illan lämpimän veden lämmitys",
-              "dhw_evening_hour": "Illan kysyntäjakson aloitusaika"
             }
           },
           "building_characteristics": {
@@ -137,9 +114,42 @@
               "thermal_mass": "Kuinka nopeasti rakennus reagoi muutoksiin (0,5=kevyt/puu, 1,0=normaali, 2,0=raskas/betoni)",
               "insulation_quality": "Yleinen eristystaso (0,5=huono, 1,0=normaali, 2,0=erinomainen)"
             }
+          },
+          "domestic_hot_water": {
+            "name": "Lämmin käyttövesi (DHW)",
+            "description": "Ajoita milloin lämpimän veden tulee olla valmiina ja kuinka paljon sitä tarvitset",
+            "data": {
+              "dhw_target_temp": "Lämpimän veden tavoitelämpötila",
+              "dhw_min_amount": "Vähimmäismäärä lämmintä vettä ajoitettuna ajankohtana",
+              "dhw_schedules": "Ota käyttöön / poista käytöstä",
+              "dhw_morning_hour": "Aamun aloitusaika",
+              "dhw_evening_hour": "Illan aloitusaika"
+            },
+            "data_description": {
+              "dhw_target_temp": "Tavoitelämpötila lämpimälle vedelle (45-60°C)",
+              "dhw_min_amount": "Lämpimän veden minuuttimäärä, jonka tulee olla käytettävissä ajoitettuna ajankohtana.\n\nEffektGuard lämmittää halvimpien tuntien aikana varmistaakseen, että määrä on valmiina kun tarvitset sitä.",
+              "dhw_schedules": "Valitse mitkä lämmitysjaksot ovat käytössä. Poista valinta kytkeäksesi lämmityksen pois kyseiseltä jaksolta.",
+              "dhw_morning_hour": "Aamun kysyntäjakson aloitusaika",
+              "dhw_evening_hour": "Illan kysyntäjakson aloitusaika"
+            }
+          },
+          "airflow_optimization": {
+            "name": "Ilmavirran optimointi (poistoilma)",
+            "description": "Määritä ilmavirrat poistoilmalämpöpumpuille. Ota käyttöön / poista käytöstä Ilmavirran optimointi -kytkimellä Ohjaimet-osiossa.",
+            "data": {
+              "airflow_standard_rate": "Normaali ilmavirta",
+              "airflow_enhanced_rate": "Tehostettu ilmavirta"
+            },
+            "data_description": {
+              "airflow_standard_rate": "Normaali ilmanvaihdon teho tavallisessa käytössä.\nAseta se haluamallesi mukavuustasolle päivittäiseen käyttöön.\n\nNIBE F750 oletus: 150 m³/h (nopeus 2).",
+              "airflow_enhanced_rate": "Tehostettu ilmanvaihto, jota käytetään suotuisissa olosuhteissa poistoilman lämmön talteenoton ja COP:n parantamiseksi.\n\nNIBE F750 oletus: 252 m³/h (nopeus 4)."
+            }
           }
         }
       }
+    },
+    "error": {
+      "invalid_dhw_config": "Virheellinen lämpimän käyttöveden asetus: {reason}"
     }
   },
   "entity": {
@@ -162,6 +172,80 @@
       "airflow_optimization": {
         "name": "Ilmavirran optimointi"
       }
+    },
+    "sensor": {
+      "current_offset": {
+        "name": "Nykyinen siirtymä"
+      },
+      "degree_minutes": {
+        "name": "Asteminuutit"
+      },
+      "supply_temperature": {
+        "name": "Menoveden lämpötila"
+      },
+      "outdoor_temperature": {
+        "name": "Ulkolämpötila"
+      },
+      "indoor_temperature": {
+        "name": "Sisälämpötila"
+      },
+      "current_price": {
+        "name": "Nykyinen sähkön hinta"
+      },
+      "peak_today": {
+        "name": "Huipputeho tänään"
+      },
+      "peak_this_month": {
+        "name": "Huipputeho tässä kuussa"
+      },
+      "nibe_power": {
+        "name": "NIBE teho"
+      },
+      "compressor_frequency": {
+        "name": "Kompressorin taajuus"
+      },
+      "compressor_health": {
+        "name": "Kompressorin kunto"
+      },
+      "optimization_reasoning": {
+        "name": "Optimoinnin perustelu"
+      },
+      "quarter_of_day": {
+        "name": "Vuorokauden neljännes"
+      },
+      "price_period_classification": {
+        "name": "Hintajakson luokitus"
+      },
+      "temperature_trend": {
+        "name": "Sisälämpötilan suuntaus"
+      },
+      "outdoor_temperature_trend": {
+        "name": "Ulkolämpötilan suuntaus"
+      },
+      "savings_estimate": {
+        "name": "Arvioitu kuukausisäästö"
+      },
+      "optional_features_status": {
+        "name": "Valinnaisten toimintojen tila"
+      },
+      "heat_pump_model": {
+        "name": "Lämpöpumpun malli"
+      },
+      "dhw_status": {
+        "name": "Lämpimän käyttöveden tila"
+      },
+      "dhw_recommendation": {
+        "name": "Lämpimän käyttöveden suositus"
+      },
+      "dhw_next_boost_time": {
+        "name": "Lämpimän käyttöveden ajastettu käynnistys"
+      },
+      "airflow_enhancement": {
+        "name": "Tehostettu ilmavirta"
+      },
+      "airflow_thermal_gain": {
+        "name": "Ilmavirran lämpöhyöty"
+      }
     }
   },
   "services": {
@@ -172,6 +256,16 @@
     "boost_hot_water": {
       "name": "Tehosta lämmintä vettä",
       "description": "Käynnistä välitön lämpimän veden kierros"
+    }
+  },
+  "issues": {
+    "no_price_source": {
+      "title": "Ei sähkön hintalähdettä",
+      "description": "EffektGuardilla ei ole sähkön hintatietoja, joten hintaoptimointi ei ole käynnissä - lämpökäyrää ohjataan vain mukavuuden ja turvallisuuden perusteella. Määritä pörssisähköentiteetti (GE-Spot, Nord Pool tai vastaava) integraation asetuksissa ottaaksesi sen käyttöön."
+    },
+    "no_dhw_control_entity": {
+      "title": "Lämpimän veden ohjausentiteettiä ei löytynyt",
+      "description": "EffektGuard ohjaa lämmintä vettä kytkemällä NIBEn väliaikaisen luksus-kytkimen, eikä tällaista entiteettiä löytynyt. Home Assistantin NIBE-integraatio tuo kyseisen rekisterin (50004) esiin vain F-sarjalle, joten S-sarjan lämpöpumpulla ei ole vastaavaa - lämpimän veden optimointi EI ole käynnissä, eikä sensorien näyttämä ajastettu ajo toteudu. Lämmityksen optimointiin tämä ei vaikuta."
     }
   }
 }
