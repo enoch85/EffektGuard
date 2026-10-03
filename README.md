@@ -6,7 +6,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.6.0-beta.1-blue)
-![HA](https://img.shields.io/badge/Home%20Assistant-2025.10%2B-blue)
+![HA](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github&style=for-the-badge)](https://github.com/sponsors/enoch85)
 
 ---
@@ -120,7 +120,7 @@ Production-ready safety mechanisms:
 
 ## Requirements
 
-- **Home Assistant** 2025.10+
+- **Home Assistant** 2025.11+ (`SensorDeviceClass.TEMPERATURE_DELTA`, used by the curve-offset sensor, was added in 2025.11)
 - **Compatible NIBE heat pump** connected through ONE of these data sources:
   - [MyUplink integration](https://www.home-assistant.io/integrations/myuplink/) (cloud;
     writes may require a valid myUplink subscription)

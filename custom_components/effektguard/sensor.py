@@ -81,6 +81,14 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         # A heating-curve offset is an INTERVAL, not an absolute temperature. device_class
         # TEMPERATURE applies absolute conversion, so an imperial user saw 0.0 C as 32.0 F and
         # statistics stored the converted value; TEMPERATURE_DELTA converts as an interval.
+        # TEMPERATURE_DELTA, not TEMPERATURE: this is an offset, and a delta converts as
+        # dF = 1.8 * dC with no +32 term. Labelled TEMPERATURE, a +2 C offset would read as
+        # 35.6 F to a Fahrenheit user instead of 3.6 F.
+        #
+        # THIS SETS THE INTEGRATION'S MINIMUM HOME ASSISTANT VERSION. The member was added in
+        # HA 2025.11.0 and does not exist in 2025.10.0 - importing this module there raises
+        # AttributeError and the whole platform fails to load. hacs.json and the README say
+        # 2025.11 because of this line. Verified against the 2025.10.0 and 2025.11.0 tags.
         device_class=SensorDeviceClass.TEMPERATURE_DELTA,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         state_class=SensorStateClass.MEASUREMENT,
