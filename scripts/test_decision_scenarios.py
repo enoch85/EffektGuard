@@ -166,23 +166,14 @@ from const import (
     PROACTIVE_ZONE5_WEIGHT,
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
-    WARNING_CAUTION_OFFSET,
-    WARNING_CAUTION_WEIGHT,
-    WARNING_DEVIATION_DIVISOR_MODERATE,
-    WARNING_DEVIATION_DIVISOR_SEVERE,
-    WARNING_DEVIATION_THRESHOLD,
-    WARNING_OFFSET_MAX_MODERATE,
-    WARNING_OFFSET_MAX_SEVERE,
-    WARNING_OFFSET_MIN_MODERATE,
-    WARNING_OFFSET_MIN_SEVERE,
     WEATHER_COMP_DEFER_DM_CRITICAL,
     WEATHER_COMP_DEFER_DM_LIGHT,
     WEATHER_COMP_DEFER_DM_MODERATE,
     WEATHER_COMP_DEFER_DM_SIGNIFICANT,
-    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
-    WEATHER_COMP_DEFER_WEIGHT_LIGHT,
-    WEATHER_COMP_DEFER_WEIGHT_MODERATE,
-    WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT,
+    WEATHER_COMP_DEFER_RETAIN_CRITICAL,
+    WEATHER_COMP_DEFER_RETAIN_LIGHT,
+    WEATHER_COMP_DEFER_RETAIN_MODERATE,
+    WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT,
     PRICE_TOLERANCE_MIN,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_FACTOR_MIN,
@@ -494,39 +485,11 @@ class ScenarioTester:
                 reason=f"MODERATE RECOVERY: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (threshold: {t1_threshold:.0f})",
             )
 
-        # WARNING: DM beyond expected range (strengthened Oct 19, 2025)
-        if dm < expected_warning:
-            deviation = expected_warning - dm
-
-            # Strengthened offset calculation
-            if deviation > WARNING_DEVIATION_THRESHOLD:  # Severe deviation
-                offset = min(
-                    WARNING_OFFSET_MAX_SEVERE,
-                    WARNING_OFFSET_MIN_SEVERE + (deviation / WARNING_DEVIATION_DIVISOR_SEVERE),
-                )
-            else:  # Moderate deviation
-                offset = min(
-                    WARNING_OFFSET_MAX_MODERATE,
-                    WARNING_OFFSET_MIN_MODERATE + (deviation / WARNING_DEVIATION_DIVISOR_MODERATE),
-                )
-
-            percent_beyond = abs(deviation / expected_warning) if expected_warning else 0
-
-            return LayerVote(
-                "Emergency",
-                offset=offset,
-                weight=self.emergency_weight,
-                reason=f"WARNING: DM {dm:.0f} beyond expected for {outdoor:.1f}°C (expected: {expected_normal:.0f}, {percent_beyond:.0%} over)",
-            )
-
-        # CAUTION: Approaching expected limits
-        elif dm < expected_normal:
-            return LayerVote(
-                "Emergency",
-                offset=WARNING_CAUTION_OFFSET,
-                weight=WARNING_CAUTION_WEIGHT,
-                reason=f"CAUTION: DM {dm:.0f} at {outdoor:.1f}°C - monitoring",
-            )
+        # The WARNING and CAUTION branches that used to sit here mirrored two branches in
+        # thermal_layer.EmergencyLayer that could never run (T1 fires at the same threshold,
+        # and every climate zone sets normal_max == warning). Both are gone from production,
+        # so they are gone from this script: a scenario tester that models tiers the engine
+        # does not have reports behaviour the pump will never produce.
 
         return LayerVote(
             "Emergency",
@@ -780,19 +743,19 @@ class ScenarioTester:
 
         if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
             # Critical debt: 39% reduction (0.49 → 0.30)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / LAYER_WEIGHT_WEATHER_PREDICTION
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
             defer_note = f"; Deferred: Critical debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
             # Significant debt: 29% reduction (0.49 → 0.35)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT / LAYER_WEIGHT_WEATHER_PREDICTION
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT
             defer_note = f"; Deferred: Significant debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
             # Moderate debt: 18% reduction (0.49 → 0.40)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_MODERATE / LAYER_WEIGHT_WEATHER_PREDICTION
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_MODERATE
             defer_note = f"; Deferred: Moderate debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
             # Light debt: 8% reduction (0.49 → 0.45)
-            defer_factor = WEATHER_COMP_DEFER_WEIGHT_LIGHT / LAYER_WEIGHT_WEATHER_PREDICTION
+            defer_factor = WEATHER_COMP_DEFER_RETAIN_LIGHT
             defer_note = f"; Deferred: Light debt (DM {degree_minutes:.0f})"
         else:
             # No debt: full weather comp weight

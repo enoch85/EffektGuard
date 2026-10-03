@@ -2367,24 +2367,32 @@ class IntelligentDHWScheduler:
         thermal_debt: float,
         indoor_temp: float,
         target_indoor: float,
+        current_dhw_temp: float | None = None,
     ) -> tuple[bool, str | None]:
         """Check if any DHW abort conditions are triggered.
-
-        Moved from coordinator._check_dhw_abort_conditions for shared reuse.
 
         Abort conditions are returned by DHW optimizer to monitor during active heating.
         If triggered, we should stop DHW heating early to prioritize space heating.
 
-        Note: DHW amount target is checked in should_start_dhw() Rule 0, not here.
-        Every 5 min the coordinator calls should_start_dhw() with the sensor value,
-        and if target is reached, it returns should_heat=False - simple and reliable.
+        EVERY CONDITION THE DECISION EMITS MUST BE HANDLED HERE. `dhw_temp >= TARGET` was
+        emitted by four call sites in should_start_dhw and matched no branch below, so it
+        fell through and returned "no abort" - the tank's own target, advertised as an abort
+        condition, did nothing. An unrecognised condition now logs an ERROR rather than
+        being skipped silently, so the next one added cannot go the same way.
+
+        The conditions are strings because they are also displayed to the user, and parsing
+        a string we formatted ourselves is the weak part of that. The guard below is what
+        makes the weakness visible instead of silent.
 
         Args:
             abort_conditions: List of condition strings from DHW decision
-                Examples: ["thermal_debt < -500", "indoor_temp < 21.5"]
+                Examples: ["thermal_debt < -500", "indoor_temp < 21.5", "dhw_temp >= 50"]
             thermal_debt: Current degree minutes (DM) value
             indoor_temp: Current indoor temperature
             target_indoor: Target indoor temperature (currently unused but kept for future)
+            current_dhw_temp: Current DHW temperature (BT7/BT6). None means the sensor is
+                unavailable, in which case a dhw_temp condition cannot be evaluated and is
+                reported as unevaluable rather than treated as not-triggered.
 
         Returns:
             Tuple of (should_abort, reason_str)
@@ -2414,6 +2422,30 @@ class IntelligentDHWScheduler:
                 except (ValueError, IndexError) as err:
                     _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
                     continue
+
+            # Parse and evaluate "dhw_temp >= TARGET": the tank reached what we asked for,
+            # so stop rather than let the pump carry on past it on our open lux window.
+            elif "dhw_temp >=" in condition:
+                try:
+                    threshold = float(condition.split(">=")[1].strip())
+                except (ValueError, IndexError) as err:
+                    _LOGGER.warning("Failed to parse abort condition '%s': %s", condition, err)
+                    continue
+                if current_dhw_temp is None:
+                    _LOGGER.debug(
+                        "Cannot evaluate '%s': no DHW temperature available this cycle",
+                        condition,
+                    )
+                    continue
+                if current_dhw_temp >= threshold:
+                    return True, f"DHW {current_dhw_temp:.1f}°C >= target {threshold:.1f}°C"
+
+            else:
+                _LOGGER.error(
+                    "Unhandled DHW abort condition '%s' - it was emitted by the decision and "
+                    "is being ignored. Add a branch for it in check_abort_conditions.",
+                    condition,
+                )
 
         return False, None
 

@@ -436,20 +436,29 @@ class WeatherPatternLearner:
             for period_key, patterns in self.pattern_db.items()
         }
 
-    @classmethod
-    def from_dict(cls, data: dict[str, list[WeatherPatternDict]]) -> "WeatherPatternLearner":
-        """Create WeatherPatternLearner from dictionary.
+    def load_from_dict(self, data: dict[str, list[WeatherPatternDict]]) -> int:
+        """Load a persisted pattern database INTO THIS learner, and say how much arrived.
+
+        An instance method, deliberately. This was a `@classmethod` returning a NEW learner,
+        and the coordinator called it on the live instance and dropped the return value - so
+        every restart silently started from an empty database while logging a restore. The
+        classmethod also built its replacement with `cls()`, discarding the climate_zone_info
+        the live learner was constructed with, which is the fallback every seasonal default
+        reads when no history exists yet.
+
+        Mutating self keeps the zone and makes the coordinator's call site correct as written.
+        Returning the count means a caller can log what actually happened instead of trusting
+        that it did - see tests/unit/learning/test_weather_patterns_survive_a_restart.py.
 
         Args:
-            data: Dictionary representation of pattern database
+            data: Dictionary from to_dict()
 
         Returns:
-            Reconstructed WeatherPatternLearner instance
+            Number of patterns loaded.
         """
-        learner = cls()
-
+        restored = 0
         for period_key, patterns_data in data.items():
-            learner.pattern_db[period_key] = [
+            self.pattern_db[period_key] = [
                 WeatherPattern(
                     date=datetime.fromisoformat(p["date"]),
                     avg_temp=p["avg_temp"],
@@ -461,8 +470,9 @@ class WeatherPatternLearner:
                 )
                 for p in patterns_data
             ]
+            restored += len(self.pattern_db[period_key])
 
-        return learner
+        return restored
 
 
 # Import for timedelta

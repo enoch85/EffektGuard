@@ -13,7 +13,7 @@ from custom_components.effektguard.const import (
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     WEATHER_COMP_DEFER_DM_CRITICAL,
     WEATHER_COMP_DEFER_DM_LIGHT,
-    WEATHER_COMP_DEFER_WEIGHT_CRITICAL,
+    WEATHER_COMP_DEFER_RETAIN_CRITICAL,
 )
 from custom_components.effektguard.optimization.weather_layer import (
     AdaptiveClimateSystem,
@@ -299,7 +299,7 @@ class TestWeatherCompensationDeferral:
         )
 
         # Critical deferral should reduce weight significantly
-        expected_factor = WEATHER_COMP_DEFER_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+        expected_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
         assert result.defer_factor == pytest.approx(expected_factor, rel=0.01)
         assert "Critical debt" in result.reason
 

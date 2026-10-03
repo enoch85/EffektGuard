@@ -26,7 +26,6 @@ from ..const import (
     ANTI_WINDUP_DM_HISTORY_BASE_SIZE,
     ANTI_WINDUP_MIN_POSITIVE_OFFSET,
     ANTI_WINDUP_MIN_SAMPLES,
-    ANTI_WINDUP_OFFSET_CAP_MULTIPLIER,
     ANTI_WINDUP_REDUCTION_MULTIPLIER,
     ANTI_WINDUP_REDUCTION_RATE_DIVISOR,
     ANTI_WINDUP_REDUCTION_THRESHOLD,
@@ -93,15 +92,6 @@ from ..const import (
     THERMAL_RECOVERY_T3_MIN_OFFSET,
     THERMAL_RECOVERY_WARMING_THRESHOLD,
     VOLATILE_WEIGHT_REDUCTION,
-    WARNING_CAUTION_OFFSET,
-    WARNING_CAUTION_WEIGHT,
-    WARNING_DEVIATION_DIVISOR_MODERATE,
-    WARNING_DEVIATION_DIVISOR_SEVERE,
-    WARNING_DEVIATION_THRESHOLD,
-    WARNING_OFFSET_MAX_MODERATE,
-    WARNING_OFFSET_MAX_SEVERE,
-    WARNING_OFFSET_MIN_MODERATE,
-    WARNING_OFFSET_MIN_SEVERE,
     # DM recovery constants (shared with dhw_optimizer)
     DM_RECOVERY_MAX_HOURS,
     DM_RECOVERY_RATE_COLD,
@@ -602,10 +592,24 @@ class EmergencyLayer:
         anti_windup_active: bool,
         tier_name: str,
     ) -> tuple[float, str]:
-        """Apply anti-windup offset capping if active.
+        """Hold the offset at its current value while heat is in transit.
 
-        When anti-windup is triggered (heat in transit), cap the new offset to
-        prevent escalation. Allow maintaining or slightly reducing offset.
+        Anti-windup fires when degree minutes are FALLING even though the offset is already
+        positive: raising S1 widens the (BT25 - S1) gap that DM integrates, so asking for
+        more heat makes the number worse for hours before the thermal mass responds. The
+        response is to stop escalating and wait.
+
+        The cap is `current_offset` - hold, do not climb. It used to be
+
+            max(current_offset, current_offset * ANTI_WINDUP_OFFSET_CAP_MULTIPLIER)
+
+        with the multiplier at 0.7, which is identically `current_offset` for every positive
+        offset, and anti-windup only triggers at an offset of at least
+        ANTI_WINDUP_MIN_POSITIVE_OFFSET. So the multiplier never changed an outcome at any
+        input, while reading like a 30% safety reduction. Holding is the real behaviour, and
+        it is now the stated one; ACTIVE reduction is a separate, deliberate path keyed on
+        how bad the spiral is (ANTI_WINDUP_REDUCTION_THRESHOLD and the rate-proportional
+        reduction below it), which is where a reduction belongs.
 
         Args:
             calculated_offset: Offset calculated by tier logic
@@ -621,16 +625,18 @@ class EmergencyLayer:
 
         # Calculate capped offset: don't exceed current offset * cap multiplier
         # This prevents escalation while allowing gradual reduction
-        max_offset = max(current_offset, current_offset * ANTI_WINDUP_OFFSET_CAP_MULTIPLIER)
+        # Hold at the offset the pump is already running. See the docstring: the former
+        # max(current, current * 0.7) was `current` at every reachable input.
+        max_offset = current_offset
 
         if calculated_offset > max_offset:
             _LOGGER.info(
-                "%s anti-windup: capping offset %.2f°C → %.2f°C (heat in transit)",
+                "%s anti-windup: holding offset at %.2f°C instead of %.2f°C (heat in transit)",
                 tier_name,
-                calculated_offset,
                 max_offset,
+                calculated_offset,
             )
-            return max_offset, f"capped from {calculated_offset:.1f}°C"
+            return max_offset, f"held at {max_offset:.1f}°C instead of {calculated_offset:.1f}°C"
 
         return calculated_offset, ""
 
@@ -1001,74 +1007,27 @@ class EmergencyLayer:
                 dm_rate=dm_rate,
             )
 
-        # WARNING: Beyond expected range
-        if degree_minutes < expected_dm["warning"]:
-            deviation = expected_dm["warning"] - degree_minutes
+        # The ladder ends here. Z1..Z5 (ProactiveLayer) cover the band from just-negative DM
+        # down to the thermal-mass-adjusted warning threshold, and T1 picks up at exactly that
+        # threshold (DM_CRITICAL_T1_MARGIN is 0, by design: T1 IS the warning response). The
+        # coverage is contiguous and verified for every heating type by
+        # tests/unit/optimization/test_the_degree_minute_ladder_has_no_gaps.py.
+        #
+        # Two further branches used to sit here, and NEITHER COULD EVER RUN:
+        #
+        #   WARNING  `degree_minutes < expected_dm["warning"]`, placed after T1's
+        #            `degree_minutes <= warning - DM_CRITICAL_T1_MARGIN`. With the margin at 0
+        #            the two tests are the same test, so T1 always returned first.
+        #   CAUTION  `degree_minutes < expected_dm["normal"]`. Every climate zone defines
+        #            dm_normal_range[1] == dm_warning_threshold - "warning" MEANS "deeper than
+        #            the normal range" - so this is also T1's condition, one step further down.
+        #
+        # They were removed rather than resurrected: reviving either needs a NEW threshold
+        # invented between the existing ones, and the Z-zones already occupy that space with
+        # real, reachable, graduated responses. Deleting them changed no pump behaviour; it
+        # removed two tiers the docs promised and the code could not deliver.
 
-            if deviation > WARNING_DEVIATION_THRESHOLD:
-                offset = min(
-                    WARNING_OFFSET_MAX_SEVERE,
-                    WARNING_OFFSET_MIN_SEVERE + (deviation / WARNING_DEVIATION_DIVISOR_SEVERE),
-                )
-            else:
-                offset = min(
-                    WARNING_OFFSET_MAX_MODERATE,
-                    WARNING_OFFSET_MIN_MODERATE + (deviation / WARNING_DEVIATION_DIVISOR_MODERATE),
-                )
-
-            # Apply anti-windup cap to WARNING tier too
-            final_offset, cap_reason = self._apply_anti_windup_cap(
-                offset, current_offset, anti_windup_active, "WARNING"
-            )
-
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, final_offset):
-                final_offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
-
-            reason = (
-                f"DM {degree_minutes:.0f} beyond expected for "
-                f"{outdoor_temp:.1f}°C (expected: {expected_dm['normal']:.0f}, "
-                f"warning: {expected_dm['warning']:.0f}, deviation: {deviation:.0f})"
-            )
-            if anti_windup_active:
-                reason += f" [{anti_windup_reason}]"
-            if volatile_suffix:
-                reason += volatile_suffix
-
-            # Apply weight reduction during volatile cheap periods
-            weight = LAYER_WEIGHT_EMERGENCY
-            if is_volatile:
-                weight = weight * VOLATILE_WEIGHT_REDUCTION
-
-            return EmergencyLayerDecision(
-                name="Thermal Debt Warning",
-                offset=final_offset,
-                weight=weight,
-                reason=reason,
-                tier="WARNING",
-                degree_minutes=degree_minutes,
-                threshold_used=expected_dm["warning"],
-                anti_windup_active=anti_windup_active,
-                dm_rate=dm_rate,
-            )
-
-        # CAUTION: Approaching limits
-        if degree_minutes < expected_dm["normal"]:
-            return EmergencyLayerDecision(
-                name="Thermal Debt",
-                offset=WARNING_CAUTION_OFFSET,
-                weight=WARNING_CAUTION_WEIGHT,
-                reason=f"DM {degree_minutes:.0f} approaching limits - monitoring",
-                tier="CAUTION",
-                degree_minutes=degree_minutes,
-                threshold_used=expected_dm["normal"],
-                dm_rate=dm_rate,
-            )
-
-        # OK: Within normal range
+        # OK: within the normal range for this outdoor temperature.
         return EmergencyLayerDecision(
             name="Thermal Debt",
             offset=0.0,

@@ -234,16 +234,49 @@ EFFECT_PREDICTIVE_WARMING_DECREASE: Final = -0.5  # kW predicted decrease
 
 # Weather compensation deferral (Conservative strategy)
 # Reduce weather comp weight when thermal debt exists, allowing thermal reality
-# (DM + comfort + proactive) to override outdoor temperature optimization
-WEATHER_COMP_DEFER_DM_LIGHT: Final = -150  # Start reducing influence (8% reduction)
-WEATHER_COMP_DEFER_DM_MODERATE: Final = -200  # Clear thermal priority (18% reduction)
-WEATHER_COMP_DEFER_DM_SIGNIFICANT: Final = -300  # Strong reduction (29% reduction)
-WEATHER_COMP_DEFER_DM_CRITICAL: Final = -400  # Minimal weather comp influence (39% reduction)
+# (DM + comfort + proactive) to override outdoor temperature optimization.
+#
+# The deferral is a FRACTION OF THE OWNER'S CONFIGURED WEIGHT that is retained, and the
+# RETAIN_* constants below are derived from the weights a default install lands on, so the
+# numbers an owner may already have tuned against are preserved exactly.
+#
+# The behaviour was correct; the EXPRESSION of it was not. weather_layer computed
+#
+#     defer_factor = WEATHER_COMP_DEFER_WEIGHT_X / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+#
+# which is a fraction reconstructed by dividing one tuning constant by another, in a layer
+# that then multiplied it by a third. Reading it, two of us concluded it cancelled the
+# owner's own weight - it does not, it scales it - and that is reason enough to state the
+# fraction directly instead of making every reader re-derive it.
+#
+# The DM comments also contradicted the weight comments four lines below them: -200 was
+# annotated "18% reduction" against a constant annotated "16% reduction from 0.49", and
+# -300 said 29% against 27%. The arithmetic below is now the single statement of it.
+WEATHER_COMP_DEFER_DM_LIGHT: Final = -150  # Start reducing influence
+WEATHER_COMP_DEFER_DM_MODERATE: Final = -200  # Clear thermal priority
+WEATHER_COMP_DEFER_DM_SIGNIFICANT: Final = -300  # Strong reduction
+WEATHER_COMP_DEFER_DM_CRITICAL: Final = -400  # Minimal weather comp influence
 
-WEATHER_COMP_DEFER_WEIGHT_LIGHT: Final = 0.45  # 8% reduction from 0.49
-WEATHER_COMP_DEFER_WEIGHT_MODERATE: Final = 0.41  # 16% reduction from 0.49
-WEATHER_COMP_DEFER_WEIGHT_SIGNIFICANT: Final = 0.36  # 27% reduction from 0.49
-WEATHER_COMP_DEFER_WEIGHT_CRITICAL: Final = 0.30  # 39% reduction from 0.49
+# The weight a DEFAULT install (DEFAULT_WEATHER_COMPENSATION_WEIGHT) ends up at per tier.
+# Kept because these are the numbers the tiers were tuned to produce.
+_WEATHER_COMP_DEFER_DEFAULT_WEIGHT_LIGHT: Final = 0.45
+_WEATHER_COMP_DEFER_DEFAULT_WEIGHT_MODERATE: Final = 0.41
+_WEATHER_COMP_DEFER_DEFAULT_WEIGHT_SIGNIFICANT: Final = 0.36
+_WEATHER_COMP_DEFER_DEFAULT_WEIGHT_CRITICAL: Final = 0.30
+
+# Derived, not rounded: a hand-rounded 0.61 would quietly retune every install by ~0.2%.
+WEATHER_COMP_DEFER_RETAIN_LIGHT: Final = (
+    _WEATHER_COMP_DEFER_DEFAULT_WEIGHT_LIGHT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+)  # keep 91.8% of the owner's weight
+WEATHER_COMP_DEFER_RETAIN_MODERATE: Final = (
+    _WEATHER_COMP_DEFER_DEFAULT_WEIGHT_MODERATE / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+)  # keep 83.7%
+WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT: Final = (
+    _WEATHER_COMP_DEFER_DEFAULT_WEIGHT_SIGNIFICANT / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+)  # keep 73.5%
+WEATHER_COMP_DEFER_RETAIN_CRITICAL: Final = (
+    _WEATHER_COMP_DEFER_DEFAULT_WEIGHT_CRITICAL / DEFAULT_WEATHER_COMPENSATION_WEIGHT
+)  # keep 61.2%
 
 # Climate Zone Winter Baselines (Oct 19, 2025 - SMHI Climate Normals 1991-2020)
 # These represent Jan-Feb average temperatures for each climate zone
@@ -470,7 +503,6 @@ ANTI_WINDUP_MIN_POSITIVE_OFFSET: Final = 0.5  # Offset must be at least +0.5°C
 
 # When anti-windup is active, cap offset at this fraction of current offset
 # This allows some recovery but prevents escalation
-ANTI_WINDUP_OFFSET_CAP_MULTIPLIER: Final = 0.7  # Cap at 70% of normal recovery offset
 
 # Anti-windup cooldown period (Jan 2026 DM spiral analysis)
 # After anti-windup prevents an offset raise, wait this long before trying again.
@@ -572,22 +604,11 @@ TOLERANCE_RANGE_MULTIPLIER: Final = 0.4  # of the owner's tolerance: 0.5 C -> a 
 # Used for extreme temperature deviations and absolute DM maximum
 SAFETY_EMERGENCY_OFFSET: Final = MAX_OFFSET  # Emergency temperature correction (too cold/hot)
 
-# WARNING layer dynamic offsets (Oct 19, 2025)
-# Progressive offset calculation based on DM deviation severity
-# Severe deviation: DM deviation > 200 from expected warning threshold
-# Moderate deviation: DM deviation <= 200 from expected warning threshold
-WARNING_DEVIATION_THRESHOLD: Final = 200  # DM deviation threshold for severe vs moderate
-WARNING_OFFSET_MAX_SEVERE: Final = 1.8  # Maximum offset for severe deviation
-WARNING_OFFSET_MIN_SEVERE: Final = 1.0  # Minimum offset for severe deviation
-WARNING_DEVIATION_DIVISOR_SEVERE: Final = 250  # Ramp steepness for severe (1.0 + dev/250)
-WARNING_OFFSET_MAX_MODERATE: Final = 1.5  # Maximum offset for moderate deviation
-WARNING_OFFSET_MIN_MODERATE: Final = 0.8  # Minimum offset for moderate deviation
-WARNING_DEVIATION_DIVISOR_MODERATE: Final = 300  # Ramp steepness for moderate (0.8 + dev/300)
-
-# WARNING layer caution zone (Oct 19, 2025)
-# Gentle correction when slightly beyond normal operating range
-WARNING_CAUTION_OFFSET: Final = 0.5  # Gentle correction for caution zone
-WARNING_CAUTION_WEIGHT: Final = 0.5  # Caution layer weight
+# The WARNING and CAUTION tiers that these constants configured are GONE, and so are they.
+# Both branches sat after T1 in EmergencyLayer and neither could execute: T1 triggers at
+# `warning - DM_CRITICAL_T1_MARGIN` with the margin at 0, and every climate zone defines
+# dm_normal_range[1] == dm_warning_threshold. The graduated response they were meant to give
+# is what PROACTIVE_ZONE1..5 below actually deliver, reachably.
 
 # Proactive layer zone thresholds (Oct 19, 2025)
 # Five-zone system based on percentage of climate-aware expected DM thresholds
@@ -623,18 +644,28 @@ PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 0.875  # 87.5% - strictly BEFORE warn
 # Lower offsets accumulate via fractional accumulator but take multiple cycles to apply
 #
 # ESCALATION HIERARCHY (must be strictly increasing):
-# Z1 → Z2 → Z3 → Z4 → Z5 → WARNING → T1 → T2 → T3
+# Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY
+#
+# Eight rungs, and every one of them fires. This list said nine and named a WARNING rung
+# between Z5 and T1 that no degree-minute value could reach; the ladder is now what the
+# code does, checked by test_the_degree_minute_ladder_has_no_gaps.
+#
+# The handover is exact: Z1..Z5 are percentages of the thermal-mass-adjusted normal_max,
+# Z5 bottoming out AT that threshold, and T1 triggers at the same number
+# (DM_CRITICAL_T1_MARGIN = 0). Contiguous, no overlap, no gap - for radiators, timber and
+# concrete alike, which is the part that was broken when the two layers read the threshold
+# in different coordinate systems.
 #
 # Effective contribution = offset × weight
 # Z1: 1.0 × 0.30 = 0.30 (gentle nudge)
 # Z2: 1.5 × 0.40 = 0.60 (moderate boost)
 # Z3: 2.0 × 0.50 = 1.00 to 2.5 × 0.50 = 1.25 (significant)
 # Z4: 2.5 × 0.55 = 1.38 (strong prevention)
-# Z5: 3.0 × 0.60 = 1.80 (very strong, approaching WARNING)
-# WARNING: 0.8-1.8 × 0.5-0.7 = 0.4-1.26 (at warning threshold)
-# T1: 4.0 × 0.65 = 2.60 (recovery mode)
+# Z5: 3.0 × 0.60 = 1.80 (very strong, at the warning threshold)
+# T1: 4.0 × 0.65 = 2.60 (recovery mode, from the warning threshold down)
 # T2: 7.0 × 0.81 = 5.67 (strong recovery)
 # T3: 8.5 × 0.91 = 7.74 (emergency recovery)
+# EMERGENCY: MAX_OFFSET at DM_THRESHOLD_AUX_LIMIT, overriding every cost layer
 #
 PROACTIVE_ZONE1_OFFSET: Final = 1.0  # Light boost (immediate NIBE effect)
 # Zone 1 weight uses LAYER_WEIGHT_PROACTIVE_MIN (0.3)
