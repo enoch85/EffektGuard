@@ -1,8 +1,8 @@
 # Exact direct pins give Dependabot meaningful version updates. The HA test plugin
 # pins its own complete toolchain; keep these compatible rather than forcing pip.
 homeassistant==2026.10.0
-numpy==2.3.2
-pytest==9.0.3
+numpy==2.5.3
+pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pytest-homeassistant-custom-component==0.13.371
