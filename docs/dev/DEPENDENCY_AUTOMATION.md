@@ -12,7 +12,8 @@ Dependabot can record updates. There was no lockfile in this repository.
 
 Every PR, including documentation and workflow updates, runs `Lint EffektGuard`,
 `Validate EffektGuard`, and `Validate Automation` with read-only permissions. There are no
-path filters or job conditions. The production build is the HACS release ZIP; no Node build
+path filters or job conditions. The existing full simulator sweep runs too: its recorded
+known findings remain visible, and an unrecorded scenario failure fails validation. The production build is the HACS release ZIP; no Node build
 applies. Docker is built on every PR. Existing HACS and Hassfest checks remain enabled.
 Merge-group validation uses the same check names.
 

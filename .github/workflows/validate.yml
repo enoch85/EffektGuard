@@ -41,6 +41,7 @@ jobs:
       - run: pytest tests/ -v --tb=short
       - run: python scripts/simulation/sim_harness.py --selftest
       - run: python scripts/simulation/sim_harness.py --dst
+      - run: python scripts/simulation/sim_harness.py --all-scenarios
       # This integration has no web/Node build: its production build is the HACS ZIP.
       - run: bash scripts/build_release.sh
       - name: HACS validation
