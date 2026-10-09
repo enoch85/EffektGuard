@@ -31,6 +31,8 @@ Automatically optimizes your heat pump to minimize electricity costs (spot price
 
 Currently supports NIBE heat pumps via MyUplink integration, with plans to add support for additional brands in the future.
 
+Dependency updates and PR checks run automatically; releases remain manual.
+
 ## Key Features
 
 ### 🎯 Multi-Layer Optimization Engine

@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directories: [/, /tests]
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
+    labels: [dependencies, automated]
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
+    labels: [dependencies, automated]
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /.devcontainer
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
+    labels: [dependencies, automated]
+    groups:
+      docker-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
