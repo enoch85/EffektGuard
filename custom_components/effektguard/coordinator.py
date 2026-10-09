@@ -268,7 +268,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                         hour = int(p.availability_hour)
                         temp = float(p.target_temp)
                         formatted_periods.append(f"{hour:02d}:00 ({temp:.1f}°C)")
-                    except TypeError, ValueError:
+                    except (TypeError, ValueError):
                         # Fallback for mock objects in tests
                         formatted_periods.append(f"{p.availability_hour}:00 ({p.target_temp}°C)")
 
@@ -493,7 +493,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                                 "Synced with NIBE offset: %d°C", int(self.last_applied_offset)
                             )
                             offset_synced = True
-                        except ValueError, TypeError:
+                        except (ValueError, TypeError):
                             pass
 
                 # Fall back to stored value if NIBE entity wasn't available

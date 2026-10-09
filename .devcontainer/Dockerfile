@@ -15,8 +15,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
     && add-apt-repository -y ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        python3.14 \
-        python3.14-dev \
-        python3.14-venv \
+        python3.13 \
+        python3.13-dev \
+        python3.13-venv \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

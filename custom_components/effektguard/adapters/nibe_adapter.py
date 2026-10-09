@@ -491,7 +491,7 @@ class NibeAdapter:
         entity_offset: int | None = None
         try:
             entity_offset = int(float(state.state))
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             pass
 
         resync_window_passed = self._last_write is None or now - self._last_write >= timedelta(
@@ -537,7 +537,7 @@ class NibeAdapter:
         try:
             entity_min = float(state.attributes["min"])
             entity_max = float(state.attributes["max"])
-        except KeyError, TypeError, ValueError:
+        except (KeyError, TypeError, ValueError):
             entity_min = entity_max = None
         if entity_min is not None and entity_max is not None:
             clamped = int(max(entity_min, min(float(offset_to_apply), entity_max)))
@@ -959,7 +959,7 @@ class NibeAdapter:
 
         try:
             value = float(state.state)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             _LOGGER.warning("Cannot parse float from %s: %s", entity_id, state.state)
             return default
 
@@ -1054,7 +1054,7 @@ class NibeAdapter:
 
         try:
             value = float(state.state)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             _LOGGER.warning("Cannot parse temperature from %s: %s", entity_id, state.state)
             return default
 
@@ -1069,7 +1069,7 @@ class NibeAdapter:
 
         try:
             return TemperatureConverter.convert(value, unit, UnitOfTemperature.CELSIUS)
-        except HomeAssistantError, ValueError, TypeError:
+        except (HomeAssistantError, ValueError, TypeError):
             _LOGGER.warning(
                 "Unrecognised temperature unit %r on %s - treating %.1f as °C",
                 unit,

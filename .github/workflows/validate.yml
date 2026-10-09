@@ -43,7 +43,12 @@ jobs:
       - run: python scripts/simulation/sim_harness.py --dst
       - run: python scripts/simulation/sim_harness.py --all-scenarios
       # This integration has no web/Node build: its production build is the HACS ZIP.
-      - run: bash scripts/build_release.sh
+      - name: Build and verify the HACS distribution
+        run: |
+          mkdir /tmp/effektguard-release
+          cp -r custom_components/effektguard README.md LICENSE hacs.json /tmp/effektguard-release/
+          (cd /tmp/effektguard-release && zip -qr /tmp/effektguard.zip . -x '*/__pycache__/*' '*.pyc')
+          unzip -tq /tmp/effektguard.zip
       - name: HACS validation
         uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa # main
         with:

@@ -504,7 +504,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                                 "Restored peak_this_month to coordinator: %.2f kW",
                                 self._restored_value,
                             )
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     _LOGGER.debug(
                         "Could not restore %s, will use coordinator value",
                         self.entity_description.key,
@@ -547,7 +547,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                     unit = gespot_state.attributes.get("unit_of_measurement")
                     if isinstance(unit, str) and unit:
                         return unit
-        except AttributeError, KeyError:
+        except (AttributeError, KeyError):
             pass
         return None
 
@@ -844,7 +844,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                                                 "friendly_name", entity_id
                                             ),
                                         }
-                                    except ValueError, TypeError:
+                                    except (ValueError, TypeError):
                                         sensor_temps[f"sensor_{i}"] = {
                                             "entity_id": entity_id,
                                             "temperature": None,

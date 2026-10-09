@@ -654,7 +654,7 @@ class IntelligentDHWScheduler:
                         if last_legionella_time is None or timestamp > last_legionella_time:
                             last_legionella_time = timestamp
 
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     continue
 
             _LOGGER.info(

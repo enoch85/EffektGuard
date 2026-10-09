@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   release:
@@ -14,16 +15,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+        uses: actions/checkout@v5
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: .python-version
+      - name: Prepare Release Assets
+        run: |
+          mkdir release
+          cp -r custom_components/effektguard release/
+          cp README.md release/
+          cp LICENSE release/
+          cp hacs.json release/
 
-      - name: Build HACS distribution
-        run: bash scripts/build_release.sh
+      - name: Create ZIP
+        run: |
+          cd release
+          zip -r ../effektguard.zip .
 
       - name: Create release
         env:

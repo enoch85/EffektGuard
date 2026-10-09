@@ -70,7 +70,7 @@ def power_kw_from_state(state: State | None) -> float | None:
 
     try:
         return float(state.state) * factor
-    except ValueError, TypeError:
+    except (ValueError, TypeError):
         _LOGGER.warning(
             "Power sensor %s reports %r, which is not a number", state.entity_id, state.state
         )
