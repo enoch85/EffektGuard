@@ -6,7 +6,7 @@ are exempt. Minor/patch updates are grouped within each ecosystem, while majors 
 individual PRs for manual review. No dependency is excluded.
 
 The pinned Home Assistant test plugin fixes NumPy at 2.3.2 and pytest at 9.0.3. These are
-compatible with HA 2026.10.0 / Python 3.14.2; newer standalone NumPy/pytest releases cannot be
+compatible with HA 2026.10.0 / Python 3.14.8; newer standalone NumPy/pytest releases cannot be
 installed with the complete test toolchain. Direct requirements use exact versions so
 Dependabot can record updates. There was no lockfile in this repository.
 

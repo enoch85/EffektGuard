@@ -61,10 +61,10 @@ jobs:
         env:
           ACTIONLINT_VERSION: 1.7.12
         run: |
-          curl --fail --silent --show-error --location --output /tmp/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --output "/tmp/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl --fail --silent --show-error --location --output /tmp/actionlint-checksums.txt "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           (cd /tmp && sha256sum --check --ignore-missing actionlint-checksums.txt)
-          tar --no-same-owner -xzf /tmp/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz -C /tmp actionlint
+          tar --no-same-owner -xzf "/tmp/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" -C /tmp actionlint
           /tmp/actionlint -color
       - run: node --test scripts/automation/*.test.cjs
       - name: Build development container
