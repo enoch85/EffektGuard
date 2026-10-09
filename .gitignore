@@ -71,3 +71,6 @@ scripts/simulation/output/
 
 # Stray directories created when a MagicMock leaks into a filesystem path in tests
 **/MagicMock/
+
+# Locally built HACS distribution
+effektguard.zip

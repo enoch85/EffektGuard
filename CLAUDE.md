@@ -28,6 +28,7 @@ entities other integrations publish.
 | [docs/research/](docs/research/) | Any NIBE or physics claim - it states what is *not* sourced |
 | [docs/dev/CODE_STANDARDS.md](docs/dev/CODE_STANDARDS.md) | Imports, type hints, async, docstrings |
 | [docs/dev/TESTING.md](docs/dev/TESTING.md) | Test layout and categories |
+| [docs/dev/DEPENDENCY_AUTOMATION.md](docs/dev/DEPENDENCY_AUTOMATION.md) | Dependency updates, validation, and required-check rollout |
 | [docs/dev/ENVIRONMENT_SETUP.md](docs/dev/ENVIRONMENT_SETUP.md) | First-time setup |
 
 **Add any new doc to this table.** It is the single index.

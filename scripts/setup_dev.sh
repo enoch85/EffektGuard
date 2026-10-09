@@ -1,6 +1,6 @@
 #!/bin/bash
 # Setup development environment for EffektGuard
-# Requires Python 3.13 for Home Assistant compatibility
+# Runtime is shared with CI through .python-version.
 
 set -e
 
@@ -11,30 +11,20 @@ VENV_DIR="$PROJECT_DIR/.venv"
 echo "=== EffektGuard Development Environment Setup ==="
 echo ""
 
-# Check if Python 3.13 is available
-if ! command -v python3.13 &> /dev/null; then
-    echo "Python 3.13 not found. Installing..."
-    
-    # Check if we're on Ubuntu/Debian
-    if command -v apt-get &> /dev/null; then
-        echo "Adding deadsnakes PPA..."
-        sudo add-apt-repository -y ppa:deadsnakes/ppa
-        sudo apt-get update
-        sudo apt-get install -y python3.13 python3.13-venv python3.13-dev
-    else
-        echo "ERROR: Automatic installation only supported on Ubuntu/Debian."
-        echo "Please install Python 3.13 manually and re-run this script."
-        exit 1
-    fi
+PYTHON_VERSION="$(cat "$PROJECT_DIR/.python-version")"
+PYTHON_MINOR="${PYTHON_VERSION%.*}"
+PYTHON_BIN="python${PYTHON_MINOR}"
+if ! command -v "$PYTHON_BIN" &> /dev/null; then
+    echo "Install Python $PYTHON_VERSION or newer in the $PYTHON_MINOR series, then re-run."
+    exit 1
 fi
-
-echo "✓ Python 3.13 found: $(python3.13 --version)"
+"$PYTHON_BIN" -c "import sys; assert sys.version_info >= tuple(map(int, '$PYTHON_VERSION'.split('.')))"
 
 # Create virtual environment if it doesn't exist
 if [ ! -d "$VENV_DIR" ]; then
     echo ""
     echo "Creating virtual environment..."
-    python3.13 -m venv "$VENV_DIR"
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
     echo "✓ Virtual environment created at $VENV_DIR"
 else
     echo "✓ Virtual environment already exists at $VENV_DIR"
@@ -44,6 +34,8 @@ fi
 echo ""
 echo "Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
+
+python -c "import sys; assert sys.version_info[:2] == tuple(map(int, '$PYTHON_MINOR'.split('.'))), 'Recreate .venv for the configured runtime'"
 
 # Upgrade pip
 echo ""

@@ -707,7 +707,7 @@ class AdaptiveThermalModel:
         if data.get("last_update"):
             try:
                 model._last_update = datetime.fromisoformat(data["last_update"])
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 model._last_update = None
 
         # Restore learned parameters

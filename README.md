@@ -6,7 +6,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.6.1-blue)
-![HA](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
+![HA](https://img.shields.io/badge/Home%20Assistant-2026.10%2B-blue)
 [![Sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github&style=for-the-badge)](https://github.com/sponsors/enoch85)
 
 ---
@@ -30,6 +30,8 @@ Automatically optimizes your heat pump to minimize electricity costs (spot price
 **Lower bills without sacrificing comfort or longevity.**
 
 Currently supports NIBE heat pumps via MyUplink integration, with plans to add support for additional brands in the future.
+
+Python 3.14 / Home Assistant 2026.10+. Dependency updates are checked and merged automatically when eligible; releases remain manual.
 
 ## Key Features
 

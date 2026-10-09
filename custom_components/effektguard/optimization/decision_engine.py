@@ -250,7 +250,7 @@ class DecisionEngine:
                 tm_attr = getattr(thermal_model, "thermal_mass", None)
                 if isinstance(tm_attr, (int, float)):
                     thermal_mass_value = float(tm_attr)
-            except (TypeError, AttributeError):
+            except TypeError, AttributeError:
                 pass  # Use default if thermal_model is mocked or has no thermal_mass
 
         if "heating_type" in config:
@@ -932,7 +932,7 @@ class DecisionEngine:
             return WEATHER_FORECAST_HORIZON
         try:
             horizon = float(thermal_model.get_prediction_horizon())
-        except (AttributeError, TypeError, ValueError):
+        except AttributeError, TypeError, ValueError:
             return WEATHER_FORECAST_HORIZON
         return max(WEATHER_FORECAST_HORIZON, horizon)
 

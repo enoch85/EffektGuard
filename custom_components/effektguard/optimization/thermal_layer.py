@@ -1056,7 +1056,7 @@ class EmergencyLayer:
                     QuarterClassification.CHEAP,
                     QuarterClassification.VERY_CHEAP,
                 )
-        except (AttributeError, IndexError, TypeError):
+        except AttributeError, IndexError, TypeError:
             pass  # Price data unavailable or malformed - return False (default to not cheap)
 
         return False
