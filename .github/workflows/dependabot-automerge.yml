@@ -1,9 +1,5 @@
 name: Dependabot auto-merge
-
-on:
-  workflow_run:
-    workflows: ["*", "!Dependabot auto-merge"]
-    types: [completed]
+on: pull_request_target
 
 permissions: {}
 
@@ -11,66 +7,41 @@ jobs:
   automerge:
     if: >-
       github.actor == 'dependabot[bot]' &&
-      github.event.workflow_run.actor.login == 'dependabot[bot]' &&
-      github.event.workflow_run.triggering_actor.login == 'dependabot[bot]' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion == 'success'
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
       checks: read
     steps:
-      # This privileged workflow runs from the default branch, without checking out PR code.
-      - id: verify
-        uses: actions/github-script@v9.0.0
-        with:
-          script: |
-            const repo = context.repo, run = context.payload.workflow_run;
-            const bot = user => user?.login === 'dependabot[bot]' && user?.id === 49699333;
-            if (!bot(run.actor) || !bot(run.triggering_actor)) throw new Error('Unverified actor');
-            const {data: repository} = await github.rest.repos.get(repo);
-            const prs = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit,
-              {...repo, commit_sha: run.head_sha, per_page: 100});
-            const eligible = prs.filter(pr => bot(pr.user) && pr.state === 'open' &&
-              pr.base.ref === repository.default_branch && pr.head.sha === run.head_sha &&
-              pr.head.repo?.full_name === repository.full_name);
-            if (eligible.length !== 1) return;
-            const {data: pr} = await github.rest.pulls.get({...repo, pull_number: eligible[0].number});
-            if (pr.draft || !bot(pr.user) || pr.head.sha !== run.head_sha || pr.state !== 'open') return;
-            const commits = await github.paginate(github.rest.pulls.listCommits,
-              {...repo, pull_number: pr.number, per_page: 100});
-            // fetch-metadata checks the first commit; also verify every subsequent commit.
-            if (!commits.length || commits.length !== pr.commits || commits.at(-1).sha !== pr.head.sha ||
-                commits.some(c => !bot(c.author) || !c.commit.verification.verified ||
-                  c.commit.verification.reason !== 'valid')) throw new Error('Unverified PR commits');
-            const path = require('path').join(process.env.RUNNER_TEMP, 'dependabot-event.json');
-            require('fs').writeFileSync(path, JSON.stringify({pull_request: pr, repository}));
-            core.setOutput('event', path);
-            core.setOutput('url', pr.html_url);
-            core.setOutput('sha', pr.head.sha);
-
-      - id: metadata
-        if: steps.verify.outputs.url != ''
+      # Never check out or execute PR code in this privileged workflow.
+      - name: Verify Dependabot metadata
+        id: metadata
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        env:
-          GITHUB_EVENT_PATH: ${{ steps.verify.outputs.event }}
         with:
           github-token: ${{ github.token }}
-          skip-verification: false
-          skip-commit-verification: false
 
-      - name: Approve and auto-merge after all checks pass
+      - name: Wait for all checks, approve and auto-merge
         if: >-
           contains(fromJSON('["version-update:semver-major","version-update:semver-minor","version-update:semver-patch"]'),
             steps.metadata.outputs.update-type)
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ steps.verify.outputs.url }}
-          HEAD_SHA: ${{ steps.verify.outputs.sha }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COMMIT_COUNT: ${{ github.event.pull_request.commits }}
         run: |
           set -euo pipefail
-          gh pr checks "$PR_URL" --json bucket | jq -e 'length > 0 and all(.bucket == "pass")' > /dev/null
+          gh pr checks "$PR_URL" --watch --fail-fast
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" |
+            jq -e --arg sha "$HEAD_SHA" --argjson count "$COMMIT_COUNT" '
+              flatten | length == $count and length > 0 and last.sha == $sha and
+              all(.author.login == "dependabot[bot]" and .author.id == 49699333 and
+                .commit.verification.verified and .commit.verification.reason == "valid")' > /dev/null
           test "$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)" = "$HEAD_SHA"
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"

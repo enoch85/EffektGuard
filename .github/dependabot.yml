@@ -1,17 +1,9 @@
 version: 2
 updates:
   - package-ecosystem: pip
-    directories:
-      - /
-      - /tests
-    schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Europe/Stockholm
-    # GitHub applies cooldown only to version updates, never security updates.
-    cooldown:
-      default-days: 3
+    directories: [/, /tests]
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
     labels: [dependencies, automated]
     groups:
       python-minor-patch:
@@ -19,13 +11,8 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Europe/Stockholm
-    cooldown:
-      default-days: 3
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
     labels: [dependencies, automated]
     groups:
       actions-minor-patch:
@@ -33,13 +20,8 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: docker
     directory: /.devcontainer
-    schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Europe/Stockholm
-    cooldown:
-      default-days: 3
+    schedule: {interval: weekly, day: monday, time: "06:00", timezone: Europe/Stockholm}
+    cooldown: {default-days: 3}
     labels: [dependencies, automated]
     groups:
       docker-minor-patch:
