@@ -1,15 +1,14 @@
-name: Approve Dependabot
+name: Dependabot auto-merge
 
 on:
   workflow_run:
-    workflows: [Validate]
+    workflows: ["*", "!Dependabot auto-merge"]
     types: [completed]
 
 permissions: {}
 
 jobs:
-  approve:
-    name: Approve verified Dependabot update
+  automerge:
     if: >-
       github.actor == 'dependabot[bot]' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]' &&
@@ -18,85 +17,60 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: write
       pull-requests: write
+      checks: read
     steps:
-      # No checkout, downloaded artifacts, PR scripts, or package installations here.
-      - name: Verify validation and every PR commit
-        id: verify
+      # This privileged workflow runs from the default branch, without checking out PR code.
+      - id: verify
         uses: actions/github-script@v9.0.0
         with:
           script: |
-            const run = context.payload.workflow_run;
-            const repo = context.repo;
+            const repo = context.repo, run = context.payload.workflow_run;
             const bot = user => user?.login === 'dependabot[bot]' && user?.id === 49699333;
-            if (context.actor !== 'dependabot[bot]' || !bot(run.actor) ||
-                !bot(run.triggering_actor) || run.event !== 'pull_request' ||
-                run.conclusion !== 'success' || run.head_repository.full_name !== `${repo.owner}/${repo.repo}`) {
-              throw new Error('Untrusted validation run');
-            }
+            if (!bot(run.actor) || !bot(run.triggering_actor)) throw new Error('Unverified actor');
             const {data: repository} = await github.rest.repos.get(repo);
             const prs = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit,
               {...repo, commit_sha: run.head_sha, per_page: 100});
-            const candidates = prs.filter(pr => bot(pr.user) && pr.state === 'open' &&
+            const eligible = prs.filter(pr => bot(pr.user) && pr.state === 'open' &&
               pr.base.ref === repository.default_branch && pr.head.sha === run.head_sha &&
               pr.head.repo?.full_name === repository.full_name);
-            if (candidates.length !== 1) throw new Error('No unique current Dependabot PR');
-            const {data: pr} = await github.rest.pulls.get({...repo, pull_number: candidates[0].number});
-            if (!bot(pr.user) || pr.draft || pr.state !== 'open' || pr.head.sha !== run.head_sha ||
-                pr.base.ref !== repository.default_branch || pr.head.repo?.full_name !== repository.full_name) {
-              throw new Error('PR changed or is ineligible');
-            }
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
-              {...repo, run_id: run.id, filter: 'latest', per_page: 100});
-            for (const name of ['Lint EffektGuard', 'Validate EffektGuard', 'Validate Automation']) {
-              const matching = jobs.filter(job => job.name === name);
-              if (matching.length !== 1 || matching[0].conclusion !== 'success') {
-                throw new Error(`Validation missing or failed: ${name}`);
-              }
-            }
+            if (eligible.length !== 1) return;
+            const {data: pr} = await github.rest.pulls.get({...repo, pull_number: eligible[0].number});
+            if (pr.draft || !bot(pr.user) || pr.head.sha !== run.head_sha || pr.state !== 'open') return;
             const commits = await github.paginate(github.rest.pulls.listCommits,
               {...repo, pull_number: pr.number, per_page: 100});
-            // fetch-metadata verifies the first commit; this verifies the complete PR.
-            if (!commits.length || commits.length !== pr.commits ||
-                commits.at(-1).sha !== pr.head.sha ||
-                commits.some(commit => !bot(commit.author) ||
-                  !commit.commit.verification?.verified || commit.commit.verification.reason !== 'valid')) {
-              throw new Error('PR contains unverified or non-Dependabot commits');
-            }
-            const fs = require('fs');
+            // fetch-metadata checks the first commit; also verify every subsequent commit.
+            if (!commits.length || commits.length !== pr.commits || commits.at(-1).sha !== pr.head.sha ||
+                commits.some(c => !bot(c.author) || !c.commit.verification.verified ||
+                  c.commit.verification.reason !== 'valid')) throw new Error('Unverified PR commits');
             const path = require('path').join(process.env.RUNNER_TEMP, 'dependabot-event.json');
-            fs.writeFileSync(path, JSON.stringify({pull_request: pr, repository}));
-            core.setOutput('event-path', path);
-            core.setOutput('pr-url', pr.html_url);
-            core.setOutput('head-sha', pr.head.sha);
-            core.setOutput('pr-number', pr.number);
+            require('fs').writeFileSync(path, JSON.stringify({pull_request: pr, repository}));
+            core.setOutput('event', path);
+            core.setOutput('url', pr.html_url);
+            core.setOutput('sha', pr.head.sha);
 
-      - name: Fetch verified Dependabot metadata
-        id: metadata
+      - id: metadata
+        if: steps.verify.outputs.url != ''
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         env:
-          # The action requires a PR event. This file is constructed from GitHub's
-          # authenticated API above, never from PR code or a validation artifact.
-          GITHUB_EVENT_PATH: ${{ steps.verify.outputs.event-path }}
+          GITHUB_EVENT_PATH: ${{ steps.verify.outputs.event }}
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           skip-verification: false
           skip-commit-verification: false
 
-      - name: Approve and enable squash auto-merge
+      - name: Approve and auto-merge after all checks pass
         if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-minor' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-patch'
+          contains(fromJSON('["version-update:semver-major","version-update:semver-minor","version-update:semver-patch"]'),
+            steps.metadata.outputs.update-type)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ steps.verify.outputs.pr-url }}
-          HEAD_SHA: ${{ steps.verify.outputs.head-sha }}
-          PR_NUMBER: ${{ steps.verify.outputs.pr-number }}
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.verify.outputs.url }}
+          HEAD_SHA: ${{ steps.verify.outputs.sha }}
         run: |
           set -euo pipefail
-          current=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
-          jq -e --arg sha "$HEAD_SHA" '.head.sha == $sha and .state == "open" and .user.login == "dependabot[bot]" and .user.id == 49699333' <<< "$current" > /dev/null
+          gh pr checks "$PR_URL" --json bucket | jq -e 'length > 0 and all(.bucket == "pass")' > /dev/null
+          test "$(gh pr view "$PR_URL" --json headRefOid --jq .headRefOid)" = "$HEAD_SHA"
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"

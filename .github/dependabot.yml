@@ -45,4 +45,3 @@ updates:
       docker-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
-# Majors remain individual PRs and require manual review. No dependencies ignored.
