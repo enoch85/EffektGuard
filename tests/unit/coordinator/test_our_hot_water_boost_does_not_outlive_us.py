@@ -108,7 +108,7 @@ async def test_nothing_is_written_when_the_boost_has_already_finished(monkeypatc
 
 @pytest.mark.asyncio
 async def test_a_pump_with_no_lux_switch_unloads_cleanly(monkeypatch):
-    """An S1155 exposes no temporary-lux entity at all. Unload must not raise."""
+    """No temporary-lux entity configured (temp_lux_entity is None). Unload must not raise."""
     coordinator = _coordinator(lux_state=None, boost_is_ours=False)
     coordinator.temp_lux_entity = None
 

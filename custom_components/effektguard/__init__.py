@@ -432,8 +432,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     async def boost_dhw_handler(call) -> None:
         """Handle boost_dhw service call.
 
-        Manual DHW heating boost via NIBE temporary lux switch.
-        Uses MyUplink switch.temporary_lux_50004 for 3-hour DHW priority.
+        Manual DHW heating boost via the configured temporary-lux entity: the MyUplink switch
+        (parameter 50004) or an input_boolean helper bridged to nibe_heatpump's select.
 
         Rate limited to prevent excessive calls.
         """
@@ -460,10 +460,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
         if not temp_lux_entity:
             _LOGGER.warning(
-                "No temporary lux entity configured. DHW boost requires MyUplink switch."
+                "No temporary-lux entity configured. DHW boost needs the MyUplink temporary-lux "
+                "switch or an input_boolean helper bridged to nibe_heatpump's select."
             )
             raise ServiceValidationError(
-                "DHW boost requires temporary lux entity (switch.temporary_lux_50004)"
+                "DHW boost requires a temporary-lux entity (the MyUplink switch or an input_boolean "
+                "helper), chosen under Reconfigure"
             )
 
         # Go through the coordinator, not straight at the switch: that records the boost as OURS

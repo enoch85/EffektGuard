@@ -266,7 +266,7 @@
     },
     "no_dhw_control_entity": {
       "title": "Lämpimän veden ohjausentiteettiä ei löytynyt",
-      "description": "EffektGuard ohjaa lämmintä vettä kytkemällä NIBEn väliaikaisen luksus-kytkimen, eikä tällaista entiteettiä löytynyt. Home Assistantin NIBE-integraatio tuo kyseisen rekisterin (50004) esiin vain F-sarjalle, joten S-sarjan lämpöpumpulla ei ole vastaavaa - lämpimän veden optimointi EI ole käynnissä, eikä sensorien näyttämä ajastettu ajo toteudu. Lämmityksen optimointiin tämä ei vaikuta."
+      "description": "EffektGuard ohjaa lämmintä vettä kytkemällä NIBEn väliaikaisen luksuksen päälle ja pois, eikä sille ole määritetty entiteettiä - lämpimän veden optimointi EI ole käynnissä, eikä sensorien näyttämä ajastettu ajo toteudu. MyUplink tarjoaa väliaikaisen luksuksen kytkimen F-sarjan lämpöpumpuille (parametri 50004). F-sarjan, SMO- ja VVM-pumpuilla paikallinen nibe_heatpump-integraatio tuo sen sijaan Temporary Lux -rekisterin (48132) esiin select-entiteettinä, jota EffektGuard ei voi ohjata suoraan: luo input_boolean-apuri ja automaatio, joka asettaa select-entiteetin arvoon \"ONE TIME INCREASE\", kun apuri kytkeytyy päälle, ja arvoon \"OFF\", kun se kytkeytyy pois. S-sarjan pumpuille nibe_heatpump ei tarjoa väliaikaisen luksuksen rekisteriä. Valitse kytkin tai apuri uudelleenmäärityksessä. Lämmityksen optimointiin tämä ei vaikuta."
     }
   }
 }

@@ -266,7 +266,7 @@
     },
     "no_dhw_control_entity": {
       "title": "Ingen entitet til varmtvandsstyring",
-      "description": "EffektGuard styrer varmt vand ved at tænde NIBEs midlertidige luksus-kontakt, og ingen sådan entitet blev fundet. Home Assistants NIBE-integration eksponerer det register (50004) kun for F-serien, så en S-seriepumpe har ingen tilsvarende - varmtvandsoptimeringen kører IKKE, og en planlagt kørsel, som sensorerne viser, vil ikke ske. Varmeoptimeringen påvirkes ikke."
+      "description": "EffektGuard styrer varmt vand ved at tænde og slukke NIBEs midlertidige luksus, og ingen entitet til det er konfigureret - varmtvandsoptimeringen kører IKKE, og en planlagt kørsel, som sensorerne viser, vil ikke ske. MyUplink har en kontakt til midlertidig luksus på F-seriens pumper (parameter 50004). På pumper i F-serien, SMO og VVM eksponerer den lokale integration nibe_heatpump i stedet Temporary Lux (register 48132) som en select-entitet, som EffektGuard ikke kan styre direkte: opret en input_boolean-hjælper og en automatisering, der sætter select-entiteten til \"ONE TIME INCREASE\", når hjælperen tændes, og til \"OFF\", når den slukkes. S-seriens pumper har intet register til midlertidig luksus i nibe_heatpump. Vælg kontakten eller hjælperen under Omkonfigurer. Varmeoptimeringen påvirkes ikke."
     }
   }
 }
