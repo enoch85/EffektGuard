@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
@@ -29,11 +30,14 @@ from .const import (
     AIRFLOW_DEFAULT_STANDARD,
     CONF_AIRFLOW_ENHANCED_RATE,
     CONF_AIRFLOW_STANDARD_RATE,
+    CONF_AWAY,
     CONF_DHW_MIN_AMOUNT,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_ENABLE_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
     CONF_NIBE_TEMP_LUX_ENTITY,
+    CONF_TARGET_INDOOR_TEMP,
+    AWAY_SETBACK,
     DEFAULT_DHW_EVENING_HOUR,
     DEFAULT_DHW_MORNING_HOUR,
     DEFAULT_DHW_TARGET_TEMP,
@@ -90,6 +94,12 @@ if TYPE_CHECKING:
     from .models.types import EffektGuardConfigDict
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def held_target_of(config: Mapping[str, Any]) -> float:
+    """The indoor temperature to hold: the configured target, AWAY_SETBACK lower while AWAY."""
+    target = float(config.get(CONF_TARGET_INDOOR_TEMP, DEFAULT_INDOOR_TEMP))
+    return target - AWAY_SETBACK if config.get(CONF_AWAY) else target
 
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
@@ -1567,13 +1577,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         airflow_decision = None
         if self.airflow_optimizer and nibe_data:
             try:
-                # Get target temperature from config
-                target_temp = float(
-                    self.entry.options.get(
-                        "target_indoor_temp",
-                        self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
-                    )
-                )
+                target_temp = self.held_target
 
                 airflow_decision = self.airflow_optimizer.evaluate_from_nibe(
                     nibe_data=nibe_data,
@@ -1661,11 +1665,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             DHWRecommendation with recommendation text and detailed planning info
         """
         # Gather HA-specific data
-        # CRITICAL: Check options first (runtime changes), fall back to data then default
-        target_indoor = self.entry.options.get(
-            "target_indoor_temp",
-            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
-        )
+        target_indoor = self.held_target
         hours_since_last = await self._calculate_hours_since_last_dhw()
 
         # Get thermal trend from predictor
@@ -2006,11 +2006,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self.last_update_success and hasattr(self, "data") and self.data is not None
             else DEFAULT_INDOOR_TEMP
         )
-        # CRITICAL: Check options first (runtime changes), fall back to data then default
-        target_indoor = self.entry.options.get(
-            "target_indoor_temp",
-            self.entry.data.get("target_indoor_temp", DEFAULT_INDOOR_TEMP),
-        )
+        target_indoor = self.held_target
 
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
@@ -2486,6 +2482,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.engine.clear_manual_override()
             raise
 
+    @property
+    def held_target(self) -> float:
+        """The indoor temperature being held, AWAY setback included."""
+        return held_target_of({**self.entry.data, **self.entry.options})
+
     async def async_update_config(self, options: "EffektGuardConfigDict") -> None:
         """Update configuration without full reload.
 
@@ -2499,8 +2500,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Update decision engine cached configuration values
         # CRITICAL: Decision engine caches these at init, must update them here
-        if "target_indoor_temp" in options:
-            self.engine.target_temp = float(options["target_indoor_temp"])
+        if CONF_TARGET_INDOOR_TEMP in options or CONF_AWAY in options:
+            self.engine.target_temp = held_target_of(options)
             _LOGGER.debug("Updated target temperature: %.1f°C", self.engine.target_temp)
 
         if "tolerance" in options:

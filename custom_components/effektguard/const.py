@@ -132,6 +132,8 @@ MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
 
 # Config keys for internal use
 CONF_TARGET_INDOOR_TEMP: Final = "target_indoor_temp"
+CONF_AWAY: Final = "away"  # the AWAY preset is on
+AWAY_SETBACK: Final = 3.0  # °C the AWAY preset holds below the target
 
 # Limits
 MIN_OFFSET: Final = -10.0

@@ -8,7 +8,12 @@ import pytest
 from unittest.mock import Mock
 
 from homeassistant.components.climate import ClimateEntityFeature, HVACMode
-from homeassistant.components.climate.const import PRESET_COMFORT, PRESET_ECO, PRESET_NONE
+from homeassistant.components.climate.const import (
+    PRESET_AWAY,
+    PRESET_COMFORT,
+    PRESET_ECO,
+    PRESET_NONE,
+)
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -16,6 +21,7 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from custom_components.effektguard.climate import EffektGuardClimate
+from custom_components.effektguard.coordinator import held_target_of
 from custom_components.effektguard.sensor import EffektGuardSensor, SENSORS
 from custom_components.effektguard.switch import EffektGuardSwitch, SWITCHES
 from custom_components.effektguard.const import (
@@ -25,6 +31,8 @@ from custom_components.effektguard.const import (
     CONF_ENABLE_WEATHER_PREDICTION,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    AWAY_SETBACK,
+    CONF_AWAY,
     CONF_OPTIMIZATION_MODE,
     CONF_TARGET_INDOOR_TEMP,
     DOMAIN,
@@ -553,6 +561,7 @@ class TestClimateEntity:
 
         assert PRESET_NONE in climate.preset_modes
         assert PRESET_ECO in climate.preset_modes
+        assert PRESET_AWAY in climate.preset_modes
         assert PRESET_COMFORT in climate.preset_modes
 
     def test_climate_current_temperature(self, mock_coordinator_with_data, mock_config_entry):
@@ -731,6 +740,28 @@ class TestConfigReloadIntegration:
         # Update to savings mode
         mock_config_entry.options[CONF_OPTIMIZATION_MODE] = OPTIMIZATION_MODE_SAVINGS
         assert climate.preset_mode == PRESET_ECO
+
+    @pytest.mark.asyncio
+    async def test_away_is_eco_held_below_the_target(
+        self, mock_coordinator_with_data, mock_config_entry
+    ):
+        """AWAY saves like ECO, holds AWAY_SETBACK below the target, and reads back as AWAY."""
+        climate = EffektGuardClimate(mock_coordinator_with_data, mock_config_entry)
+        climate.hass = Mock()
+        written = lambda: climate.hass.config_entries.async_update_entry.call_args.kwargs["options"]
+
+        await climate.async_set_preset_mode(PRESET_AWAY)
+        assert written()[CONF_OPTIMIZATION_MODE] == OPTIMIZATION_MODE_SAVINGS
+        assert written()[CONF_AWAY] is True
+        mock_config_entry.options = written()
+        assert climate.preset_mode == PRESET_AWAY
+        assert held_target_of({**written(), CONF_TARGET_INDOOR_TEMP: 21.5}) == 21.5 - AWAY_SETBACK
+
+        await climate.async_set_preset_mode(PRESET_ECO)
+        assert written()[CONF_AWAY] is False
+        mock_config_entry.options = written()
+        assert climate.preset_mode == PRESET_ECO
+        assert held_target_of({**written(), CONF_TARGET_INDOOR_TEMP: 21.5}) == 21.5
 
     @pytest.mark.asyncio
     async def test_switch_state_updates_from_options(
