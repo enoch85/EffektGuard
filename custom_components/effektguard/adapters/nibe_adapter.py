@@ -440,10 +440,10 @@ class NibeAdapter:
         """Set the heating curve offset via the NIBE offset entity.
 
         The NIBE offset register (47011 on the F-series) is integer-only, while the engine
-        calculates fractional offsets. The offset is ROUNDED to the nearest integer and written
-        only once it differs from what the register holds by a whole degree - a deadband, so the
-        register is not rewritten every five minutes as demand wanders across a rounding boundary.
-        See utils/offset.py.
+        calculates fractional offsets. Only the whole degrees of the pending demand (the engine's
+        offset minus what the register holds) are written - TRUNCATED with int(), never rounded -
+        so the fraction stays pending for the next cycle and the register is not rewritten every
+        five minutes as demand wanders across a boundary. See utils/offset.py.
 
         Args:
             offset: Calculated offset value in °C (e.g., -1.24, +0.87)
