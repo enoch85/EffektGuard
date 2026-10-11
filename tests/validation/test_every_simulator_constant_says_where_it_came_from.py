@@ -73,6 +73,8 @@ NOT_A_PHYSICAL_CLAIM = frozenset(
         "BATTERY_DEAR_PERCENTILE",
         "TARGET_INDOOR",
         "TOMORROW_VISIBLE_HOUR",
+        # A process exit code the sweep reads, not a measurement.
+        "KNOWN_RED_EXIT",
     }
 )
 

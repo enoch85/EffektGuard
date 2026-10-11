@@ -751,9 +751,11 @@ TREND_DAMPING_NEUTRAL: Final = 1.0  # No damping when trend stable
 # them; a repair issue does. (Audit F-123.)
 PRICE_SOURCE_ISSUE_ID: Final = "no_price_source"
 
-# EffektGuard drives hot water by toggling NIBE's temporary-lux switch. Home Assistant's own NIBE
-# integration only maps that register (50004) for the F-series, so an S-series pump exposes no such
-# entity at all - and the DHW half of EffektGuard then does nothing whatsoever. It said so in a
+# EffektGuard drives hot water by toggling NIBE's temporary lux. MyUplink offers it as a switch
+# (parameter 50004, F-series), as can a generic Modbus switch on register 48132; nibe_heatpump
+# exposes 48132 as a select with five states (F-series, SMO, VVM), which needs an input_boolean
+# helper bridge, and has no such register for the S-series. With no entity configured the DHW half
+# of EffektGuard does nothing whatsoever. It said so in a
 # _LOGGER.debug, while the UI carried on showing a hot-water status, a recommendation and a
 # scheduled start time that could never fire. Same rule as the price source: a debug line is not
 # telling anyone.

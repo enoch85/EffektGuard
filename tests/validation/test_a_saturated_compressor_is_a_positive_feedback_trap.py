@@ -8,7 +8,8 @@ handed a pump at maximum flow, a house ABOVE target and DM at the integrator flo
 layer still commands +10.
 
 On every machine that saturates, the optimiser buys MORE resistive heat than the capacity deficit
-forces (1.2-1.7x on datasheet-sized systems). It does NOT cook a correctly-sized house: the pump's
+forces - the measured figures are the F-124 known reds in scripts/simulation/sim_harness.py, which
+the scenario sweep holds. It does NOT cook a correctly-sized house: the pump's
 own start addition arms the elpatron first (F750 -700, S-series -460, VVM 320 -760, see
 test_the_plant_engages_aux_where_the_pump_does.py) and holds the house, while the controller wastes
 money fighting a wall.
@@ -44,7 +45,8 @@ def test_the_emergency_tier_asks_for_maximum_heat_at_the_aux_limit():
         "F-124, BLOCKED-ON-OWNER. A saturated compressor cannot raise BT25, so raising S1 makes "
         "DM = integral(BT25 - S1) fall FASTER. The emergency layer answers by raising it again and "
         "latches at +10. Every machine that saturates is made worse by it: the optimiser burns "
-        "1.2-1.7x the resistive heat the capacity deficit physically forces. Fixing it means "
+        "more resistive heat than the capacity deficit physically forces (figures: the F-124 "
+        "known reds in the simulator's scenarios). Fixing it means "
         "deciding what a pump should do when it physically cannot meet its own curve - a heat-pump "
         "decision, not a code-cleanup one."
     ),

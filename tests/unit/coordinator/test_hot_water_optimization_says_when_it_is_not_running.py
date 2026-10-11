@@ -1,8 +1,9 @@
-"""On an S-series pump, hot-water optimisation must raise a repair issue, not fail in a debug line.
+"""With no temporary-lux entity, hot-water optimisation must raise a repair issue, not a debug line.
 
-EffektGuard drives DHW via NIBE's temporary-lux switch (register 50004), which Home Assistant's
-NIBE integration maps for the F-SERIES ONLY. On an S-series pump no such entity exists, so the
-whole DHW feature silently does nothing while the UI still shows a hot-water status, a
+EffektGuard drives DHW by toggling NIBE's temporary lux: the MyUplink switch (parameter 50004,
+F-series), a generic Modbus switch, or an input_boolean helper bridged to nibe_heatpump's select.
+An S-series pump has no temporary-lux register in nibe_heatpump at all. Without a configured
+entity the whole DHW feature silently does nothing while the UI still shows a hot-water status, a
 recommendation and a scheduled start time that can never fire. A _LOGGER.debug is not telling
 anyone - so this now raises the same kind of repair issue the missing price source does (F-123).
 """

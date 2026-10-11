@@ -17,7 +17,8 @@ shipped three defects, all reported as PASS, which this file now pins:
    was clamped to max_flow_temp; `flow_target` was not. DM is the integral of (flow - flow_target),
    so DM fell no matter what any controller did and the harness blamed the recovery ladder. A NIBE
    limits its calculated supply temperature to the configured maximum; it does not chase water it
-   cannot make. This one inflated the evidence for F-124; the honest numbers now live in
+   cannot make. This one inflated the evidence for F-124; the honest numbers now live in the
+   F-124 known reds of scripts/simulation/sim_harness.py, and the mechanism is pinned in
    test_a_saturated_compressor_is_a_positive_feedback_trap.
 """
 

@@ -266,7 +266,7 @@
     },
     "no_dhw_control_entity": {
       "title": "No hot-water control entity",
-      "description": "EffektGuard drives hot water by toggling NIBE's temporary-lux switch, and no such entity was found. Home Assistant's NIBE integration exposes that register (50004) for F-series pumps only, so an S-series pump has no equivalent - hot-water optimisation is NOT running, and any scheduled boost shown by its sensors will not happen. Space-heating optimisation is unaffected."
+      "description": "EffektGuard drives hot water by switching NIBE's temporary lux on and off, and no entity for it is configured - hot-water optimisation is NOT running, and any scheduled boost shown by its sensors will not happen. MyUplink provides a temporary-lux switch on F-series pumps (parameter 50004). On F-series, SMO and VVM pumps the local nibe_heatpump integration exposes Temporary Lux (register 48132) as a select instead, which EffektGuard cannot drive directly: create an input_boolean helper and an automation that sets the select to \"ONE TIME INCREASE\" when the helper turns on and \"OFF\" when it turns off. S-series pumps have no temporary-lux register in nibe_heatpump. Choose the switch or the helper under Reconfigure. Space-heating optimisation is unaffected."
     }
   }
 }

@@ -501,9 +501,17 @@ RESIDUAL RISK (honest boundary — cannot be ruled out in this environment):
 
 - get_current_state silent defaults (#17): surfaced but NOT redesigned —
   needs a data-quality flag consumed by the coordinator (breaking-ish change).
-- Modbus/nibe_heatpump temp-lux switch: works via manual switch selection
-  (nibe_heatpump exposes switch.temporary_lux_48132); auto-discovery of it
-  still MyUplink-flavored in config_flow (_discover_temp_lux_entities).
+- Temp lux on nibe_heatpump is NOT a switch (corrected 2026-10-11): register
+  48132 has five mapped states, so nibe_heatpump creates
+  `select.temporary_lux_48132` (select.py takes writable coils with mappings
+  that are not boolean; yozik04/nibe nibe/data/f1155_f1255.json). nibe 2.25.0
+  upper-cases mapping values, so the options are OFF/3H/6H/12H/ONE TIME
+  INCREASE, and select.select_option matches them case-sensitively. F-series,
+  SMO and VVM maps carry 48132; the S-series maps have no temporary-lux
+  register at all (nibe/coil_groups.py). The temp-lux picker accepts switch
+  and input_boolean only, so these users bridge the select with an
+  input_boolean helper and an automation. A generic Modbus YAML switch on
+  48132 (the devbox stack above) is a switch and works directly.
 - -32768 "unknown value" guard for raw Modbus sensor glitches.
 - S-series myuplink parameter-id space unverified (3 distinct ID spaces exist).
 - hacs.json (2024.1.0) vs README (2025.10+) HA version mismatch.

@@ -20,7 +20,7 @@ COMPONENT = Path(__file__).resolve().parent.parent.parent / "custom_components" 
 STRINGS = COMPONENT / "strings.json"
 TRANSLATIONS = COMPONENT / "translations"
 
-LOCALES = ["en", "sv", "no", "da", "fi"]
+LOCALES = ["en", "sv", "nb", "da", "fi"]
 
 
 def _leaf_keys(data: dict, prefix: str = "") -> dict[str, str]:

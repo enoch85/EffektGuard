@@ -847,9 +847,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return
 
         _LOGGER.warning(
-            "No temporary-lux switch found (register 50004) - hot-water optimization is NOT "
-            "running. Home Assistant's NIBE integration exposes this switch for F-series pumps "
-            "only; an S-series pump has no equivalent entity."
+            "No temporary-lux entity configured - hot-water optimization is NOT running. MyUplink "
+            "provides a temporary-lux switch on F-series pumps (parameter 50004), and a generic Modbus "
+            "switch on register 48132 works too; nibe_heatpump exposes 48132 as a select on F-series, "
+            "SMO and VVM pumps, which needs an input_boolean helper bridge, and has no such register "
+            "for the S-series. Choose the switch or the helper under Reconfigure."
         )
         async_create_issue(
             self.hass,
@@ -1222,6 +1224,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 "Manual override: bypassing volatile check (offset → %.1f°C)",
                 decision.offset,
             )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
+        elif not optimization_enabled:
+            # OFF is a user command as well: its neutral offset must never be swapped for the last
+            # automatic one, which kept the pump on it for up to 45 minutes behind an OFF display.
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.is_emergency:
             # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
@@ -1955,8 +1961,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Check temporary lux entity
         if not self.temp_lux_entity:
             # A _LOGGER.debug is not telling anyone, and this is a whole feature silently doing
-            # nothing. Home Assistant's NIBE integration maps the temporary-lux register (50004)
-            # for the F-series only, so an S-series pump exposes no such entity - while the UI goes
+            # nothing. MyUplink offers temporary lux as a switch (parameter 50004, F-series), as can
+            # a generic Modbus switch on 48132; nibe_heatpump exposes 48132 as a select (F-series,
+            # SMO, VVM) that needs a helper bridge, and has none for the S-series - while the UI goes
             # on showing a hot-water status, a recommendation and a SCHEDULED START TIME that can
             # never fire. Exactly the case the price-source repair issue was created for.
             self._raise_dhw_control_issue()

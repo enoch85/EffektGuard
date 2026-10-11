@@ -11,7 +11,6 @@ from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
-    PRESET_AWAY,
     PRESET_COMFORT,
     PRESET_ECO,
     PRESET_NONE,
@@ -72,7 +71,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
     _attr_name = None
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
-    _attr_preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT]
+    _attr_preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_COMFORT]
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
@@ -180,7 +179,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         """Set HVAC mode.
 
         HEAT: Optimization active
-        OFF: Optimization disabled (safety monitoring only)
+        OFF: Optimization disabled. The offset is held at 0 (an external change is written back
+             to 0) and no decision layer runs, safety included - the pump's own curve is in charge.
         """
         # Convert string to HVACMode if needed
         if isinstance(hvac_mode, str):
@@ -202,7 +202,6 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         - COMFORT: Minimize temperature deviation, accept higher costs
         - NONE/BALANCED: Balance comfort and savings
         - ECO: Maximize savings, wider temperature tolerance
-        - AWAY: Reduce temperature, maximum savings
         """
         _LOGGER.info("Setting preset mode to %s", preset_mode)
 
@@ -211,7 +210,6 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
             PRESET_COMFORT: OPTIMIZATION_MODE_COMFORT,
             PRESET_NONE: OPTIMIZATION_MODE_BALANCED,
             PRESET_ECO: OPTIMIZATION_MODE_SAVINGS,
-            PRESET_AWAY: OPTIMIZATION_MODE_SAVINGS,  # Same as ECO but could differ
         }
 
         optimization_mode = mode_map.get(preset_mode, OPTIMIZATION_MODE_BALANCED)

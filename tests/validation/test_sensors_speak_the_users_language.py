@@ -22,7 +22,7 @@ from custom_components.effektguard.sensor import SENSORS
 
 COMPONENT = Path(__file__).resolve().parents[2] / "custom_components" / "effektguard"
 STRINGS = json.loads((COMPONENT / "strings.json").read_text(encoding="utf-8"))
-LOCALES = ("en", "sv", "no", "da", "fi")
+LOCALES = ("en", "sv", "nb", "da", "fi")
 
 
 @pytest.mark.parametrize("description", SENSORS, ids=lambda d: d.key)
