@@ -102,7 +102,7 @@ async def test_the_safety_abort_still_stops_a_user_boost():
 
 @pytest.mark.asyncio
 async def test_a_boost_is_refused_while_optimization_is_off():
-    """OFF means safety monitoring only - it does not fire the immersion heater on request."""
+    """OFF hands control to the pump's own curve - it does not fire the immersion heater on request."""
     coordinator = _coordinator()
     coordinator.entry.data = {"enable_optimization": False}
 

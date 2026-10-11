@@ -180,7 +180,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         """Set HVAC mode.
 
         HEAT: Optimization active
-        OFF: Optimization disabled (safety monitoring only)
+        OFF: Optimization disabled. The offset is held at 0 (an external change is written back
+             to 0) and no decision layer runs, safety included - the pump's own curve is in charge.
         """
         # Convert string to HVACMode if needed
         if isinstance(hvac_mode, str):

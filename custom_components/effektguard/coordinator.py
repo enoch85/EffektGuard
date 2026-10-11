@@ -1225,6 +1225,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.offset,
             )
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
+        elif not optimization_enabled:
+            # OFF is a user command as well: its neutral offset must never be swapped for the last
+            # automatic one, which kept the pump on it for up to 45 minutes behind an OFF display.
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif decision.is_emergency:
             # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
             # The volatile blocker damps price-driven flip-flopping; it must never defer a safety

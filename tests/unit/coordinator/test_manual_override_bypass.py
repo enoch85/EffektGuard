@@ -137,3 +137,22 @@ async def test_automatic_reversal_still_blocked():
 
     # Blocked: previous +4°C retained
     assert coordinator.current_offset == 4.0
+
+
+@pytest.mark.asyncio
+async def test_switching_off_right_after_a_raise_holds_neutral():
+    """OFF is a user command too: the gate must not swap its neutral 0 for the +4 just raised.
+
+    The thermostat showed OFF while the volatility blocker kept re-asserting the last automatic
+    offset for up to 45 minutes after it.
+    """
+    coordinator = _make_coordinator(OptimizationDecision(offset=0.0, reasoning="unused"))
+    coordinator.entry.data = {"enable_optimization": False}
+
+    await coordinator._drive_the_pump()
+
+    assert coordinator.current_offset == 0.0, (
+        f"optimization is OFF and the pump was left on {coordinator.current_offset:+.0f}: the "
+        f"volatility gate treated OFF's neutral offset as an automatic reversal and kept +4"
+    )
+    assert coordinator._offset_volatility_tracker.last_offset == 0.0
