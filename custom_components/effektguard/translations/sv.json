@@ -63,6 +63,7 @@
         "data": {
           "nibe_entity": "NIBE-entitet för värmekurvans förskjutning",
           "heat_pump_model": "Värmepumpsmodell",
+          "gespot_entity": "Spotpris-sensor (Current Price Rekommenderas)",
           "weather_entity": "Väderentitet",
           "degree_minutes_entity": "Gradminuter-entitet",
           "power_sensor_entity": "Effektmätarsensor",
@@ -261,7 +262,7 @@
   "issues": {
     "no_price_source": {
       "title": "Ingen elpriskälla",
-      "description": "EffektGuard saknar elprisdata, så prisoptimeringen är inte igång - värmekurvan styrs enbart av komfort och säkerhet. Konfigurera en spotprisentitet (GE-Spot, Nord Pool eller liknande) i integrationens inställningar för att aktivera den."
+      "description": "EffektGuard saknar elprisdata, så prisoptimeringen är inte igång - värmekurvan styrs enbart av komfort och säkerhet. Välj en GE-Spot-prissensor under Omkonfigurera på EffektGuard-integrationen för att aktivera den."
     },
     "no_dhw_control_entity": {
       "title": "Ingen entitet för varmvattenstyrning",

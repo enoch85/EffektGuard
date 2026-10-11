@@ -619,9 +619,9 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle reconfiguration of entity selections.
 
-        Allows users to change entity selections (offset control, weather,
-        power sensor, manual sensor overrides, etc.) without recreating the
-        entire integration. Fields left empty are cleared (back to
+        Allows users to change entity selections (offset control, price source,
+        weather, power sensor, manual sensor overrides, etc.) without recreating
+        the entire integration. Fields left empty are cleared (back to
         auto-discovery); the offset entity keeps its previous value when left
         empty because the integration cannot work without one.
         """
@@ -632,6 +632,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Explicit None for absent optional fields so clearing works;
             # async_update_reload_and_abort merges data_updates over entry.data
             data_updates: dict[str, Any] = {
+                CONF_GESPOT_ENTITY: user_input.get(CONF_GESPOT_ENTITY),
                 CONF_WEATHER_ENTITY: user_input.get(CONF_WEATHER_ENTITY),
                 CONF_DEGREE_MINUTES_ENTITY: user_input.get(CONF_DEGREE_MINUTES_ENTITY),
                 CONF_POWER_SENSOR_ENTITY: user_input.get(CONF_POWER_SENSOR_ENTITY),
@@ -674,6 +675,14 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 default=entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL),
             )
         ] = vol.In(HEAT_PUMP_MODEL_OPTIONS)
+        # A price source installed after setup must be selectable here, not only in the
+        # initial flow - otherwise the only remedy is deleting the entry (issue #18)
+        _optional_entity_field(
+            schema_dict,
+            CONF_GESPOT_ENTITY,
+            selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor")),
+            entry.data.get(CONF_GESPOT_ENTITY),
+        )
         _optional_entity_field(
             schema_dict,
             CONF_WEATHER_ENTITY,
