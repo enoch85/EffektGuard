@@ -773,7 +773,7 @@ WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches therma
 # are dropped; the current hour is kept (current_temp carries the present reading anyway), and an
 # all-past forecast becomes EMPTY, which the layers already treat as "no forecast".
 WEATHER_FORECAST_PERIOD_HOURS: Final = 1.0  # each forecast entry covers one hour
-WEATHER_GENTLE_OFFSET: Final = 0.83  # °C - gentle pre-heat (tuned Oct 20, was 0.5→0.6→0.7→0.77)
+WEATHER_GENTLE_OFFSET: Final = 2.0  # °C - 0.83 averaged below the one whole step the register needs
 WEATHER_INDOOR_COOLING_CONFIRMATION: Final = -0.5  # °C/h - confirms forecast accuracy
 LAYER_WEIGHT_WEATHER_PREDICTION: Final = 0.85  # Base weight (scaled by thermal mass)
 WEATHER_WEIGHT_CAP: Final = 0.99  # Cap for weather weight (below Safety 1.0)
@@ -952,9 +952,10 @@ DHW_TREND_RATE_THRESHOLD: Final = -0.3  # °C/h cooling rate for trend check
 
 # UFH prediction horizons based on thermal lag research
 # Prediction horizons for different UFH types
-UFH_CONCRETE_PREDICTION_HORIZON: Final = (
-    24.0  # hours - 6+ hour lag, needs 24h for extreme cold (20°C drops)
-)
+# 48 h: on the owner's F750 slab, pre-heating a cold snap 6-24 h ahead saved almost no immersion
+# heat, 48 h saved most and 72 h little more (docs/research/03). 48 h is also as far as an hourly
+# weather forecast reaches.
+UFH_CONCRETE_PREDICTION_HORIZON: Final = 48.0
 UFH_TIMBER_PREDICTION_HORIZON: Final = 12.0  # hours - 2-3 hour lag (increased from 6h)
 UFH_RADIATOR_PREDICTION_HORIZON: Final = 6.0  # hours - <1 hour lag (increased from 2h)
 

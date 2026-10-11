@@ -56,7 +56,6 @@ solved a problem. If you do fix one, the note must turn false in the same commit
 | F-107 | Effect-tariff model is Ellevio-shaped; needs to be configurable per operator | open with the owner |
 | F-112 | Ladder rescale against the pump's real aux-start DM; 68 tests encode the −1500 world | parked in a git stash |
 | F-124 | Air-source saturation trap: the optimiser burns more immersion heat than the capacity deficit forces in deep cold - on 2026-10-11, 57.0 kWh against 22.4 forced (2.5×) in `nordic_coldsnap_jan2024` and 85.8 against 51.7 (1.7×) in `steady_winter_feb2024`, with the coordinator's volatility gate in the bench (1.5-1.6× before it ran there). The scenarios' known reds hold the aux kWh, and the sweep fails if it rises | strict `xfail` + scenario `known_open` |
-| F-130b | Pre-heat sizing (0.83 → 2.0) | open with the owner |
 | F-132b | Learning confidence ceiling | strict `xfail` |
 | ~~F-142~~ | **Withdrawn 2026-10-03, and it was mine.** I reported the offset limit-cycling from a bench that never ran `OffsetVolatilityTracker`, so it measured the engine's raw proposals as writes. With the real gate: 8-16 reversals/day against a 24 budget, scenario passes. Kept here because the guard is load-bearing - weaken it and `thaw_freeze` goes red | closed in `eaa3986` |
 | F-143 | The DHW pre-schedule path (RULE 4.5) is near-unreachable: 25 of 45,030 input combinations, zero at the default heating rate | comment at the call site |
@@ -125,7 +124,7 @@ unreachable. That is the design, not a typo.
 
 Prediction horizons, from `const.py`:
 
-- **Concrete slab**: 6+ hours thermal lag, **24h** prediction horizon
+- **Concrete slab**: 6+ hours thermal lag, **48h** prediction horizon
 - **Timber**: 2-3 hours lag, **12h** prediction horizon
 - **Radiators**: <1 hour lag, **6h** prediction horizon
 

@@ -121,7 +121,7 @@ pre-heat, not **how much**. The amount is a constant.
 
 ```python
 # 1. Look ahead as far as this building's thermal mass justifies.
-#    6 h radiators / 12 h timber UFH / 24 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
+#    6 h radiators / 12 h timber UFH / 48 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
 forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
 
 # 2. The coldest hour in that window, relative to now.
