@@ -906,6 +906,28 @@ def apply_coldsnap(times, temps):
     return out
 
 
+# Exit code of a --scenario run whose every failure is a recorded known red, none of them worse than
+# recorded. 1 stays "news"; 2 is an unknown scenario name.
+KNOWN_RED_EXIT = 3
+
+
+@dataclass(frozen=True)
+class KnownRed:
+    """One red a scenario shows TODAY, recorded precisely enough that the sweep can tell it from news.
+
+    `fails_with` picks the FAIL line it excuses. `houses` maps each house that shows it to the worst
+    figure of `stat` it is recorded at (None: no figure to hold). A known red that gets WORSE than
+    its figure is news, and so is one that stops failing - fixing a defect must turn its note false.
+    The sweep used to accept any failure in a scenario that had a note at all, so the F-124 note read
+    1.5x while the bench measured 2.5x, and a new red on the S1155 went unrecorded.
+    """
+
+    fails_with: str
+    houses: dict[str, float | None]
+    why: str
+    stat: str | None = None
+
+
 @dataclass(frozen=True)
 class Scenario:
     """A real Swedish weather window paired with the real prices of the SAME days.
@@ -922,7 +944,7 @@ class Scenario:
     # What this scenario fails on TODAY, and why. Stated, not silenced: the run still goes
     # red, and this is the reviewer's note on which reds are news. Same discipline as the
     # F-124 xfail - a known defect stays visible, and fixing it must turn the note false.
-    known_open: tuple[str, ...] = ()
+    known_open: tuple[KnownRed, ...] = ()
 
 
 SCENARIOS = {
@@ -938,12 +960,21 @@ SCENARIOS = {
             ),
             expect=("comfort_held", "no_dm_past_aux_limit"),
             known_open=(
-                "F-124 on the air-source F2040 only, exactly as in steady_winter_feb2024: 30.8 "
-                "kWh of immersion heat where the capacity deficit forced 20.4 kWh (1.5x), "
-                "inside the 1.4-1.7x band that commit measured. The other four houses hold "
-                "every invariant through Sweden's coldest wave since 1999 AND the 589 ore/kWh "
-                "spike it caused. Fixing it is a heat-pump policy question - what should a "
-                "machine do when it cannot meet its own curve - not a refactor."
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="aux_kwh",
+                    houses={"airsource_f2040": 57.0},
+                    why=(
+                        "F-124 on the air-source F2040 only: the offset held high against a "
+                        "compressor with nothing left to give. Measured with the coordinator's own "
+                        "volatility gate in the loop (eaa3986), which holds the offset through "
+                        "reversals as production does; before the bench ran it this window read "
+                        "1.5x. The other four houses hold every invariant through Sweden's coldest "
+                        "wave since 1999 AND the 589 ore/kWh spike it caused. Fixing it is a "
+                        "heat-pump policy question - what should a machine do when it cannot meet "
+                        "its own curve - not a refactor."
+                    ),
+                ),
             ),
         ),
         Scenario(
@@ -955,20 +986,26 @@ SCENARIOS = {
                 "controller that only behaves well in a crisis is not a controller."
             ),
             # NOT no_aux_at_all. This window reaches -18.4 C, and an air-source machine there
-            # legitimately needs resistive help - the plant measures 46.5 kWh of it as
-            # physically forced by the capacity deficit. Asserting zero aux here was my error:
+            # legitimately needs resistive help - the plant measures how much of it the capacity
+            # deficit physically forces. Asserting zero aux here was my error:
             # it is the SHOULDER scenario's expectation, not a cold month's. The aux that is
             # NOT forced is already caught for every run by check_invariants, against
             # AUX_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
             expect=("comfort_held", "no_dm_past_aux_limit"),
             known_open=(
-                "F-124 on the air-source F2040 only: 72.5 kWh of immersion heat where the "
-                "pump's capacity deficit forced 46.5 kWh (1.6x). This is the saturation trap "
-                "already recorded as F-124 - the controller pinning the offset against a "
-                "compressor with nothing left to give - and the 1.6x lands inside the "
-                "1.4-1.7x band the synthetic cold-snap run reports. The other four houses "
-                "hold every invariant. First reproduction of F-124 on REAL weather rather "
-                "than a synthetic temperature shift.",
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="aux_kwh",
+                    houses={"airsource_f2040": 85.8},
+                    why=(
+                        "F-124 on the air-source F2040 only, the same saturation trap as "
+                        "nordic_coldsnap_jan2024: the controller pinning the offset against a "
+                        "compressor with nothing left to give. 1.6x before the bench ran the "
+                        "volatility gate (eaa3986). The other four houses hold every invariant. "
+                        "First reproduction of F-124 on REAL weather rather than a synthetic "
+                        "temperature shift."
+                    ),
+                ),
             ),
         ),
         Scenario(
@@ -997,24 +1034,66 @@ SCENARIOS = {
             ),
             expect=("heating_tracks_demand", "no_aux_at_all", "no_emergency_tier"),
             known_open=(
-                "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
-                "best published figure for each machine, so the harness's own Carnot/"
-                "datasheet guard fails the run. The exergy COP fit is anchored on EN 14511 "
-                "rating points taken at winter source temperatures and extrapolates above "
-                "them when the source is mild. Every COST number in this scenario is "
-                "therefore too low, and no saving may be quoted from it.",
-                "CONTROLLER: the thermal-debt recovery ladder (T1/T2) fires in May on three "
-                "of five houses, DM reaching -460. In mild weather the curve is correctly "
-                "LOW, so (BT25 - S1) stays negative and DM drifts down without the house "
-                "being in any difficulty. EffektGuard has NO heating-season concept and "
-                "relies entirely on the pump's own stop-heating cutoff to make this "
-                "harmless. Same family as the historical 'emergency ladder fired in July', "
-                "which was fixed for the emergency tier and not for the recovery tiers.",
-                "CONTROLLER: comfort breaches in mild weather - the oversized F730 spends "
-                "14550 minutes above its band peaking at 25.3 C, the F750 3210 minutes, and "
-                "the F2040 1015 minutes BELOW. Overshoot protection is tuned for winter "
-                "overshoot driven by heating; these are driven by solar gain and a pump "
-                "with nothing smaller to modulate down to.",
+                KnownRed(
+                    fails_with="seasonal COP was",
+                    stat="mean_cop",
+                    houses={"wooden_f750": 6.17, "apartment_f730": 7.70, "airsource_f2040": 8.56},
+                    why=(
+                        "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
+                        "best published figure for each machine, so the harness's own Carnot/"
+                        "datasheet guard fails the run. The exergy COP fit is anchored on EN 14511 "
+                        "rating points taken at winter source temperatures and extrapolates above "
+                        "them when the source is mild. Every COST number in this scenario is "
+                        "therefore too low, and no saving may be quoted from it."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="recovery ladder fired",
+                    houses={"concrete_f1155": None, "villa_s1155": None, "airsource_f2040": None},
+                    why=(
+                        "CONTROLLER: the thermal-debt recovery ladder (T1/T2) fires in May on "
+                        "three of five houses, DM reaching -460. In mild weather the curve is "
+                        "correctly LOW, so (BT25 - S1) stays negative and DM drifts down without "
+                        "the house being in any difficulty. EffektGuard has NO heating-season "
+                        "concept and relies entirely on the pump's own stop-heating cutoff to make "
+                        "this harmless. Same family as the historical 'emergency ladder fired in "
+                        "July', which was fixed for the emergency tier and not for the recovery "
+                        "tiers."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="in weather this mild",
+                    stat="aux_kwh",
+                    houses={"villa_s1155": 0.6},
+                    why=(
+                        "CONTROLLER, the same cause as the ladder above: the S1155's DM drifts to "
+                        "-460, which is its own aux-start setting, so its immersion heater runs "
+                        "briefly in May. Unrecorded until the sweep began checking which failure "
+                        "each note covers."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="minutes above the comfort band",
+                    stat="comfort_minutes_above",
+                    houses={"wooden_f750": 3125, "apartment_f730": 14020},
+                    why=(
+                        "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
+                        "days above their band. The plant models no solar gain: its constant "
+                        "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
+                        "the outdoor air passes their balance point, and no curve offset can "
+                        "remove free heat. Overshoot protection is tuned for overshoot driven by "
+                        "heating."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="minutes below the comfort band",
+                    stat="comfort_minutes_below",
+                    houses={"airsource_f2040": 320},
+                    why=(
+                        "CONTROLLER: the F2040 goes BELOW its band in the same window - the other "
+                        "side of the same mild-weather tuning gap."
+                    ),
+                ),
             ),
         ),
         Scenario(
@@ -1026,17 +1105,24 @@ SCENARIOS = {
             ),
             expect=("comfort_held", "no_dm_past_aux_limit"),
             known_open=(
-                "PLANT BOUND, not a controller result, and the same mechanism as "
-                "shoulder_may2024: October source temperatures sit above the EN 14511 rating "
-                "points the exergy COP fit is anchored on, so the fit extrapolates and seasonal "
-                "COP comes out 1.27-1.61x the best published figure (F750 5.99 vs 4.72, F730 "
-                "7.19 vs 5.32, F2040 7.50 vs 4.65). The harness's own datasheet guard catches "
-                "it, which is the guard working. Every COST number in this run is therefore too "
-                "low; the CONTROL decisions - which layer voted, which offset was written - do "
-                "not depend on the COP model and are the part this window is read for. The "
-                "comfort side is clean: the 65-minute excursion this scenario used to fail on "
-                "was 0.027 C deep on average and 0.046 C at its worst, below what the room "
-                "sensor can report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C."
+                KnownRed(
+                    fails_with="seasonal COP was",
+                    stat="mean_cop",
+                    houses={"wooden_f750": 5.98, "apartment_f730": 7.21, "airsource_f2040": 7.49},
+                    why=(
+                        "PLANT BOUND, not a controller result, and the same mechanism as "
+                        "shoulder_may2024: October source temperatures sit above the EN 14511 "
+                        "rating points the exergy COP fit is anchored on, so the fit extrapolates "
+                        "and seasonal COP comes out 1.27-1.61x the best published figure. The "
+                        "harness's own datasheet guard catches it, which is the guard working. "
+                        "Every COST number in this run is therefore too low; the CONTROL decisions "
+                        "- which layer voted, which offset was written - do not depend on the COP "
+                        "model and are the part this window is read for. The comfort side is "
+                        "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
+                        "deep on average and 0.046 C at its worst, below what the room sensor can "
+                        "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C."
+                    ),
+                ),
             ),
         ),
     )
@@ -1154,6 +1240,23 @@ def load_scenario(scenario: Scenario):
     return times, temps, _to_gespot_shape(payload["days"], 1.0), GESPOT_UNIT_ORE
 
 
+def triage(
+    scenario: Scenario, house: str, failures: list[str], stats: dict, excused: set
+) -> list[str | None]:
+    """Per failure: None when a known red accounts for it, otherwise why it is news."""
+    verdicts: list[str | None] = []
+    for failure in failures:
+        reds = [r for r in scenario.known_open if house in r.houses and r.fails_with in failure]
+        worse = [
+            f"{r.stat} {stats[r.stat]} is worse than the recorded {r.houses[house]}"
+            for r in reds
+            if r.houses[house] is not None and stats[r.stat] > r.houses[house]
+        ]
+        excused.update((r.fails_with, house) for r in reds)
+        verdicts.append("no known red covers it" if not reds else (worse[0] if worse else None))
+    return verdicts
+
+
 def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[str]:
     """The per-scenario assertions. Each one is why that window is in the set."""
     failures: list[str] = []
@@ -1248,8 +1351,8 @@ def run_all_scenarios(mode: str) -> int:
             f"\n{'=' * 78}\n{slug}\n  {scenario.what_it_tests}\n  pins: "
             f"{', '.join(scenario.expect)}\n{'=' * 78}"
         )
-        for note in scenario.known_open:
-            print(f"  KNOWN OPEN: {note}")
+        for red in scenario.known_open:
+            print(f"  KNOWN RED ({', '.join(red.houses)}): {red.why}")
         completed = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--scenario", slug, "--mode", mode],
             cwd=str(Path(__file__).parent),
@@ -1258,16 +1361,16 @@ def run_all_scenarios(mode: str) -> int:
 
     print(f"\n{'=' * 78}\nSCENARIO SUMMARY\n{'=' * 78}")
     for slug, code in results.items():
-        marker = "PASS" if code == 0 else ("FAIL*" if SCENARIOS[slug].known_open else "FAIL")
+        marker = {0: "PASS", KNOWN_RED_EXIT: "FAIL*"}.get(code, "FAIL")
         print(f"  {marker:<6} {slug}")
     failed = [s for s, c in results.items() if c != 0]
-    unexpected = [s for s in failed if not SCENARIOS[s].known_open]
+    unexpected = [s for s, c in results.items() if c not in (0, KNOWN_RED_EXIT)]
     print(f"\n{len(results) - len(failed)}/{len(results)} scenarios passed")
     if failed:
-        print("  FAIL* = fails only on defects recorded in its known_open notes above.")
+        print("  FAIL* = fails only on its known reds above, none of them worse than recorded.")
     if unexpected:
-        print(f"  UNEXPECTED failures (no known_open note): {', '.join(unexpected)}")
-    # Only an UNRECORDED failure breaks the sweep. A recorded one still prints red.
+        print(f"  NEWS (a red no known red covers, worse than recorded, or fixed): {unexpected}")
+    # Only news breaks the sweep. A recorded red still prints red.
     return 1 if unexpected else 0
 
 
@@ -2413,6 +2516,17 @@ def main() -> int:
 
     price_source = PriceSource(price_days, unit)
     exit_code = 0
+    # Known reds are recorded for the default run of each scenario. Any variant - another mode, an
+    # undersized pump, no prices - is a different experiment, so every red in it is news.
+    triaged = (
+        scenario is not None
+        and mode == "balanced"
+        and not any(
+            (baseline, battery, coldsnap, undersized, no_price, no_weather, no_forecast)
+            + (tuned_curve, live_se4, dst, arctic, selftest)
+        )
+    )
+    excused: set[tuple[str, str]] = set()
 
     houses = HOUSES
     if undersized:
@@ -2525,12 +2639,33 @@ def main() -> int:
             print(f"[{tag}] layers that voted: {share}")
         if violations:
             print(f"[{tag}] first violations: {violations[:5]}")
-        if failures:
+        verdicts = (
+            triage(scenario, house.name, failures, stats, excused)
+            if triaged
+            else ["known reds cover only the default run of a scenario"] * len(failures)
+        )
+        for failure, news in zip(failures, verdicts):
+            if news is None:
+                print(f"[{tag}] FAIL* (known red): {failure}")
+            else:
+                print(f"[{tag}] FAIL: {failure} [{news}]")
+        if any(news is not None for news in verdicts):
             exit_code = 1
-            for failure in failures:
-                print(f"[{tag}] FAIL: {failure}")
-        else:
+        elif failures and exit_code == 0:
+            exit_code = KNOWN_RED_EXIT
+        if not failures:
             print(f"[{tag}] PASS: all safety invariants held")
+
+    if triaged:
+        for red in scenario.known_open:
+            for house_name in red.houses:
+                if (red.fails_with, house_name) not in excused:
+                    exit_code = 1
+                    print(
+                        f"[{house_name}-{scenario.slug}] FIXED?: no longer fails with "
+                        f"{red.fails_with!r}. A known red that stops failing must turn its note "
+                        f"false - delete the entry, and the register line if it was the last."
+                    )
 
     return exit_code
 
