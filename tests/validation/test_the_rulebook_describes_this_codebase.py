@@ -161,7 +161,7 @@ def test_every_climate_number_in_the_rulebook_is_the_number_the_code_computes(
     ],
 )
 def test_the_prediction_horizons_match_the_constants(emitter, constant):
-    """A slab plans over 24 hours, not 12. Six hours is its LAG, not its horizon."""
+    """A slab plans over 48 hours, not 12. Six hours is its LAG, not its horizon."""
     real = int(getattr(const, constant))
 
     line = next((ln for ln in EVERY_WORD.splitlines() if f"**{emitter}**" in ln), None)

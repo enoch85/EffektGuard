@@ -28,6 +28,7 @@ from .adapters.gespot_adapter import GESpotAdapter
 from .adapters.nibe_adapter import NibeAdapter
 from .adapters.weather_adapter import WeatherAdapter
 from .const import (
+    CONF_TARGET_INDOOR_TEMP,
     ATTR_DURATION,
     ATTR_OFFSET,
     CONF_NIBE_TEMP_LUX_ENTITY,
@@ -46,7 +47,7 @@ from .const import (
     SERVICE_RATE_LIMIT_MINUTES,
     SERVICE_RESET_PEAK_TRACKING,
 )
-from .coordinator import EffektGuardCoordinator
+from .coordinator import EffektGuardCoordinator, held_target_of
 from .optimization.decision_engine import DecisionEngine
 from .optimization.effect_layer import EffectManager
 from .optimization.price_layer import PriceAnalyzer
@@ -264,6 +265,7 @@ async def _create_coordinator(
     config_with_latitude = dict(entry.data)  # Start with switch states
     config_with_latitude.update(entry.options)  # Overlay runtime options
     config_with_latitude["latitude"] = hass.config.latitude
+    config_with_latitude[CONF_TARGET_INDOOR_TEMP] = held_target_of(config_with_latitude)
 
     decision_engine = DecisionEngine(
         price_analyzer=price_analyzer,

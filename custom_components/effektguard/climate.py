@@ -11,6 +11,7 @@ from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACMode,
+    PRESET_AWAY,
     PRESET_COMFORT,
     PRESET_ECO,
     PRESET_NONE,
@@ -23,6 +24,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_AWAY,
     CONF_ENABLE_OPTIMIZATION,
     CONF_OPTIMIZATION_MODE,
     CONF_TARGET_INDOOR_TEMP,
@@ -71,7 +73,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
     _attr_name = None
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
-    _attr_preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_COMFORT]
+    _attr_preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT]
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
@@ -140,6 +142,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
             CONF_OPTIMIZATION_MODE,
             self._entry.data.get(CONF_OPTIMIZATION_MODE, OPTIMIZATION_MODE_BALANCED),
         )
+        if self._entry.options.get(CONF_AWAY):
+            return PRESET_AWAY
         # Map optimization mode to preset
         preset_map = {
             OPTIMIZATION_MODE_COMFORT: PRESET_COMFORT,
@@ -202,6 +206,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         - COMFORT: Minimize temperature deviation, accept higher costs
         - NONE/BALANCED: Balance comfort and savings
         - ECO: Maximize savings, wider temperature tolerance
+        - AWAY: ECO, holding AWAY_SETBACK below the target
         """
         _LOGGER.info("Setting preset mode to %s", preset_mode)
 
@@ -210,6 +215,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
             PRESET_COMFORT: OPTIMIZATION_MODE_COMFORT,
             PRESET_NONE: OPTIMIZATION_MODE_BALANCED,
             PRESET_ECO: OPTIMIZATION_MODE_SAVINGS,
+            PRESET_AWAY: OPTIMIZATION_MODE_SAVINGS,
         }
 
         optimization_mode = mode_map.get(preset_mode, OPTIMIZATION_MODE_BALANCED)
@@ -218,6 +224,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         # This follows Home Assistant best practices for ClimateEntity preset changes
         new_options = dict(self._entry.options)
         new_options[CONF_OPTIMIZATION_MODE] = optimization_mode
+        new_options[CONF_AWAY] = preset_mode == PRESET_AWAY
 
         self.hass.config_entries.async_update_entry(self._entry, options=new_options)
         # This automatically calls async_reload_entry() which updates coordinator config

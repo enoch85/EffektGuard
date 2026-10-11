@@ -1,9 +1,9 @@
-# A concrete slab: why the horizon is 24 hours — and why the pre-heat is still an open question
+# A concrete slab: why the horizon is 48 hours, and how big the pre-heat is
 
 One constant comes from this analysis:
 
 ```python
-UFH_CONCRETE_PREDICTION_HORIZON = 24.0   # hours
+UFH_CONCRETE_PREDICTION_HORIZON = 48.0   # hours
 ```
 
 A second change this analysis argues for — a stronger pre-heat offset — has **not** been made,
@@ -70,35 +70,34 @@ case that needed it least.
 Guarded by `tests/unit/optimization/test_preheat_sees_the_cold_coming.py` — the horizon must
 follow thermal mass, and a two-day slide must be visible to a slab.
 
-## 🛑 OPEN — the pre-heat offset is too small to charge the store, and changing it is the owner's call
-
-Production ships:
+## The pre-heat offset (decided 2026-10-11)
 
 ```python
-WEATHER_GENTLE_OFFSET = 0.83   # °C - the pre-heat offset actually in const.py
+WEATHER_GENTLE_OFFSET = 2.0   # °C
 ```
 
-The pre-heat's job is to fill the building's thermal store — `THERMAL_BATTERY_BAND`, ±1.0 °C —
-*before* the cold arrives. The sizing rule is arithmetic, not taste:
+The old +0.83 was averaged with the other layers' votes to below the one whole step the offset
+register needs, so in practice it never banked. On the owner's own winter 2025/26 data, the
+average offset in the 24 h before every cold snap was negative. +2.0 fills the thermal-battery
+band inside the horizon (9.6 h radiator, 14.8 h slab, against 28.4 and 34.6 h at +0.83 on the
+simulator's plants).
 
-```
-energy to fill the band = C_fabric × THERMAL_BATTERY_BAND
-surplus the offset buys = offset × DEFAULT_CURVE_SENSITIVITY × dQ/dFlow
-time to fill            = energy / surplus        (must be ≤ the forecast horizon)
-```
+**Why 48 hours.** An optimiser on the plant fitted to the owner's F750 slab gives the immersion
+heat (kWh) each cold snap needed, by how many hours ahead pre-heating started. It used perfect
+forecasts and the compressor only:
 
-Against the simulator's plant models, `+0.83 °C` fills the band in **28.4 h** (radiator house,
-12 h horizon) and **34.6 h** (slab, 24 h horizon): the cold always arrives first. The constant's
-own history records the struggle without diagnosing it — *"tuned Oct 20, was 0.5 → 0.6 → 0.7 →
-0.77"* — nudged in hundredths when the arithmetic wanted it tripled. At **+2.0 °C** the times are
-9.6 h and 14.8 h, inside both horizons, bounded by `WEATHER_COMP_MAX_OFFSET` (3.0) and handed
-over to the comfort layer at the edge of the band.
+| snap | react | 24 h | 48 h | 72 h |
+|---|---|---|---|---|
+| 24 Dec | 8.8 | 8.8 | 3.9 | 0 |
+| 29 Dec | 4.7 | 2.7 | 0.4 | 0 |
+| 19 Jan | 8.3 | 6.8 | 3.6 | 1.3 |
 
-**This change has not been made.** It is a control-tuning decision on real heat pumps — a
-stronger pre-heat buys comfort insurance with money — and an earlier version of this document
-declared it as `WEATHER_PREHEAT_OFFSET = 2.0` as if it had shipped, citing a guard test that
-does not exist. It had not shipped, there is no such constant, and the validation suite now
-fails any fenced declaration of a constant the code does not have.
+6-24 h ahead does almost nothing. Most of the gain comes by 48 h, and 72 h adds little.
+Heat is only banked cheaply while the weather is still mild enough for the compressor to have
+headroom. 48 h is also as far as an hourly weather forecast reaches.
+
+**Still open:** the comfort layer cuts any bank once the room is about 0.6 °C over target. That
+is listed in the owner's TODO, not changed here.
 
 ## Owner's words
 
