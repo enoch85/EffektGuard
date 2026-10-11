@@ -94,7 +94,7 @@ Native 15-minute (quarterly) integration:
 - **Day/night weighting** - full effect daytime, reduced nighttime
 - **Savings calculation** - estimates monthly savings (effect + spot)
 
-Works with any 15-min price source (GE-Spot, Nordpool, Tibber, etc.).
+Prices come from [GE-Spot](https://github.com/enoch85/ge-spot) (15-minute intervals).
 
 ### 💰 Smart Price Forecasting
 Multi-factor forward-looking optimization combining:
@@ -134,7 +134,7 @@ Production-ready safety mechanisms:
     registers (see [Local Modbus setups](#local-modbus-setups))
   - Models: F750, F730, F1155, F2040, S1155 (profiles); similar NIBE models work with the
     nearest profile. Additional brands: planned for future releases
-- **Price integration** with 15-min data (GE-Spot, Nordpool, Tibber, etc.)
+- **Price integration**: [GE-Spot](https://github.com/enoch85/ge-spot) (15-minute data)
 - **Weather integration** (Met.no or equivalent)
 
 ## Installation
@@ -159,7 +159,7 @@ Production-ready safety mechanisms:
 
 Guided setup flow with validation:
 1. **Select heat pump entity** - heating curve offset (e.g., number.xxx_offset_s1_47011 for NIBE)
-2. **Select price entity** - quarterly price sensor (any spot price integration)
+2. **Select price entity** - a GE-Spot price sensor (can be added or changed later via **Reconfigure**)
 3. **Select weather entity** - forecast integration
 4. **Configure targets** - indoor temperature, tolerance, optimization mode
 5. **Optional features** - DHW optimization, power meter, extra sensors

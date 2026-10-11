@@ -63,6 +63,7 @@
         "data": {
           "nibe_entity": "NIBE-lämpökäyrän siirtymäentiteetti",
           "heat_pump_model": "Lämpöpumpun malli",
+          "gespot_entity": "Spot-hinta-sensori (Current Price Suositeltu)",
           "weather_entity": "Sää-entiteetti",
           "degree_minutes_entity": "Asteminuutti-entiteetti",
           "power_sensor_entity": "Tehomittarianturi",
@@ -261,7 +262,7 @@
   "issues": {
     "no_price_source": {
       "title": "Ei sähkön hintalähdettä",
-      "description": "EffektGuardilla ei ole sähkön hintatietoja, joten hintaoptimointi ei ole käynnissä - lämpökäyrää ohjataan vain mukavuuden ja turvallisuuden perusteella. Määritä pörssisähköentiteetti (GE-Spot, Nord Pool tai vastaava) integraation asetuksissa ottaaksesi sen käyttöön."
+      "description": "EffektGuardilla ei ole sähkön hintatietoja, joten hintaoptimointi ei ole käynnissä - lämpökäyrää ohjataan vain mukavuuden ja turvallisuuden perusteella. Valitse GE-Spot-hintasensori EffektGuard-integraation uudelleenmäärityksessä ottaaksesi sen käyttöön."
     },
     "no_dhw_control_entity": {
       "title": "Lämpimän veden ohjausentiteettiä ei löytynyt",
