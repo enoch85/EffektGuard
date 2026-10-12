@@ -120,12 +120,13 @@ This prevents unnecessary pre-heating during:
 pre-heat, not **how much**. The amount is a constant.
 
 ```python
-# 1. Look ahead as far as this building's thermal mass justifies.
-#    6 h radiators / 12 h timber UFH / 48 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
-forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
+# 1. A cold snap is a colder DAY: compare 24-hour means, so a night's low cannot fire it.
+temps = [f.temperature for f in weather_data.forecast_hours]
+today = mean(temps[:24])
 
-# 2. The coldest hour in that window, relative to now.
-temp_drop = min(f.temperature for f in forecast_hours) - nibe_state.outdoor_temp
+# 2. The coldest day that starts within the horizon this building's thermal mass justifies:
+#    6 h radiators / 12 h timber UFH / 48 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
+temp_drop = min(mean(temps[s:s + 24]) for s in 1..horizon) - today
 
 # 3. Two independent triggers - either fires the layer.
 forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD      # -4.0 °C

@@ -44,6 +44,7 @@ from ..const import (
     WEATHER_COMP_DEFER_RETAIN_MODERATE,
     WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT,
     WEATHER_COMP_MAX_OFFSET,
+    WEATHER_DAILY_MEAN_HOURS,
     WEATHER_FORECAST_DROP_THRESHOLD,
     BALANCE_POINT_MAX_OFFSET,
     BALANCE_POINT_MIN_OFFSET,
@@ -636,6 +637,7 @@ class WeatherPredictionLayer:
         weather_data,
         thermal_trend: dict,
         enable_weather_prediction: bool = True,
+        past_day_mean: float | None = None,
     ) -> WeatherLayerDecision:
         """Weather prediction layer: Proactive pre-heating based on forecast.
 
@@ -654,6 +656,7 @@ class WeatherPredictionLayer:
             weather_data: Weather forecast data
             thermal_trend: Trend data from predictor (rate_per_hour, confidence)
             enable_weather_prediction: Whether layer is enabled by user
+            past_day_mean: Measured outdoor mean over the last 24 h, None until it is known
 
         Returns:
             WeatherLayerDecision with gentle pre-heating recommendation
@@ -675,23 +678,18 @@ class WeatherPredictionLayer:
                 reason="No weather data",
             )
 
-        # Check forecast for significant temperature drop
-        current_outdoor = nibe_state.outdoor_temp
-        forecast_hours = weather_data.forecast_hours[: int(self.forecast_horizon)]
-
-        if not forecast_hours:
-            return WeatherLayerDecision(
-                name="Weather Pre-heat",
-                offset=0.0,
-                weight=0.0,
-                reason="No forecast data",
-            )
-
-        # Find minimum temperature in forecast period
-        min_temp = min(f.temperature for f in forecast_hours)
-        temp_drop = min_temp - current_outdoor
-
-        # PRIMARY TRIGGER: Forecast shows ≥3°C drop
+        # PRIMARY TRIGGER: a coming day, starting within the horizon, is colder on average than the
+        # past one - so a front hours away counts and a night does not. Until 24 h of measurements
+        # exist, the next 24 forecast hours stand in for the past day.
+        temps = [f.temperature for f in weather_data.forecast_hours]
+        day = WEATHER_DAILY_MEAN_HOURS
+        first = 0 if past_day_mean is not None else 1
+        if past_day_mean is None:
+            past_day_mean = sum(temps[:day]) / day if len(temps) >= day else 0.0
+        last = min(int(self.forecast_horizon), len(temps) - day)
+        days_ahead = [sum(temps[s : s + day]) / day for s in range(first, last + 1)]
+        coldest = min(days_ahead, default=past_day_mean)
+        temp_drop = coldest - past_day_mean
         forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
 
         # CONFIRMATION TRIGGER: Indoor already cooling (confirms forecast)
@@ -705,12 +703,12 @@ class WeatherPredictionLayer:
 
         # Debug logging for weather pre-heat decisions
         _LOGGER.debug(
-            "Weather Pre-heat check: outdoor=%.1f°C, forecast_min=%.1f°C, "
+            "Weather Pre-heat check: past 24h mean=%.1f°C, coldest day ahead=%.1f°C, "
             "temp_drop=%.1f°C (threshold=%.1f°C), forecast_triggered=%s, "
             "trend_rate=%.2f°C/h (threshold=%.1f°C/h), trend_confidence=%.2f, "
             "indoor_cooling=%s",
-            current_outdoor,
-            min_temp,
+            past_day_mean,
+            coldest,
             temp_drop,
             WEATHER_FORECAST_DROP_THRESHOLD,
             forecast_triggered,
@@ -735,7 +733,8 @@ class WeatherPredictionLayer:
                 trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
             elif forecast_triggered:
                 trigger = (
-                    f"Forecast {temp_drop:.1f}°C drop in {self.forecast_horizon:.0f}h (proactive)"
+                    f"Forecast daily-mean drop {temp_drop:.1f}°C within {self.forecast_horizon:.0f}h "
+                    "(proactive)"
                 )
             else:
                 trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"

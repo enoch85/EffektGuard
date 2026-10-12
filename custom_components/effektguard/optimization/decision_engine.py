@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    WEATHER_DAILY_MEAN_HOURS,
+    SAMPLES_PER_HOUR,
     WEATHER_FORECAST_HORIZON,
     COMPRESSOR_RISK_HIGH,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
@@ -437,6 +439,14 @@ class DecisionEngine:
             "samples": 0,
         }
 
+    def _outdoor_mean_past_day(self) -> float | None:
+        """The measured outdoor mean over the last 24 h, once the predictor holds that much."""
+        samples = WEATHER_DAILY_MEAN_HOURS * SAMPLES_PER_HOUR
+        history = self.predictor.state_history if self.predictor else ()
+        if len(history) < samples:
+            return None
+        return sum(s.outdoor_temp for s in list(history)[-samples:]) / samples
+
     def _get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend (BT1 real-time).
 
@@ -683,6 +693,7 @@ class DecisionEngine:
             weather_data=weather_data,
             thermal_trend=self._get_thermal_trend(),
             enable_weather_prediction=self.config.get("enable_weather_prediction", True),
+            past_day_mean=self._outdoor_mean_past_day(),
         )
         weather_decision = LayerDecision(
             name=weather_result.name,

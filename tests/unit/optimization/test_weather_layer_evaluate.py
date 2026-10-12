@@ -43,16 +43,8 @@ def mock_nibe_state():
 def mock_weather_data_dropping():
     """Create mock weather data with temperature drop forecast."""
     weather = MagicMock()
-    # Temperature dropping 6°C over forecast period
-    weather.forecast_hours = [
-        MagicMock(temperature=0.0),
-        MagicMock(temperature=-1.0),
-        MagicMock(temperature=-2.0),
-        MagicMock(temperature=-3.0),
-        MagicMock(temperature=-4.0),
-        MagicMock(temperature=-5.0),
-        MagicMock(temperature=-6.0),  # -6°C drop
-    ]
+    # Twelve hours as now, then a day 10 °C colder: the daily mean drops 5 °C within 12 h
+    weather.forecast_hours = [MagicMock(temperature=t) for t in [0.0] * 12 + [-10.0] * 36]
     return weather
 
 
@@ -182,6 +174,43 @@ class TestEvaluateLayerForecastTrigger:
         assert "stable" in result.reason.lower()
 
 
+@pytest.mark.parametrize("past_day_mean", [None, 12.0])
+def test_a_cold_night_is_not_a_cold_snap(weather_layer, mock_nibe_state, past_day_mean):
+    """May: 16 °C afternoons, 8 °C nights. The night is 8 °C below now, but no day is colder."""
+    mock_nibe_state.outdoor_temp = 16.0
+    weather = MagicMock()
+    weather.forecast_hours = [
+        MagicMock(temperature=16.0 if 8 <= hour % 24 < 20 else 8.0) for hour in range(48)
+    ]
+
+    result = weather_layer.evaluate_layer(
+        nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=past_day_mean,
+    )
+
+    assert result.offset == 0.0, f"pre-heated for a cold night: {result.reason}"
+
+
+def test_a_front_hours_away_is_a_cold_snap_for_a_radiator_house(mock_nibe_state):
+    """A fast house still pre-heats for a front three hours out, measured against the past day."""
+    radiators = WeatherPredictionLayer(thermal_mass=0.5)
+    weather = MagicMock()
+    weather.forecast_hours = [MagicMock(temperature=t) for t in [0.0] * 3 + [-6.0] * 45]
+
+    result = radiators.evaluate_layer(
+        nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=0.0,
+    )
+
+    assert result.offset == WEATHER_GENTLE_OFFSET, result.reason
+
+
 class TestEvaluateLayerIndoorCoolingTrigger:
     """Test evaluate_layer indoor cooling confirmation trigger."""
 
@@ -238,3 +267,17 @@ class TestEvaluateLayerThermalMassWeight:
 
         expected_weight = LAYER_WEIGHT_WEATHER_PREDICTION * 0.5
         assert result.weight == expected_weight
+
+
+def test_the_past_day_is_measured_once_a_day_of_history_exists():
+    from custom_components.effektguard.const import SAMPLES_PER_HOUR
+    from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+
+    engine = DecisionEngine(MagicMock(), MagicMock(), MagicMock(), config={})
+    day = 24 * SAMPLES_PER_HOUR
+    engine.predictor = MagicMock(state_history=[MagicMock(outdoor_temp=5.0)] * (day - 1))
+    assert engine._outdoor_mean_past_day() is None
+    engine.predictor.state_history = [MagicMock(outdoor_temp=-9.0)] + [
+        MagicMock(outdoor_temp=5.0)
+    ] * day
+    assert engine._outdoor_mean_past_day() == 5.0

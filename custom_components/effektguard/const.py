@@ -765,7 +765,10 @@ DHW_CONTROL_ISSUE_ID: Final = "no_dhw_control_entity"
 
 PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 
-WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in forecast (was -5.0, lowered Jan 2026)
+WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in the daily mean
+# A cold snap is a colder DAY, not a colder night: the trigger compares 24-hour means of the forecast,
+# so the ordinary day-night swing (a May night reads 8 C below the afternoon) cannot fire it.
+WEATHER_DAILY_MEAN_HOURS: Final = 24
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 
 # `WeatherData.forecast_hours` MUST be filtered to the future, because every consumer slices it
