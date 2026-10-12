@@ -1075,14 +1075,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3125, "apartment_f730": 14020},
+                    houses={"wooden_f750": 3130, "apartment_f730": 14150},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
                         "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
                         "the outdoor air passes their balance point, and no curve offset can "
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
-                        "heating."
+                        "heating. The +2.0 weather pre-heat (0ce8e93) adds 5 and 130 minutes: its "
+                        "trigger reads a May night's low as a 4 C drop, so it fires on day-night "
+                        "swings. Open: trigger on a drop in the daily mean instead."
                     ),
                 ),
                 KnownRed(
