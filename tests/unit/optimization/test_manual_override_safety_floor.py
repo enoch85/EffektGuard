@@ -88,12 +88,12 @@ class TestManualOverrideRespectsAbsoluteSafetyFloor:
         assert decision.is_emergency is True
 
     def test_force_offset_cannot_hold_dm_past_the_aux_limit(self, engine):
-        """force_offset(-10) while DM is past the aux limit must be raised."""
+        """force_offset(-10) while DM is past the aux limit is raised to the no-cut floor, 0."""
         engine.set_manual_override(MIN_OFFSET, duration_minutes=360)
 
         decision = decide(engine, state(degree_minutes=DM_THRESHOLD_AUX_LIMIT - 20))
 
-        assert decision.offset == pytest.approx(SAFETY_EMERGENCY_OFFSET), (
+        assert decision.offset == pytest.approx(0.0), (
             f"Manual override held {decision.offset:+.1f}°C at DM "
             f"{DM_THRESHOLD_AUX_LIMIT - 20}. Past the aux limit the immersion heater is "
             "running; reducing heat deepens the debt."
@@ -131,7 +131,7 @@ class TestAbsoluteSafetyFloor:
 
     def test_floor_engages_at_the_aux_limit(self, engine):
         floor = engine._absolute_safety_floor(state(degree_minutes=DM_THRESHOLD_AUX_LIMIT))
-        assert floor == pytest.approx(SAFETY_EMERGENCY_OFFSET)
+        assert floor == pytest.approx(0.0)
 
 
 class TestVolatilityBlockerBypassesEmergency:
@@ -141,9 +141,8 @@ class TestVolatilityBlockerBypassesEmergency:
         """Regression guard for the offset-volatility blocker.
 
         Pre-fix the blocker bypassed only `is_manual_override` and `anti_windup_active`.
-        An aux-limit emergency sets neither, so a +10.0 recovery following a -6.0 PEAK
-        offset was a "volatile reversal" and got deferred for up to 45 minutes while DM
-        kept falling.
+        An aux-limit emergency sets neither, so lifting a -6.0 PEAK offset there was a
+        "volatile reversal" and got deferred for up to 45 minutes while DM kept falling.
         """
         import inspect
 

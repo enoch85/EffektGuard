@@ -132,7 +132,7 @@ class OptimizationDecision:
     # True when an ABSOLUTE safety path produced this offset: indoor below MIN_TEMP_LIMIT,
     # or degree minutes past DM_THRESHOLD_AUX_LIMIT. The coordinator's offset-volatility
     # blocker must never defer such a decision - it exists to damp price-driven
-    # flip-flopping, and deferring an aux-limit recovery for 45 minutes lets DM plunge
+    # flip-flopping, and holding a cut for 45 minutes past the aux limit lets DM plunge
     # further while the immersion heater runs.
     is_emergency: bool = False
 
@@ -398,10 +398,10 @@ class DecisionEngine:
         """Lowest offset the system may apply regardless of user intent or cost.
 
         These are the two conditions the project treats as non-negotiable:
-          - indoor below MIN_TEMP_LIMIT: the house is getting dangerously cold.
-          - degree minutes at or past DM_THRESHOLD_AUX_LIMIT: NIBE engages the auxiliary
-            immersion heater here. Declining to recover does not avoid that - it
-            guarantees it, while the debt keeps deepening.
+          - indoor below MIN_TEMP_LIMIT: the house is getting dangerously cold - maximum heat.
+          - degree minutes at or past DM_THRESHOLD_AUX_LIMIT: the compressor is flat out and the
+            immersion heater is running. A cut here deepens a real shortfall, so the offset may
+            not go below 0 (a raise would only buy immersion heat, F-124).
 
         Applied as a FLOOR, not a replacement: a user asking for MORE heat than safety
         requires still gets what they asked for. Only a command that would leave the
@@ -419,7 +419,7 @@ class DecisionEngine:
         ):
             return SAFETY_EMERGENCY_OFFSET
         if nibe_state.degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
-            return SAFETY_EMERGENCY_OFFSET
+            return 0.0
         return None
 
     def _get_thermal_trend(self) -> dict:
@@ -782,9 +782,9 @@ class DecisionEngine:
 
         final_offset = raw_offset * damping_factor
 
-        # An ABSOLUTE safety path outranks the wear guard: a house below MIN_TEMP_LIMIT, or degree
-        # minutes past the pump's aux-start, gets everything the machine has. Wear is a cost;
-        # a cold house is a failure.
+        # An ABSOLUTE safety path outranks the wear guard: a house below MIN_TEMP_LIMIT gets
+        # everything the machine has, and past the aux limit the guard's hold at the current offset
+        # must not keep a cut the EMERGENCY floor lifts. Wear is a cost; a cold house is a failure.
         is_emergency = (
             safety_decision.weight >= LAYER_WEIGHT_SAFETY
             or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
@@ -957,7 +957,7 @@ class DecisionEngine:
 
         Priority order:
             1. Safety layer            - indoor below MIN_TEMP_LIMIT. Absolute.
-            2. EMERGENCY tier          - DM past DM_THRESHOLD_AUX_LIMIT. Absolute.
+            2. EMERGENCY tier          - DM past DM_THRESHOLD_AUX_LIMIT: the rest, floored at 0.
             3. Recovery tiers T1/T2/T3 - cost layers may MODERATE the response down to
                                          the tier's peak-aware offset, never reverse it.
             4. Remaining critical      - weight >= LAYER_WEIGHT_SAFETY, safety-biased tie-break.
@@ -983,17 +983,20 @@ class DecisionEngine:
         if safety_layer is not None and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
             return self._clamp_offset(safety_layer.offset)
 
-        # 2. EMERGENCY tier: DM past the auxiliary-heat limit.
-        # Nothing may throttle this. Past DM_THRESHOLD_AUX_LIMIT the immersion heater
-        # engages; suppressing recovery to protect the effect tariff does not avoid the
-        # peak, it guarantees a bigger one from the aux heater while the debt deepens.
+        # 2. EMERGENCY tier: DM past the auxiliary-heat limit. NO CUTS, and no raise of its own.
+        # The compressor is flat out and the immersion heater is running: a cost or comfort cut
+        # deepens a shortfall the pump is already paying for at COP 1, while a raise cannot add
+        # compressor heat - it only drives DM down faster and steps the heater up (F-124). So the
+        # other layers decide and their verdict is floored at 0.
         if emergency_layer is not None and emergency_layer.tier == DM_TIER_EMERGENCY:
+            others = [layer for layer in layers if layer is not emergency_layer]
+            offset = max(self._aggregate_layers(others, starvation), 0.0)
             _LOGGER.warning(
-                "Aux-limit emergency: DM %.0f - applying %.1f°C, overriding all cost layers",
+                "Aux-limit emergency: DM %.0f - no cuts, applying %.1f°C",
                 emergency_layer.degree_minutes,
-                emergency_layer.offset,
+                offset,
             )
-            return self._clamp_offset(emergency_layer.offset)
+            return offset
 
         # 3. Recovery tiers (T1/T2/T3): thermal debt beyond the climate-aware warning
         # threshold. The emergency layer only reaches a recovery tier when the house is
@@ -1025,8 +1028,7 @@ class DecisionEngine:
             max_offset = max(layer.offset for layer in critical_layers)
             min_offset = min(layer.offset for layer in critical_layers)
             # Safety-biased tie-break: on equal magnitude prefer the HEATING vote.
-            # (`>` here returned the negative vote on an exact tie, and
-            # SAFETY_EMERGENCY_OFFSET/+10 vs PRICE_OFFSET_PEAK/-10 tie by construction.)
+            # (`>` here once returned the -10 price cut against the old +10 aux-limit vote.)
             chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
 
             # A COST LAYER MAY COAST THE HOUSE WITHIN ITS COMFORT BAND. IT MAY NOT COAST IT OUT.

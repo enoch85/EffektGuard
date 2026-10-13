@@ -10,7 +10,6 @@ from custom_components.effektguard.const import (
     DM_CRITICAL_T2_MARGIN,
     DM_THRESHOLD_AUX_LIMIT,
     QuarterClassification,
-    SAFETY_EMERGENCY_OFFSET,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.thermal_layer import (
@@ -99,7 +98,7 @@ class TestEmergencyLayerEvaluate:
         assert hasattr(result, "damping_applied")
 
     def test_absolute_limit_triggers_emergency(self):
-        """Test that DM at -1500 triggers emergency response."""
+        """Past the aux limit the tier fires as a no-cut floor and asks for no raise of its own."""
         layer = self._create_layer()
         nibe_state = MockNibeState(
             degree_minutes=DM_THRESHOLD_AUX_LIMIT - 10,  # -1510
@@ -115,7 +114,7 @@ class TestEmergencyLayerEvaluate:
             tolerance_range=0.5,
         )
 
-        assert result.offset == SAFETY_EMERGENCY_OFFSET
+        assert result.offset == 0.0
         assert result.weight == 1.0
         assert result.tier == "EMERGENCY"
         assert "EMERGENCY" in result.reason

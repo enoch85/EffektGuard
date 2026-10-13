@@ -71,7 +71,6 @@ from ..const import (
     RAPID_COOLING_OUTDOOR_THRESHOLD,
     RAPID_COOLING_THRESHOLD,
     RAPID_COOLING_WEIGHT,
-    SAFETY_EMERGENCY_OFFSET,
     THERMAL_CHANGE_MODERATE,
     THERMAL_CHANGE_MODERATE_COOLING,
     THERMAL_RECOVERY_DAMPING_FACTOR,
@@ -365,16 +364,15 @@ class EmergencyLayer:
     - Stockholm (-5°C): Moderate tolerances
     - Luleå/Kiruna (-30°C): Wide tolerances, expect deep DM
 
-    Absolute maximum DM -1500 is ALWAYS enforced regardless of conditions.
-    This is the hard safety limit validated by Swedish NIBE forums.
+    Past DM -1500 the layer stops cuts (a floor at 0) unless the room is above its band; it never
+    commands a raise there - a saturated compressor turns a raise into immersion heat (F-124).
 
     VOLATILE-PRICE SUPPRESSION (deliberate smoothness/recovery trade-off): when the current
     spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS, should_skip_volatile_boost()
     zeroes the T1/T2/T3 recovery offset and cuts weight to VOLATILE_WEIGHT_REDUCTION, to avoid
     compressor cycling on brief windows. Cost: DM may keep falling during a volatile run. Bounded
     because the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of evaluate_layer returns first, so the
-    EMERGENCY tier is never suppressed. If a DM spiral ever coincides with short price runs, look
-    here first.
+    EMERGENCY floor is never suppressed.
     """
 
     def __init__(
@@ -693,21 +691,33 @@ class EmergencyLayer:
         )
 
         temp_deviation = indoor_temp - target_temp
+        # Comfort reasoning needs a REAL indoor reading. Without a room sensor the adapter reports
+        # DEFAULT_INDOOR_TEMP (== target), so temp_deviation == 0.0 and Case 2's `>= 0` gate would
+        # permanently disable DM protection on exactly the systems that depend on it most. Skip the
+        # comfort cases and use the degree-minute tiers, as NIBE does sensorless.
+        indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
+        too_warm = indoor_is_measured and temp_deviation > tolerance_range
 
         # ========================================
-        # HARD LIMIT: DM -1500 absolute maximum (never exceed)
+        # AUX LIMIT: past DM -1500, no cuts - and no raise (F-124)
         # ========================================
-        # MUST come before every other branch: the anti-windup and "too warm" cases return early, so
-        # placing any of them first makes the hard limit unenforceable (e.g. "too warm" trips at only
-        # tolerance_range over target, silencing this on a solar-gain morning during a debt spiral).
-        # Past this threshold NIBE engages the aux immersion heater; declining to respond guarantees
-        # it rather than preventing it.
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+        # MUST come before anti-windup and the cooldown, which return early. Past this threshold the
+        # compressor is flat out and the immersion heater already running (from about -1450 on the
+        # owner's F750). Raising the curve cannot add compressor heat: S1 climbs where the supply
+        # cannot follow, DM falls faster and the heater steps up - in the owner's winter +10 latched
+        # for hours and cooked the house. What protects the house is not CUTTING here, so this tier
+        # is a floor at 0 that _aggregate_layers applies to the other layers' verdict. A room above
+        # its band skips it: a deep DM there means our own target is too high, and lowering it is
+        # what recovers DM.
+        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT and not too_warm:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
-                offset=SAFETY_EMERGENCY_OFFSET,
+                offset=0.0,
                 weight=1.0,
-                reason=f"EMERGENCY: DM {degree_minutes:.0f} at aux limit {DM_THRESHOLD_AUX_LIMIT}",
+                reason=(
+                    f"EMERGENCY: DM {degree_minutes:.0f} past aux limit {DM_THRESHOLD_AUX_LIMIT}"
+                    " - no cuts"
+                ),
                 tier="EMERGENCY",
                 degree_minutes=degree_minutes,
                 threshold_used=DM_THRESHOLD_AUX_LIMIT,
@@ -795,14 +805,8 @@ class EmergencyLayer:
                     dm_rate=dm_rate,
                 )
 
-        # Cases 1 and 2 reason about indoor comfort, so both need a REAL indoor reading. Without a
-        # room sensor the adapter reports DEFAULT_INDOOR_TEMP (== target), so temp_deviation == 0.0
-        # and Case 2's `>= 0` gate would permanently disable DM protection on exactly the systems
-        # that depend on it most. Skip both and use the degree-minute tiers, as NIBE does sensorless.
-        indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
-
         # Case 1: Too warm (above tolerance)
-        if indoor_is_measured and temp_deviation > tolerance_range:
+        if too_warm:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
                 offset=0.0,
