@@ -103,6 +103,11 @@ deliberate design fact, not a typo - do not "fix" a table to hide it.
 
 - **`elprisetjustnu.se` returns 403 without a `User-Agent` header.**
 
+- **The comfort layer's band is not the tolerance slider.** The engine hands it `tolerance_range`,
+  `TOLERANCE_RANGE_MULTIPLIER` × the slider: the default ±0.5 gives a 0.2 °C band - in balanced mode
+  exactly the dead zone, so there is no in-band correction at all - and ±1.2 gives 0.48 °C. Reasoning
+  about the comfort layer from the slider's value puts its edge 2.5× too far out.
+
 ---
 
 ## The numbers a maintainer reads

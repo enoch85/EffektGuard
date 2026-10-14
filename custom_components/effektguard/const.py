@@ -199,19 +199,10 @@ LAYER_WEIGHT_PROACTIVE_MIN: Final = 0.3  # Minimum proactive weight
 LAYER_WEIGHT_PREDICTION: Final = 0.65  # Prediction layer weight (Phase 6)
 LAYER_WEIGHT_COMFORT_MIN: Final = 0.2  # Minimum comfort weight
 LAYER_WEIGHT_COMFORT_MAX: Final = (
-    0.5  # Ceiling of the comfort layer's urgency ramp (comfort_layer.py)
+    0.5  # Weight of the comfort layer's too-cold boost (comfort_layer.py)
 )
 
-# Graduated comfort layer weights (Phase 2: Temperature Control Fixes)
-# Provides dynamic response to temperature overshoot severity
-# Dec 2, 2025: Lowered thresholds - comfort layer triggers at 0.5°C and 1.0°C
-LAYER_WEIGHT_COMFORT_HIGH: Final = 0.7  # High priority: 0-0.5°C over tolerance
-LAYER_WEIGHT_COMFORT_CRITICAL: Final = (
-    1.0  # Critical priority: 1°C+ over tolerance (same as safety)
-)
-
-# Graduated comfort layer correction multipliers (Phase 2)
-COMFORT_CORRECTION_MILD: Final = 1.0  # 0-1°C over tolerance: standard correction
+LAYER_WEIGHT_COMFORT_CRITICAL: Final = 1.0  # A full overshoot coast wins outright (as safety)
 
 # Effect tariff / Peak protection layer weights and offsets
 # Oct 19, 2025: Increased weights to make peak protection more decisive
@@ -684,27 +675,24 @@ PROACTIVE_ZONE4_WEIGHT: Final = 0.55  # Strong weight (below WARNING)
 PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNING)
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
-# Warm house weight reduction (Dec 10, 2025)
-# When house is warm (above target + threshold), reduce proactive layer weight
-# to prevent fighting with COAST (overshoot protection).
-# Root cause: DM can be negative even when house is warm due to flow temp reduction.
-# The correct response is to let COAST reduce heat, not boost DM recovery.
+# Warm house weight reduction (Dec 10, 2025): above target + threshold the proactive zones vote at
+# reduced weight. DM can be negative in a warm house because the heat is being cut; that is not a
+# shortfall to boost against while the comfort layer is lowering the heat.
 # Z5 exemption: At warning boundary, prioritize DM recovery over temperature
 PROACTIVE_WARM_HOUSE_THRESHOLD: Final = 0.5  # °C above target to consider "warm"
 PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION: Final = 0.3  # Apply 30% of normal weight when warm
 
-# Overshoot Protection
-# Graduated coasting response when indoor temp is above target with stable weather
-# Based on Dec 1-2, 2025 production analysis: overshoot was ignored, causing DM spiral
-# Key insight: DM recovers when we STOP heating, not by boosting
-OVERSHOOT_PROTECTION_START: Final = (
-    0.6  # °C above target to start responding (catches Dec 2 crisis)
-)
-OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for full response
-OVERSHOOT_PROTECTION_OFFSET_MIN: Final = -7.0  # Offset at start threshold (coast gently)
+# Overshoot protection (comfort_layer.py): above its band the comfort layer ramps from the in-band
+# correction at the band edge to a full coast - OVERSHOOT_PROTECTION_OFFSET_MAX at
+# LAYER_WEIGHT_COMFORT_CRITICAL - at OVERSHOOT_PROTECTION_FULL, and reads no prices. It replaces
+# -7 C at weight 0.7 from 0.6 C, swapped for a near-neutral vote whenever a pricier quarter came
+# into view: two cliffs, about 72 coast entries in 59 days, half of them from the price swap (closed
+# loop on the owner's F750 + slab, Jan-Feb 2026). FULL is the deepest bank the owner wants a slab to
+# hold before a cold snap; a later full coast measured cheaper, but from 1.7-1.8 C on it held the
+# room above target + 1.5 C longer than the cliff did.
+OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for the full coast
 OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # Offset at full threshold (full coast)
 
-# Price-aware overshoot protection (Dec 4, 2025)
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
 RAPID_COOLING_THRESHOLD: Final = -0.3  # °C/hour for rapid cooling detection
@@ -890,15 +878,6 @@ PRICE_PRE_PEAK_OFFSET: Final = -6.0  # °C - gradual reduction before PEAK arriv
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)
 COMFORT_CORRECTION_MULT: Final = 0.3  # Gentle correction multiplier
-
-# Comfort layer thermal-aware calculations (Dec 8, 2025)
-# Heat loss rate calculation: base_heat_loss = temp_diff / (insulation * HEAT_LOSS_DIVISOR)
-# Well-insulated Swedish house loses ~0.15°C/hour at 20°C indoor/outdoor diff
-# Formula: heat_loss = (temp_diff / REF_DIFF) * RATE / insulation
-#          = temp_diff / (insulation * REF_DIFF / RATE)
-# Updated Dec 12, 2025: Was hardcoded 10.0 which gave 13x too high heat loss rates
-# Now dynamically calculated from reference constants (defined in prediction layer section below)
-COMFORT_HEAT_LOSS_FLOOR: Final = 0.02  # Minimum effective heat loss rate (°C/h)
 COMFORT_TOO_COLD_CORRECTION_MULT: Final = 0.5  # Multiplier for "too cold" correction
 
 # Effect layer peak protection margins and offsets (Dec 8, 2025)
@@ -937,11 +916,6 @@ PREDICTION_PREHEAT_MAX_MILD: Final = 3.0  # Max offset in mild
 # Reference: Well-insulated Swedish house loses ~0.1-0.2°C/hour at 20°C indoor/outdoor diff
 PREDICTION_FALLBACK_HEAT_LOSS_RATE: Final = 0.15  # °C/hour at reference temp diff
 PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF: Final = 20.0  # Reference indoor/outdoor temp diff
-# Derived divisor for heat loss formula: divisor = REF_DIFF / RATE
-# Used by both comfort_layer and prediction_layer for consistent heat loss calculations
-HEAT_LOSS_DIVISOR: Final = (
-    PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF / PREDICTION_FALLBACK_HEAT_LOSS_RATE
-)
 # Current overshoot threshold for logging thermal storage strategy
 PREDICTION_OVERSHOOT_LOG_THRESHOLD: Final = 0.1  # °C overshoot to log storage strategy
 

@@ -1293,9 +1293,8 @@ class ProactiveLayer:
     def _is_house_warm(self, indoor_temp: float, target_temp: float) -> bool:
         """Check if house is warm enough to reduce proactive heating.
 
-        When house is above target + threshold, DM recovery is less urgent
-        because COAST (overshoot protection) should handle temperature.
-        Reduces proactive layer weight to prevent fighting with COAST.
+        Above target + threshold DM recovery is less urgent: the comfort layer is lowering the
+        heat, and a negative DM there is that cut, not a shortfall.
 
         Args:
             indoor_temp: Current indoor temperature (°C)

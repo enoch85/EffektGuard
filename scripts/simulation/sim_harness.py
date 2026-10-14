@@ -1037,14 +1037,15 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.17, "apartment_f730": 7.70, "airsource_f2040": 8.56},
+                    houses={"wooden_f750": 6.28, "apartment_f730": 8.03, "airsource_f2040": 8.50},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
                         "datasheet guard fails the run. The exergy COP fit is anchored on EN 14511 "
                         "rating points taken at winter source temperatures and extrapolates above "
                         "them when the source is mild. Every COST number in this scenario is "
-                        "therefore too low, and no saving may be quoted from it."
+                        "therefore too low, and no saving may be quoted from it. The overshoot "
+                        "ramp moved the F750's and F730's figures up from 6.17 and 7.70."
                     ),
                 ),
                 KnownRed(
@@ -1075,7 +1076,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3130, "apartment_f730": 14150},
+                    houses={"wooden_f750": 3405, "apartment_f730": 11505},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1084,16 +1085,9 @@ SCENARIOS = {
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
                         "heating. The +2.0 weather pre-heat (0ce8e93) adds 5 and 130 minutes: its "
                         "trigger reads a May night's low as a 4 C drop, so it fires on day-night "
-                        "swings. Open: trigger on a drop in the daily mean instead."
-                    ),
-                ),
-                KnownRed(
-                    fails_with="minutes below the comfort band",
-                    stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 320},
-                    why=(
-                        "CONTROLLER: the F2040 goes BELOW its band in the same window - the other "
-                        "side of the same mild-weather tuning gap."
+                        "swings. Open: trigger on a drop in the daily mean instead. The overshoot "
+                        "ramp moved them from 3130 and 14150: it pulls softer than the old -7 C "
+                        "coast above 0.6 C and harder than the old mild correction below it."
                     ),
                 ),
             ),
@@ -1110,12 +1104,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.98, "apartment_f730": 7.21, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.66, "apartment_f730": 7.40, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
                         "rating points the exergy COP fit is anchored on, so the fit extrapolates "
-                        "and seasonal COP comes out 1.27-1.61x the best published figure. The "
+                        "and seasonal COP comes out 1.20-1.61x the best published figure. The "
                         "harness's own datasheet guard catches it, which is the guard working. "
                         "Every COST number in this run is therefore too low; the CONTROL decisions "
                         "- which layer voted, which offset was written - do not depend on the COP "

@@ -307,8 +307,6 @@ class DecisionEngine:
 
         # Comfort layer for reactive temperature adjustments
         self.comfort_layer = ComfortLayer(
-            get_thermal_trend=self._get_thermal_trend,
-            thermal_model=self.thermal,
             mode_config=self.mode_config,
             tolerance_range=self.tolerance_range,
             target_temp=self.target_temp,
@@ -711,11 +709,7 @@ class DecisionEngine:
         )
 
         # 9. Comfort Layer
-        comfort_result = self.comfort_layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            price_data=price_data,
-        )
+        comfort_result = self.comfort_layer.evaluate_layer(nibe_state=nibe_state)
         comfort_decision = LayerDecision(
             name=comfort_result.name,
             offset=comfort_result.offset,

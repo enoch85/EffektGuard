@@ -156,16 +156,15 @@ the case that needed it least. See audit F-130.
 ### Safety Mechanisms
 
 #### The pre-heat is bounded by construction
-`WEATHER_PREHEAT_OFFSET` is **+2.0 °C**, and it is sized, not tuned: the fabric must reach the edge
-of `THERMAL_BATTERY_BAND` (±1.0 °C) **within the horizon the house is given**, or the pre-heat is
-decoration. On the simulator's validated plant models the previous +0.83 took **28.4 h** (radiator)
-and **34.6 h** (concrete slab) to fill that band, against horizons of 12 h and 24 h. It could never
-charge the battery before the cold arrived. At +2.0 it takes 9.6 h and 14.8 h — both inside. See
-audit F-130 and `tests/unit/optimization/test_preheat_can_actually_charge_the_house.py`.
+`WEATHER_PREHEAT_OFFSET` is **+2.0 °C**, and it is sized, not tuned: the fabric must bank 1.0 °C
+**within the horizon the house is given**, or the pre-heat is decoration. On the simulator's
+validated plant models the previous +0.83 took **28.4 h** (radiator) and **34.6 h** (concrete slab)
+to bank that 1.0 °C, against horizons of 12 h and 24 h. It could never charge the battery before the
+cold arrived. At +2.0 it takes 9.6 h and 14.8 h — both inside. See audit F-130.
 
-It cannot cook the house: the comfort layer takes charge at the edge of the storage band, and
-+2.0 sits within `WEATHER_COMP_MAX_OFFSET` (3.0), the bound placed on every weather-driven
-correction.
+It cannot cook the house: the comfort layer's overshoot ramp wins outright at
+`OVERSHOOT_PROTECTION_FULL` (+1.5 °C), whatever the prices, and +2.0 sits within
+`WEATHER_COMP_MAX_OFFSET` (3.0), the bound placed on every weather-driven correction.
 
 #### Weight scales with thermal mass
 ```
