@@ -124,6 +124,7 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
         LayerDecision,
         OptimizationDecision,
     )
+    from custom_components.effektguard.utils.compressor_monitor import CompressorSaturation
 
     nibe = NibeState(
         outdoor_temp=-5.0,
@@ -155,7 +156,7 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
         "price": None,  # F-123: no price source -> the whole price layer withdrew
         "weather": MagicMock(current_temp=-5.0),
     }
-    coordinator.compressor_risk = "OK"
+    coordinator.compressor_saturation = CompressorSaturation()
     # The real detector: Stockholm's latitude, so the zone and the band are the ones a real house
     # would be held to - and so the redaction has something genuine to redact.
     coordinator.engine.climate_detector = ClimateZoneDetector(latitude=59.3293)

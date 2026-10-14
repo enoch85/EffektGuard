@@ -50,12 +50,15 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.adapters.gespot_adapter import GESpotAdapter, PriceData
 from custom_components.effektguard.const import (
+    COMPRESSOR_HZ_MIN,
+    COMPRESSOR_HZ_RANGE,
     CONF_GESPOT_ENTITY,
     DM_THRESHOLD_AUX_LIMIT,
     INTERNAL_GAINS_W,
     POWER_SOURCE_EXTERNAL_METER,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
+from custom_components.effektguard.utils.compressor_monitor import CompressorSaturation
 from custom_components.effektguard.utils.emitter import en442_flow_temp
 from custom_components.effektguard.utils.offset import integer_offset_for
 from custom_components.effektguard.utils.volatile_helpers import (
@@ -963,16 +966,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 57.0},
+                    houses={"airsource_f2040": 34.0},
                     why=(
-                        "F-124 on the air-source F2040 only: the offset held high against a "
-                        "compressor with nothing left to give. Measured with the coordinator's own "
-                        "volatility gate in the loop (eaa3986), which holds the offset through "
-                        "reversals as production does; before the bench ran it this window read "
-                        "1.5x. The other four houses hold every invariant through Sweden's coldest "
-                        "wave since 1999 AND the 589 ore/kWh spike it caused. Fixing it is a "
-                        "heat-pump policy question - what should a machine do when it cannot meet "
-                        "its own curve - not a refactor."
+                        "F-124 on the air-source F2040 only: aux above what its capacity deficit "
+                        "forces. The wear guard caps raises while the compressor is saturated "
+                        "(47.75 kWh before it had a trigger), but lets a share of them through for "
+                        "a room low in its band; what still burns above the forced share is not "
+                        "attributed yet. Measured with the coordinator's own "
+                        "volatility gate in the loop (eaa3986). The other four houses hold every "
+                        "invariant through Sweden's coldest wave since 1999 AND the 589 ore/kWh "
+                        "spike it caused."
                     ),
                 ),
             ),
@@ -996,14 +999,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 85.8},
+                    houses={"airsource_f2040": 78.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024: the controller pinning the offset against a "
-                        "compressor with nothing left to give. 1.6x before the bench ran the "
-                        "volatility gate (eaa3986). The other four houses hold every invariant. "
-                        "First reproduction of F-124 on REAL weather rather than a synthetic "
-                        "temperature shift."
+                        "nordic_coldsnap_jan2024 (84.0 kWh before the wear guard had a trigger). "
+                        "The other four houses hold every invariant. First reproduction of F-124 "
+                        "on REAL weather rather than a synthetic temperature shift."
                     ),
                 ),
             ),
@@ -1684,6 +1685,8 @@ def simulate(
     # Driven by simulated time: `time` is not monkeypatched here, only `dt_util`.
     sim_clock = {"now": 0.0}
     offset_volatility = OffsetVolatilityTracker(time_source=lambda: sim_clock["now"])
+    # The wear guard's trigger, fed once a cycle as the coordinator feeds it.
+    saturation = CompressorSaturation()
 
     # The register's last written value and the direction of that write, for the reversal
     # count. Seeded from the starting register so the first write is a direction, not a
@@ -1915,8 +1918,10 @@ def simulate(
                 )
 
             power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
+            # The engine's saturation signal reads this, so it must move as a compressor does: with
+            # its load, climbing while it has headroom and pinned at the top once capacity binds.
             hz = (
-                40 + int(min(50, max(0, (flow_target - indoor))))
+                round(COMPRESSOR_HZ_MIN + load_fraction * COMPRESSOR_HZ_RANGE)
                 if (compressor_on and available)
                 else 0
             )
@@ -1992,6 +1997,9 @@ def simulate(
                         weather_data=weather,
                         current_peak=running_peak_kw,
                         current_power=power_kw,
+                        compressor_saturated=saturation.update(
+                            nibe, hot_water=False, airflow_enhanced=False
+                        ),
                     )
                     calc_offset = decision.offset
                     # WHICH LAYERS ACTUALLY VOTED. "5/5 PASS" says nothing about a layer that never
@@ -2449,8 +2457,8 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
             f"the immersion heater burned {stats['aux_kwh']:.1f} kWh, but the pump's capacity "
             f"deficit only forced {unavoidable:.1f} kWh of it "
             f"({stats['aux_kwh'] / max(unavoidable, 1e-9):.1f}x). The rest is the controller's "
-            f"doing: resistive heat at COP 1.0, bought because the offset was pinned at maximum "
-            f"against a compressor that had nothing left to give"
+            f"doing: resistive heat at COP 1.0, bought by raising the curve against a compressor "
+            f"that had nothing left to give"
         )
 
     if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:

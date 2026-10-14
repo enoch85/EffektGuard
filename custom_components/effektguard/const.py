@@ -1773,22 +1773,26 @@ POWER_MULTIPLIER_MILD: Final = 1.0  # >0°C
 # - 50 Hz (mid): ~3.5-4.5 kW
 # - 80 Hz (normal max): ~6.0-7.0 kW
 # - 100-120 Hz (emergency/max): Higher output, reduced efficiency
-# Compressor stress levels, as reported by CompressorHealthMonitor.assess_risk().
-#
-# HIGH means the compressor has been above 100 Hz for more than fifteen minutes: it is at maximum
-# capacity and has nothing left to give. Asking it for more heat by raising the curve offset
-# produces NONE - the offset raises the calculated supply setpoint S1, and the compressor cannot
-# follow it. What it does produce is wear, and a DEEPER degree-minute deficit, because
-# DM = integral(BT25 - S1) and S1 just went up while BT25 could not.
-#
-# The auxiliary heater exists for exactly this moment: NIBE places "start addition" where it does
-# (menu 4.9.3) so the compressor need not grind at full frequency for hours. Declining its help by
-# demanding more from a saturated compressor trades cheap kWh for expensive compressor life.
-COMPRESSOR_RISK_HIGH: Final = "HIGH"  # >100 Hz for >15 min - at maximum, nothing left to give
+# Compressor stress levels, as reported by CompressorHealthMonitor.assess_risk() - the compressor
+# health sensor. No control decision reads them: a fixed frequency cannot say whether a compressor
+# is saturated (an F750's top frequency moves with its airflow), CompressorSaturation can.
+COMPRESSOR_RISK_HIGH: Final = "HIGH"  # >100 Hz for >15 min
 COMPRESSOR_RISK_ELEVATED: Final = "ELEVATED"  # >80 Hz for >2 h
 COMPRESSOR_RISK_NOTABLE: Final = "NOTABLE"
 COMPRESSOR_RISK_WATCH: Final = "WATCH"
 COMPRESSOR_RISK_OK: Final = "OK"
+
+# CompressorSaturation (utils/compressor_monitor.py), the wear guard's trigger: degree minutes falling
+# at ANTI_WINDUP_DM_DROPPING_RATE or faster through a window in which every reading sits at the
+# highest level the frequency has sustained in a day - or a window at COMPRESSOR_HZ_MAX without the
+# degree minutes gaining. With headroom a NIBE inverter climbs instead: the owner's F750 answers a fall
+# of 6-10 DM in a five-minute cycle with about +7 Hz in the next one. ASSUMED; closed loop on two fits
+# of the owner's F750, Jan-Feb 2026, against a saving of 125 / 97 SEK: a band of 8 Hz or a window of
+# 20 or 45 min moves cost by under 7 SEK, a band of 3 Hz gives up 4-20 SEK and six hours of memory
+# 4-15 SEK.
+COMPRESSOR_SATURATION_WINDOW_MINUTES: Final = 30  # the frequency's median and the DM rate
+COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
+COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

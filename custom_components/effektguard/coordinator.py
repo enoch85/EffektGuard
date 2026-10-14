@@ -85,7 +85,7 @@ from .optimization.dhw_optimizer import (
 from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
-from .utils.compressor_monitor import CompressorHealthMonitor
+from .utils.compressor_monitor import CompressorHealthMonitor, CompressorSaturation
 from .utils.power import power_kw_from_state
 from .utils.time_utils import get_current_billing_period
 from .utils.volatile_helpers import OffsetVolatilityTracker
@@ -174,10 +174,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Compressor health monitoring (Oct 19, 2025)
         self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
-        # The monitor's verdict, fed to the decision engine so it will not demand more heat from a
-        # compressor already at maximum frequency.
-        self.compressor_risk: str | None = None
         self.compressor_stats = None  # Latest CompressorStats from monitor
+        # Whether the compressor has any frequency left to give: the wear guard's trigger. Fed by the
+        # paths that drive the pump (the control cycle, explicit commands), never by a read-only
+        # refresh: anything may trigger one, and it is not a sample of the run.
+        self.compressor_saturation = CompressorSaturation()
 
         # DHW temporary lux entity (stored once, reused everywhere)
         self.temp_lux_entity = entry.data.get(CONF_NIBE_TEMP_LUX_ENTITY)
@@ -952,13 +953,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     nibe_data.compressor_hz, nibe_data.timestamp, heating_mode
                 )
                 if self.compressor_stats:
-                    # This is a CONTROL INPUT, not a log line. A compressor that has been at
-                    # maximum frequency for a quarter of an hour has nothing left to give, and
-                    # asking it for more heat buys only wear and a deeper DM deficit.
                     risk_level, risk_reason = self.compressor_monitor.assess_risk(
                         self.compressor_stats
                     )
-                    self.compressor_risk = risk_level
                     _LOGGER.debug(
                         "Compressor: %d Hz (1h avg: %.0f, 6h avg: %.0f, mode: %s) - %s: %s",
                         self.compressor_stats.current_hz,
@@ -1147,6 +1144,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                 self.dhw_was_active = dhw_is_active
 
+                if apply:
+                    self.compressor_saturation.update(
+                        nibe_data,
+                        hot_water=dhw_is_active,
+                        airflow_enhanced=bool(await self.nibe.is_enhanced_ventilation_active()),
+                    )
+
                 decision = await self.hass.async_add_executor_job(
                     self.engine.calculate_decision,
                     nibe_data,
@@ -1156,7 +1160,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     current_power_for_decision,  # Current whole-house power consumption
                     dhw_is_active,  # DHW heating active - skip weather comp
                     self.dhw_heating_end,  # When DHW last stopped - for cooldown
-                    self.compressor_risk,  # Do not ask a saturated compressor for more heat
+                    self.compressor_saturation.saturated,  # Do not raise a flat-out compressor
                 )
 
                 # Startup grace period: lockout + observation cycles

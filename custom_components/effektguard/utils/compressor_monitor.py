@@ -6,24 +6,32 @@ This module tracks NIBE compressor frequency over time to:
 3. Diagnose thermal stress patterns
 4. Provide diagnostic data for troubleshooting
 
-Data collection only - decision-making logic can be added later.
+CompressorHealthMonitor is data collection only. CompressorSaturation is the one control input: the
+decision engine's wear guard reads it.
 """
 
 import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from statistics import median
 from typing import TypedDict
 
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    ANTI_WINDUP_DM_DROPPING_RATE,
     COMPRESSOR_HZ_MAX,
+    COMPRESSOR_HZ_MIN,
     COMPRESSOR_RISK_ELEVATED,
     COMPRESSOR_RISK_HIGH,
     COMPRESSOR_RISK_NOTABLE,
     COMPRESSOR_RISK_OK,
     COMPRESSOR_RISK_WATCH,
+    COMPRESSOR_SATURATION_BAND_HZ,
+    COMPRESSOR_SATURATION_MEMORY_HOURS,
+    COMPRESSOR_SATURATION_WINDOW_MINUTES,
+    NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -404,3 +412,121 @@ class CompressorHealthMonitor:
             "risk_reason": risk_reason,
             "samples_count": stats.samples_count,
         }
+
+
+class CompressorSaturation:
+    """Whether the compressor has run out of frequency to give - the trigger of the wear guard.
+
+    A NIBE inverter answers falling degree minutes by raising its frequency, until it can rise no
+    further. So the compressor is saturated when degree minutes fall at ANTI_WINDUP_DM_DROPPING_RATE
+    or faster through a window in which every reading sits at its ceiling - the highest level the
+    frequency has sustained in the last COMPRESSOR_SATURATION_MEMORY_HOURS - or, whatever the memory
+    holds, when it runs at COMPRESSOR_HZ_MAX without gaining on its degree minutes. It stays
+    saturated while the frequency stays at that ceiling and stops climbing.
+
+    The ceiling has to be earned. It is remembered per airflow state, because enhanced ventilation
+    lifts an exhaust-air pump's ceiling, and only counts once this run or the memory has shown the
+    frequency span more than COMPRESSOR_SATURATION_BAND_HZ: a frozen reading or a run that began at
+    the ceiling proves nothing. A compressor within the band of COMPRESSOR_HZ_MIN is never at its
+    ceiling, and a level rising past the highest one an hour or more old is climbing, not stuck -
+    without such a level there is no evidence yet. Hot water pauses the run without ending it: a
+    verdict stands until the readings after the pause confirm or release it, and the degree minutes
+    the tank costs never count. A stop, a dropout, an airflow change, the clock going back or
+    another gap longer than half a window ends it.
+    """
+
+    def __init__(self) -> None:
+        """Start with no history."""
+        self._window: deque[tuple[datetime, int, float, int]] = deque()  # (time, Hz, DM, run part)
+        self._levels: dict[bool, deque[tuple[datetime, float]]] = {False: deque(), True: deque()}
+        self._run_low: float | None = None
+        self._part = 0
+        self._paused = False
+        self._enhanced = False
+        self.saturated = False
+        self.level: float | None = None
+        self.ceiling: float | None = None
+
+    def update(self, nibe_state, *, hot_water: bool, airflow_enhanced: bool) -> bool:
+        """Record one reading of a pump-driving cycle and return whether it is saturated."""
+        now = nibe_state.timestamp
+        window = timedelta(minutes=COMPRESSOR_SATURATION_WINDOW_MINUTES)
+        band = COMPRESSOR_SATURATION_BAND_HZ
+        hz = nibe_state.compressor_hz
+        self.level = self.ceiling = None
+        if (
+            hz is None
+            or hz < NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD
+            or airflow_enhanced != self._enhanced
+            or (self._window and now < self._window[-1][0])
+        ):
+            self._end_run()
+            self._enhanced = airflow_enhanced
+            if hz is None or hz < NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD:
+                return False
+        if hot_water:
+            self._paused = True
+            return self.saturated
+        if self._paused:
+            self._paused = False
+            self._part += 1
+        elif self._window and now - self._window[-1][0] > window / 2:
+            self._end_run()
+
+        self._window.append((now, hz, nibe_state.degree_minutes, self._part))
+        while now - self._window[0][0] >= window:
+            self._window.popleft()
+        memory = self._levels[airflow_enhanced]
+        while memory and now - memory[0][0] > timedelta(hours=COMPRESSOR_SATURATION_MEMORY_HOURS):
+            memory.popleft()
+        if now - self._window[0][0] < window / 2:
+            return self.saturated  # too little evidence yet: only a verdict carried over hot water
+
+        readings = [held for _, held, _, _ in self._window]
+        level = median(readings)
+        self._run_low = level if self._run_low is None else min(self._run_low, level)
+        held_before = [held for _, held in memory]
+        lowest = min(held_before + [self._run_low])
+        ceiling = max(held_before) if held_before and max(held_before) - lowest > band else None
+        hour_old = max((held for at, held in memory if now - at >= 2 * window), default=None)
+        memory.append((now, level))
+        self.level, self.ceiling = level, ceiling
+
+        at_max = all(held >= COMPRESSOR_HZ_MAX - band for held in readings)
+        steady = hour_old is not None and level <= hour_old + band / 2
+        if self.saturated:
+            self.saturated = at_max or (
+                ceiling is not None
+                and abs(level - ceiling) <= band
+                and (hour_old is None or steady)
+            )
+            return self.saturated
+        rate = self._dm_rate(window / 2)
+        at_ceiling = (
+            ceiling is not None
+            and level > COMPRESSOR_HZ_MIN + band
+            and all(abs(held - ceiling) <= band for held in readings)
+        )
+        self.saturated = rate is not None and (
+            (at_max and rate <= 0)
+            or (at_ceiling and steady and rate <= ANTI_WINDUP_DM_DROPPING_RATE)
+        )
+        return self.saturated
+
+    def _end_run(self) -> None:
+        """A stop, a dropout, an airflow change or a gap: nothing in the run carries over."""
+        self._window.clear()
+        self._run_low = None
+        self._paused = False
+        self.saturated = False
+
+    def _dm_rate(self, evidence: timedelta) -> float | None:
+        """DM per hour across the window's consecutive readings, hot water left out."""
+        change, span = 0.0, timedelta()
+        for (t0, _, dm0, part0), (t1, _, dm1, part1) in zip(self._window, list(self._window)[1:]):
+            if part0 == part1:
+                change += dm1 - dm0
+                span += t1 - t0
+        if span < evidence:
+            return None
+        return change / (span.total_seconds() / 3600)

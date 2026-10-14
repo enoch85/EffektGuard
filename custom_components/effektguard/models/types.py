@@ -124,5 +124,5 @@ class DiagnosticsDict(TypedDict, total=False):
     nibe: dict[str, object]
     decision: DiagnosticsDecisionDict
     dm_thresholds: dict[str, object]
-    compressor_risk: str | None
+    compressor_saturation: dict[str, object]
     peaks: dict[str, object]
