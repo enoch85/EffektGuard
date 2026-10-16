@@ -135,6 +135,11 @@ class OptimizationDecision:
     # flip-flopping, and holding a cut for 45 minutes past the aux limit lets DM plunge
     # further while the immersion heater runs.
     is_emergency: bool = False
+    # True when the wear guard lowered this offset because the compressor is saturated. The
+    # blocker must not hold back that withdrawal either: kept for 45 minutes, a raise the
+    # compressor cannot follow only deepens the DM deficit and brings the immersion heater in
+    # sooner (F-124). The cap never goes below the pump's own curve, so no cut rides on it.
+    saturation_capped: bool = False
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -775,10 +780,10 @@ class DecisionEngine:
             damping_factor = TREND_DAMPING_NEUTRAL
             reason_suffix = ""
 
-        final_offset = raw_offset * damping_factor
+        asked_offset = raw_offset * damping_factor
 
         final_offset, wear_note = self._limit_for_compressor_wear(
-            final_offset, nibe_state, compressor_saturated
+            asked_offset, nibe_state, compressor_saturated
         )
 
         # Generate human-readable reasoning
@@ -807,6 +812,7 @@ class DecisionEngine:
             reasoning=reasoning,
             anti_windup_active=anti_windup,
             is_emergency=is_emergency,
+            saturation_capped=final_offset < asked_offset,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:

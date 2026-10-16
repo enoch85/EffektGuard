@@ -100,17 +100,19 @@ ending it: a verdict stands until the readings after the pause confirm or releas
 degree minutes the tank costs never count. A stop, a dropout, an airflow change, the clock going
 back or another gap longer than half a window ends the run.
 
-Saturated, the decision engine caps the offset at 0, the pump's own curve, for a room at the top
-of its comfort band or above: a raise is declined, and one already made is withdrawn. Lower in the
-band a share of the raise passes - half at the target, all of it at the band's lower edge, where
-immersion heat is the heat the house is short of. (Starting the share at the target left a house
-the guard had kept from banking immersion heat colder than its band through a savings-mode peak
-cut or a ventilation boost.) A cut stands, and below `MIN_TEMP_LIMIT` the house still gets
-everything. Withdrawing a raise drops S1 under what the compressor can deliver, so the
-frequency backs off and the guard lets go until the next window proves the ceiling again: the
-compressor does not sit at its ceiling throughout, and some of the heat it would have made is given
-up with the immersion heat. `CompressorHealthMonitor.assess_risk()` (HIGH above 100 Hz for 15
-minutes, ELEVATED above 80 Hz for 2 hours) feeds the compressor health sensor only.
+Saturated, the decision engine caps the offset at 0, the pump's own curve, for a room at the top of
+its comfort band or above: a raise is declined, and one already made is withdrawn - at once, for the
+coordinator's volatility gate, which holds a reversal for 45 minutes, lets that withdrawal through
+(and only that: a cut it holds stays held). Lower in the band a share of the raise passes - half at
+the target, all of it at the band's lower edge, where immersion heat is the heat the house is short
+of. (Starting the share at the target left a house the guard had kept from banking immersion heat
+colder than its band through a savings-mode peak cut or a ventilation boost.) A cut stands, and
+below `MIN_TEMP_LIMIT` the house still gets everything. Withdrawing a raise drops S1 under what the
+compressor can deliver, so the frequency backs off and the guard lets go until the next window
+proves the ceiling again: the compressor does not sit at its ceiling throughout, and some of the
+heat it would have made is given up with the immersion heat. `CompressorHealthMonitor.assess_risk()`
+(HIGH above 100 Hz for 15 minutes, ELEVATED above 80 Hz for 2 hours) feeds the compressor health
+sensor only.
 
 ## Sources
 

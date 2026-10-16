@@ -1272,6 +1272,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.offset,
             )
             self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
+        elif decision.saturation_capped and decision.offset < (
+            self._offset_volatility_tracker.last_offset or 0.0
+        ):
+            # The wear guard withdrew a raise the saturated compressor cannot follow. Held for 45
+            # minutes it buys no heat, only a deeper DM deficit and the immersion heater sooner
+            # (F-124). Only the withdrawal passes: the cap stops at the pump's own curve.
+            _LOGGER.info(
+                "Compressor saturated: bypassing volatile check (offset %.1f°C → %.1f°C)",
+                self._offset_volatility_tracker.last_offset,
+                decision.offset,
+            )
+            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
         elif self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
             volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
             _LOGGER.info(

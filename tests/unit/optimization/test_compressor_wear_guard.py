@@ -276,8 +276,8 @@ def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None
     )
 
 
-def _offset(saturated: bool, dm: float = -600.0, engine=None, **state) -> float:
-    decision = (engine or _engine()).calculate_decision(
+def _decision(saturated: bool, dm: float = -600.0, engine=None, **state):
+    return (engine or _engine()).calculate_decision(
         nibe_state=_reading(START, CEILING_HZ, dm, **state),
         price_data=None,
         weather_data=None,
@@ -285,7 +285,10 @@ def _offset(saturated: bool, dm: float = -600.0, engine=None, **state) -> float:
         current_power=3.0,
         compressor_saturated=saturated,
     )
-    return decision.offset
+
+
+def _offset(saturated: bool, dm: float = -600.0, engine=None, **state) -> float:
+    return _decision(saturated, dm, engine, **state).offset
 
 
 class TestTheCap:
@@ -300,6 +303,19 @@ class TestTheCap:
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"
         assert _offset(True, **top) == 0.0
+
+    @pytest.mark.parametrize(
+        "saturated, indoor, capped",
+        [
+            pytest.param(False, TARGET + BAND, False, id="not-saturated"),
+            pytest.param(True, TARGET + BAND, True, id="a-raise-withdrawn"),
+            pytest.param(True, TARGET + 1.5, False, id="a-cut-standing"),
+        ],
+    )
+    def test_the_decision_says_when_it_withdrew_a_raise(self, saturated, indoor, capped):
+        """The coordinator's volatility gate lets the withdrawal through on this, and only that:
+        every other reversal it still holds for its 45 minutes."""
+        assert _decision(saturated, indoor_temp=indoor).saturation_capped is capped
 
     @pytest.mark.parametrize("share", [0.25, 0.5, 1.0, 1.5])
     def test_lower_in_the_band_a_share_of_the_raise_passes(self, share):
