@@ -95,10 +95,11 @@ memory after a restart proves nothing. A compressor within the band of its minim
 ceiling - the same F750 holds 20 Hz for up to 40 minutes after a cold start while DM falls ~110.
 A level more than half the band above the highest one an hour or more old is climbing, not stuck,
 and without a level that old there is no evidence yet; a slower drift is taken for the ceiling,
-since an inverter with headroom adds about 7 Hz in a single cycle. Hot water pauses the run without
-ending it: a verdict stands until the readings after the pause confirm or release it, and the
-degree minutes the tank costs never count. A stop, a dropout, an airflow change, the clock going
-back or another gap longer than half a window ends the run.
+since an inverter with headroom adds about 7 Hz in a single cycle. Hot water - the pump's own
+hot-water priority, not the temporary-lux switch, which stays on for hours after the tank is
+charged - pauses the run without ending it: a verdict stands until the readings after the pause
+confirm or release it, and the degree minutes the tank costs never count. A stop, a dropout, an
+airflow change, the clock going back or another gap longer than half a window ends the run.
 
 Saturated, the decision engine caps the offset at 0, the pump's own curve, for a room at the top of
 its comfort band or above: a raise is declined, and one already made is withdrawn - at once, for the

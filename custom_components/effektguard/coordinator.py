@@ -1145,9 +1145,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.dhw_was_active = dhw_is_active
 
                 if apply:
+                    # The pump's own hot-water priority, not the temporary-lux switch: lux is a timed
+                    # comfort mode that stays on for hours after the tank is charged, while the
+                    # compressor is back on space heating and saturation must still be seen.
                     self.compressor_saturation.update(
                         nibe_data,
-                        hot_water=dhw_is_active,
+                        hot_water=is_hot_water,
                         airflow_enhanced=bool(await self.nibe.is_enhanced_ventilation_active()),
                     )
 
