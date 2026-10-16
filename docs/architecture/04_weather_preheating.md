@@ -120,13 +120,16 @@ This prevents unnecessary pre-heating during:
 pre-heat, not **how much**. The amount is a constant.
 
 ```python
-# 1. A cold snap is a colder DAY: compare 24-hour means, so a night's low cannot fire it.
+# 1. A cold snap is a colder DAY: compare 24-hour means, so a night's low cannot fire it. The
+#    past day is the measured outdoor mean once the predictor's readings cover the last 24 h with
+#    no hour unread (a restored history can be days old); until then the next 24 forecast hours
+#    stand in for it.
 temps = [f.temperature for f in weather_data.forecast_hours]
-today = mean(temps[:24])
+past_day = measured_past_day if it is known else mean(temps[:24])
 
 # 2. The coldest day that starts within the horizon this building's thermal mass justifies:
 #    6 h radiators / 12 h timber UFH / 48 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
-temp_drop = min(mean(temps[s:s + 24]) for s in 1..horizon) - today
+temp_drop = min(mean(temps[s:s + 24]) for s in (0 if measured else 1)..horizon) - past_day
 
 # 3. Two independent triggers - either fires the layer.
 forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD      # -4.0 °C

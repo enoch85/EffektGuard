@@ -768,6 +768,11 @@ PRICE_UNIT_FALLBACK: Final = "öre/kWh"
 WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in the daily mean
 # A cold snap is a colder DAY, not a colder night: the trigger compares 24-hour means of the forecast,
 # so the ordinary day-night swing (a May night reads 8 C below the afternoon) cannot fire it.
+# The past day is MEASURED only while the thermal predictor's readings cover it with no forecast
+# period (WEATHER_FORECAST_PERIOD_HOURS) unread. The history is restored from storage at start-up:
+# three days stale at 15 C, it would make a flat 5 C forecast a cold snap. An unread hour moves a
+# 24-hour mean by a twenty-third of that hour's distance from it - under 0.2 C for May's swing,
+# against the 4 C trigger - while a restart or a dropped cycle leaves minutes unread.
 WEATHER_DAILY_MEAN_HOURS: Final = 24
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 

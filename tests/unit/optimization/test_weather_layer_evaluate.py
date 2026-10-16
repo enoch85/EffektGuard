@@ -3,15 +3,27 @@
 Phase 4 of layer refactor: Tests for the extracted weather prediction layer evaluation logic.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from unittest.mock import MagicMock
 
+from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.adapters.weather_adapter import WeatherData, WeatherForecastHour
+from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.optimization.weather_layer import (
     WeatherPredictionLayer,
     WeatherLayerDecision,
 )
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_WEATHER_PREDICTION,
+    UPDATE_INTERVAL_MINUTES,
+    WEATHER_DAILY_MEAN_HOURS,
+    WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_GENTLE_OFFSET,
     WEATHER_WEIGHT_CAP,
 )
@@ -269,15 +281,84 @@ class TestEvaluateLayerThermalMassWeight:
         assert result.weight == expected_weight
 
 
-def test_the_past_day_is_measured_once_a_day_of_history_exists():
-    from custom_components.effektguard.const import SAMPLES_PER_HOUR
-    from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+NOW = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+CYCLE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
+DAY = timedelta(hours=WEATHER_DAILY_MEAN_HOURS)
+PERIOD = timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS)
+TWO_DAYS = [
+    CYCLE * k for k in range(1, 2 * DAY // CYCLE + 1)
+]  # a reading a cycle, the last one ago
 
-    engine = DecisionEngine(MagicMock(), MagicMock(), MagicMock(), config={})
-    day = 24 * SAMPLES_PER_HOUR
-    engine.predictor = MagicMock(state_history=[MagicMock(outdoor_temp=5.0)] * (day - 1))
-    assert engine._outdoor_mean_past_day() is None
-    engine.predictor.state_history = [MagicMock(outdoor_temp=-9.0)] + [
-        MagicMock(outdoor_temp=5.0)
-    ] * day
-    assert engine._outdoor_mean_past_day() == 5.0
+
+def _restored(ages: list[timedelta]) -> ThermalStatePredictor:
+    """The predictor as the coordinator restores it at start-up: a 15 C reading at each age."""
+    return ThermalStatePredictor.from_dict(
+        {
+            "state_history": [
+                {
+                    "timestamp": (NOW - age).isoformat(),
+                    "indoor_temp": 21.0,
+                    "outdoor_temp": 15.0,
+                    "heating_offset": 0.0,
+                    "flow_temp": 30.0,
+                    "degree_minutes": -100.0,
+                }
+                for age in sorted(ages, reverse=True)
+            ]
+        }
+    )
+
+
+def _unread(ages: list[timedelta], stretch: timedelta) -> list[timedelta]:
+    """The same readings with `stretch` between two of them, half a day ago."""
+    return [age for age in ages if not DAY / 2 < age < DAY / 2 + stretch]
+
+
+@pytest.mark.parametrize(
+    "ages, measured",
+    [
+        pytest.param(TWO_DAYS, True, id="readings-every-cycle"),
+        pytest.param(
+            [age + timedelta(days=3) for age in TWO_DAYS], False, id="restored-three-days-late"
+        ),
+        pytest.param(
+            [age + timedelta(hours=2) for age in TWO_DAYS], False, id="restored-two-hours-late"
+        ),
+        pytest.param(TWO_DAYS[: len(TWO_DAYS) // 4], False, id="half-a-day-since-install"),
+        pytest.param(_unread(TWO_DAYS, PERIOD + CYCLE), False, id="an-hour-unread"),
+        pytest.param(_unread(TWO_DAYS, 3 * CYCLE), True, id="a-restart"),
+    ],
+)
+def test_the_past_day_is_measured_only_while_readings_cover_it(ages, measured):
+    """Measured at 15 C, the past day makes a flat 5 C forecast a colder day. A history that does
+    not cover that day - restored days late, or with hours of it unread - is some other day's mean,
+    so the next 24 forecast hours stand in for it, and no day ahead is colder than they are."""
+    engine = DecisionEngine(
+        price_analyzer=PriceAnalyzer(),
+        effect_manager=EffectManager(MagicMock()),
+        thermal_model=ThermalModel(0.7, 1.0),
+        config={"target_indoor_temp": 21.0, "latitude": 59.33, "heating_type": "radiator"},
+        thermal_predictor=_restored(ages),
+    )
+    flat = [WeatherForecastHour(datetime=NOW + PERIOD * h, temperature=5.0) for h in range(48)]
+
+    decision = engine.calculate_decision(
+        nibe_state=NibeState(
+            outdoor_temp=5.0,
+            indoor_temp=21.0,
+            supply_temp=30.0,
+            return_temp=26.0,
+            degree_minutes=-100.0,
+            current_offset=0.0,
+            is_heating=True,
+            is_hot_water=False,
+            timestamp=NOW,
+        ),
+        price_data=None,
+        weather_data=WeatherData(current_temp=5.0, forecast_hours=flat),
+        current_peak=0.0,
+        current_power=1.5,
+    )
+
+    preheat = next(layer for layer in decision.layers if layer.name == "Weather Pre-heat")
+    assert (preheat.offset == WEATHER_GENTLE_OFFSET) is measured, preheat.reason

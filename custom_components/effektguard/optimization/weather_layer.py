@@ -679,8 +679,8 @@ class WeatherPredictionLayer:
             )
 
         # PRIMARY TRIGGER: a coming day, starting within the horizon, is colder on average than the
-        # past one - so a front hours away counts and a night does not. Until 24 h of measurements
-        # exist, the next 24 forecast hours stand in for the past day.
+        # past one - so a front hours away counts and a night does not. Until measurements cover the
+        # past 24 h, the next 24 forecast hours stand in for it.
         temps = [f.temperature for f in weather_data.forecast_hours]
         day = WEATHER_DAILY_MEAN_HOURS
         first = 0 if past_day_mean is not None else 1
