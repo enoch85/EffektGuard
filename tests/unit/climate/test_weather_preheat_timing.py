@@ -36,6 +36,12 @@ def nibe_state_mock():
     return state
 
 
+def _a_colder_day_ahead():
+    """Twelve hours as now, then a day well below the trigger: a cold snap, not a cold night."""
+    cold = 2 * WEATHER_FORECAST_DROP_THRESHOLD - 2.0
+    return [MagicMock(temperature=t) for t in [0.0] * 12 + [cold] * 36]
+
+
 @pytest.fixture
 def weather_data_mock():
     """Create mocked weather data."""
@@ -64,12 +70,7 @@ class TestWeatherPredictionLayer:
         self, weather_layer, nibe_state_mock, weather_data_mock
     ):
         """Forecast drop >= threshold triggers pre-heating."""
-        # Create a drop in forecast
-        drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
-        # Set forecast to have a drop
-        weather_data_mock.forecast_hours = [
-            MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
-        ]
+        weather_data_mock.forecast_hours = _a_colder_day_ahead()
 
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
@@ -99,11 +100,7 @@ class TestWeatherPredictionLayer:
 
     def test_combined_triggers_preheat(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Both forecast drop and indoor cooling trigger pre-heating."""
-        # Forecast drop
-        drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
-        weather_data_mock.forecast_hours = [
-            MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
-        ]
+        weather_data_mock.forecast_hours = _a_colder_day_ahead()
 
         # Indoor cooling
         thermal_trend = {
@@ -121,11 +118,7 @@ class TestWeatherPredictionLayer:
         """Test weight scaling for concrete slab (high thermal mass)."""
         layer = WeatherPredictionLayer(thermal_mass=1.5)  # Concrete
 
-        # Trigger pre-heat
-        drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
-        weather_data_mock.forecast_hours = [
-            MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
-        ]
+        weather_data_mock.forecast_hours = _a_colder_day_ahead()
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
         decision = layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
@@ -137,11 +130,7 @@ class TestWeatherPredictionLayer:
         """Test weight scaling for radiators (low thermal mass)."""
         layer = WeatherPredictionLayer(thermal_mass=0.5)  # Radiators
 
-        # Trigger pre-heat
-        drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
-        weather_data_mock.forecast_hours = [
-            MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
-        ]
+        weather_data_mock.forecast_hours = _a_colder_day_ahead()
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
         decision = layer.evaluate_layer(nibe_state_mock, weather_data_mock, thermal_trend)
@@ -152,10 +141,7 @@ class TestWeatherPredictionLayer:
     def test_disabled_layer(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Test disabled layer returns 0."""
         # Trigger condition present
-        drop_temp = nibe_state_mock.outdoor_temp + WEATHER_FORECAST_DROP_THRESHOLD - 1.0
-        weather_data_mock.forecast_hours = [
-            MagicMock(temperature=drop_temp) for _ in range(int(WEATHER_FORECAST_HORIZON))
-        ]
+        weather_data_mock.forecast_hours = _a_colder_day_ahead()
         thermal_trend = {"rate_per_hour": 0.0, "confidence": 0.8}
 
         decision = weather_layer.evaluate_layer(

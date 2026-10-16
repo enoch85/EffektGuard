@@ -51,8 +51,9 @@ owner said before this model existed: *"we need to pre-heat super early … like
 
 ## Why the pre-heat trigger never fired (fixed — the horizon follows thermal mass)
 
-The trigger is *"a drop of at least 4 °C within the forecast horizon"*. The horizon was a **fixed
-12 hours, for every house, whatever it was built of**:
+The trigger was *"a drop of at least 4 °C within the forecast horizon"* (since 2026-10-12 it compares
+24-hour means, so a night's low cannot fire it). The horizon was a **fixed 12 hours, for every
+house, whatever it was built of**:
 
 | cold snap | drop within 12 h | fires? | drop within 24 h | fires? |
 |---|---:|---|---:|---|
