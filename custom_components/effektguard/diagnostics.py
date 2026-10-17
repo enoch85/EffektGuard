@@ -42,8 +42,18 @@ async def async_get_config_entry_diagnostics(
         "nibe": _nibe(nibe),
         "decision": _decision(decision),
         "dm_thresholds": _dm_thresholds(coordinator, nibe),
-        "compressor_risk": getattr(coordinator, "compressor_risk", None),
+        "compressor_saturation": _saturation(coordinator),
         "peaks": _peaks(coordinator),
+    }
+
+
+def _saturation(coordinator) -> dict[str, object]:
+    """The wear guard's trigger: is the compressor flat out, at what level, against what ceiling."""
+    saturation = coordinator.compressor_saturation
+    return {
+        "saturated": saturation.saturated,
+        "level_hz": saturation.level,
+        "ceiling_hz": saturation.ceiling,
     }
 
 

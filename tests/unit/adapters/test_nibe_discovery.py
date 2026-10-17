@@ -598,8 +598,9 @@ class TestStatusParsing:
         assert state.is_hot_water is False
 
     async def test_unknown_priority_leaves_status_reads_untouched(self, monkeypatch):
-        """MyUplink priority enums are not fully documented (raw 31 observed):
-        unknown values must not override the pattern-based status reads."""
+        """MyUplink priority enums are not fully documented (raw 31 observed): an
+        unknown value must not override the compressor-status read, and it says
+        nothing about whether the compressor serves the tank."""
         states = required_core_states() + [
             make_state("sensor.gotham_city_priority", "31", {}),
             make_state("sensor.gotham_city_status_compressor", "Running", {}),
@@ -611,7 +612,7 @@ class TestStatusParsing:
         assert adapter.entity_cache["prio"] == "sensor.gotham_city_priority"
         state = await adapter.get_current_state()
         assert state.is_heating is True  # from compressor status, not prio
-        assert state.is_hot_water is False
+        assert state.is_hot_water is None
 
     async def test_zero_frequency_is_not_heating_and_not_none(self, monkeypatch):
         states = required_core_states() + [

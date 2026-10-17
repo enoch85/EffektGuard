@@ -112,6 +112,7 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
 
     nibe = MagicMock()
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
+    nibe.is_enhanced_ventilation_active = AsyncMock(return_value=None)
 
     engine = MagicMock()
     engine.calculate_decision = MagicMock(
@@ -188,6 +189,7 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         current_offset=0.0,
     )
     nibe.get_current_state = AsyncMock(return_value=nibe_data)
+    nibe.is_enhanced_ventilation_active = AsyncMock(return_value=None)
     nibe.set_curve_offset = AsyncMock(return_value=True)
     nibe._power_sensor_entity = "sensor.power"
     nibe.power_sensor_entity = "sensor.power"

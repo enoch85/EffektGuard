@@ -68,24 +68,52 @@ setpoint and the pump is meeting it comfortably, by construction. (Audit F-120.)
 
 The mirror case (F-124): raising the offset on a compressor that is already saturated raises S1
 while BT25 cannot follow, so **DM gets worse** — the boost that was meant to recover the debt
-deepens it, and buys nothing but compressor hours. This is why the compressor-wear guard holds the
-offset at HIGH frequency risk rather than raising it (F-129).
+deepens it, and buys nothing but compressor hours and immersion heat. This is why the
+compressor-wear guard caps raises while the compressor is saturated (F-124, F-129).
 
 **The comfort floor, not DM, is what protects the occupant.**
 
 ## Compressor wear
 
-`CompressorHealthMonitor.assess_risk()`:
+`CompressorSaturation` (in `utils/compressor_monitor.py`) decides when the compressor has no
+frequency left; the coordinator feeds it from every cycle that drives the pump, never from a
+read-only refresh. No fixed frequency can decide it. In a year of the owner's F750, an hourly mean
+above 100 Hz came 112 times with EffektGuard's airflow boost on and 5 times without, while its
+hardest hours at normal airflow averaged 75-90 Hz; a ground-source pump at 60 Hz may have headroom
+to spare. What a NIBE inverter does with headroom is
+answer falling degree minutes with more frequency - the owner's F750 adds about 7 Hz in the next
+five-minute cycle after losing 6-10 DM. So the compressor is saturated when degree minutes fall at
+`ANTI_WINDUP_DM_DROPPING_RATE` or faster through a window in which every reading sits at its
+ceiling - the highest level the frequency has sustained in a day - or when it runs at
+`COMPRESSOR_HZ_MAX` without gaining on its degree minutes. It stays saturated while the frequency
+stays at that ceiling and stops climbing.
 
-| risk | condition |
-|---|---|
-| HIGH | above 100 Hz for more than 15 minutes — at maximum, nothing left to give |
-| ELEVATED | above 80 Hz for more than 2 hours |
+The ceiling has to be earned. It is remembered per airflow state, so a boost to 120 Hz does not
+blind the guard for the day after it, and it counts only once this run or the memory has shown the
+frequency span more than the band: a frozen reading, a run that began at the ceiling or the empty
+memory after a restart proves nothing. A compressor within the band of its minimum is never at its
+ceiling - the same F750 holds 20 Hz for up to 40 minutes after a cold start while DM falls ~110.
+A level more than half the band above the highest one an hour or more old is climbing, not stuck,
+and without a level that old there is no evidence yet; a slower drift is taken for the ceiling,
+since an inverter with headroom adds about 7 Hz in a single cycle. Hot water - the pump's own
+hot-water priority, not the temporary-lux switch, which stays on for hours after the tank is
+charged - pauses the run without ending it: a verdict stands until the readings after the pause
+confirm or release it, and the degree minutes the tank costs never count. A stop, a dropout, an
+airflow change, the clock going back or another gap longer than half a window ends the run.
 
-At HIGH risk the decision engine **holds** the offset: it may decline to ask for more, never for
-less, and it stands aside entirely for the absolute safety floor. This costs no comfort, and that is
-not a judgement but an identity — the extra offset was not producing heat, because the compressor
-had no frequency left to give it with.
+Saturated, the decision engine caps the offset at 0, the pump's own curve, for a room at the top of
+its comfort band or above: a raise is declined, and one already made is withdrawn - at once, for the
+coordinator's volatility gate, which holds a reversal for 45 minutes, lets that withdrawal through
+(and only that: a cut it holds stays held). Lower in the band a share of the raise passes - half at
+the target, all of it at the band's lower edge, where immersion heat is the heat the house is short
+of. (Starting the share at the target left a house the guard had kept from banking immersion heat
+colder than its band through a savings-mode peak cut or a ventilation boost.) A cut stands, and
+below `MIN_TEMP_LIMIT` the house still gets everything. Withdrawing a raise drops S1 under what the
+compressor can deliver, so the frequency backs off and the guard lets go until the next window
+proves the ceiling again: the compressor does not sit at its ceiling throughout, and some of the
+heat it would have made is given up with the immersion heat. `CompressorHealthMonitor.assess_risk()`
+(HIGH above 100 Hz for 15 minutes, ELEVATED above 80 Hz for 2 hours) feeds the compressor health
+sensor only.
 
 ## Sources
 
@@ -94,6 +122,11 @@ had no frequency left to give it with.
 - NIBE's degree-minute definition is consistent across the F-series and S-series manuals.
 
 ## Not sourced
+
+That an inverter raises its frequency as DM falls is measured on one F750 (the owner's, October
+2026), not read in a manual; the saturation signal assumes every NIBE inverter regulates that way.
+The frequencies quoted are the owner's long-term statistics, which carry no ventilation history:
+"with the airflow boost on" means EffektGuard had asked for it, not that the fan was measured.
 
 The **−1500** figure itself. It is attributed in the code to "Swedish forums" and to a `stevedvo`
 F2040 case study, neither of which is in this repository. It functions as an absolute backstop and

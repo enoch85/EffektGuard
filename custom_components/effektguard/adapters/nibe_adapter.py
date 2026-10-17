@@ -99,7 +99,7 @@ class NibeState:
     degree_minutes: float
     current_offset: float
     is_heating: bool
-    is_hot_water: bool
+    is_hot_water: bool | None  # None: the priority cannot say what the compressor serves
     timestamp: datetime
     dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
     dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
@@ -338,9 +338,10 @@ class NibeAdapter:
         # nibe_heatpump reports the compressor "Running" during DHW production, and no NIBE
         # integration publishes a separate hot-water status. A name match on "hot_water" finds
         # settings and counters instead - on a MyUplink F750 the comfort mode, the hot-water
-        # hours - so none is read as one.
+        # hours - so none is read as one. None when the priority cannot say: a tank charge then
+        # reads as space heating, so nothing may judge the compressor on it.
         prio = self._read_prio_state()
-        is_hot_water = prio == "hot_water"
+        is_hot_water = {"hot_water": True, "heating": False}.get(prio)
 
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_temperature(self._entity_cache.get("dhw_top_temp"))

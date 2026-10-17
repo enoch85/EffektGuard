@@ -15,6 +15,7 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Optional, TypedDict
@@ -25,7 +26,6 @@ from ..const import (
     WEATHER_DAILY_MEAN_HOURS,
     WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_FORECAST_HORIZON,
-    COMPRESSOR_RISK_HIGH,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
     DEFAULT_TARGET_TEMP,
     DEFAULT_THERMAL_MASS,
@@ -137,6 +137,11 @@ class OptimizationDecision:
     # flip-flopping, and holding a cut for 45 minutes past the aux limit lets DM plunge
     # further while the immersion heater runs.
     is_emergency: bool = False
+    # True when the wear guard lowered this offset because the compressor is saturated. The
+    # blocker must not hold back that withdrawal either: kept for 45 minutes, a raise the
+    # compressor cannot follow only deepens the DM deficit and brings the immersion heater in
+    # sooner (F-124). The cap never goes below the pump's own curve, so no cut rides on it.
+    saturation_capped: bool = False
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -516,7 +521,7 @@ class DecisionEngine:
         current_power: float,
         temp_lux_active: bool = False,
         dhw_heating_end: datetime | None = None,
-        compressor_risk: str | None = None,
+        compressor_saturated: bool = False,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -535,6 +540,7 @@ class DecisionEngine:
             weather_data: Weather forecast data
             current_peak: Current monthly peak threshold (kW) - from peak_this_month sensor
             current_power: Current whole-house power consumption (kW) - from peak_today sensor
+            compressor_saturated: CompressorSaturation's verdict - no frequency left to give
 
         Returns:
             OptimizationDecision with offset, reasoning, and layer votes
@@ -795,18 +801,10 @@ class DecisionEngine:
             damping_factor = TREND_DAMPING_NEUTRAL
             reason_suffix = ""
 
-        final_offset = raw_offset * damping_factor
-
-        # An ABSOLUTE safety path outranks the wear guard: a house below MIN_TEMP_LIMIT gets
-        # everything the machine has, and past the aux limit the guard's hold at the current offset
-        # must not keep a cut the EMERGENCY floor lifts. Wear is a cost; a cold house is a failure.
-        is_emergency = (
-            safety_decision.weight >= LAYER_WEIGHT_SAFETY
-            or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
-        )
+        asked_offset = raw_offset * damping_factor
 
         final_offset, wear_note = self._limit_for_compressor_wear(
-            final_offset, nibe_state, compressor_risk, is_emergency
+            asked_offset, nibe_state, compressor_saturated
         )
 
         # Generate human-readable reasoning
@@ -821,10 +819,13 @@ class DecisionEngine:
         # The volatile blocker must not block this safety-critical reduction.
         anti_windup = getattr(emergency_decision, "anti_windup_active", False)
 
-        # `is_emergency` was computed above, before the wear guard, so that the guard could stand
-        # aside for it. It also tells the coordinator's offset-volatility blocker not to defer this
+        # An ABSOLUTE safety path tells the coordinator's offset-volatility blocker not to defer this
         # decision: that blocker damps price-driven flip-flopping, and deferring an aux-limit
         # recovery for 45 minutes lets DM keep falling while the immersion heater runs.
+        is_emergency = (
+            safety_decision.weight >= LAYER_WEIGHT_SAFETY
+            or getattr(emergency_decision, "tier", "") == DM_TIER_EMERGENCY
+        )
 
         return OptimizationDecision(
             offset=final_offset,
@@ -832,6 +833,7 @@ class DecisionEngine:
             reasoning=reasoning,
             anti_windup_active=anti_windup,
             is_emergency=is_emergency,
+            saturation_capped=final_offset < asked_offset,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
@@ -884,48 +886,44 @@ class DecisionEngine:
                 reason="OK",
             )
 
-    @staticmethod
     def _limit_for_compressor_wear(
-        offset: float,
-        nibe_state,
-        compressor_risk: str | None,
-        is_emergency: bool,
+        self, offset: float, nibe_state, saturated: bool
     ) -> tuple[float, str]:
-        """Decline to ask a saturated compressor for more heat. Never ask it for less.
+        """Ask a saturated compressor for no more than its own curve, unless the room needs it.
 
         The offset works by raising the pump's calculated supply setpoint, S1. That only produces
-        heat while the compressor has frequency left to give. Above 100 Hz for a quarter of an hour
-        it has none: the setpoint goes up, the compressor cannot follow, and all that is bought is
+        compressor heat while the compressor has frequency left to give. Saturated
+        (CompressorSaturation) it has none: a positive offset holds S1 where the supply cannot
+        follow, and all it buys is a DEEPER degree-minute deficit, because DM = integral(BT25 - S1)
+        - and with it the immersion heater, sooner and on a higher step (F-124).
 
-          * wear, from holding the machine at full frequency longer than it needs to be, and
-          * a DEEPER degree-minute deficit, because DM = integral(BT25 - S1) and S1 just rose while
-            BT25 could not (audit F-124).
-
-        The auxiliary heater exists for precisely this moment - NIBE sets "start addition" where it
-        does (menu 4.9.3) so the compressor need not grind at maximum for hours. Refusing its help
-        by demanding more from a saturated compressor trades cheap kWh for expensive compressor.
-
-        This costs no comfort, and that is forced rather than argued: the extra offset was not
-        producing heat, so declining to ask for it cannot take any away. It HOLDS the offset at what
-        the pump is already being asked for; it never reduces it, and the absolute safety paths
-        (indoor below MIN_TEMP_LIMIT, the aux-limit emergency) return before this is ever reached.
+        So a room at the top of its comfort band or above gets the pump's own curve, offset 0: a
+        raise is declined and one already made is withdrawn. Lower in the band a share of the raise
+        passes - half at the target, all of it at the band's lower edge, where immersion heat is
+        the heat the house is short of. Starting at the target instead left a house that the guard
+        had kept from banking immersion heat colder than the band through a peak-price cut or a
+        boost to the ventilation (closed loop on the owner's F750). A cut stands, and the absolute
+        safety floor bounds the cap: below MIN_TEMP_LIMIT the house gets everything.
         """
-        if is_emergency or compressor_risk != COMPRESSOR_RISK_HIGH:
+        cap = max(0.0, self._absolute_safety_floor(nibe_state) or 0.0)
+        if not saturated or offset <= cap:
             return offset, ""
 
-        held = min(offset, nibe_state.current_offset)
-        if held >= offset:
+        need = 0.0
+        if getattr(nibe_state, "indoor_temp_valid", True):
+            short = self.target_temp + self.tolerance_range - nibe_state.indoor_temp
+            need = max(short / (2 * self.tolerance_range), 0.0)
+        held = cap + (offset - cap) * need
+        if held >= offset or math.isclose(held, offset):
             return offset, ""
 
         _LOGGER.info(
-            "Compressor saturated (%s): holding offset at %.2f°C instead of %.2f°C. A higher "
-            "setpoint buys no heat from a compressor already at maximum - only wear and a deeper "
-            "DM deficit. The auxiliary heater is what adds heat here.",
-            compressor_risk,
-            held,
+            "Compressor saturated: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
+            "from a compressor with no frequency left - only a deeper DM deficit and immersion heat.",
             offset,
+            held,
         )
-        return held, f" | Compressor at maximum: holding {held:+.1f}°C (asked {offset:+.1f}°C)"
+        return held, f" | Compressor saturated: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:
