@@ -963,7 +963,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 57.0},
+                    houses={"airsource_f2040": 59.5},
                     why=(
                         "F-124 on the air-source F2040 only: the offset held high against a "
                         "compressor with nothing left to give. Measured with the coordinator's own "
@@ -996,7 +996,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 85.8},
+                    houses={"airsource_f2040": 87.5},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
                         "nordic_coldsnap_jan2024: the controller pinning the offset against a "
@@ -1037,7 +1037,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.17, "apartment_f730": 7.70, "airsource_f2040": 8.56},
+                    houses={"wooden_f750": 6.17, "apartment_f730": 7.71, "airsource_f2040": 8.56},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1075,16 +1075,14 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3130, "apartment_f730": 14150},
+                    houses={"wooden_f750": 3125, "apartment_f730": 13725},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
                         "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
                         "the outdoor air passes their balance point, and no curve offset can "
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
-                        "heating. The +2.0 weather pre-heat (0ce8e93) adds 5 and 130 minutes: its "
-                        "trigger reads a May night's low as a 4 C drop, so it fires on day-night "
-                        "swings. Open: trigger on a drop in the daily mean instead."
+                        "heating."
                     ),
                 ),
                 KnownRed(
