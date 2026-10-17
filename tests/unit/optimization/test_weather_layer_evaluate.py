@@ -3,15 +3,27 @@
 Phase 4 of layer refactor: Tests for the extracted weather prediction layer evaluation logic.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from unittest.mock import MagicMock
 
+from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.adapters.weather_adapter import WeatherData, WeatherForecastHour
+from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.optimization.weather_layer import (
     WeatherPredictionLayer,
     WeatherLayerDecision,
 )
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_WEATHER_PREDICTION,
+    UPDATE_INTERVAL_MINUTES,
+    WEATHER_DAILY_MEAN_HOURS,
+    WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_GENTLE_OFFSET,
     WEATHER_WEIGHT_CAP,
 )
@@ -43,16 +55,8 @@ def mock_nibe_state():
 def mock_weather_data_dropping():
     """Create mock weather data with temperature drop forecast."""
     weather = MagicMock()
-    # Temperature dropping 6°C over forecast period
-    weather.forecast_hours = [
-        MagicMock(temperature=0.0),
-        MagicMock(temperature=-1.0),
-        MagicMock(temperature=-2.0),
-        MagicMock(temperature=-3.0),
-        MagicMock(temperature=-4.0),
-        MagicMock(temperature=-5.0),
-        MagicMock(temperature=-6.0),  # -6°C drop
-    ]
+    # Twelve hours as now, then a day 10 °C colder: the daily mean drops 5 °C within 12 h
+    weather.forecast_hours = [MagicMock(temperature=t) for t in [0.0] * 12 + [-10.0] * 36]
     return weather
 
 
@@ -182,6 +186,43 @@ class TestEvaluateLayerForecastTrigger:
         assert "stable" in result.reason.lower()
 
 
+@pytest.mark.parametrize("past_day_mean", [None, 12.0])
+def test_a_cold_night_is_not_a_cold_snap(weather_layer, mock_nibe_state, past_day_mean):
+    """May: 16 °C afternoons, 8 °C nights. The night is 8 °C below now, but no day is colder."""
+    mock_nibe_state.outdoor_temp = 16.0
+    weather = MagicMock()
+    weather.forecast_hours = [
+        MagicMock(temperature=16.0 if 8 <= hour % 24 < 20 else 8.0) for hour in range(48)
+    ]
+
+    result = weather_layer.evaluate_layer(
+        nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=past_day_mean,
+    )
+
+    assert result.offset == 0.0, f"pre-heated for a cold night: {result.reason}"
+
+
+def test_a_front_hours_away_is_a_cold_snap_for_a_radiator_house(mock_nibe_state):
+    """A fast house still pre-heats for a front three hours out, measured against the past day."""
+    radiators = WeatherPredictionLayer(thermal_mass=0.5)
+    weather = MagicMock()
+    weather.forecast_hours = [MagicMock(temperature=t) for t in [0.0] * 3 + [-6.0] * 45]
+
+    result = radiators.evaluate_layer(
+        nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=0.0,
+    )
+
+    assert result.offset == WEATHER_GENTLE_OFFSET, result.reason
+
+
 class TestEvaluateLayerIndoorCoolingTrigger:
     """Test evaluate_layer indoor cooling confirmation trigger."""
 
@@ -238,3 +279,86 @@ class TestEvaluateLayerThermalMassWeight:
 
         expected_weight = LAYER_WEIGHT_WEATHER_PREDICTION * 0.5
         assert result.weight == expected_weight
+
+
+NOW = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+CYCLE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
+DAY = timedelta(hours=WEATHER_DAILY_MEAN_HOURS)
+PERIOD = timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS)
+TWO_DAYS = [
+    CYCLE * k for k in range(1, 2 * DAY // CYCLE + 1)
+]  # a reading a cycle, the last one ago
+
+
+def _restored(ages: list[timedelta]) -> ThermalStatePredictor:
+    """The predictor as the coordinator restores it at start-up: a 15 C reading at each age."""
+    return ThermalStatePredictor.from_dict(
+        {
+            "state_history": [
+                {
+                    "timestamp": (NOW - age).isoformat(),
+                    "indoor_temp": 21.0,
+                    "outdoor_temp": 15.0,
+                    "heating_offset": 0.0,
+                    "flow_temp": 30.0,
+                    "degree_minutes": -100.0,
+                }
+                for age in sorted(ages, reverse=True)
+            ]
+        }
+    )
+
+
+def _unread(ages: list[timedelta], stretch: timedelta) -> list[timedelta]:
+    """The same readings with `stretch` between two of them, half a day ago."""
+    return [age for age in ages if not DAY / 2 < age < DAY / 2 + stretch]
+
+
+@pytest.mark.parametrize(
+    "ages, measured",
+    [
+        pytest.param(TWO_DAYS, True, id="readings-every-cycle"),
+        pytest.param(
+            [age + timedelta(days=3) for age in TWO_DAYS], False, id="restored-three-days-late"
+        ),
+        pytest.param(
+            [age + timedelta(hours=2) for age in TWO_DAYS], False, id="restored-two-hours-late"
+        ),
+        pytest.param(TWO_DAYS[: len(TWO_DAYS) // 4], False, id="half-a-day-since-install"),
+        pytest.param(_unread(TWO_DAYS, PERIOD + CYCLE), False, id="an-hour-unread"),
+        pytest.param(_unread(TWO_DAYS, 3 * CYCLE), True, id="a-restart"),
+    ],
+)
+def test_the_past_day_is_measured_only_while_readings_cover_it(ages, measured):
+    """Measured at 15 C, the past day makes a flat 5 C forecast a colder day. A history that does
+    not cover that day - restored days late, or with hours of it unread - is some other day's mean,
+    so the next 24 forecast hours stand in for it, and no day ahead is colder than they are."""
+    engine = DecisionEngine(
+        price_analyzer=PriceAnalyzer(),
+        effect_manager=EffectManager(MagicMock()),
+        thermal_model=ThermalModel(0.7, 1.0),
+        config={"target_indoor_temp": 21.0, "latitude": 59.33, "heating_type": "radiator"},
+        thermal_predictor=_restored(ages),
+    )
+    flat = [WeatherForecastHour(datetime=NOW + PERIOD * h, temperature=5.0) for h in range(48)]
+
+    decision = engine.calculate_decision(
+        nibe_state=NibeState(
+            outdoor_temp=5.0,
+            indoor_temp=21.0,
+            supply_temp=30.0,
+            return_temp=26.0,
+            degree_minutes=-100.0,
+            current_offset=0.0,
+            is_heating=True,
+            is_hot_water=False,
+            timestamp=NOW,
+        ),
+        price_data=None,
+        weather_data=WeatherData(current_temp=5.0, forecast_hours=flat),
+        current_peak=0.0,
+        current_power=1.5,
+    )
+
+    preheat = next(layer for layer in decision.layers if layer.name == "Weather Pre-heat")
+    assert (preheat.offset == WEATHER_GENTLE_OFFSET) is measured, preheat.reason

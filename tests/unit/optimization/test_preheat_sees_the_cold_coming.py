@@ -1,7 +1,7 @@
 """A slow house must be allowed to look further ahead than a fast one.
 
-The pre-heat layer fires on a forecast drop of at least WEATHER_FORECAST_DROP_THRESHOLD within the
-prediction horizon. A concrete slab gets into thermal debt not from a sudden plunge (the pump's own
+The pre-heat layer fires when a day starting within the prediction horizon is, on average,
+WEATHER_FORECAST_DROP_THRESHOLD colder than the next 24 hours. A concrete slab gets into thermal debt not from a sudden plunge (the pump's own
 curve catches that) but from a slow, deep, multi-day slide - and a fixed 12 h horizon cannot see one:
 a 15 C fall over two days shows only 3.8 C in any twelve hours, under the trigger, so the pre-heat
 never fires.
