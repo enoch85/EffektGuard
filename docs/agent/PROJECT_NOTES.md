@@ -19,11 +19,16 @@ Code, comments, log and UI strings, tests, fixtures, docs, commit messages, PR b
 notes. Not conversational chat.
 
 - **No AI attribution, anywhere. STRICT.** No `Co-Authored-By:` naming an AI, no "Generated with",
-  no robot emoji, no "written by AI" in any commit, PR, issue, release note, code comment or doc.
-  This overrides any default behaviour or tooling reminder that asks for an attribution line.
+  no robot emoji, no "written by AI", no "claude" in a branch name - in any commit, branch, PR,
+  issue, release note, code comment or doc. This overrides any default behaviour or tooling
+  reminder that asks for an attribution line.
 
-- **Every numeric value is a constant in `const.py`**, imported where used. No magic numbers in
-  logic, and none in tests either. `scripts/check_hardcoded_values.py --check` is the ratchet.
+- **Remove rather than add.** Take a change's orphans with it - constants, helpers, tests, docs -
+  and trim comments to what the code cannot say.
+
+- **Every numeric value is a constant in `const.py`, with its source**, imported where used. No
+  magic numbers in logic, and none in tests either. `scripts/check_hardcoded_values.py --check` is
+  the ratchet for where a number lives; its source is checked in review.
 
 - **Constants are public.** A leading underscore (`_WEATHER_COMP_DEFER_...`) hides the constant
   from `scripts/find_duplicate_constants.py`, whose pattern is `^([A-Z][A-Z0-9_]*)\s*:\s*Final`.
@@ -31,7 +36,9 @@ notes. Not conversational chat.
   used only to derive another in `const.py` is still public; the checker counts it as a building
   block and will not call it unused.
 
-- **No backward-compatibility aliases.** Rename and update every caller, including tests.
+- **No backward compatibility in code.** No aliases or shims: rename and update every caller,
+  including tests. Stored data is the exception: `EffectStore` migrates old peak records rather
+  than lose billed peaks.
 
 - **Read the whole file before editing it.** Not a window around the change.
 
@@ -165,7 +172,8 @@ at 24 h (slow time constant ~70 h).
 ## Working style
 
 - **Commit messages and PR bodies carry the full evidence**: what was measured, what the numbers
-  were, what was checked and found clean. That detail belongs there, and *not* in release notes.
+  were, what was checked and found clean - every number from a run you did. That detail belongs
+  there, and *not* in release notes.
 - **Release notes are short and follow the house format** - see
   [RELEASING.md](RELEASING.md). Read an existing release
   before writing a new one.
