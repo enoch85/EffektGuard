@@ -68,7 +68,9 @@ Weather pre-heat                ·  Spot price            ·  Comfort / overshoo
 **Nothing is a fixed threshold.** `climate_zones.py` derives degree-minute bands from Home
 Assistant's latitude and the current outdoor temperature; `thermal_layer.py` then adjusts them for
 thermal mass (concrete ×1.3, timber ×1.15, radiator ×1.0). The same pump at −10 °C is "normal" in
-Kiruna and "in trouble" in Malmö, with no configuration. DM −1500 is the single absolute floor.
+Kiruna and "in trouble" in Malmö, with no configuration. Past DM −1500 the EMERGENCY tier floors
+the offset at 0 unless the room is above its band, and raises nothing itself - the compressor is
+flat out there, so a raise only buys immersion heat (F-124).
 
 The ladder is `Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY` - eight rungs that fire. There
 is no WARNING or CAUTION tier; see the open-findings register for why.

@@ -17,6 +17,7 @@ from datetime import datetime
 import pytest
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer, ProactiveLayer
 
@@ -97,14 +98,15 @@ def test_the_ladder_escalates_monotonically(latitude):
 
     The ladder spans two layers (proactive Z1-Z5, then emergency T1-T3), and the proactive layer
     correctly stands down to zero at the handover. So the invariant is on the strongest boost EITHER
-    layer asks for: it must never weaken as the house falls further into debt.
+    layer asks for: it must never weaken as the house falls further into debt. It ends at the aux
+    limit, where the EMERGENCY tier stops cuts instead of raising (F-124).
     """
     proactive = ProactiveLayer(ClimateZoneDetector(latitude=latitude), heating_type="radiator")
     emergency = EmergencyLayer(ClimateZoneDetector(latitude=latitude), heating_type="radiator")
 
     strongest_so_far = 0.0
     previous = (0.0, "start")
-    for dm in range(0, -1600, -5):
+    for dm in range(0, DM_THRESHOLD_AUX_LIMIT, -5):
         state = _state(float(dm), -10.0)
         p = proactive.evaluate_layer(state, None, 21.0, is_volatile=False)
         e = emergency.evaluate_layer(state, None, None, 21.0, 1.0, is_volatile=False)

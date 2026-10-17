@@ -670,7 +670,7 @@ PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 0.875  # 87.5% - strictly BEFORE warn
 # T1: 4.0 × 0.65 = 2.60 (recovery mode, from the warning threshold down)
 # T2: 7.0 × 0.81 = 5.67 (strong recovery)
 # T3: 8.5 × 0.91 = 7.74 (emergency recovery)
-# EMERGENCY: MAX_OFFSET at DM_THRESHOLD_AUX_LIMIT, overriding every cost layer
+# EMERGENCY: past DM_THRESHOLD_AUX_LIMIT no cuts and no raise - the rest floored at 0 (F-124)
 #
 PROACTIVE_ZONE1_OFFSET: Final = 1.0  # Light boost (immediate NIBE effect)
 # Zone 1 weight uses LAYER_WEIGHT_PROACTIVE_MIN (0.3)

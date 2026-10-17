@@ -15,12 +15,12 @@ flowchart TD
         E[Cold Zone at -10°C:<br/>Expected: -490 to -740 DM<br/>Warning: -740 DM]
         F[Extreme Cold Zone at -25°C:<br/>Expected: -900 to -1300 DM<br/>Warning: -1300 DM]
         G[Adjustment: -20 DM per °C<br/>colder than zone winter avg]
-        H[Distance from Absolute Max<br/>-1500 DM NEVER EXCEED]
+        H[Distance from the aux limit<br/>-1500 DM]
     end
 
     subgraph "Emergency Layer Decision"
         I{DM ≤ -1500?}
-        J[ABSOLUTE MAX<br/>Offset: +5.0°C<br/>Weight: 1.0]
+        J[EMERGENCY<br/>No cuts: offset floored at 0<br/>no raise of its own]
         
         K{Margin < 300 DM?}
         L[CRITICAL<br/>Offset: +3.0°C<br/>Weight: 1.0]
@@ -89,7 +89,7 @@ EffektGuard uses **climate zone detection** (based on latitude) combined with **
 
 - **Climate zone** determines base expectations (latitude-based detection)
 - **Temperature delta** adjusts thresholds by -20 DM per °C colder than zone's winter average
-- **Absolute maximum** -1500 DM is NEVER exceeded regardless of conditions
+- **Aux limit** -1500 DM: past it nothing cuts heat
 
 ### Climate Zones (Latitude-Based)
 
@@ -117,20 +117,23 @@ adjusted_warning = zone_warning + (outdoor_temp - zone_winter_avg) × 20
 and every threshold derived from it was 40 degree-minutes shallower than the code's. -450 to -700
 IS a real Stockholm range - at -8 °C. It is not the range at -10 °C.
 
-### Absolute Safety Limit
+### The aux limit
 
-**DM -1500 is NEVER exceeded** regardless of outdoor temperature - it is the absolute floor.
+Past **DM -1500** the offset may not go below 0 - no price, peak or comfort cut - unless the room is
+above its band, where a deep DM means our own target is too high. The tier raises nothing itself:
+the compressor is flat out there and the immersion heater already running, so a raise only drives DM
+down faster and steps the heater up (F-124 - on the owner's F750 +10 latched for hours).
 
 ⚠️ It is **not** the number that governs a real F750: the pump's own "start addition" (menu 4.9.3)
-fires at **-700** and works DM back up, so the immersion heater engages long before -1500 is
-approached. The -1500 figure is attributed to Swedish forums and is **not sourced in this
-repository** - see `docs/research/01_degree_minutes.md`.
+is set per model and per installation (factory -700; the owner's F750 starts it at about -1450).
+The -1500 figure is attributed to Swedish forums and is **not sourced in this repository** - see
+`docs/research/01_degree_minutes.md`.
 
 ### Graduated Response System
 
 The emergency layer provides graduated responses:
 
-1. **ABSOLUTE MAX** (-1500 DM): Maximum emergency recovery (+5.0°C)
+1. **EMERGENCY** (-1500 DM): no cuts - the other layers' verdict floored at 0
 2. **CRITICAL** (within 300 DM of limit): Strong recovery (+3.0°C)
 3. **WARNING** (beyond expected range): Moderate recovery (+1.0 to +2.0°C)
 4. **CAUTION** (approaching expected limit): Gentle correction (+0.5°C)

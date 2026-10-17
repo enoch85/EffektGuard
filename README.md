@@ -66,9 +66,9 @@ to be wrong; see `docs/CLIMATE_ZONES.md` for the full tables.
 
 **No configuration needed** — uses Home Assistant's latitude.
 
-**DM −1500 is the absolute floor**, enforced globally. ⚠️ It is *not* the number that governs a real
-F750: the pump's own "start addition" (menu 4.9.3) fires at **−700**, so the immersion heater engages
-and works DM back up long before −1500 is approached. See `docs/research/01_degree_minutes.md`.
+**Past DM −1500 nothing cuts heat**, and nothing raises into the flat-out compressor either: a raise
+there only buys immersion heat. ⚠️ The pump's own "start addition" (menu 4.9.3) is set per model and
+installation (factory −700; about −1450 on the owner's F750). See `docs/research/01_degree_minutes.md`.
 
 ### 🧠 Self-Learning Capability (observing only — not yet driving your pump)
 EffektGuard continuously observes your building and estimates:
@@ -285,7 +285,7 @@ DM = ∫(BT25 - S1) dt
 - **S1**: Target flow temperature  
 - **Negative DM**: Heat deficit (compressor catching up)
 
-Climate-aware thresholds prevent heat pump damage. DM -1500 absolute maximum enforced.
+Climate-aware thresholds prevent heat pump damage. Past DM -1500 nothing cuts heat.
 
 ### Price Integration
 Native quarterly (15-min) price periods:

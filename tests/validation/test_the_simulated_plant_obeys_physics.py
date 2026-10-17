@@ -61,8 +61,8 @@ def _weather_and_prices():
 _SATURATING_HOUSE = "airsource_f2040"
 
 
-@functools.lru_cache(maxsize=1)
-def _the_only_run_that_reaches_the_immersion_heater() -> dict:
+@functools.lru_cache(maxsize=2)
+def _the_only_run_that_reaches_the_immersion_heater(fixed_offset: float | None = None) -> dict:
     """An UNDERSIZED F2040 through a cold-snap month, cached: the run that saturates a pump.
 
     It is an outdoor-air machine, so it is the only one whose capacity collapses as the weather
@@ -86,6 +86,7 @@ def _the_only_run_that_reaches_the_immersion_heater() -> dict:
             sim.apply_coldsnap(times, temps),
             sim.PriceSource(price_days, unit),
             days=sim.SIM_DAYS,
+            fixed_offset=fixed_offset,
         )
     finally:
         asyncio.set_event_loop(asyncio.new_event_loop())
@@ -218,21 +219,22 @@ class TestThePumpIsNeverAskedForWaterItCannotMake:
     """
 
     def test_the_saturated_pump_is_never_asked_for_water_above_its_maximum(self):
-        """The F2040 in a cold snap, where the curve plus a +10 emergency offset overshoots.
+        """The F2040 in a cold snap, held at +10, where the curve plus the offset overshoots.
 
         Degree minutes are the integral of (BT25 - S1). `flow` was clamped to max_flow_temp and
         `flow_target` was not, so the plant integrated against a setpoint the pump was physically
         forbidden to reach: DM fell regardless of the controller and floored on its own, and the
-        harness called it a control failure.
+        harness called it a control failure. The engine no longer raises past the aux limit (F-124),
+        so the overshoot is forced here: this is a property of the plant, not of the controller.
         """
-        stats = _the_only_run_that_reaches_the_immersion_heater()
+        stats = _the_only_run_that_reaches_the_immersion_heater(fixed_offset=MAX_OFFSET)
         house = next(h for h in sim.HOUSES if h.name == _SATURATING_HOUSE)
         max_flow = float(house.profile.max_flow_temp)
 
         assert stats["offset_max"] >= MAX_OFFSET, (
-            "PRECONDITION: this only bites when the emergency tier commands its maximum offset on "
-            "top of an already-steep curve. If the ladder never latched, the overshoot never "
-            "happened and this test is not exercising anything."
+            "PRECONDITION: this only bites with the maximum offset on top of an already-steep "
+            "curve. If the offset never got there, the overshoot never happened and this test is "
+            "not exercising anything."
         )
         assert stats["flow_target_max"] <= max_flow + 1e-6, (
             f"The plant asked the pump for {stats['flow_target_max']:.1f} C water, "

@@ -121,11 +121,10 @@ Provides **responsive temperature correction**:
 if safety_layer and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
     return clamp(safety_layer.offset)
 
-# 2. EMERGENCY tier - DM past DM_THRESHOLD_AUX_LIMIT. Absolute.
-#    Suppressing recovery to protect the effect tariff does not avoid the peak: it
-#    guarantees a bigger one from the immersion heater, while the debt deepens.
+# 2. EMERGENCY tier - DM past DM_THRESHOLD_AUX_LIMIT. No cuts, and no raise of its own (F-124):
+#    a cut deepens a shortfall the immersion heater pays for, a raise cannot add compressor heat.
 if emergency_layer and emergency_layer.tier == DM_TIER_EMERGENCY:
-    return clamp(emergency_layer.offset)
+    return max(aggregate(layers without emergency_layer), 0.0)
 
 # 3. Recovery tiers T1/T2/T3 - debt past the climate-aware warning threshold.
 #    A critical cost layer may MODERATE the response, never reverse it.
@@ -150,8 +149,8 @@ Two details that look like nits and are not:
 - **Tiers are read from `EmergencyLayerDecision.tier`, never inferred from a weight or an offset
   magnitude.** Damping mutates the offset and a weight is a tuning knob, so inferring from either
   lets a damped or retuned tier fall through into the cost-layer override path.
-- **The tie-break at step 4 is `>=`, not `>`.** `SAFETY_EMERGENCY_OFFSET` (+10) and
-  `PRICE_OFFSET_PEAK` (−10) tie by construction, and `>` returned the negative vote.
+- **The tie-break at step 4 is `>=`, not `>`.** On an exact tie the heating vote wins; `>` once
+  returned the −10 price cut against the old +10 aux-limit vote.
 
 ### Layer Weight Rationale
 
