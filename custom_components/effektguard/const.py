@@ -1523,9 +1523,8 @@ NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
 #     number.heat_offset_s1_47011 (writable coils are NUMBER entities)
 #   - generic modbus YAML + template numbers (user-defined names)
 # Matching: lowercase substring of entity_id; keys are tried in dict order and each
-# entity satisfies at most ONE key, so specific temperature keys MUST come before
-# broad status keys (e.g. sensor.*_hot_water_top_bt7 belongs to dhw_top_temp, not
-# hot_water_status).
+# entity satisfies at most ONE key, so a specific key MUST come before a broader one
+# that would also match its entities.
 # Register references (yozik04/nibe, file nibe/data/f1155_f1255.json — the map
 # HA's nibe_heatpump integration uses; F-series register ids double as MyUplink
 # parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
@@ -1573,7 +1572,6 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "phase2_current": ["current_be2", "_be2", "phase_2_current", "40081"],
     "phase3_current": ["current_be3", "_be3", "phase_3_current", "40079"],
     "dhw_amount": ["hot_water_amount", "hw_amount"],
-    "hot_water_status": ["hot_water", "dhw"],
 }
 
 # Entity-id substrings that must never be matched by discovery

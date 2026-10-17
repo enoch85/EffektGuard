@@ -55,19 +55,13 @@ class CompressorDiagnosticsDict(TypedDict):
 
 @dataclass
 class CompressorStats:
-    """Compressor frequency statistics.
+    """Compressor frequency statistics, for diagnostics.
 
-    Tracks current and historical Hz readings to identify health risks.
-
-    NIBE F750/F2040 Compressor Frequency Ranges:
-    - Idle: 20-30 Hz (pump circulation only)
-    - Normal: 40-70 Hz (typical heating)
-    - High: 70-90 Hz (cold weather or high demand)
-    - Very High: 90-110 Hz (peak capacity)
-    - Emergency: 110-120 Hz (absolute maximum, short duration only)
-
-    Sustained operation above 80 Hz indicates thermal stress.
-    Continuous operation above 100 Hz risks compressor damage.
+    What the frequency reads on the owner's F750 (production statistics, Oct 2025 - Oct 2026): 0 or
+    1 Hz while stopped, never steady below 20 Hz while running, about 80 Hz through a hot-water
+    charge, 75-90 Hz flat out on normal ventilation (91 % of its saturation-like winter hours), and
+    up to COMPRESSOR_HZ_MAX with the ventilation boosted - held at 120 Hz for 8 whole hours.
+    docs/research cites no frequency or duration that harms a NIBE compressor.
     """
 
     current_hz: int
@@ -83,10 +77,10 @@ class CompressorStats:
     """Rolling 24-hour average Hz"""
 
     time_above_80hz: timedelta
-    """Continuous time above 80 Hz (high stress threshold)"""
+    """Continuous time at or above 80 Hz"""
 
     time_above_100hz: timedelta
-    """Continuous time above 100 Hz (critical stress threshold)"""
+    """Continuous time at or above 100 Hz"""
 
     max_hz_1h: int
     """Maximum Hz in last 1 hour"""

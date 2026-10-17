@@ -146,42 +146,26 @@ python3 -c "from custom_components.effektguard.optimization.thermal_model import
 
 ### Commit Message Format
 
+The subject is a plain sentence that says what the change does, as `git log` shows - no `feat:` or
+`fix:` prefix. The body says why and carries the evidence, as "Working style" in
+[PROJECT_NOTES.md](../agent/PROJECT_NOTES.md) describes. No AI attribution (rule 1 in
+[CLAUDE.md](../../CLAUDE.md)).
+
+### Example Commit
+
+From the history (abridged):
+
 ```
-Type: Brief description (50 chars max)
+Pre-heat on a colder day, not a colder night
 
-- Change 1 with context
-- Change 2 with safety implications noted
-- Change 3 with NIBE research reference
+The pre-heat trigger compared the forecast's coldest hour with the current outdoor temperature, so
+an ordinary night fired it: a May night reads 8 C below the afternoon. At +2.0 that pre-heated mild
+weather, and shoulder_may2024 went red on comfort.
 
-Tests: passing
-Safety: validated
-Format: black applied
-```
+A cold snap is a colder day. The trigger now compares the measured outdoor mean over the past 24 h
+with every coming 24-hour window that starts within the horizon. [...]
 
-### Commit Types
-
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `refactor:` - Code refactoring (no behavior change)
-- `test:` - Adding/updating tests
-- `docs:` - Documentation changes
-- `style:` - Formatting, typos (no code change)
-- `safety:` - Safety-critical changes
-- `perf:` - Performance improvements
-
-### Example Commits
-
-```bash
-git commit -m "feat: Add climate-aware DM thresholds
-
-- Integrate ClimateZoneDetector into decision engine
-- Adapt warning thresholds based on location and outdoor temp
-- Stockholm at -10°C: warning=-700, Kiruna at -30°C: warning=-1200
-- Critical threshold remains -1500 (validated in Swedish forums)
-
-Tests: Added test_climate_aware_thresholds()
-Safety: Improves safety for cold climates
-References: Swedish_NIBE_Forum_Findings.md"
+Tests: a May day-night forecast no longer fires it, with or without a measured past day; [...]
 ```
 
 ## Pull Request Process
@@ -225,11 +209,7 @@ Respond to review comments:
 ```bash
 # Make requested changes
 git add .
-git commit -m "refactor: Address PR feedback
-
-- Update docstrings with research references
-- Add test case for edge condition
-- Remove hardcoded threshold"
+git commit -m "Say a room above its band may still be cut past the aux limit"
 
 git push origin feature/your-feature-name
 ```
