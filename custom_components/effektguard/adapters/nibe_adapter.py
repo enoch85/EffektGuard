@@ -19,7 +19,7 @@ Data read includes:
 - Degree minutes (GM/DM)
 - Current heating curve offset
 - Compressor status
-- Hot water status
+- Priority (43086): whether the compressor serves the hot-water tank
 """
 
 import logging
@@ -334,20 +334,13 @@ class NibeAdapter:
             self._entity_cache.get("compressor_status"), default=False
         )
 
-        # Read hot water status
-        is_hot_water = await self._read_entity_bool(
-            self._entity_cache.get("hot_water_status"), default=False
-        )
-
-        # Priority (register 43086) identifies what the compressor is serving.
-        # It overrides the broad status patterns: a DHW-priority run must not
-        # count as space heating (nibe_heatpump reports compressor "Running"
-        # during DHW production while no hot_water_status entity exists).
+        # Priority (register 43086) is the one NIBE signal of what the compressor serves:
+        # nibe_heatpump reports the compressor "Running" during DHW production, and no NIBE
+        # integration publishes a separate hot-water status. A name match on "hot_water" finds
+        # settings and counters instead - on a MyUplink F750 the comfort mode, the hot-water
+        # hours - so none is read as one.
         prio = self._read_prio_state()
-        if prio == "hot_water":
-            is_hot_water = True
-        elif prio == "heating":
-            is_hot_water = False
+        is_hot_water = prio == "hot_water"
 
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_temperature(self._entity_cache.get("dhw_top_temp"))
@@ -709,8 +702,7 @@ class NibeAdapter:
 
         Matching rules:
         - Keys are tried in NIBE_DISCOVERY_PATTERNS dict order; each entity can
-          satisfy at most one key (specific temperature keys are ordered before
-          broad status keys to prevent e.g. hot_water_status grabbing BT7).
+          satisfy at most one key, so specific keys are ordered before broader ones.
         - Temperature keys require device_class temperature or a °C/°F unit.
         - The offset key requires a number entity (write path uses
           number.set_value; a read-only Modbus offset sensor must never win).
@@ -732,8 +724,8 @@ class NibeAdapter:
 
         for state in self.hass.states.async_all(("sensor", "number")):
             live_ids.add(state.entity_id)
-            # Never discover our own entities (e.g. sensor.effektguard_dhw_status
-            # would match the hot_water_status patterns)
+            # Never discover our own entities (e.g. sensor.effektguard_degree_minutes
+            # would match the degree_minutes patterns)
             registry_entry = registry.async_get(state.entity_id)
             if registry_entry and registry_entry.platform == DOMAIN:
                 continue
@@ -1107,9 +1099,10 @@ class NibeAdapter:
         """Read the pump priority (register 43086) and classify it.
 
         Covers nibe_heatpump mapped strings ("Hot Water", "Heat"), raw Modbus
-        numbers (20, 30), and MyUplink enum text. Unknown or unavailable
-        values return None so the pattern-based status reads stay untouched
-        (MyUplink priority ids/texts are not fully documented).
+        numbers (20, 30), and MyUplink enum text ("Hot water", "Heating"). An
+        unrecognised value is "other" and an unavailable one None; neither
+        overrides the compressor-status read (MyUplink priority ids/texts are
+        not fully documented).
 
         Returns:
             "hot_water", "heating", "other", or None when unavailable/unknown

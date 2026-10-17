@@ -190,15 +190,6 @@ class TestMyUplinkNaming:
         assert cache["offset"] == "number.gotham_city_heating_offset_climate_system_1"
         assert cache["compressor_status"] == "sensor.gotham_city_status_compressor"
 
-    async def test_bt7_not_stolen_by_hot_water_status(self, hass):
-        """hot_water_top_bt7 must claim dhw_top_temp, not hot_water_status."""
-        adapter = NibeAdapter(hass, {})
-        await adapter.discover_entities()
-
-        assert (
-            adapter.entity_cache.get("hot_water_status") != "sensor.gotham_city_hot_water_top_bt7"
-        )
-
 
 class TestMyUplinkF750LegacyNaming:
     """MyUplink remains a first-class source: the maintainer's own F750
@@ -260,6 +251,22 @@ class TestMyUplinkF750LegacyNaming:
         assert state.degree_minutes == -150
         assert state.is_heating is True
         assert state.dhw_top_temp == 48.7
+
+    async def test_hot_water_settings_and_counters_are_not_its_hot_water_state(self, monkeypatch):
+        """The F750's hot-water comfort mode, running hours, periodic-increase step and setpoint
+        temperature match "hot_water" by name, but say nothing about whether the tank is charging:
+        only the priority does."""
+        names = {
+            "sensor.f750_cu_3x400v_current_hot_water_mode": "3.0",
+            "sensor.f750_cu_3x400v_oper_time_hot_water": "2573.0",
+            "sensor.f750_cu_3x400v_periodic_hot_water_increase_in_progress": "2.0",
+            "sensor.f750_cu_3x400v_hot_water_temp": "56.0",
+        }
+        states = required_core_states() + [make_state(e, v, {}) for e, v in names.items()]
+        adapter = NibeAdapter(make_hass(states, [], monkeypatch), {})
+        await adapter.discover_entities()
+
+        assert not set(names) & set(adapter.entity_cache.values())
 
 
 class TestGenericModbusStatesOnly:
@@ -409,17 +416,17 @@ class TestRegistryEdgeCases:
     async def test_own_entities_excluded_by_platform(self, monkeypatch):
         """EffektGuard's own entities must never be discovered as sources."""
         states = [
-            make_state("sensor.effektguard_dhw_status", "Scheduled", {}),
+            make_state("sensor.effektguard_degree_minutes", "-150", {}),
         ]
         registry_entries = [
-            make_registry_entry("sensor.effektguard_dhw_status"),
+            make_registry_entry("sensor.effektguard_degree_minutes"),
         ]
         registry_entries[0].platform = "effektguard"
         hass = make_hass(states, registry_entries, monkeypatch)
         adapter = NibeAdapter(hass, {})
         await adapter.discover_entities()
 
-        assert "hot_water_status" not in adapter.entity_cache
+        assert "degree_minutes" not in adapter.entity_cache
 
 
 class TestStartupRaces:
