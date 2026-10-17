@@ -482,16 +482,15 @@ THERMAL_RECOVERY_T3_MIN_OFFSET: Final = 2.0  # T3 damped minimum (critical - nee
 # Reference: NIBE DM formula from F750 Service Manual Menu 4.9.3
 ANTI_WINDUP_DM_DROPPING_RATE: Final = -50.0  # DM/hour (≈0.8°C gap between S1 and BT25)
 
-# Base history size for anti-windup DM tracking (30 minutes = 6 samples at 5-min intervals)
-# This is scaled by DM_THERMAL_MASS_BUFFER_* in EmergencyLayer.__init__
-# Concrete (×1.3): 6 × 1.3 ≈ 8 samples = 40 min history
-# Timber (×1.15): 6 × 1.15 ≈ 7 samples = 35 min history
-# Radiator (×1.0): 6 samples = 30 min history
-ANTI_WINDUP_DM_HISTORY_BASE_SIZE: Final = 6  # Base samples, scaled by thermal mass buffer
+# The window over which a fall in DM is judged. The anti-windup (EmergencyLayer) scales it by the
+# thermal-mass buffer - 30 min for radiators, 35 for timber, 40 for concrete; CompressorSaturation
+# also takes the compressor frequency's median over it.
+DM_RATE_WINDOW_MINUTES: Final = 30
 
 # Minimum samples needed to calculate reliable DM trend
 # At least 15 minutes of data (3 samples at 5-min intervals)
 ANTI_WINDUP_MIN_SAMPLES: Final = 3
+ANTI_WINDUP_MIN_SPAN_MINUTES: Final = 3  # readings closer together than this give no rate
 
 # Minimum positive offset to trigger anti-windup check
 # Below this, we're not actively pushing recovery hard enough to cause windup
@@ -1789,14 +1788,13 @@ COMPRESSOR_RISK_WATCH: Final = "WATCH"
 COMPRESSOR_RISK_OK: Final = "OK"
 
 # CompressorSaturation (utils/compressor_monitor.py), the wear guard's trigger: degree minutes falling
-# at ANTI_WINDUP_DM_DROPPING_RATE or faster through a window in which every reading sits at the
-# highest level the frequency has sustained in a day - or a window at COMPRESSOR_HZ_MAX without the
-# degree minutes gaining. With headroom a NIBE inverter climbs instead: the owner's F750 answers a fall
-# of 6-10 DM in a five-minute cycle with about +7 Hz in the next one. ASSUMED; closed loop on two fits
-# of the owner's F750, Jan-Feb 2026, against a saving of 125 / 97 SEK: a band of 8 Hz or a window of
-# 20 or 45 min moves cost by under 7 SEK, a band of 3 Hz gives up 4-20 SEK and six hours of memory
-# 4-15 SEK.
-COMPRESSOR_SATURATION_WINDOW_MINUTES: Final = 30  # the frequency's median and the DM rate
+# at ANTI_WINDUP_DM_DROPPING_RATE or faster through a DM_RATE_WINDOW_MINUTES window in which every
+# reading sits at the highest level the frequency has sustained in a day - or such a window at
+# COMPRESSOR_HZ_MAX without the degree minutes gaining. With headroom a NIBE inverter climbs instead:
+# the owner's F750 answers a fall of 6-10 DM in a five-minute cycle with about +7 Hz in the next one.
+# ASSUMED; closed loop on two fits of the owner's F750, Jan-Feb 2026, against a saving of 125 / 97
+# SEK: a band of 8 Hz or a window of 20 or 45 min moves cost by under 7 SEK, a band of 3 Hz gives up
+# 4-20 SEK and six hours of memory 4-15 SEK.
 COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
 COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
 

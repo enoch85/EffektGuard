@@ -173,7 +173,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.weather_learner = WeatherPatternLearner(climate_zone_info=climate_zone_info)
 
         # Compressor health monitoring (Oct 19, 2025)
-        self.compressor_monitor = CompressorHealthMonitor(max_history_hours=24)
+        self.compressor_monitor = CompressorHealthMonitor()
         self.compressor_stats = None  # Latest CompressorStats from monitor
         # Whether the compressor has any frequency left to give: the wear guard's trigger. Fed by the
         # paths that drive the pump (the control cycle, explicit commands), never by a read-only

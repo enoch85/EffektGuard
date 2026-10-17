@@ -23,9 +23,9 @@ from ..const import (
     ANTI_WINDUP_CAUSATION_WINDOW_MINUTES,
     ANTI_WINDUP_COOLDOWN_MINUTES,
     ANTI_WINDUP_DM_DROPPING_RATE,
-    ANTI_WINDUP_DM_HISTORY_BASE_SIZE,
     ANTI_WINDUP_MIN_POSITIVE_OFFSET,
     ANTI_WINDUP_MIN_SAMPLES,
+    ANTI_WINDUP_MIN_SPAN_MINUTES,
     ANTI_WINDUP_REDUCTION_MULTIPLIER,
     ANTI_WINDUP_REDUCTION_RATE_DIVISOR,
     ANTI_WINDUP_REDUCTION_THRESHOLD,
@@ -41,6 +41,7 @@ from ..const import (
     DM_CRITICAL_T3_WEIGHT,
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
+    DM_RATE_WINDOW_MINUTES,
     DM_THERMAL_MASS_BUFFER_TIMBER,
     DM_THRESHOLD_AUX_LIMIT,
     LAYER_WEIGHT_EMERGENCY,
@@ -90,6 +91,7 @@ from ..const import (
     THERMAL_RECOVERY_T2_MIN_OFFSET,
     THERMAL_RECOVERY_T3_MIN_OFFSET,
     THERMAL_RECOVERY_WARMING_THRESHOLD,
+    UPDATE_INTERVAL_MINUTES,
     VOLATILE_WEIGHT_REDUCTION,
     # DM recovery constants (shared with dhw_optimizer)
     DM_RECOVERY_MAX_HOURS,
@@ -98,6 +100,7 @@ from ..const import (
     DM_RECOVERY_RATE_VERY_COLD,
 )
 from .climate_zones import ClimateZoneDetector, keep_triggers_clear_of_the_compressor_band
+from ..utils.degree_minutes import dm_rate_per_hour
 from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
@@ -423,7 +426,7 @@ class EmergencyLayer:
     def _get_dm_history_size_for_heating_type(self, heating_type: str) -> int:
         """Get DM history size based on heating system thermal lag.
 
-        Derives from ANTI_WINDUP_DM_HISTORY_BASE_SIZE scaled by thermal mass buffer.
+        DM_RATE_WINDOW_MINUTES of readings, scaled by thermal mass buffer.
         Longer thermal lag systems need more history to detect sustained trends.
 
         Args:
@@ -441,11 +444,8 @@ class EmergencyLayer:
         else:
             multiplier = DM_THERMAL_MASS_BUFFER_RADIATOR  # 1.0
 
-        # Scale base history size by thermal mass buffer
-        # Base 6 samples × 1.3 = ~8 samples for concrete (40 min)
-        # Base 6 samples × 1.15 = ~7 samples for timber (35 min)
-        # Base 6 samples × 1.0 = 6 samples for radiator (30 min)
-        return round(ANTI_WINDUP_DM_HISTORY_BASE_SIZE * multiplier)
+        # 30 min of 5-min readings: 6 samples x 1.3 = 8 for concrete, x 1.15 = 7 for timber
+        return round(DM_RATE_WINDOW_MINUTES / UPDATE_INTERVAL_MINUTES * multiplier)
 
     def _update_dm_history(self, dm: float, timestamp: datetime) -> None:
         """Update DM history for anti-windup tracking.
@@ -465,18 +465,11 @@ class EmergencyLayer:
         """
         if len(self._dm_history) < ANTI_WINDUP_MIN_SAMPLES:
             return 0.0, False
-
-        oldest_time, oldest_dm = self._dm_history[0]
-        newest_time, newest_dm = self._dm_history[-1]
-
-        time_diff = (newest_time - oldest_time).total_seconds() / 3600  # hours
-        if time_diff < 0.05:  # Less than 3 minutes of data
-            return 0.0, False
-
-        dm_change = newest_dm - oldest_dm  # Negative means DM dropped
-        dm_rate = dm_change / time_diff  # DM/hour
-
-        return dm_rate, True
+        rate = dm_rate_per_hour(
+            ((at, dm, 0) for at, dm in self._dm_history),
+            timedelta(minutes=ANTI_WINDUP_MIN_SPAN_MINUTES),
+        )
+        return (0.0, False) if rate is None else (rate, True)
 
     def _is_in_cooldown(self, timestamp: datetime) -> bool:
         """Check if still in cooldown from previous anti-windup activation.

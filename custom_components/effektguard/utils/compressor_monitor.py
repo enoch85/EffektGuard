@@ -30,9 +30,10 @@ from ..const import (
     COMPRESSOR_RISK_WATCH,
     COMPRESSOR_SATURATION_BAND_HZ,
     COMPRESSOR_SATURATION_MEMORY_HOURS,
-    COMPRESSOR_SATURATION_WINDOW_MINUTES,
+    DM_RATE_WINDOW_MINUTES,
     NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD,
 )
+from .degree_minutes import dm_rate_per_hour
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -453,7 +454,7 @@ class CompressorSaturation:
     def update(self, nibe_state, *, hot_water: bool | None, airflow_enhanced: bool) -> bool:
         """Record one reading of a pump-driving cycle and return whether it is saturated."""
         now = nibe_state.timestamp
-        window = timedelta(minutes=COMPRESSOR_SATURATION_WINDOW_MINUTES)
+        window = timedelta(minutes=DM_RATE_WINDOW_MINUTES)
         band = COMPRESSOR_SATURATION_BAND_HZ
         hz = nibe_state.compressor_hz
         self.level = self.ceiling = None
@@ -503,7 +504,7 @@ class CompressorSaturation:
                 and (hour_old is None or steady)
             )
             return self.saturated
-        rate = self._dm_rate(window / 2)
+        rate = dm_rate_per_hour(((at, dm, part) for at, _, dm, part in self._window), window / 2)
         at_ceiling = (
             ceiling is not None
             and level > COMPRESSOR_HZ_MIN + band
@@ -522,14 +523,3 @@ class CompressorSaturation:
         self._seen = None
         self._paused = False
         self.saturated = False
-
-    def _dm_rate(self, evidence: timedelta) -> float | None:
-        """DM per hour across the window's consecutive readings, hot water left out."""
-        change, span = 0.0, timedelta()
-        for (t0, _, dm0, part0), (t1, _, dm1, part1) in zip(self._window, list(self._window)[1:]):
-            if part0 == part1:
-                change += dm1 - dm0
-                span += t1 - t0
-        if span < evidence:
-            return None
-        return change / (span.total_seconds() / 3600)
