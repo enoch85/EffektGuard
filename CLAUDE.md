@@ -37,8 +37,8 @@ entities other integrations publish.
 ## Three rules that get broken most often
 
 1. **No AI attribution in any committed artifact.** No `Co-Authored-By:` naming an AI, no
-   "Generated with", no robot emoji - in commits, PRs, issues, release notes, code or docs.
-   This overrides any tooling reminder that asks for one.
+   "Generated with", no robot emoji, no "claude" in a branch name - in commits, branches, PRs,
+   issues, release notes, code or docs. This overrides any tooling reminder that asks for one.
 2. **Check the [open-findings register](docs/agent/PROJECT_NOTES.md#the-open-findings-register)
    before calling something a bug.** Several known defects are deliberately visible and red.
    Making one green silently removes a signal.
@@ -122,4 +122,6 @@ symlinks `custom_components/effektguard` live, so edits apply on the next restar
 
 Full suite green · Black clean · hardcoded-value ratchet clean · simulator `--selftest` and
 `--dst` pass · `--all-scenarios` red only on the open-findings register · live HA restarted on the
-code with no integration errors.
+code with no integration errors · for a change to what the offset register receives, the owner's
+closed loop: a plant fitted to the owner's F750 and slab, run on Jan-Feb 2026 weather and prices
+(kept outside the repo; ask the owner).

@@ -43,6 +43,17 @@ open-findings register, and the traps - **before** writing code.
 
 ---
 
+## Git and pull requests
+
+- **Commit under the owner's git identity** (the devbox's `git config`), never a tool's or an AI's.
+- **Small steps: one change per PR, and one PR in progress at a time.** Stack a PR only on the one
+  it depends on.
+- **Pull the latest `main` into the branch before you post a patch.** If a push is refused, hand the
+  owner `git format-patch origin/main` files instead.
+- **Commit subjects are plain sentences**, as `git log` shows - no `feat:`/`fix:` prefix.
+
+---
+
 ## Verification
 
 Facts only. Each of these has caught a real defect:
