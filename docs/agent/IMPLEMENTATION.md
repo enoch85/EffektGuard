@@ -50,8 +50,7 @@ open-findings register, and the traps - **before** writing code.
   it depends on.
 - **Pull the latest `main` into the branch before you post a patch.** If a push is refused, hand the
   owner `git format-patch origin/main` files instead.
-- **Commit subjects are plain sentences**, as `git log` shows - not the `feat:`/`fix:` format in
-  `docs/dev/CONTRIBUTION_GUIDE.md`.
+- **Commit subjects are plain sentences**, as `git log` shows - no `feat:`/`fix:` prefix.
 
 ---
 
