@@ -420,28 +420,35 @@ class CompressorSaturation:
     A NIBE inverter answers falling degree minutes by raising its frequency, until it can rise no
     further. So the compressor is saturated when degree minutes fall at ANTI_WINDUP_DM_DROPPING_RATE
     or faster through a window in which every reading sits at its ceiling - the highest level the
-    frequency has sustained in the last COMPRESSOR_SATURATION_MEMORY_HOURS - or, whatever the memory
-    holds, when it runs at COMPRESSOR_HZ_MAX without gaining on its degree minutes. It stays
-    saturated while the frequency stays at that ceiling and stops climbing.
+    frequency has held flat, within COMPRESSOR_SATURATION_BAND_HZ through a whole window, in the
+    last COMPRESSOR_SATURATION_MEMORY_HOURS - or, whatever the memory holds, when it runs at
+    COMPRESSOR_HZ_MAX without gaining on its degree minutes. It stays saturated while the frequency
+    stays at that ceiling and stops climbing. A window that ramps - into or out of a hot-water run,
+    say - is no ceiling.
 
     The ceiling has to be earned. It is remembered per airflow state, because enhanced ventilation
     lifts an exhaust-air pump's ceiling, and only counts once this run or the memory has shown the
-    frequency span more than COMPRESSOR_SATURATION_BAND_HZ: a frozen reading or a run that began at
-    the ceiling proves nothing. A compressor within the band of COMPRESSOR_HZ_MIN is never at its
-    ceiling, and a level rising past the highest one an hour or more old is climbing, not stuck -
-    without such a level there is no evidence yet. Hot water pauses the run without ending it: a
-    verdict stands until the readings after the pause confirm or release it, and the degree minutes
-    the tank costs never count. A stop, a dropout, an airflow change, the clock going back or
-    another gap longer than half a window ends it, and so does a reading that cannot say whether
-    the compressor serves the tank: a charge holds a high frequency while degree minutes fall, as
-    saturation does, and an unseen one would become the ceiling the next one matches.
+    frequency span more than the band: a frozen reading or a run that began at the ceiling proves
+    nothing. A compressor within the band of COMPRESSOR_HZ_MIN is never at its ceiling, and a level
+    rising past the highest one an hour or more old is climbing, not stuck - without such a level
+    there is no evidence yet. Hot water pauses the run without ending it, and so does a reading
+    that cannot say whether the compressor serves the tank, since a charge holds a high frequency
+    while degree minutes fall, as saturation does: a verdict stands until the readings after the
+    pause confirm or release it, and nothing in the pause counts. A stop (the pump reports 1 Hz,
+    NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD, while stopped), a dropout, an airflow change, the clock
+    going back or a gap longer than half a window since the last reading ends the run.
     """
 
     def __init__(self) -> None:
         """Start with no history."""
         self._window: deque[tuple[datetime, int, float, int]] = deque()  # (time, Hz, DM, run part)
-        self._levels: dict[bool, deque[tuple[datetime, float]]] = {False: deque(), True: deque()}
+        # (time, level, whether the window was flat) per airflow state
+        self._levels: dict[bool, deque[tuple[datetime, float, bool]]] = {
+            False: deque(),
+            True: deque(),
+        }
         self._run_low: float | None = None
+        self._seen: datetime | None = None
         self._part = 0
         self._paused = False
         self._enhanced = False
@@ -456,27 +463,23 @@ class CompressorSaturation:
         band = COMPRESSOR_SATURATION_BAND_HZ
         hz = nibe_state.compressor_hz
         self.level = self.ceiling = None
-        if hot_water is None:
-            self._end_run()
-            return False
+        stopped = hz is None or hz <= NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD
         if (
-            hz is None
-            or hz < NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD
+            stopped
             or airflow_enhanced != self._enhanced
-            or (self._window and now < self._window[-1][0])
+            or (self._seen and not timedelta(0) <= now - self._seen <= window / 2)
         ):
             self._end_run()
             self._enhanced = airflow_enhanced
-            if hz is None or hz < NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD:
+            if stopped:
                 return False
-        if hot_water:
+        self._seen = now
+        if hot_water or hot_water is None:
             self._paused = True
             return self.saturated
         if self._paused:
             self._paused = False
             self._part += 1
-        elif self._window and now - self._window[-1][0] > window / 2:
-            self._end_run()
 
         self._window.append((now, hz, nibe_state.degree_minutes, self._part))
         while now - self._window[0][0] >= window:
@@ -490,11 +493,11 @@ class CompressorSaturation:
         readings = [held for _, held, _, _ in self._window]
         level = median(readings)
         self._run_low = level if self._run_low is None else min(self._run_low, level)
-        held_before = [held for _, held in memory]
-        lowest = min(held_before + [self._run_low])
-        ceiling = max(held_before) if held_before and max(held_before) - lowest > band else None
-        hour_old = max((held for at, held in memory if now - at >= 2 * window), default=None)
-        memory.append((now, level))
+        lowest = min([held for _, held, _ in memory] + [self._run_low])
+        held_flat = [held for _, held, flat in memory if flat]
+        ceiling = max(held_flat) if held_flat and max(held_flat) - lowest > band else None
+        hour_old = max((held for at, held, _ in memory if now - at >= 2 * window), default=None)
+        memory.append((now, level, max(readings) - min(readings) <= band))
         self.level, self.ceiling = level, ceiling
 
         at_max = all(held >= COMPRESSOR_HZ_MAX - band for held in readings)
@@ -522,6 +525,7 @@ class CompressorSaturation:
         """A stop, a dropout, an airflow change or a gap: nothing in the run carries over."""
         self._window.clear()
         self._run_low = None
+        self._seen = None
         self._paused = False
         self.saturated = False
 

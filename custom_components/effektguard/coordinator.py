@@ -1148,7 +1148,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # The pump's own hot-water priority, not the temporary-lux switch: lux is a timed
                     # comfort mode that stays on for hours after the tank is charged, while the
                     # compressor is back on space heating and saturation must still be seen. None
-                    # (nothing reads the priority) withholds the verdict: a tank charge looks the same.
+                    # (nothing reads the priority) pauses it as hot water does: a charge looks the same.
                     self.compressor_saturation.update(
                         nibe_data,
                         hot_water=is_hot_water,
