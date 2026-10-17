@@ -963,7 +963,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 59.5},
+                    houses={"airsource_f2040": 54.25},
                     why=(
                         "F-124 on the air-source F2040 only: the offset held high against a "
                         "compressor with nothing left to give. Measured with the coordinator's own "
@@ -996,7 +996,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 87.5},
+                    houses={"airsource_f2040": 87.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
                         "nordic_coldsnap_jan2024: the controller pinning the offset against a "
@@ -1037,14 +1037,15 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.17, "apartment_f730": 7.71, "airsource_f2040": 8.56},
+                    houses={"wooden_f750": 6.28, "apartment_f730": 8.01, "airsource_f2040": 8.59},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
                         "datasheet guard fails the run. The exergy COP fit is anchored on EN 14511 "
                         "rating points taken at winter source temperatures and extrapolates above "
                         "them when the source is mild. Every COST number in this scenario is "
-                        "therefore too low, and no saving may be quoted from it."
+                        "therefore too low, and no saving may be quoted from it. The overshoot "
+                        "ramp moved them up from 6.17, 7.71 and 8.56."
                     ),
                 ),
                 KnownRed(
@@ -1075,23 +1076,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3125, "apartment_f730": 13725},
+                    houses={"wooden_f750": 3405, "apartment_f730": 11505},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
                         "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
                         "the outdoor air passes their balance point, and no curve offset can "
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
-                        "heating."
-                    ),
-                ),
-                KnownRed(
-                    fails_with="minutes below the comfort band",
-                    stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 320},
-                    why=(
-                        "CONTROLLER: the F2040 goes BELOW its band in the same window - the other "
-                        "side of the same mild-weather tuning gap."
+                        "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
+                        "softer than the old -7 C coast above 0.6 C and harder than the old mild "
+                        "correction below it."
                     ),
                 ),
             ),
@@ -1108,12 +1102,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.98, "apartment_f730": 7.21, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.66, "apartment_f730": 7.40, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
                         "rating points the exergy COP fit is anchored on, so the fit extrapolates "
-                        "and seasonal COP comes out 1.27-1.61x the best published figure. The "
+                        "and seasonal COP comes out 1.20-1.61x the best published figure. The "
                         "harness's own datasheet guard catches it, which is the guard working. "
                         "Every COST number in this run is therefore too low; the CONTROL decisions "
                         "- which layer voted, which offset was written - do not depend on the COP "

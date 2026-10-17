@@ -97,8 +97,12 @@ forecasts and the compressor only:
 Heat is only banked cheaply while the weather is still mild enough for the compressor to have
 headroom. 48 h is also as far as an hourly weather forecast reaches.
 
-**Still open:** the comfort layer cuts any bank once the room is about 0.6 °C over target. That
-is listed in the owner's TODO, not changed here.
+The comfort layer no longer jumps to −7 °C at 0.6 °C over target: it ramps from its in-band vote at
+the band edge to the full coast at +1.5 °C. In the closed loop on the owner's F750 + slab (Jan-Feb
+2026) the bank is cut in 31-41 % of armed pre-heat time instead of 51-54 %, but it is not
+consistently deeper:
+the room over target in the 24 h before a cold snap is 0.82 / 0.78 / 0.75 / 0.73 °C against
+0.82 / 0.73 / 0.83 / 0.75 (two plant fits at the 1.2 and 0.5 sliders).
 
 ## Owner's words
 

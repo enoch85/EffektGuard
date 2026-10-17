@@ -174,10 +174,12 @@ Two details that look like nits and are not:
 - **Warning Stable (0.65)**: Close to peak + demand stable - monitor
 
 #### Comfort Layer Dynamic Weighting
-- **Critical (1.0)**: >2°C beyond tolerance - emergency correction
-- **Severe (0.9)**: 1-2°C beyond tolerance - strong correction
-- **High (0.7)**: 0-1°C beyond tolerance - moderate correction  
-- **Mild (0.2)**: Within tolerance - gentle steering
+- **Within the band**: gentle steering, `-COMFORT_CORRECTION_MULT` × deviation at
+  `LAYER_WEIGHT_COMFORT_MIN` × the mode's multiplier
+- **Above the band**: one straight ramp from that vote at the band edge to
+  `OVERSHOOT_PROTECTION_OFFSET_MAX` at `LAYER_WEIGHT_COMFORT_CRITICAL` at
+  `OVERSHOOT_PROTECTION_FULL` above target, where the full coast wins outright. Prices do not move it
+- **Below the band**: a firm boost at `LAYER_WEIGHT_COMFORT_MAX`
 
 **Purpose**: Graduated response matching severity while allowing optimization when comfortable
 
@@ -252,20 +254,6 @@ Non-critical layers achieve **natural balance** through weighted averaging:
 - No single layer dominates unless situation is truly critical
 
 ### Dynamic Weight Adjustment
-
-#### Comfort Layer Scaling
-```python
-def _comfort_layer(self, nibe_state) -> LayerDecision:
-    temp_error = nibe_state.indoor_temp - self.target_temp
-    tolerance = self.tolerance_range  # ±0.4-4.0°C based on user setting
-    
-    if abs(temp_error) < 0.2:
-        weight = 0.0  # Very close to target
-    elif abs(temp_error) < tolerance:
-        weight = 0.2  # Within tolerance, gentle steering
-    else:
-        weight = 0.5  # Outside tolerance, stronger correction
-```
 
 #### Emergency Layer Scaling  
 ```python
