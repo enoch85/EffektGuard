@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    WEATHER_DAILY_MEAN_HOURS,
+    WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_FORECAST_HORIZON,
     COMPRESSOR_RISK_HIGH,
     DEFAULT_HEAT_LOSS_COEFFICIENT,
@@ -435,6 +437,24 @@ class DecisionEngine:
             "samples": 0,
         }
 
+    def _outdoor_mean_past_day(self, now: datetime) -> float | None:
+        """The measured outdoor mean over the 24 h before `now`, once readings cover all of it.
+
+        The predictor's history is restored from storage at start-up, so after an outage it can be
+        days old or have hours missing, and its mean is then not the past day's. It counts only
+        while no forecast period of the day went unread; until then the forecast stands in.
+        """
+        history = list(self.predictor.state_history) if self.predictor else []
+        if not history:
+            return None
+        start = now - timedelta(hours=WEATHER_DAILY_MEAN_HOURS)
+        readings = [s for s in history if start <= s.timestamp <= now]
+        times = [start, *sorted(s.timestamp for s in readings), now]
+        unread = max(later - earlier for earlier, later in zip(times, times[1:]))
+        if unread > timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS):
+            return None
+        return sum(s.outdoor_temp for s in readings) / len(readings)
+
     def _get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend (BT1 real-time).
 
@@ -681,6 +701,7 @@ class DecisionEngine:
             weather_data=weather_data,
             thermal_trend=self._get_thermal_trend(),
             enable_weather_prediction=self.config.get("enable_weather_prediction", True),
+            past_day_mean=self._outdoor_mean_past_day(nibe_state.timestamp),
         )
         weather_decision = LayerDecision(
             name=weather_result.name,

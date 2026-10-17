@@ -963,7 +963,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 57.0},
+                    houses={"airsource_f2040": 54.25},
                     why=(
                         "F-124 on the air-source F2040 only: the offset held high against a "
                         "compressor with nothing left to give. Measured with the coordinator's own "
@@ -996,7 +996,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 85.8},
+                    houses={"airsource_f2040": 87.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
                         "nordic_coldsnap_jan2024: the controller pinning the offset against a "
@@ -1037,7 +1037,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.28, "apartment_f730": 8.03, "airsource_f2040": 8.50},
+                    houses={"wooden_f750": 6.28, "apartment_f730": 8.01, "airsource_f2040": 8.59},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1045,7 +1045,7 @@ SCENARIOS = {
                         "rating points taken at winter source temperatures and extrapolates above "
                         "them when the source is mild. Every COST number in this scenario is "
                         "therefore too low, and no saving may be quoted from it. The overshoot "
-                        "ramp moved the F750's and F730's figures up from 6.17 and 7.70."
+                        "ramp moved them up from 6.17, 7.71 and 8.56."
                     ),
                 ),
                 KnownRed(
@@ -1083,11 +1083,9 @@ SCENARIOS = {
                         "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
                         "the outdoor air passes their balance point, and no curve offset can "
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
-                        "heating. The +2.0 weather pre-heat (0ce8e93) adds 5 and 130 minutes: its "
-                        "trigger reads a May night's low as a 4 C drop, so it fires on day-night "
-                        "swings. Open: trigger on a drop in the daily mean instead. The overshoot "
-                        "ramp moved them from 3130 and 14150: it pulls softer than the old -7 C "
-                        "coast above 0.6 C and harder than the old mild correction below it."
+                        "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
+                        "softer than the old -7 C coast above 0.6 C and harder than the old mild "
+                        "correction below it."
                     ),
                 ),
             ),
