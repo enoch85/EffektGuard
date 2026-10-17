@@ -26,7 +26,7 @@ CYCLES = 5
 LUX = "switch.temporary_lux_50004"
 
 
-def _coordinator(hot_water: bool, enhanced, lux: bool) -> EffektGuardCoordinator:
+def _coordinator(hot_water: bool | None, enhanced, lux: bool) -> EffektGuardCoordinator:
     """A real coordinator and tracker; the pump at its inverter maximum, DM holding."""
     cycle = iter(range(CYCLES))
     now = {"cycle": 0}
@@ -112,6 +112,13 @@ async def test_a_read_only_refresh_does_not_feed_it():
 @pytest.mark.asyncio
 async def test_hot_water_pauses_it():
     assert await _verdicts(hot_water=True) == [False] * CYCLES
+
+
+@pytest.mark.asyncio
+async def test_a_pump_that_cannot_say_what_it_serves_gets_no_verdict():
+    """No priority and no hot-water status: a tank charge reads as space heating at a high, held
+    frequency with DM falling, which is what saturation looks like."""
+    assert await _verdicts(hot_water=None) == [False] * CYCLES
 
 
 @pytest.mark.asyncio

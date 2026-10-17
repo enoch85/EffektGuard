@@ -432,7 +432,9 @@ class CompressorSaturation:
     without such a level there is no evidence yet. Hot water pauses the run without ending it: a
     verdict stands until the readings after the pause confirm or release it, and the degree minutes
     the tank costs never count. A stop, a dropout, an airflow change, the clock going back or
-    another gap longer than half a window ends it.
+    another gap longer than half a window ends it, and so does a reading that cannot say whether
+    the compressor serves the tank: a charge holds a high frequency while degree minutes fall, as
+    saturation does, and an unseen one would become the ceiling the next one matches.
     """
 
     def __init__(self) -> None:
@@ -447,13 +449,16 @@ class CompressorSaturation:
         self.level: float | None = None
         self.ceiling: float | None = None
 
-    def update(self, nibe_state, *, hot_water: bool, airflow_enhanced: bool) -> bool:
+    def update(self, nibe_state, *, hot_water: bool | None, airflow_enhanced: bool) -> bool:
         """Record one reading of a pump-driving cycle and return whether it is saturated."""
         now = nibe_state.timestamp
         window = timedelta(minutes=COMPRESSOR_SATURATION_WINDOW_MINUTES)
         band = COMPRESSOR_SATURATION_BAND_HZ
         hz = nibe_state.compressor_hz
         self.level = self.ceiling = None
+        if hot_water is None:
+            self._end_run()
+            return False
         if (
             hz is None
             or hz < NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD

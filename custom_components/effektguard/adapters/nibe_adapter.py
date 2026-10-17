@@ -99,7 +99,7 @@ class NibeState:
     degree_minutes: float
     current_offset: float
     is_heating: bool
-    is_hot_water: bool
+    is_hot_water: bool | None  # None: no priority or status says what the compressor serves
     timestamp: datetime
     dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
     dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
@@ -334,9 +334,10 @@ class NibeAdapter:
             self._entity_cache.get("compressor_status"), default=False
         )
 
-        # Read hot water status
+        # Read hot water status. None when nothing says what the compressor serves: a tank charge
+        # then reads as space heating, so nothing may judge the compressor on it.
         is_hot_water = await self._read_entity_bool(
-            self._entity_cache.get("hot_water_status"), default=False
+            self._entity_cache.get("hot_water_status"), default=None
         )
 
         # Priority (register 43086) identifies what the compressor is serving.
@@ -1081,8 +1082,8 @@ class NibeAdapter:
     async def _read_entity_bool(
         self,
         entity_id: str | None,
-        default: bool = False,
-    ) -> bool:
+        default: bool | None = False,
+    ) -> bool | None:
         """Read boolean value from entity.
 
         Args:

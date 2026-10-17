@@ -88,6 +88,17 @@ SATURATED = CLIMBED + _hold(CEILING_HZ, 24, -420.0)  # two hours flat out while 
 MILD_DAY = [(20 if (i // 6) % 2 else 26, -60.0, False) for i in range(48)]  # 20-26 Hz, DM holding
 
 
+def _a_day_that_cannot_see_its_hot_water() -> list:
+    """Space heating at 50 Hz; two 45-minute tank charges at 90 Hz, 11 hours apart, with DM
+    falling 120/h - and no priority or status to say which is which (hot water None)."""
+    readings, dm = [], -200.0
+    for i in range(12 * 24):
+        charging = any(start <= i < start + 9 for start in (12 * 5, 12 * 16))
+        dm = dm - 10.0 if charging else min(dm + 15.0, -200.0)
+        readings.append((90 if charging else 50, dm, None))
+    return readings
+
+
 class TestTheTrigger:
     """CompressorSaturation: the compressor holds a ceiling it has earned while DM keeps falling."""
 
@@ -144,6 +155,7 @@ class TestTheTrigger:
             pytest.param([(0, -660.0, False)], id="a-stop"),
             pytest.param([(None, -660.0, False)], id="a-dropout"),
             pytest.param([(0, -660.0, True)], id="a-stop-while-hot-water-is-asked-for"),
+            pytest.param([(CEILING_HZ, -670.0, None)], id="a-reading-blind-to-hot-water"),
             pytest.param(
                 [(100, -660.0, True)] * 7 + _hold(CEILING_HZ - 12, 4, -700.0),
                 id="headroom-after-a-long-hot-water-run",
@@ -191,6 +203,7 @@ class TestTheTrigger:
                 ],
                 id="dm-falling-only-for-hot-water",
             ),
+            pytest.param(_a_day_that_cannot_see_its_hot_water(), id="hot-water-it-cannot-see"),
         ],
     )
     def test_without_that_evidence_it_is_not_saturated(self, readings):
