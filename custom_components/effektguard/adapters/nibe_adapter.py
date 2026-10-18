@@ -104,10 +104,13 @@ class NibeState:
     dhw_top_temp: float | None = None  # BT7 - Hot water top (40013) - optional
     dhw_charging_temp: float | None = None  # BT6 - Hot water charging/bottom (40014) - optional
     dhw_amount_minutes: float | None = None  # Hot water amount available (minutes) - optional
-    phase1_current: float | None = None  # BE1 - Phase 1 current (43086) - optional
-    phase2_current: float | None = None  # BE2 - Phase 2 current (43122) - optional
-    phase3_current: float | None = None  # BE3 - Phase 3 current (43081) - optional
+    phase1_current: float | None = None  # BE1 - Phase 1 current (40083) - optional
+    phase2_current: float | None = None  # BE2 - Phase 2 current (40081) - optional
+    phase3_current: float | None = None  # BE3 - Phase 3 current (40079) - optional
     compressor_hz: int | None = None  # Compressor frequency - optional
+    # The highest frequency the pump allows itself right now (43123 on the F-series, 31043 on the
+    # S-series) - optional, and not published by every pump
+    compressor_hz_max: int | None = None
     power_kw: float | None = None  # Total power consumption in kW - optional
     # True when power_kw is a temperature-derived estimate, not a measurement. It rides in the same
     # field as a real reading, so anything that reports or bills consumption must check this first
@@ -375,6 +378,9 @@ class NibeAdapter:
         compressor_hz = await self._read_entity_float(
             self._entity_cache.get("compressor_hz"), default=None
         )
+        compressor_hz_max = await self._read_entity_float(
+            self._entity_cache.get("compressor_hz_max"), default=None
+        )
 
         # Derive heating activity from compressor frequency when the status
         # entity is missing or unparseable (raw Modbus 43427 is a numeric enum
@@ -425,6 +431,7 @@ class NibeAdapter:
             phase2_current=phase2_current,
             phase3_current=phase3_current,
             compressor_hz=int(compressor_hz) if compressor_hz is not None else None,
+            compressor_hz_max=int(compressor_hz_max) if compressor_hz_max is not None else None,
             power_kw=power_kw,
             power_is_estimated=power_is_estimated,
             indoor_temp_valid=indoor_temp_valid,

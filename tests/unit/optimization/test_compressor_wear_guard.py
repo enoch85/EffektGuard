@@ -50,23 +50,24 @@ def _reading(at: datetime, hz, dm: float, **state) -> NibeState:
         is_hot_water=False,
         timestamp=at,
         compressor_hz=hz,
+        compressor_hz_max=state.get("compressor_hz_max"),
         power_kw=3.0,
         indoor_temp_valid=state.get("indoor_temp_valid", True),
     )
 
 
 def _feed(readings, airflow=lambda i: False, tracker=None) -> list[bool]:
-    """Run one tracker through (Hz, DM, hot water) readings five minutes apart; the verdict after
-    each. A ("clock", minutes) entry moves the clock without a reading."""
+    """Run one tracker through (Hz, DM, hot water[, the maximum the pump publishes]) readings five
+    minutes apart; the verdict after each. A ("clock", minutes) entry moves the clock without a
+    reading."""
     tracker, at, verdicts = tracker or CompressorSaturation(), START, []
     for i, entry in enumerate(readings):
         if entry[0] == "clock":
             at += timedelta(minutes=entry[1])
             continue
-        hz, dm, hot_water = entry
-        verdicts.append(
-            tracker.update(_reading(at, hz, dm), hot_water=hot_water, airflow_enhanced=airflow(i))
-        )
+        hz, dm, hot_water, *top = entry
+        reading = _reading(at, hz, dm, compressor_hz_max=top[0] if top else None)
+        verdicts.append(tracker.update(reading, hot_water=hot_water, airflow_enhanced=airflow(i)))
         at += CYCLE
     return verdicts
 
@@ -287,6 +288,45 @@ class TestTheTrigger:
         """At COMPRESSOR_HZ_MAX there is no frequency left whatever the memory holds - unless the
         compressor is gaining on its degree minutes."""
         assert _feed(_hold(COMPRESSOR_HZ_MAX - 3, 7, -300.0, dm_step))[-1] is saturated
+
+
+def _published(readings, top: int) -> list:
+    """The same readings, each with the maximum the pump published alongside it."""
+    return [(hz, dm, hot_water, top) for hz, dm, hot_water in readings]
+
+
+class TestThePumpsOwnMaximum:
+    """Where the pump publishes its current maximum frequency, that is the ceiling: none to learn.
+
+    The owner's F750 moves it. On 2026-10-13 it allowed 120 Hz until 03:15, then 92, 83, 91 and 86
+    over the next two hours, its compressor at each while degree minutes fell from -626 to -940.
+    """
+
+    def test_at_its_published_maximum_it_is_saturated_though_it_ran_higher_today(self):
+        """F-124: a level held earlier in the day hid the saturation at a lower one."""
+        readings = _published(_climb_to(98) + _hold(98, 12, -410.0, 0.0), COMPRESSOR_HZ_MAX)
+        readings += _published(_hold(86, 12, -410.0), 86)
+
+        assert _feed(readings)[-1] is True
+
+    def test_below_its_published_maximum_it_has_frequency_to_give(self):
+        """The highest level it has held is not its limit when the pump says it may go higher."""
+        assert not any(_feed(_published(SATURATED, COMPRESSOR_HZ_MAX)))
+
+    @pytest.mark.parametrize("dm_step, saturated", [(-10.0, True), (0.0, False)])
+    def test_at_its_published_maximum_degree_minutes_must_fall(self, dm_step, saturated):
+        """Flat out and holding its degree minutes, a compressor is keeping up: 8 of the 10 long
+        stretches the owner's F750 spent at its maximum in October 2026 were like that."""
+        assert _feed(_published(_hold(86, 12, -410.0, dm_step), 86))[-1] is saturated
+
+    def test_a_stray_reading_off_its_maximum_does_not_release_it(self):
+        """Held while the frequency stays at its maximum, as a learned ceiling is held."""
+        readings = _published(_hold(86, 12, -410.0), 86)
+        readings += [(71, -530.0, False, 86)] + _published(_hold(86, 2, -540.0), 86)
+
+        verdicts = _feed(readings)
+
+        assert verdicts[11] and all(verdicts[12:])
 
 
 def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None) -> DecisionEngine:

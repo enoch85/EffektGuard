@@ -413,30 +413,41 @@ class CompressorSaturation:
     """Whether the compressor has run out of frequency to give - the trigger of the wear guard.
 
     A NIBE inverter answers falling degree minutes by raising its frequency, until it can rise no
-    further. So the compressor is saturated when degree minutes fall at ANTI_WINDUP_DM_DROPPING_RATE
-    or faster through a window in which every reading sits at its ceiling - the highest level the
-    frequency has held flat, within COMPRESSOR_SATURATION_BAND_HZ through a whole window, in the
-    last COMPRESSOR_SATURATION_MEMORY_HOURS - or, whatever the memory holds, when it runs at
-    COMPRESSOR_HZ_MAX without gaining on its degree minutes. It stays saturated while the frequency
-    stays at that ceiling and stops climbing. A window that ramps - into or out of a hot-water run,
-    say - is no ceiling.
+    further. The F750, F730 and F1155/F1255 publish how far that is - their current maximum
+    frequency, register 43123 - and the S1155/S1255 theirs (31043). It moves: the owner's F750
+    puts it anywhere from 70 to 120 Hz, often several times an hour. With that maximum the
+    compressor is saturated when degree minutes fall at ANTI_WINDUP_DM_DROPPING_RATE or faster
+    through a window in which every reading sits within COMPRESSOR_SATURATION_BAND_HZ of the maximum
+    published with it, and stays saturated while the frequency stays at that maximum. Below its own
+    maximum it has frequency to give.
 
-    The ceiling has to be earned. It is remembered per airflow state, because enhanced ventilation
-    lifts an exhaust-air pump's ceiling, and only counts once this run or the memory has shown the
-    frequency span more than the band: a frozen reading or a run that began at the ceiling proves
-    nothing. A compressor within the band of COMPRESSOR_HZ_MIN is never at its ceiling, and a level
-    rising past the highest one an hour or more old is climbing, not stuck - without such a level
-    there is no evidence yet. Hot water pauses the run without ending it, and so does a reading
-    that cannot say whether the compressor serves the tank, since a charge holds a high frequency
-    while degree minutes fall, as saturation does: a verdict stands until the readings after the
-    pause confirm or release it, and nothing in the pause counts. A stop (the pump reports 1 Hz,
-    NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD, while stopped), a dropout, an airflow change, the clock
-    going back or a gap longer than half a window since the last reading ends the run.
+    A pump that publishes no maximum (an F2040 behind its SMO or VVM) is judged on a ceiling learned
+    from its frequency: degree minutes falling at ANTI_WINDUP_DM_DROPPING_RATE or faster through a
+    window in which every reading sits at the highest level the frequency has held flat, within the
+    band through a whole window, in the last COMPRESSOR_SATURATION_MEMORY_HOURS - or, whatever the
+    memory holds, at COMPRESSOR_HZ_MAX without gaining on its degree minutes. It stays saturated
+    while the frequency stays at that ceiling and stops climbing. A window that ramps - into or out
+    of a hot-water run, say - is no ceiling. The ceiling has to be earned. It is remembered per
+    airflow state, because enhanced ventilation lifts an exhaust-air pump's ceiling, and only counts
+    once this run or the memory has shown the frequency span more than the band: a frozen reading or
+    a run that began at the ceiling proves nothing. A level rising past the highest one an hour or
+    more old is climbing, not stuck - without such a level there is no evidence yet. A learned
+    ceiling goes stale wherever the real one moves: a level held hours ago hides the saturation at
+    a lower one.
+
+    Either way a compressor within the band of COMPRESSOR_HZ_MIN is never at its limit. Hot water
+    pauses the run without ending it, and so does a reading that cannot say whether the compressor
+    serves the tank, since a charge holds a high frequency while degree minutes fall, as saturation
+    does: a verdict stands until the readings after the pause confirm or release it, and nothing in
+    the pause counts. A stop (the pump reports 1 Hz, NIBE_COMPRESSOR_ACTIVE_HZ_THRESHOLD, while
+    stopped), a dropout, an airflow change, the clock going back or a gap longer than half a window
+    since the last reading ends the run.
     """
 
     def __init__(self) -> None:
         """Start with no history."""
-        self._window: deque[tuple[datetime, int, float, int]] = deque()  # (time, Hz, DM, run part)
+        # (time, Hz, DM, run part, the maximum the pump published with it)
+        self._window: deque[tuple[datetime, int, float, int, int | None]] = deque()
         # (time, level, whether the window was flat) per airflow state
         self._levels: dict[bool, deque[tuple[datetime, float, bool]]] = {
             False: deque(),
@@ -476,7 +487,9 @@ class CompressorSaturation:
             self._paused = False
             self._part += 1
 
-        self._window.append((now, hz, nibe_state.degree_minutes, self._part))
+        self._window.append(
+            (now, hz, nibe_state.degree_minutes, self._part, nibe_state.compressor_hz_max)
+        )
         while now - self._window[0][0] >= window:
             self._window.popleft()
         memory = self._levels[airflow_enhanced]
@@ -485,8 +498,25 @@ class CompressorSaturation:
         if now - self._window[0][0] < window / 2:
             return self.saturated  # too little evidence yet: only a verdict carried over hot water
 
-        readings = [held for _, held, _, _ in self._window]
+        readings = [held for _, held, _, _, _ in self._window]
         level = median(readings)
+        published = [top for *_, top in self._window]
+        if None not in published:
+            self.level, self.ceiling = level, published[-1]
+            short = [top - held for held, top in zip(readings, published)]
+            if self.saturated:
+                self.saturated = level > COMPRESSOR_HZ_MIN + band and median(short) <= band
+                return self.saturated
+            rate = dm_rate_per_hour(
+                ((at, dm, part) for at, _, dm, part, _ in self._window), window / 2
+            )
+            self.saturated = (
+                level > COMPRESSOR_HZ_MIN + band
+                and max(short) <= band
+                and rate is not None
+                and rate <= ANTI_WINDUP_DM_DROPPING_RATE
+            )
+            return self.saturated
         self._run_low = level if self._run_low is None else min(self._run_low, level)
         lowest = min([held for _, held, _ in memory] + [self._run_low])
         held_flat = [held for _, held, flat in memory if flat]
@@ -504,7 +534,7 @@ class CompressorSaturation:
                 and (hour_old is None or steady)
             )
             return self.saturated
-        rate = dm_rate_per_hour(((at, dm, part) for at, _, dm, part in self._window), window / 2)
+        rate = dm_rate_per_hour(((at, dm, part) for at, _, dm, part, _ in self._window), window / 2)
         at_ceiling = (
             ceiling is not None
             and level > COMPRESSOR_HZ_MIN + band

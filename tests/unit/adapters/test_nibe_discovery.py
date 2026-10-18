@@ -268,6 +268,24 @@ class TestMyUplinkF750LegacyNaming:
 
         assert not set(names) & set(adapter.entity_cache.values())
 
+    async def test_the_pumps_maximum_frequency_is_not_its_frequency(self, monkeypatch):
+        """The F750 publishes its current maximum frequency beside its frequency, and both names
+        hold "compressor_frequency": the maximum must never be read as the frequency, whichever the
+        integration creates first. Its maximum for heating (40322) is not the current maximum."""
+        names = [
+            "sensor.f750_cu_3x400v_max_compressor_frequency",
+            "sensor.f750_cu_3x400v_max_compressor_frequency_heating",
+            "sensor.f750_cu_3x400v_current_compressor_frequency",
+        ]
+        states = required_core_states() + [make_state(e, "86", {}) for e in names]
+        adapter = NibeAdapter(make_hass(states, [], monkeypatch), {})
+        await adapter.discover_entities()
+
+        cache = adapter.entity_cache
+        assert cache["compressor_hz"] == names[2]
+        assert cache["compressor_hz_max"] == names[0]
+        assert names[1] not in cache.values()
+
 
 class TestGenericModbusStatesOnly:
     """Generic modbus YAML entities have no unique_id and never enter the

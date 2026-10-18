@@ -1563,6 +1563,16 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     ],
     "degree_minutes": ["degree_minutes", "gradminuter", "40940", "43005", "40941"],
     "offset": ["heat_offset", "heating_offset", "offset", "47011"],
+    # The pump's current maximum frequency: MyUplink "Max compressor frequency", nibe_heatpump
+    # "Compr. current max.freq." (43123, F-series) and "Max frequency compressor" (31043, S-series).
+    # Ahead of compressor_hz, whose "compressor_frequency" it contains: one key per entity.
+    "compressor_hz_max": [
+        "max_compressor_frequency",
+        "compr_current_max_freq",
+        "max_frequency_compressor",
+        "43123",
+        "31043",
+    ],
     "compressor_hz": ["compressor_frequency", "43136"],
     "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
     # "prio" also matches "priority" (MyUplink naming) as a substring
@@ -1575,8 +1585,13 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
 
 # Entity-id substrings that must never be matched by discovery
 # 47394 = MyUplink "control room sensor syst" (configuration, not a temperature)
+# "Max compressor frequency, heating" (40322, S-series 30142) is not the pump's current maximum
 # (EffektGuard's own entities are excluded by registry platform, not by name)
-NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = ["47394", "control_room_sensor"]
+NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = [
+    "47394",
+    "control_room_sensor",
+    "compressor_frequency_heating",
+]
 
 # Keys that trigger re-discovery on the update cycle while missing.
 # Source integrations (modbus, nibe_heatpump, myuplink) may create their
@@ -1787,14 +1802,15 @@ COMPRESSOR_RISK_NOTABLE: Final = "NOTABLE"
 COMPRESSOR_RISK_WATCH: Final = "WATCH"
 COMPRESSOR_RISK_OK: Final = "OK"
 
-# CompressorSaturation (utils/compressor_monitor.py), the wear guard's trigger: degree minutes falling
-# at ANTI_WINDUP_DM_DROPPING_RATE or faster through a DM_RATE_WINDOW_MINUTES window in which every
-# reading sits at the highest level the frequency has sustained in a day - or such a window at
-# COMPRESSOR_HZ_MAX without the degree minutes gaining. With headroom a NIBE inverter climbs instead:
-# the owner's F750 answers a fall of 6-10 DM in a five-minute cycle with about +7 Hz in the next one.
-# ASSUMED; closed loop on two fits of the owner's F750, Jan-Feb 2026, against a saving of 125 / 97
-# SEK: a band of 8 Hz or a window of 20 or 45 min moves cost by under 7 SEK, a band of 3 Hz gives up
-# 4-20 SEK and six hours of memory 4-15 SEK.
+# CompressorSaturation (utils/compressor_monitor.py), the wear guard's trigger: degree minutes
+# falling at ANTI_WINDUP_DM_DROPPING_RATE or faster through a DM_RATE_WINDOW_MINUTES window in which
+# every reading sits at the maximum frequency the pump publishes (43123 F-series, 31043 S-series) -
+# or, where it publishes none, at the highest level the frequency has sustained in a day, or a
+# window at COMPRESSOR_HZ_MAX without the degree minutes gaining. With headroom a NIBE inverter
+# climbs instead: the owner's F750 answers a fall of 6-10 DM in a five-minute cycle with about +7 Hz
+# in the next one. ASSUMED; closed loop on two fits of the owner's F750, Jan-Feb 2026, against a
+# saving of 125 / 97 SEK: a band of 8 Hz or a window of 20 or 45 min moves cost by under 7 SEK, a
+# band of 3 Hz gives up 4-20 SEK and six hours of memory 4-15 SEK.
 COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
 COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
 

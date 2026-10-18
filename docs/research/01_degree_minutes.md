@@ -82,13 +82,30 @@ above 100 Hz came 112 times with EffektGuard's airflow boost on and 5 times with
 hardest hours at normal airflow averaged 75-90 Hz; a ground-source pump at 60 Hz may have headroom
 to spare. What a NIBE inverter does with headroom is
 answer falling degree minutes with more frequency - the owner's F750 adds about 7 Hz in the next
-five-minute cycle after losing 6-10 DM. So the compressor is saturated when degree minutes fall at
+five-minute cycle after losing 6-10 DM.
+
+Many publish how far up that goes. The F750, F730 and F1155/F1255 report their current maximum
+frequency in register 43123 ("Compr. current max.freq."), the S1155/S1255 in 31043; the SMO 40 and
+VVM modules an F2040 runs behind report none (the register lists of the `nibe` library that Home
+Assistant's `nibe_heatpump` integration reads). On the owner's F750 it moves between 70 and 120 Hz,
+often several times an hour (October 2026). On the night of 2026-10-13 it went from 120 to 92, 83,
+91 and 86 Hz in two hours, the compressor at each while DM fell from -626 to -940. Where the pump
+publishes it, the compressor is saturated when DM falls at `ANTI_WINDUP_DM_DROPPING_RATE` or faster
+through a window in which every reading sits within the band of the maximum published with it, and
+it stays saturated while the frequency stays at that maximum. Of the 10 stretches of 40 minutes or
+more the owner's F750 spent at its maximum in October 2026, DM fell at 50/h or faster through 2
+(130/h and 88/h, the night of 10-13); through the other 8 it fell slower or rose. Below its own
+maximum it has frequency to give: in October 2026 the owner's F750 never held its frequency flat for
+half an hour below that maximum while DM fell at 50/h or faster - all six such windows were at the
+maximum.
+
+A pump that publishes no maximum is saturated when degree minutes fall at
 `ANTI_WINDUP_DM_DROPPING_RATE` or faster through a window in which every reading sits at its
 ceiling - the highest level the frequency has sustained in a day - or when it runs at
 `COMPRESSOR_HZ_MAX` without gaining on its degree minutes. It stays saturated while the frequency
 stays at that ceiling and stops climbing.
 
-The ceiling has to be earned. It is remembered per airflow state, so a boost to 120 Hz does not
+That ceiling has to be earned. It is remembered per airflow state, so a boost to 120 Hz does not
 blind the guard for the day after it, and it counts only once this run or the memory has shown the
 frequency span more than the band: a frozen reading, a run that began at the ceiling or the empty
 memory after a restart proves nothing. A compressor within the band of its minimum is never at its
@@ -125,6 +142,9 @@ sensor only.
 
 That an inverter raises its frequency as DM falls is measured on one F750 (the owner's, October
 2026), not read in a manual; the saturation signal assumes every NIBE inverter regulates that way.
+So is that a pump's published maximum is the only limit on its frequency: no manual says what
+43123 or 31043 takes into account, and on the owner's F750 the air leaving the evaporator (BT21)
+reads the same spread whether the maximum is 120 Hz or lower.
 The frequencies quoted are the owner's long-term statistics, which carry no ventilation history:
 "with the airflow boost on" means EffektGuard had asked for it, not that the fan was measured.
 

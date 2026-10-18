@@ -52,6 +52,7 @@ def _make_coordinator(decision: OptimizationDecision) -> EffektGuardCoordinator:
         degree_minutes=-150.0,
         current_offset=4.0,
         compressor_hz=40,
+        compressor_hz_max=None,
         timestamp=datetime.now(timezone.utc),
         power_kw=2.0,
         is_heating=True,
