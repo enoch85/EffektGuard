@@ -392,6 +392,28 @@ class TestTheCap:
 
         assert offset == SAFETY_EMERGENCY_OFFSET
 
+    def test_a_cooling_room_gets_the_whole_raise(self, monkeypatch):
+        """On a slab the room falls for hours after the guard holds back: what it holds back from a
+        cooling room is the reserve the house lacks by the time it reaches the band's lower edge."""
+        monkeypatch.setattr(dt_util, "now", lambda time_zone=None: START)
+        monkeypatch.setattr(dt_util, "utcnow", lambda: START)
+        top = TARGET + BAND
+        predictor = ThermalStatePredictor()
+        for k in range(25):  # 0.2 C down over the last two hours, to the top of the band
+            predictor.record_state(
+                timestamp=START - CYCLE * (24 - k),
+                indoor_temp=top + 0.2 - 0.2 * k / 24,
+                outdoor_temp=-12.0,
+                heating_offset=0.0,
+                flow_temp=40.0,
+                degree_minutes=-600.0,
+            )
+        room = {"engine": _engine(predictor=predictor), "indoor_temp": top}
+        asked = _offset(False, **room)
+
+        assert asked > 0.5, "precondition: a raise"
+        assert _offset(True, **room) == asked
+
     def test_a_damped_safety_offset_is_left_alone(self, monkeypatch):
         """A house below MIN_TEMP_LIMIT that is warming fast gets a damped safety offset. Nothing
         here may take it lower - the cap only ever trims a raise above the safety floor."""

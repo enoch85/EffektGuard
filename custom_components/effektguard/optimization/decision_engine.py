@@ -800,7 +800,7 @@ class DecisionEngine:
         asked_offset = raw_offset * damping_factor
 
         final_offset, wear_note = self._limit_for_compressor_wear(
-            asked_offset, nibe_state, compressor_saturated
+            asked_offset, nibe_state, compressor_saturated, trend_rate
         )
 
         # Generate human-readable reasoning
@@ -883,7 +883,7 @@ class DecisionEngine:
             )
 
     def _limit_for_compressor_wear(
-        self, offset: float, nibe_state, saturated: bool
+        self, offset: float, nibe_state, saturated: bool, trend_rate: float
     ) -> tuple[float, str]:
         """Ask a saturated compressor for no more than its own curve, unless the room needs it.
 
@@ -898,11 +898,14 @@ class DecisionEngine:
         passes - half at the target, all of it at the band's lower edge, where immersion heat is
         the heat the house is short of. Starting at the target instead left a house that the guard
         had kept from banking immersion heat colder than the band through a peak-price cut or a
-        boost to the ventilation (closed loop on the owner's F750). A cut stands, and the absolute
-        safety floor bounds the cap: below MIN_TEMP_LIMIT the house gets everything.
+        boost to the ventilation (closed loop on the owner's F750). A cooling room gets all of it
+        too: on a slab the room falls for hours after the guard holds back, and what was held back
+        is the reserve the house lacks by the time it reaches the band's lower edge. A cut stands,
+        and the absolute safety floor bounds the cap: below MIN_TEMP_LIMIT the house gets
+        everything.
         """
         cap = max(0.0, self._absolute_safety_floor(nibe_state) or 0.0)
-        if not saturated or offset <= cap:
+        if not saturated or offset <= cap or trend_rate < 0:
             return offset, ""
 
         need = 0.0
