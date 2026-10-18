@@ -1007,6 +1007,8 @@ class NibeAdapter:
         self,
         entity_id: str | None,
         default: float | None = None,
+        *,
+        check_age: bool = True,
     ) -> float | None:
         """Read a temperature entity and normalise it to °C.
 
@@ -1018,6 +1020,8 @@ class NibeAdapter:
         Args:
             entity_id: Entity to read
             default: Value to return when the entity is missing or unreadable
+            check_age: Reject a reading older than NIBE_READING_MAX_AGE_MINUTES. Off only for the
+                user's room thermometers - see _calculate_multi_sensor_temperature.
 
         Returns:
             Temperature in °C, or `default`
@@ -1033,7 +1037,7 @@ class NibeAdapter:
         # NIBE_READING_MAX_AGE_MINUTES (prefer last_reported, fall back to last_updated), and fail
         # OPEN when the age is unknowable. See _read_entity_float for the full rationale (F-015).
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
-        if isinstance(reported, datetime):
+        if check_age and isinstance(reported, datetime):
             age = dt_util.utcnow() - reported
             if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
                 _LOGGER.warning(
@@ -1239,8 +1243,14 @@ class NibeAdapter:
         # Read additional sensors. _read_temperature normalises each to °C first - these
         # are arbitrary user-chosen room sensors, so a °F one is entirely plausible, and
         # the plausibility band below would otherwise reject every Fahrenheit reading.
+        #
+        # A room thermometer is out only when Home Assistant says so (unavailable or unknown). Most
+        # report when their value changes, so half an hour of silence is a steady room, not a dead
+        # sensor. Aging them out made the owner's median hop 0.3-0.6 °C each time one left and came
+        # back, with no room changing (484 warnings in 16.5 hours, 2026-10-17/18). One that freezes
+        # but stays available is one vote in a median.
         for entity_id in self._additional_indoor_sensors:
-            temp = await self._read_temperature(entity_id)
+            temp = await self._read_temperature(entity_id, check_age=False)
             if temp is None:
                 continue
 
