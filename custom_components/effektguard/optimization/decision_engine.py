@@ -88,7 +88,6 @@ class PowerValidationDict(TypedDict, total=False):
 
     valid: bool
     warning: str | None
-    severity: str
 
 
 # Display name of the safety layer. _aggregate_layers looks the layer up by name rather
@@ -614,10 +613,7 @@ class DecisionEngine:
                 nibe_state.power_kw, nibe_state.outdoor_temp
             )
             if validation["warning"]:
-                _LOGGER.log(
-                    (logging.WARNING if validation["severity"] == "warning" else logging.INFO),
-                    validation["warning"],
-                )
+                _LOGGER.debug(validation["warning"])
 
         # Update comfort layer with current state before evaluation
         self.comfort_layer.mode_config = self.mode_config
@@ -1214,7 +1210,8 @@ class DecisionEngine:
         # plausible ceiling. Winter draw above the compressor range alone is the elpatron
         # doing its job - flagging that fired every five minutes all January, which teaches
         # the owner to ignore this channel. Only a reading the HARDWARE cannot produce is
-        # worth a line.
+        # worth a line, and a debug line: the configured power sensor is often the whole house
+        # (the effect-tariff meter), where an oven or a car charger is above the ceiling too.
         immersion_kw = float(getattr(self.heat_pump_model, "immersion_heater_kw", 0.0) or 0.0)
         machine_ceiling = (max_power + immersion_kw) * POWER_VALIDATION_MARGIN
 
@@ -1227,7 +1224,6 @@ class DecisionEngine:
                     f"(compressor max {max_power:.1f}kW + immersion {immersion_kw:.1f}kW). "
                     f"Check the sensor's unit and scaling."
                 ),
-                "severity": "warning",
             }
 
         # Check if unusually low (possible sensor issue)
@@ -1235,7 +1231,6 @@ class DecisionEngine:
             return {
                 "valid": True,
                 "warning": f"Power {current_power_kw:.1f}kW below expected for {outdoor_temp:.1f}°C",
-                "severity": "info",
             }
 
         return {"valid": True, "warning": None}
