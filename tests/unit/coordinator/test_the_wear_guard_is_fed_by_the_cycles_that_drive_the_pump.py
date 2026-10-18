@@ -39,6 +39,7 @@ def _coordinator(hot_water: bool | None, enhanced, lux: bool) -> EffektGuardCoor
             flow_temp=40.0,
             degree_minutes=-300.0,
             compressor_hz=COMPRESSOR_HZ_MAX,
+            compressor_hz_max=None,
             is_hot_water=hot_water,
             timestamp=START + timedelta(minutes=5 * now["cycle"]),
             dhw_top_temp=None,
