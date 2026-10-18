@@ -319,6 +319,20 @@ class TestThePumpsOwnMaximum:
         stretches the owner's F750 spent at its maximum in October 2026 were like that."""
         assert _feed(_published(_hold(86, 12, -410.0, dm_step), 86))[-1] is saturated
 
+    @pytest.mark.parametrize(
+        "after",
+        [
+            pytest.param([(86, -780.0, False)] + _published(_hold(86, 11, -790.0), 86), id="one"),
+            pytest.param(_hold(86, 48, -780.0), id="from-then-on"),
+        ],
+    )
+    def test_a_reading_without_its_maximum_is_judged_on_a_ceiling_learned_all_along(self, after):
+        """The learned ceiling keeps learning while the pump publishes its maximum, so readings that
+        come without one are judged with the history behind them, not on an empty memory."""
+        readings = _published(_climb_to(86) + _hold(86, 36, -420.0), 86)
+
+        assert all(_feed(readings + after)[len(readings) - 1 :])
+
     def test_a_stray_reading_off_its_maximum_does_not_release_it(self):
         """Held while the frequency stays at its maximum, as a learned ceiling is held."""
         readings = _published(_hold(86, 12, -410.0), 86)

@@ -419,7 +419,8 @@ class CompressorSaturation:
     compressor is saturated when degree minutes fall at ANTI_WINDUP_DM_DROPPING_RATE or faster
     through a window in which every reading sits within COMPRESSOR_SATURATION_BAND_HZ of the maximum
     published with it, and stays saturated while the frequency stays at that maximum. Below its own
-    maximum it has frequency to give.
+    maximum it has frequency to give. A window with a reading that came without the maximum is
+    judged as a pump that publishes none is.
 
     A pump that publishes no maximum (an F2040 behind its SMO or VVM) is judged on a ceiling learned
     from its frequency: degree minutes falling at ANTI_WINDUP_DM_DROPPING_RATE or faster through a
@@ -500,6 +501,14 @@ class CompressorSaturation:
 
         readings = [held for _, held, _, _, _ in self._window]
         level = median(readings)
+        # The learned ceiling learns from every reading, published maximum or not: a window with a
+        # reading that came without one is judged on it, with the history behind it.
+        self._run_low = level if self._run_low is None else min(self._run_low, level)
+        lowest = min([held for _, held, _ in memory] + [self._run_low])
+        held_flat = [held for _, held, flat in memory if flat]
+        ceiling = max(held_flat) if held_flat and max(held_flat) - lowest > band else None
+        hour_old = max((held for at, held, _ in memory if now - at >= 2 * window), default=None)
+        memory.append((now, level, max(readings) - min(readings) <= band))
         published = [top for *_, top in self._window]
         if None not in published:
             self.level, self.ceiling = level, published[-1]
@@ -517,12 +526,6 @@ class CompressorSaturation:
                 and rate <= ANTI_WINDUP_DM_DROPPING_RATE
             )
             return self.saturated
-        self._run_low = level if self._run_low is None else min(self._run_low, level)
-        lowest = min([held for _, held, _ in memory] + [self._run_low])
-        held_flat = [held for _, held, flat in memory if flat]
-        ceiling = max(held_flat) if held_flat and max(held_flat) - lowest > band else None
-        hour_old = max((held for at, held, _ in memory if now - at >= 2 * window), default=None)
-        memory.append((now, level, max(readings) - min(readings) <= band))
         self.level, self.ceiling = level, ceiling
 
         at_max = all(held >= COMPRESSOR_HZ_MAX - band for held in readings)
