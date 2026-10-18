@@ -1585,12 +1585,19 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
 
 # Entity-id substrings that must never be matched by discovery
 # 47394 = MyUplink "control room sensor syst" (configuration, not a temperature)
-# "Max compressor frequency, heating" (40322, S-series 30142) is not the pump's current maximum
+# "Max compressor frequency, heating" (40322, S-series 30142) is not the pump's current maximum.
+# The frequency the compressor was asked for (40321, S-series 30141/31857), the one it aims at
+# (43182) and its minimum (MyUplink 43122) all hold "compressor_frequency"; only the one it runs at
+# is the compressor frequency, and nibe_heatpump creates the request first.
 # (EffektGuard's own entities are excluded by registry platform, not by name)
 NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = [
     "47394",
     "control_room_sensor",
     "compressor_frequency_heating",
+    "compressor_frequency_request",
+    "compressor_frequency_target",
+    "requested_compressor_frequency",
+    "min_compressor_frequency",
 ]
 
 # Keys that trigger re-discovery on the update cycle while missing.
