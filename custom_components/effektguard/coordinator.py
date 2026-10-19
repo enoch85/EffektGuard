@@ -227,6 +227,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             emergency_layer=decision_engine.emergency_layer,
             price_analyzer=decision_engine.price,
         )
+        self._bt7_history_read = False  # the recorder's BT7 history, read once BT7 is bound
 
         # Savings calculator
         self.savings_calculator = SavingsCalculator()
@@ -557,20 +558,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     dhw_state = learned_data["dhw_state"]
                     # Use the new restore method for all DHW state
                     self.dhw_optimizer.restore_from_persistence(dhw_state)
-
-                # Initialize DHW history from Home Assistant recorder (resilience to restarts)
-                # This checks past 14 days of BT7 data to detect recent Legionella cycles
-                # even if the system was restarted after a high-temp cycle
-                if self.dhw_optimizer and self.nibe:
-                    # Ensure NIBE entities are discovered first
-                    if not self.nibe.entity_cache:
-                        await self.nibe.discover_entities()
-
-                    bt7_entity = self.nibe.entity_cache.get("dhw_top_temp")
-                    if bt7_entity:
-                        await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
-                    else:
-                        _LOGGER.debug("BT7 sensor not available - skipping history initialization")
 
                 _LOGGER.info("Learning modules initialized successfully")
             else:
@@ -1497,6 +1484,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Track temperature for trend analysis
             self.last_dhw_temp = current_dhw_temp
+
+            # A cycle NIBE ran while Home Assistant was down is in the recorder: read it once, now
+            # that BT7 is bound. At start-up the entity cache holds only the configured overrides,
+            # so the restore found no BT7 there and never ran.
+            bt7_entity = self.nibe.entity_cache.get("dhw_top_temp")
+            if bt7_entity and not self._bt7_history_read:
+                self._bt7_history_read = True
+                await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
 
             # Track previous Legionella boost time before update
             previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
