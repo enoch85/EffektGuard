@@ -17,10 +17,7 @@ tests/unit/test_shared_layer_methods.py::TestCheckAbortConditions, and a second 
 those could not fail for a reason the first one would not catch first.
 
 The structural half of the fix is not tested here on purpose: an unrecognised condition now
-logs an ERROR instead of being skipped in silence, and a log line is not a behaviour. It is
-also not something a sweep over inputs can police - the emit sites for this very condition
-sit behind RULE 4.5, which needs a DHW target of 60 C or more, the tank at exactly the 30 C
-safety floor and a learned heating rate pinned to the 5 C/h minimum to reach at all.
+logs an ERROR instead of being skipped in silence, and a log line is not a behaviour.
 """
 
 import pytest
