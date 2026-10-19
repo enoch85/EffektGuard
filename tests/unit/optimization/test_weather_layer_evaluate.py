@@ -21,8 +21,10 @@ from custom_components.effektguard.optimization.weather_layer import (
 )
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_WEATHER_PREDICTION,
+    UFH_CONCRETE_PREDICTION_HORIZON,
     UPDATE_INTERVAL_MINUTES,
     WEATHER_DAILY_MEAN_HOURS,
+    WEATHER_FORECAST_HORIZON,
     WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_GENTLE_OFFSET,
     WEATHER_WEIGHT_CAP,
@@ -186,9 +188,15 @@ class TestEvaluateLayerForecastTrigger:
         assert "stable" in result.reason.lower()
 
 
+@pytest.mark.parametrize("horizon", [WEATHER_FORECAST_HORIZON, UFH_CONCRETE_PREDICTION_HORIZON])
 @pytest.mark.parametrize("past_day_mean", [None, 12.0])
-def test_a_cold_night_is_not_a_cold_snap(weather_layer, mock_nibe_state, past_day_mean):
-    """May: 16 °C afternoons, 8 °C nights. The night is 8 °C below now, but no day is colder."""
+def test_a_cold_night_is_not_a_cold_snap(mock_nibe_state, past_day_mean, horizon):
+    """May: 16 °C afternoons, 8 °C nights. The night is 8 °C below now, but no day is colder.
+
+    A slab's horizon reaches days the forecast covers only partly; those must not read a night as
+    a colder day either.
+    """
+    weather_layer = WeatherPredictionLayer(thermal_mass=1.0, forecast_horizon=horizon)
     mock_nibe_state.outdoor_temp = 16.0
     weather = MagicMock()
     weather.forecast_hours = [
@@ -204,6 +212,32 @@ def test_a_cold_night_is_not_a_cold_snap(weather_layer, mock_nibe_state, past_da
     )
 
     assert result.offset == 0.0, f"pre-heated for a cold night: {result.reason}"
+
+
+def test_a_slab_sees_a_colder_day_beyond_the_first_forecast_day(mock_nibe_state):
+    """48 forecast hours hold a whole day only up to 24 h ahead, and a slab looks 48 h ahead.
+
+    A day 4 °C colder from hour 36, under a 6 °C day-night swing, is a cold snap while it is still
+    36 h away. Judged on whole days alone, it waited until 24 h (review of #38).
+    """
+    slab = WeatherPredictionLayer(
+        thermal_mass=1.5, forecast_horizon=UFH_CONCRETE_PREDICTION_HORIZON
+    )
+    weather = MagicMock()
+    weather.forecast_hours = [
+        MagicMock(temperature=(3.0 if 8 <= hour % 24 < 20 else -3.0) - (4.0 if hour >= 36 else 0.0))
+        for hour in range(48)
+    ]
+
+    result = slab.evaluate_layer(
+        nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=0.0,
+    )
+
+    assert result.offset == WEATHER_GENTLE_OFFSET, result.reason
 
 
 def test_a_front_hours_away_is_a_cold_snap_for_a_radiator_house(mock_nibe_state):

@@ -129,7 +129,20 @@ past_day = measured_past_day if it is known else mean(temps[:24])
 
 # 2. The coldest day that starts within the horizon this building's thermal mass justifies:
 #    6 h radiators / 12 h timber UFH / 48 h concrete slab, floored at WEATHER_FORECAST_HORIZON.
-temp_drop = min(mean(temps[s:s + 24]) for s in (0 if measured else 1)..horizon) - past_day
+#    Met.no and OpenWeatherMap give 48 forecast hours, so a whole day fits only up to 24 h ahead.
+#    A day the forecast covers at least WEATHER_PARTIAL_DAY_MIN_HOURS of is the day before it,
+#    moved by how much colder its covered hours are than the same clock hours a day earlier: the
+#    slab sees a colder day 36 h ahead, and the day-night swing still cancels.
+def day_mean(s):
+    if s + 24 <= len(temps):
+        return mean(temps[s:s + 24])
+    if s < 24:
+        return None                       # the day before it is not in the forecast: skipped
+    covered = range(s, len(temps))
+    return mean(temps[s - 24:s]) + mean(temps[h] - temps[h - 24] for h in covered)
+
+last = min(horizon, len(temps) - WEATHER_PARTIAL_DAY_MIN_HOURS)
+temp_drop = min(day_mean(s) for s in (0 if measured else 1)..last) - past_day
 
 # 3. Two independent triggers - either fires the layer.
 forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD      # -4.0 °C

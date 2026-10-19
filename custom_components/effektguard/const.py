@@ -761,6 +761,12 @@ WEATHER_FORECAST_DROP_THRESHOLD: Final = -4.0  # °C drop in the daily mean
 # 24-hour mean by a twenty-third of that hour's distance from it - under 0.2 C for May's swing,
 # against the 4 C trigger - while a restart or a dropped cycle leaves minutes unread.
 WEATHER_DAILY_MEAN_HOURS: Final = 24
+# Met.no and OpenWeatherMap both give Home Assistant 48 forecast hours, so a whole day fits only
+# up to 24 h ahead and a slab's 48-hour horizon stopped there. A day the forecast covers only
+# partly is judged once it covers half of it: the day before, moved by how much colder the
+# covered hours are than the same clock hours a day earlier (the day-night swing cancels). Half a
+# day of evidence is the most a longer lead can stand on; 48 forecast hours then reach 36 h ahead.
+WEATHER_PARTIAL_DAY_MIN_HOURS: Final = WEATHER_DAILY_MEAN_HOURS // 2
 WEATHER_FORECAST_HORIZON: Final = 12.0  # Hours to scan forecast (matches thermal lag)
 
 # `WeatherData.forecast_hours` MUST be filtered to the future, because every consumer slices it
