@@ -46,11 +46,8 @@ Copy that format. Do not invent a structure, and do not guess at a length.
 
 ## Pre-release vs production
 
-`release.yml` marks a release as pre-release **only** when the tag contains `-alpha` or `-beta`.
+`release.yml` marks a release as pre-release when the tag contains `-alpha`, `-beta` or `-rc`.
 
-- **A `-rc` tag is published as `--latest`**, i.e. a full production release, even though
-  `docs/RELEASE_PROCESS.md` lists `-rc` as a pre-release suffix and `release.sh` treats it as one.
-  Known trap; do not use `-rc` until the workflow is fixed.
 - To ship a **final version number as a pre-release** (so promotion is a flag flip, not a new
   version), push the plain tag and then flip it:
 
