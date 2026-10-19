@@ -147,11 +147,12 @@ at 24 h (slow time constant ~70 h).
 
 ## NIBE knowledge the code assumes
 
-- **Degree minutes**: `DM = ∫(BT25 − S1) dt`. Swedish *gradminuter*. Compressor starts at −60
-  (menu 4.9.3).
-- **The pump's own aux start is a hardware fact**, per model, and is *not* EffektGuard's −1500
-  floor: F750/F730 −700 (IHB GB 1301-1 menu 4.9.3), S/F11xx −460, F2040+VVM −760. It works DM back
-  *up* deliberately, to spare the compressor.
+- **Degree minutes**: `DM = ∫(BT25 − S1) dt`. Swedish *gradminuter*. The compressor starts at −60
+  at the factory (menu 4.9.3); the owner's F750 is set to −250.
+- **The pump's own aux start is an installer setting** with a per-model factory default, and is
+  *not* EffektGuard's −1500 floor: F750/F730 −700 (IHB GB 1301-1 menu 4.9.3), S/F11xx −460,
+  F2040+VVM −760. The owner's F750 starts its heater at −1450 (start compressor −250 plus start
+  diff additional heat 1200). It works DM back *up* deliberately, to spare the compressor.
 - **Heating season**: every NIBE leaves it above the menu 4.9.2 stop temperature (factory 17 °C)
   and stops space heating whatever DM says. **DM holds while out of season** - it is the
   heating-demand integral. Modelling it as still integrating produces phantom summer aux.

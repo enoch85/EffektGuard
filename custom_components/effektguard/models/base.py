@@ -122,9 +122,10 @@ class HeatPumpProfile(ABC):
 
     # The DM at which THE PUMP ITSELF engages its additive heat, at factory settings - NIBE menu
     # 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with the compressor
-    # start (S-series/F11xx). A HARDWARE fact, distinct from DM_THRESHOLD_AUX_LIMIT (EffektGuard's
-    # emergency floor, F-112): a real pump's elpatron fires HERE and works DM back up, so a plant
-    # model that waits for -1500 misreports both aux energy and overshoot. Overridden per model.
+    # start (S-series/F11xx). An installer can move it - the owner's F750 starts its heater at
+    # -1450 - and it is distinct from DM_THRESHOLD_AUX_LIMIT (EffektGuard's emergency floor, F-112):
+    # a real pump's elpatron fires at its own setting and works DM back up, so a plant model that
+    # waits for -1500 misreports both aux energy and overshoot. Only the simulator reads it.
     aux_start_dm: float = -700.0
 
     # Exhaust air heat pump features

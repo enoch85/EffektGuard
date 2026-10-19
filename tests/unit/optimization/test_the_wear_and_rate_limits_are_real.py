@@ -1,9 +1,8 @@
 """The register bounds, the write rate limit, and the emergency exemption - the real limits.
 
 There is deliberately NO per-update magnitude limit on the offset. One would rate-limit the
-emergency response, which must go from 0 to +10 in a single cycle when degree minutes reach the
-auxiliary-heat limit - deferring that even one cycle is the death spiral the anti-windup work
-prevents. What bounds the offset is the NIBE register range [MIN_OFFSET, MAX_OFFSET]; what
+emergency response, which must reach full heat in a single cycle when the house falls below its
+absolute floor. What bounds the offset is the NIBE register range [MIN_OFFSET, MAX_OFFSET]; what
 protects the controller from wear is the write rate limit, not a magnitude cap. These tests drive
 that production code directly.
 """
