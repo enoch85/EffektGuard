@@ -22,6 +22,10 @@ IS_PRERELEASE=false
 IS_PROD_RELEASE=false
 DEBUG=true
 
+# Set by update_manifest and update_readme_badge when they change their file
+MANIFEST_CHANGED=false
+README_CHANGED=false
+
 # Debug function
 function debug_log {
     if [[ "$DEBUG" == "true" ]]; then
@@ -150,7 +154,6 @@ function check_manifest {
 function update_manifest {
     local version_tag="$1"
     # Keep the full version tag with 'v' prefix (like ge-spot does: "v1.5.0")
-    local manifest_changed=false
     
     # Check if manifest exists and is valid JSON
     check_manifest
@@ -171,19 +174,15 @@ function update_manifest {
         fi
         if [[ $? -eq 0 ]]; then
             success_log "Version updated to ${version_tag} in manifest.json"
-            manifest_changed=true
+            MANIFEST_CHANGED=true
         else
             error_log "Failed to update version in manifest.json"
             return 1
         fi
     fi
     
-    # Return 0 if changes were made, 1 otherwise
-    if [[ "$manifest_changed" == true ]]; then
-        return 0
-    else
-        return 1
-    fi
+    # Already set is not a failure: under set -e a non-zero return ends the script
+    return 0
 }
 
 # Update version badge in README.md
@@ -192,7 +191,6 @@ function update_readme_badge {
     # Remove 'v' prefix for the badge (e.g., v0.0.52-beta1 -> 0.0.52-beta1)
     local version_no_v="${version_tag#v}"
     local readme_path="README.md"
-    local badge_changed=false
     
     if [[ ! -f "$readme_path" ]]; then
         error_log "README.md not found"
@@ -214,19 +212,15 @@ function update_readme_badge {
         fi
         if [[ $? -eq 0 ]]; then
             success_log "Version badge updated to ${version_no_v} in README.md"
-            badge_changed=true
+            README_CHANGED=true
         else
             error_log "Failed to update version badge in README.md"
             return 1
         fi
     fi
     
-    # Return 0 if changes were made, 1 otherwise
-    if [[ "$badge_changed" == true ]]; then
-        return 0
-    else
-        return 1
-    fi
+    # Already set is not a failure: under set -e a non-zero return ends the script
+    return 0
 }
 
 # Pull latest changes from remote
@@ -441,23 +435,21 @@ function run_release_process {
     
     # Update manifest.json
     update_manifest "$version_tag"
-    manifest_changed=$?
     
     # Update README.md badge
     update_readme_badge "$version_tag"
-    readme_changed=$?
     
-    # If changes were made, commit and push
-    if [[ "$manifest_changed" -eq 0 ]] || [[ "$readme_changed" -eq 0 ]]; then
+    # If changes were made, commit and push. A re-release finds both already set.
+    if [[ "$MANIFEST_CHANGED" == true ]] || [[ "$README_CHANGED" == true ]]; then
         info_log "Staging changes..."
         
         # Stage manifest if it changed
-        if [[ "$manifest_changed" -eq 0 ]]; then
+        if [[ "$MANIFEST_CHANGED" == true ]]; then
             git add "$MANIFEST_PATH"
         fi
         
         # Stage README if it changed
-        if [[ "$readme_changed" -eq 0 ]]; then
+        if [[ "$README_CHANGED" == true ]]; then
             git add "README.md"
         fi
         
