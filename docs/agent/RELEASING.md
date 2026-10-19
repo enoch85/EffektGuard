@@ -64,6 +64,11 @@ Copy that format. Do not invent a structure, and do not guess at a length.
   already-published release. The flag flip above is.
 - `release.sh` pushes a version-bump commit straight to `main` and requires a clean tree; its
   "uncommitted changes" prompt will abort on a non-interactive stdin.
+- **Re-cutting a published version** on newer code, as v0.7.0 was on 2026-10-19: delete its
+  release and tag (`gh release delete vX.Y.Z --yes --cleanup-tag`), then run the script. With the
+  manifest and badge already at that version it pushes no commit and tags `main`'s head. HACS
+  offers an update only to a higher version, so an install of the old cut gets none: it needs a
+  Redownload.
 
 ---
 
