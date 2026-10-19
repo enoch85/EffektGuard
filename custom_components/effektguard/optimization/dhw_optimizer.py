@@ -266,7 +266,7 @@ class IntelligentDHWScheduler:
         # yet - which is a debt to be settled the moment the house is out of danger, not a shower
         # silently cancelled. Cleared when the water reaches target.
         self._scheduled_window_owed: bool = False
-        self.bt7_history: deque = deque(maxlen=48)  # 12 hours @ 15-min intervals
+        self.bt7_history: deque = deque(maxlen=48)  # 4 hours at the 5-minute cycle
 
         # Learned DHW heating rate (persisted across restarts)
         # Uses weighted average of observations for accuracy
@@ -303,28 +303,25 @@ class IntelligentDHWScheduler:
             _LOGGER.info("DHW optimizer initialized with shared PriceAnalyzer for window search")
 
     def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
-        """Update BT7/BT6 temperature history and detect NIBE's Legionella boost.
+        """Update the BT7 history, and see NIBE's high-temperature cycle when the tank reaches it.
 
-        Call this every coordinator update to track DHW temperature and
-        automatically detect when NIBE's automatic Legionella boost runs.
-
-        Note: Despite the name, this can accept either BT7 (top) or BT6 (charging)
-        temperature. BT7 is preferred for Legionella detection (peaks at 65°C),
-        but BT6 works as fallback if BT7 not available.
+        A cycle is seen the moment BT7 reaches DHW_LEGIONELLA_DETECT - the rule the recorder
+        restore uses too. It used to be seen only once the tank had also cooled 3 C below its peak
+        inside this 4-hour history, and the owner's F750 takes 5.5-17.7 h to do that: none of its
+        cycles in October 2026 was seen, so the hygiene boost ran on every stable cheap period.
 
         Args:
             temp: Current DHW temperature (BT7 top preferred, BT6 charging acceptable)
             timestamp: Current timestamp
         """
+        reached = temp >= DHW_LEGIONELLA_DETECT and (
+            not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
+        )
         self.bt7_history.append((timestamp, temp))
-
-        # Detect if NIBE just completed Legionella boost
-        if self._detect_legionella_boost_completion():
+        if reached:
             self.last_legionella_boost = timestamp
             _LOGGER.info(
-                "NIBE Legionella boost detected (automatic): peaked at %.1f°C at %s",
-                max(t for _, t in self.bt7_history),
-                timestamp,
+                "Hot water reached %.1f°C at %s: high-temperature cycle seen", temp, timestamp
             )
 
     def calculate_heating_rate(self) -> float:
@@ -546,44 +543,13 @@ class IntelligentDHWScheduler:
         )
         return hours_needed
 
-    def _detect_legionella_boost_completion(self) -> bool:
-        """Detect when NIBE's automatic Legionella boost just completed.
-
-        Detection logic:
-        - BT7 peaked at ≥56°C recently (real-world max observed with immersion heater)
-        - Now cooling down (dropped 3°C from peak)
-
-        Returns:
-            True if boost detected, False otherwise
-        """
-        if len(self.bt7_history) < 10:
-            return False
-
-        # Get recent temperatures
-        recent_temps = [temp for _, temp in self.bt7_history]
-        max_temp = max(recent_temps)
-        current_temp = recent_temps[-1]
-
-        # Check if peaked above Legionella threshold and now cooling
-        if max_temp >= DHW_LEGIONELLA_DETECT and current_temp < (max_temp - 3.0):
-            # Make sure we haven't already recorded this boost
-            if self.last_legionella_boost:
-                time_since_last = (
-                    self.bt7_history[-1][0] - self.last_legionella_boost
-                ).total_seconds() / 3600
-                if time_since_last < 6.0:  # Same boost event
-                    return False
-            return True
-
-        return False
-
     async def initialize_from_history(self, hass, bt7_entity_id: str) -> None:
         """Initialize BT7 temperature history from Home Assistant recorder.
 
         On startup/restart, load past 14 days of BT7 temperature data to:
-        1. Check if a high-temp cycle (≥56°C) occurred recently
+        1. Check if a high-temp cycle (≥55°C) occurred recently
         2. Auto-detect last Legionella boost without manual tracking
-        3. Populate recent bt7_history (last 12h) for real-time detection
+        3. Populate recent bt7_history for the heating-rate estimate
 
         This makes the system resilient to restarts - we don't lose track of
         Legionella cycles just because Home Assistant rebooted.
@@ -639,8 +605,6 @@ class IntelligentDHWScheduler:
                     temp = float(state.state)
                     timestamp = state.last_changed
 
-                    # Add to recent history for Legionella detection
-                    # (limited to last 48 entries = 12 hours @ 15min for peak detection)
                     self.bt7_history.append((timestamp, temp))
 
                     # Track maximum temperature seen (for logging)
