@@ -24,28 +24,33 @@ single scalar that decides when to start the compressor and when to call for aux
 
 ## ⚠️ The consequence the codebase was built without
 
-**`start addition` is −700. The immersion heater (elpatron) engages there, by design, and works DM
-back UP.** On a healthy pump DM therefore *asymptotes* near −700; it does not run away toward
-−1500.
+**`start addition` is −700 at the factory. The immersion heater (elpatron) engages there and works
+DM back UP**, so on a factory-set F750 DM asymptotes near −700 rather than running away toward
+−1500. `DM_THRESHOLD_AUX_LIMIT = -1500` is treated throughout the code as the emergency threshold,
+and EffektGuard's climate-zone warning threshold for Stockholm is **−740**, *deeper* than −700: on
+such a pump the elpatron fires **first**, every time.
 
-`DM_THRESHOLD_AUX_LIMIT = -1500` is treated throughout the code as the emergency threshold — and on
-the owner's F750, **the pump's own auxiliary heat has already been running for 800 degree-minutes
-by the time DM gets there.** EffektGuard's climate-zone warning threshold for Stockholm is **−740**,
-which is *deeper* than −700: the elpatron fires **first**, every time.
+**Where the heater starts is an installer setting, not a model constant.** The owner's F750 is not
+at factory settings: it starts its compressor at −250 (parameter 47206) and its additional heat
+1200 later (48072, "start diff additional heat"), at **−1450** - 50 degree minutes short of
+`DM_THRESHOLD_AUX_LIMIT` (myUplink, read 2026-10-17). Its heater ran 454 kWh in January-February
+2026 and about 820 kWh in the year to October 2026 (Home Assistant's hourly statistics of 43084,
+"Power internal add. heat"). And the −1500 tier did fire: before #39 made it a floor at 0, it held
+the owner's offset at +10 on 2026-01-23 and 2026-01-31 with DM past −1500, and DM went on to −2260
+(EffektGuard's hourly statistics).
 
-This is not a small calibration point. It means:
+So:
 
-- The EMERGENCY tier (DM ≤ −1500) has, as far as can be determined, **never fired in the product's
-  life.**
-- Reasoning about "what happens as DM approaches −1500" describes a régime a healthy F750 never
-  enters.
-- The elpatron is **not the enemy.** NIBE placed it at −700 deliberately, to spare the compressor
-  from grinding at full frequency for hours. Fighting it with a bigger curve offset trades cheap
-  kWh for expensive compressor life.
+- A pump's own aux start has to be read from that pump. The model profiles' `aux_start_dm` holds
+  the factory default, and only the simulator's plant reads it.
+- The elpatron is **not the enemy.** NIBE placed it to spare the compressor from grinding at full
+  frequency for hours. Fighting it with a bigger curve offset trades cheap kWh for expensive
+  compressor life.
 
-Audit findings F-112 and F-129 both turn on this. F-112 (rescaling the recovery ladder to the real
-aux-start) is **open with the owner** — the −700 figure is sourced, but the ladder redesign is not,
-and 68 existing safety tests encode the −1500 world.
+Audit findings F-112 and F-129 both turn on this. F-112 (rescaling the recovery ladder to the
+pump's real aux start) is **open with the owner** - the factory figure is sourced and the owner's is
+read from the pump, but the ladder redesign is not, and 68 existing safety tests encode the −1500
+world.
 
 ## ⚠️ Why the DM safety net is structurally blind to EffektGuard's own under-heating
 
@@ -136,6 +141,9 @@ sensor only.
 
 - NIBE F750 Installer Manual **IHB GB 1301-1** (231236), menu 4.9.3 — `start compressor`,
   `start addition` defaults and ranges.
+- The owner's F750 via myUplink, read only: 47206 `start compressor` −250 and 48072 `start diff
+  additional heat` 1200 (2026-10-17); 43084 `Power internal add. heat` in Home Assistant's hourly
+  statistics.
 - NIBE's degree-minute definition is consistent across the F-series and S-series manuals.
 
 ## Not sourced
@@ -150,5 +158,6 @@ The frequencies quoted are the owner's long-term statistics, which carry no vent
 
 The **−1500** figure itself. It is attributed in the code to "Swedish forums" and to a `stevedvo`
 F2040 case study, neither of which is in this repository. It functions as an absolute backstop and
-is far below the pump's own aux-start, so it is harmless as a floor — but it should not be
-described as research-validated until someone can produce the research.
+sits below the pump's own aux start - far below at factory settings, 50 below on the owner's F750 -
+so it is harmless as a floor, but it should not be described as research-validated until someone
+can produce the research.
