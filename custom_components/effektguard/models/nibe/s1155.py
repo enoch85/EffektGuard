@@ -100,6 +100,7 @@ class NibeS1155Profile(HeatPumpProfile):
     rated_power_kw: tuple[float, float] = (3.0, 12.0)  # the PH modulation envelope, EN 14511
     typical_electrical_range_kw: tuple[float, float] = (1.04, 2.5)  # PE at the rating points
     modulation_range: tuple[int, int] = (70, 120)
+    publishes_max_frequency: bool = True  # 31043
     modulation_type: str = "inverter"
 
     typical_cop_range: tuple[float, float] = (3.75, 6.12)  # published COPs, 0/45 .. 10/35

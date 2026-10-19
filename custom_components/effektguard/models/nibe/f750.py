@@ -95,6 +95,7 @@ class NibeF750Profile(HeatPumpProfile):
     # SOURCED: F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3 "start addition",
     # setting range -2000..-30, factory default -700. The pump's own elpatron fires here.
     aux_start_dm: float = -700.0
+    publishes_max_frequency: bool = True  # 43123
 
     # Exhaust air heat pump features
     # F750 is an EAHP - supports airflow optimization for heat extraction
