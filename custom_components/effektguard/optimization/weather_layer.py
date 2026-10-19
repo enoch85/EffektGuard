@@ -52,6 +52,7 @@ from ..const import (
     WEATHER_FORECAST_HORIZON,
     WEATHER_GENTLE_OFFSET,
     WEATHER_INDOOR_COOLING_CONFIRMATION,
+    WEATHER_PARTIAL_DAY_MIN_HOURS,
     WEATHER_WEIGHT_CAP,
 )
 from ..utils.emitter import en442_flow_temp
@@ -631,6 +632,23 @@ class WeatherPredictionLayer:
         self.thermal_mass = thermal_mass
         self.forecast_horizon = forecast_horizon
 
+    @staticmethod
+    def _day_mean(temps: list[float], start: int) -> float | None:
+        """The mean of the day from forecast hour `start`, or None if the forecast cannot tell.
+
+        A day the forecast covers only partly is the day before it, moved by how much colder the
+        covered hours are than the same clock hours a day earlier - each hour against its own clock
+        hour, so the day-night swing cancels and a night is still not a cold snap.
+        """
+        day = WEATHER_DAILY_MEAN_HOURS
+        if start + day <= len(temps):
+            return sum(temps[start : start + day]) / day
+        if start < day:
+            return None  # the day before it is not in the forecast either
+        covered = temps[start:]
+        change = sum(t - temps[hour - day] for hour, t in enumerate(covered, start)) / len(covered)
+        return sum(temps[start - day : start]) / day + change
+
     def evaluate_layer(
         self,
         nibe_state,
@@ -686,9 +704,9 @@ class WeatherPredictionLayer:
         first = 0 if past_day_mean is not None else 1
         if past_day_mean is None:
             past_day_mean = sum(temps[:day]) / day if len(temps) >= day else 0.0
-        last = min(int(self.forecast_horizon), len(temps) - day)
-        days_ahead = [sum(temps[s : s + day]) / day for s in range(first, last + 1)]
-        coldest = min(days_ahead, default=past_day_mean)
+        last = min(int(self.forecast_horizon), len(temps) - WEATHER_PARTIAL_DAY_MIN_HOURS)
+        days_ahead = [self._day_mean(temps, s) for s in range(first, last + 1)]
+        coldest = min((mean for mean in days_ahead if mean is not None), default=past_day_mean)
         temp_drop = coldest - past_day_mean
         forecast_triggered = temp_drop <= WEATHER_FORECAST_DROP_THRESHOLD
 
