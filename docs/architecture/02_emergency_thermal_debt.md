@@ -1,97 +1,80 @@
-# Scenario 2: Emergency Thermal Debt Response
+# Scenario 2: Thermal Debt - the Degree-Minute Ladder
 
-**Description**: Context-aware emergency response when degree minutes approach critical thresholds.
+**Description**: how two layers answer deepening degree minutes (DM). `ProactiveLayer` (Z1-Z5) acts
+before the climate-aware warning threshold, `EmergencyLayer` (T1-T3, EMERGENCY) from it. Both live
+in `optimization/thermal_layer.py`; their thresholds come from `ClimateZoneDetector`.
+
+The ladder is `Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY`. There is no WARNING or CAUTION
+tier: `normal_max == warning` in every climate zone, so they could never fire, and they were removed
+(see the open-findings register).
 
 ```mermaid
 flowchart TD
-    subgraph "NIBE State Reading"
-        A[Read Degree Minutes]
-        B[Read Outdoor Temperature]
-        C[Read Indoor Temperature]
+    A[DM, outdoor, indoor] --> B[ClimateZoneDetector.get_expected_dm_range<br/>latitude + outdoor temperature]
+    B --> C[Thermal-mass buffer<br/>concrete ×1.3, timber ×1.15, radiator ×1.0<br/>thresholds divided: a slab acts earlier]
+
+    C --> E
+    C --> P
+
+    subgraph "EmergencyLayer"
+    E{DM ≤ DM_THRESHOLD_AUX_LIMIT<br/>and room not above its band?}
+    E -->|yes| EM[EMERGENCY<br/>no cuts: the others' verdict floored at 0<br/>no raise of its own]
+    E -->|no| AW{Anti-windup cooldown,<br/>or DM falling ≥ 50/h after a raise?}
+    AW -->|yes| AWD[Hold the offset, or cut by |rate| / 100<br/>weight 0.7]
+    AW -->|no| W{Room above its band, or at target<br/>while the price is not cheap?}
+    W -->|yes| OK1[No vote]
+    W -->|no| T3{DM ≤ T3?}
+    T3 -->|yes| T3D[T3]
+    T3 -->|no| T2{DM ≤ T2?}
+    T2 -->|yes| T2D[T2]
+    T2 -->|no| T1{DM ≤ T1 = warning?}
+    T1 -->|yes| T1D[T1]
+    T1 -->|no| OK2[No vote]
     end
 
-    subgraph "Context-Aware Analysis"
-        D[Calculate Expected DM Range<br/>Based on Climate Zone + Temp]
-        E[Cold Zone at -10°C:<br/>Expected: -490 to -740 DM<br/>Warning: -740 DM]
-        F[Extreme Cold Zone at -25°C:<br/>Expected: -900 to -1300 DM<br/>Warning: -1300 DM]
-        G[Adjustment: -20 DM per °C<br/>colder than zone winter avg]
-        H[Distance from the aux limit<br/>-1500 DM]
+    subgraph "ProactiveLayer"
+    P{Indoor cooling rapidly<br/>in the cold?}
+    P -->|yes| RC[Rapid-cooling boost]
+    P -->|no| PZ{DM between normal_max × 2 %<br/>and the warning?}
+    PZ -->|yes| Z[Z1 ... Z5<br/>weight trimmed for a warm house]
+    PZ -->|no| OK3[No vote]
     end
-
-    subgraph "Emergency Layer Decision"
-        I{DM ≤ -1500?}
-        J[EMERGENCY<br/>No cuts: offset floored at 0<br/>no raise of its own]
-        
-        K{Margin < 300 DM?}
-        L[CRITICAL<br/>Offset: +3.0°C<br/>Weight: 1.0]
-        
-        M{DM < Expected Warning?}
-        N[WARNING<br/>Offset: +1.0 to +2.0°C<br/>Weight: 0.8]
-        
-        O{DM < Expected Normal?}
-        P[CAUTION<br/>Offset: +0.5°C<br/>Weight: 0.5]
-        
-        Q[THERMAL DEBT OK<br/>Offset: 0.0°C<br/>Weight: 0.0]
-    end
-
-    subgraph "Decision Examples"
-        R[Stockholm -10°C: DM -900<br/>→ WARNING: Beyond -700 warning]
-        S[Stockholm 0°C: DM -500<br/>→ OK: Within adjusted range]  
-        T[Kiruna -25°C: DM -900<br/>→ OK: Well within -1300 warning]
-    end
-
-    %% Flow
-    A --> D
-    B --> D
-    C --> D
-    D --> E
-    D --> F
-    D --> G
-    D --> H
-    
-    E --> I
-    F --> I
-    G --> I
-    H --> I
-    
-    I -->|Yes| J
-    I -->|No| K
-    K -->|Yes| L
-    K -->|No| M
-    M -->|Yes| N
-    M -->|No| O
-    O -->|Yes| P
-    O -->|No| Q
-
-    %% Examples
-    E -.-> R
-    F -.-> S
-    G -.-> T
-
-    %% Styling
-    style I fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style K fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style M fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style O fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style J fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style L fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style N fill:#999,stroke:#fff,stroke-width:2px,color:#fff
-    style P fill:#bbb,stroke:#000,stroke-width:2px,color:#000
-    style Q fill:#ddd,stroke:#000,stroke-width:2px,color:#000
 ```
 
-## Context-Aware Safety Philosophy
+Both layers vote, and `_aggregate_layers` combines them with the rest
+([08_layer_priority_system.md](08_layer_priority_system.md)).
 
-### Climate Zone + Temperature-Based Thresholds
+## The rungs
 
-EffektGuard uses **climate zone detection** (based on latitude) combined with **outdoor temperature adjustment** to calculate what DM is "normal" for current conditions:
+Values as in `const.py` on 2026-10-19; the names are what to read.
 
-- **Climate zone** determines base expectations (latitude-based detection)
-- **Temperature delta** adjusts thresholds by -20 DM per °C colder than zone's winter average
-- **Aux limit** -1500 DM: past it nothing cuts heat
+| Rung | Fires from | Offset | Weight |
+|---|---|---|---|
+| Z1 | `normal_max × PROACTIVE_ZONE1_THRESHOLD_PERCENT` (2 %) | `PROACTIVE_ZONE1_OFFSET` (+1.0) | `LAYER_WEIGHT_PROACTIVE_MIN` (0.3) |
+| Z2 | × `PROACTIVE_ZONE2_THRESHOLD_PERCENT` (30 %) | `PROACTIVE_ZONE2_OFFSET` (+1.5) | `PROACTIVE_ZONE2_WEIGHT` (0.4) |
+| Z3 | × `PROACTIVE_ZONE3_THRESHOLD_PERCENT` (50 %) | `PROACTIVE_ZONE3_OFFSET_MIN` + severity × `_RANGE` (+2.0..+2.5) | `PROACTIVE_ZONE3_WEIGHT` (0.5) |
+| Z4 | × `PROACTIVE_ZONE4_THRESHOLD_PERCENT` (75 %) | `PROACTIVE_ZONE4_OFFSET` (+2.5) | `PROACTIVE_ZONE4_WEIGHT` (0.55) |
+| Z5 | × `PROACTIVE_ZONE5_THRESHOLD_PERCENT` (87.5 %), down to the warning | `PROACTIVE_ZONE5_OFFSET` (+3.0) | `PROACTIVE_ZONE5_WEIGHT` (0.6) |
+| T1 | warning − `DM_CRITICAL_T1_MARGIN` (0) | `DM_CRITICAL_T1_OFFSET` (+4.0) | `DM_CRITICAL_T1_WEIGHT` (0.65) |
+| T2 | warning − `DM_CRITICAL_T2_MARGIN` (200) | `DM_CRITICAL_T2_OFFSET` (+7.0) | `DM_CRITICAL_T2_WEIGHT` (0.81) |
+| T3 | max(warning − `DM_CRITICAL_T3_MARGIN` (400), `DM_CRITICAL_T3_MAX` (−1450)) | `DM_CRITICAL_T3_OFFSET` (+8.5) | `DM_CRITICAL_T3_WEIGHT` (0.91) |
+| EMERGENCY | `DM_THRESHOLD_AUX_LIMIT` (−1500) | floor at 0 | 1.0 (applied by `_aggregate_layers`) |
 
-### Climate Zones (Latitude-Based)
+While a T-tier is recovering, a critical cost layer may only moderate it down to
+`DM_CRITICAL_PEAK_AWARE_OFFSETS` - see [08_layer_priority_system.md](08_layer_priority_system.md).
+
+## Worked example (computed by the code, 2026-10-19)
+
+Stockholm (latitude 59.33, the Cold zone) at −10 °C outdoors:
+
+| | warning = normal_max | Z1 / Z2 / Z3 / Z4 / Z5 | T1 / T2 / T3 |
+|---|---|---|---|
+| Radiators | −740 | −15 / −222 / −370 / −555 / −648 | −740 / −940 / −1140 |
+| Concrete slab | −569 | −11 / −171 / −285 / −427 / −498 | −569 / −769 / −969 |
+
+The same pump at the same DM is "normal" in Kiruna and "in trouble" in Malmö. The zones, and how
+the outdoor temperature moves them (more in [10_adaptive_climate_zones.md](10_adaptive_climate_zones.md);
+`tests/validation/test_no_document_misquotes_the_safety_thresholds.py` holds these to the code):
 
 | Zone | Latitude | Winter Avg | Base Normal Range | Base Warning |
 |------|----------|------------|-------------------|--------------|
@@ -100,8 +83,6 @@ EffektGuard uses **climate zone detection** (based on latitude) combined with **
 | Cold | 56°-60.5° | -8°C | -450 to -700 | -700 |
 | Moderate Cold | 54.5°-56° | -1°C | -300 to -500 | -500 |
 | Standard | <54.5° | 0°C | -200 to -350 | -350 |
-
-### Temperature Adjustment Formula
 
 ```
 adjusted_warning = zone_warning + (outdoor_temp - zone_winter_avg) × 20
@@ -113,83 +94,47 @@ adjusted_warning = zone_warning + (outdoor_temp - zone_winter_avg) × 20
 - At 0°C: warning = -700 + (0 - (-8)) × 20 = -700 + 160 = **-540** (shallower)
 - At -20°C: warning = -700 + (-20 - (-8)) × 20 = -700 - 240 = **-940** (deeper)
 
+Expected ranges at a cold hour:
+- Stockholm (-10°C, Cold zone): expects DM -490 to -740, warning at -740
+- Kiruna (-25°C, Extreme Cold zone): expects DM -900 to -1300, warning at -1300
+
 ⚠️ The Cold zone's winter average is **-8.0 °C**, not -10. This worked example used to say -10,
 and every threshold derived from it was 40 degree-minutes shallower than the code's. -450 to -700
 IS a real Stockholm range - at -8 °C. It is not the range at -10 °C.
 
-### The aux limit
+## The aux limit
 
-Past **DM -1500** the offset may not go below 0 - no price, peak or comfort cut - unless the room is
+Past **DM −1500** the offset may not go below 0 - no price, peak or comfort cut - unless the room is
 above its band, where a deep DM means our own target is too high. The tier raises nothing itself:
 the compressor is flat out there and the immersion heater already running, so a raise only drives DM
-down faster and steps the heater up (F-124 - on the owner's F750 +10 latched for hours).
+down faster and steps the heater up (F-124 - on the owner's F750 the old +10 latched for hours).
 
 ⚠️ It is **not** the number that governs a real F750: the pump's own "start addition" (menu 4.9.3)
-is set per model and per installation (factory -700; the owner's F750 starts it at about -1450).
-The -1500 figure is attributed to Swedish forums and is **not sourced in this repository** - see
+is set per model and per installation (factory −700; the owner's F750 starts it at about −1450).
+The −1500 figure is attributed to Swedish forums and is **not sourced in this repository** - see
 `docs/research/01_degree_minutes.md`.
 
-### Graduated Response System
+## Recovery damping (T1, T2 and T3)
 
-The emergency layer provides graduated responses:
+`_apply_thermal_recovery_damping` lowers a T-tier's offset when the house is warming on its own, so
+a slab does not bank heat it will release hours later as overshoot:
 
-1. **EMERGENCY** (-1500 DM): no cuts - the other layers' verdict floored at 0
-2. **CRITICAL** (within 300 DM of limit): Strong recovery (+3.0°C)
-3. **WARNING** (beyond expected range): Moderate recovery (+1.0 to +2.0°C)
-4. **CAUTION** (approaching expected limit): Gentle correction (+0.5°C)
-5. **OK** (within normal range): No intervention (0.0°C)
+- **Warming**: indoor rising at `THERMAL_RECOVERY_WARMING_THRESHOLD` (0.3 °C/h) or more, outdoor not
+  falling faster than `THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD`: the offset is multiplied by
+  `THERMAL_RECOVERY_DAMPING_FACTOR`, or `THERMAL_RECOVERY_RAPID_FACTOR` from
+  `THERMAL_RECOVERY_RAPID_THRESHOLD` (0.5 °C/h).
+- **Overshoot**: a room 0.5 / 1.0 / 1.5 °C over target multiplies it by the mild / moderate / severe
+  `THERMAL_RECOVERY_OVERSHOOT_*_DAMPING` factor.
+- **Never below** `THERMAL_RECOVERY_T1/T2/T3_MIN_OFFSET` (+1.0 / +1.5 / +2.0), and **no damping**
+  when the forecast shows a drop past `THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD`, or when the
+  trend's confidence is under `THERMAL_RECOVERY_MIN_CONFIDENCE` (overshoot damping alone then
+  applies).
 
-This ensures the system responds appropriately to the severity of the thermal debt situation while accounting for normal operational variations in different climates.
+## Also on this path
 
-## T2 Thermal Recovery Damping (Oct 20, 2025)
-
-### The Concrete Slab Overshoot Problem
-
-**Scenario**: T2 Critical recovery mode is active during cold night, struggling to maintain temperature with DM below -1000. Morning arrives, sun begins shining through windows, providing significant solar gain. Without intelligent damping, T2 continues pushing high offset (2.5°C) even as the house warms naturally. The concrete slab's thermal mass stores this excess heat, resulting in 2-3°C overshoot above target temperature hours later.
-
-### Solution: Thermal Recovery Damping
-
-T2 now monitors indoor temperature trends and intelligently reduces offset when natural warming is detected:
-
-#### Damping Triggers
-1. **Indoor warming rate**: ≥ 0.3°C/h (solar gain detected)
-2. **Outdoor stability**: Not dropping rapidly (≥ -0.5°C/h)
-3. **Trend confidence**: ≥ 0.4 (approximately 1 hour of reliable data)
-
-#### Damping Factors
-- **Moderate warming** (0.3-0.5°C/h): Reduce to 60% of T2 offset (2.5°C → 1.5°C)
-- **Rapid warming** (>0.5°C/h): Reduce to 40% of T2 offset (2.5°C → 1.0°C, but minimum 1.5°C)
-
-#### Safety Constraints
-- **Minimum damped offset**: 1.5°C (never reduce below this safety threshold)
-- **Cold spell protection**: No damping if outdoor dropping rapidly (fighting cold front)
-- **Insufficient data**: No damping if trend confidence too low (< 0.4)
-
-### Example: Night-to-Morning Transition
-
-```
-NIGHT (02:00, -10°C outdoor, 21.0°C indoor, DM -1100)
-├─ Indoor trend: Stable/slowly cooling
-├─ T2 Active: Full offset 2.5°C (aggressive recovery needed)
-└─ Concrete slab receives full heating
-
-MORNING (08:00, -8°C outdoor, 21.8°C indoor, DM -950)
-├─ Indoor trend: Rising +0.5°C/h (solar gain detected)
-├─ Outdoor trend: Warming +0.2°C/h (morning sun)
-├─ T2 Damping Applied: Reduced to 1.5°C offset
-└─ Result: Prevents +2-3°C overshoot, stays within comfort
-
-IMPROVEMENT
-├─ Without damping: House overshoots to 24-25°C by noon
-├─ With damping: House stays 22-23°C (within target)
-└─ Concrete slab doesn't store excess heat
-```
-
-### Integration with Multi-Tier System
-
-Damping only applies to **T2 (CRITICAL Tier 2)**:
-- **T1**: Less severe, standard offset (no damping needed)
-- **T2**: Severe thermal debt, benefits from damping when warming detected
-- **T3**: Near absolute maximum, no damping (full emergency recovery required)
-
-This targeted approach ensures safety is never compromised while preventing overshoot in the most common recovery scenarios.
+- **Anti-windup** cuts or holds when DM falls at `ANTI_WINDUP_DM_DROPPING_RATE` or faster within
+  `ANTI_WINDUP_CAUSATION_WINDOW_MINUTES` of our own raise, then stays for
+  `ANTI_WINDUP_COOLDOWN_MINUTES`; it also caps the T-tiers' offsets while active.
+- **Volatile prices**: during a cheap run shorter than `VOLATILE_MIN_DURATION_QUARTERS` the T- and
+  Z-boosts are skipped and their weight cut by `VOLATILE_WEIGHT_REDUCTION`. The EMERGENCY floor is
+  checked first, so it is never suppressed.
