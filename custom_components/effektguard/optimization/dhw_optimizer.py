@@ -266,6 +266,9 @@ class IntelligentDHWScheduler:
         # yet - which is a debt to be settled the moment the house is out of danger, not a shower
         # silently cancelled. Cleared when the water reaches target.
         self._scheduled_window_owed: bool = False
+        # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
+        # it begins and ends, not on every cycle it lasts.
+        self._held_for_thermal_debt: bool = False
         self.bt7_history: deque = deque(maxlen=48)  # 4 hours at the 5-minute cycle
 
         # Learned DHW heating rate (persisted across restarts)
@@ -1106,16 +1109,10 @@ class IntelligentDHWScheduler:
 
         # === RULE 1: CRITICAL THERMAL DEBT - NEVER START DHW ===
         if should_block_for_thermal_debt:
-            _LOGGER.warning(
-                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ threshold (zone: %s, outdoor: %.1f°C)",
+            _LOGGER.debug(
+                "DHW blocked by RULE 1 (thermal debt): DM=%.0f ≤ %.0f (outdoor: %.1f°C)",
                 thermal_debt_dm,
-                (
-                    self.emergency_layer.climate_detector.zone_info.name
-                    if self.emergency_layer and self.emergency_layer.climate_detector
-                    else (
-                        self.climate_detector.zone_info.name if self.climate_detector else "unknown"
-                    )
-                ),
+                dm_block_threshold,
                 outdoor_temp,
             )
             # Find next opportunity using centralized logic
@@ -2534,6 +2531,20 @@ class IntelligentDHWScheduler:
             dhw_amount_minutes=dhw_amount_minutes,
             weather_forecast=weather_forecast,
         )
+
+        held = decision.priority_reason == "CRITICAL_THERMAL_DEBT"
+        if held and not self._held_for_thermal_debt:
+            _LOGGER.warning(
+                "Hot water held back for thermal debt: DM %.0f at or below %.0f (zone %s, "
+                "outdoor %.1f°C)",
+                thermal_debt,
+                self.get_dm_block_and_abort_thresholds(outdoor_temp)[0],
+                zone_name,
+                outdoor_temp,
+            )
+        elif self._held_for_thermal_debt and not held:
+            _LOGGER.info("Hot water no longer held back for thermal debt (DM %.0f)", thermal_debt)
+        self._held_for_thermal_debt = held
 
         # Get scheduled target for amount tracking
         upcoming_demand = self._check_upcoming_demand_period(current_time)
