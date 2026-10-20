@@ -434,11 +434,11 @@ class PriceAnalyzer:
             current_time: Search start timestamp
             price_periods: Combined today + tomorrow QuarterPeriod objects
             duration_minutes: Required heating duration (e.g., 45 for DHW, 120 for pre-heat)
-            lookahead_hours: How far ahead to search
+            lookahead_hours: How far ahead to search: every quarter of the window starts within it
             current_price: Current period price for savings calculation (optional)
 
         Returns:
-            CheapestWindowResult or None if insufficient data
+            CheapestWindowResult, or None if no window lies within the horizon
         """
         if not price_periods:
             _LOGGER.warning("No price data available for cheapest window search")
@@ -476,11 +476,22 @@ class PriceAnalyzer:
                 )
 
         if len(available_quarters) < quarters_needed:
-            _LOGGER.warning(
-                "Not enough price data for window search: %d quarters available, %d needed",
-                len(available_quarters),
-                quarters_needed,
+            # Short of price data only if the prices end before the horizon does. A horizon shorter
+            # than the run holds no window, and nothing is missing: the scheduled hot-water window
+            # asks for one inside whatever time it has left before its deadline.
+            prices_end = max(period.start_time for period in price_periods) + timedelta(
+                minutes=MINUTES_PER_QUARTER
             )
+            if prices_end < end_time:
+                _LOGGER.warning(
+                    "Not enough price data for window search: %d quarters available, %d needed",
+                    len(available_quarters),
+                    quarters_needed,
+                )
+            else:
+                _LOGGER.debug(
+                    "No %d-minute window lies within %.2f h", duration_minutes, lookahead_hours
+                )
             return None
 
         _LOGGER.debug(
