@@ -747,7 +747,7 @@ class IntelligentDHWScheduler:
             should_block_for_thermal_debt = thermal_debt_dm <= dm_block_threshold
 
         # Check if scheduling is active (user configured demand periods)
-        upcoming_demand = self._check_upcoming_demand_period(current_time)
+        upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
         scheduled_min_amount: float | None = None
         within_scheduled_window: bool = False
         hours_until_target: float | None = None
@@ -1463,102 +1463,6 @@ class IntelligentDHWScheduler:
                 recommended_start_time=next_opportunity,
             )
 
-        # === RULE 4.5: PRE-SCHEDULED WINDOW HEATING ===
-        # When OUTSIDE scheduled window but approaching the deadline, find cheapest window
-        # to start heating. This bridges LANE 2 (normal optimization) to LANE 1 (priority).
-        # Only applies if:
-        # - We have an upcoming demand period
-        # - We're NOT yet in the scheduled window (within_scheduled handled by RULE 0)
-        # - We're running out of time to heat before the target
-        if (
-            upcoming_demand is not None
-            and hours_until_target is not None
-            and not within_scheduled_window  # IMPORTANT: Only for Lane 2 → Lane 1 transition
-            and current_dhw_temp < self.user_target_temp
-        ):
-            # Calculate time needed using temperature-based estimation
-            hours_needed_to_heat = self.estimate_heating_time(
-                current_temp=current_dhw_temp,
-                target_temp=self.user_target_temp,
-            )
-            hours_with_buffer = hours_needed_to_heat + DHW_AMOUNT_HEATING_BUFFER
-
-            # If we're running out of time, find optimal window within remaining time
-            if hours_until_target <= hours_with_buffer:
-                # Find cheapest window within remaining time
-                optimal_window = None
-                if price_periods and self.price_analyzer:
-                    optimal_window = self.price_analyzer.find_cheapest_window(
-                        current_time=current_time,
-                        price_periods=price_periods,
-                        duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        lookahead_hours=max(hours_until_target, 0.5),  # At least 30 min lookahead
-                    )
-
-                temp_deficit = self.user_target_temp - current_dhw_temp
-
-                # If optimal window is NOW (within 15 min), heat immediately
-                if optimal_window and optimal_window.hours_until <= 0.25:
-                    _LOGGER.info(
-                        "DHW pre-schedule: %.1f°C → %.1f°C (need %.1fh), "
-                        "heating NOW @ %.1före/kWh (cheapest before deadline)",
-                        current_dhw_temp,
-                        self.user_target_temp,
-                        hours_needed_to_heat,
-                        optimal_window.avg_price,
-                    )
-                    return DHWScheduleDecision(
-                        should_heat=True,
-                        priority_reason=f"DHW_PRESCHEDULED_{temp_deficit:.0f}C_Q{optimal_window.quarters[0]}",
-                        target_temp=self.user_target_temp,
-                        max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                            f"dhw_temp >= {self.user_target_temp}",
-                        ],
-                        recommended_start_time=None,  # Heating now - no future time needed
-                    )
-                elif optimal_window:
-                    # Best window is coming up - wait for it
-                    _LOGGER.info(
-                        "DHW pre-schedule: %.1f°C → %.1f°C, waiting for optimal window at %s "
-                        "(%.1fh, %.1före - cheapest before deadline)",
-                        current_dhw_temp,
-                        self.user_target_temp,
-                        optimal_window.start_time.strftime("%H:%M"),
-                        optimal_window.hours_until,
-                        optimal_window.avg_price,
-                    )
-                    return DHWScheduleDecision(
-                        should_heat=False,
-                        priority_reason=f"DHW_PRESCHEDULED_WAITING_{optimal_window.hours_until:.1f}H",
-                        target_temp=self.user_target_temp,
-                        max_runtime_minutes=0,
-                        abort_conditions=[],
-                        recommended_start_time=optimal_window.start_time,
-                    )
-                else:
-                    # No price data - heat now to avoid missing target
-                    _LOGGER.warning(
-                        "DHW pre-schedule: %.1f°C → %.1f°C (%.1fh), no price data - heating now",
-                        current_dhw_temp,
-                        self.user_target_temp,
-                        hours_needed_to_heat,
-                    )
-                    return DHWScheduleDecision(
-                        should_heat=True,
-                        priority_reason=f"DHW_PRESCHEDULED_{temp_deficit:.0f}C_NO_PRICE",
-                        target_temp=self.user_target_temp,
-                        max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                            f"dhw_temp >= {self.user_target_temp}",
-                        ],
-                        recommended_start_time=None,  # Heating now - no future time needed
-                    )
-
         # === RULE 4.7: PREDICTIVE PRE-HEATING TO AVOID PEAK ===
         # If we're in cheap/normal pricing AND an upcoming PEAK period would force us
         # to heat during peak (due to predicted thermal debt + DHW cooling), pre-heat NOW
@@ -1597,7 +1501,7 @@ class IntelligentDHWScheduler:
         # === RULE 5: NORMAL PRICE OPTIMIZATION (LANE 2) ===
         # This is LANE 2 behavior - normal price optimization when:
         # - NOT within scheduled window (RULE 0 handles that as LANE 1)
-        # - NOT approaching deadline (RULE 4.5 handles that transition)
+        # - NOT approaching deadline (Lane 1 opens early enough for that)
         #
         # Logic: Heat to target temp during cheapest available window
         # If DHW is adequate (≥45°C), wait for CHEAP prices
@@ -2547,7 +2451,7 @@ class IntelligentDHWScheduler:
         self._held_for_thermal_debt = held
 
         # Get scheduled target for amount tracking
-        upcoming_demand = self._check_upcoming_demand_period(current_time)
+        upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
         scheduled_min_amount = upcoming_demand["min_amount_minutes"] if upcoming_demand else None
         within_scheduled_window = (
             upcoming_demand["within_scheduled_window"] if upcoming_demand else False
@@ -2642,7 +2546,9 @@ class IntelligentDHWScheduler:
             decision=decision,
         )
 
-    def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
+    def _check_upcoming_demand_period(
+        self, current_time: datetime, current_dhw_temp: float | None = None
+    ) -> DemandPeriodInfoDict | None:
         """Check if there's a configured demand period within 24h.
 
         Returns scheduling info including whether we're within the scheduled window.
@@ -2651,10 +2557,22 @@ class IntelligentDHWScheduler:
 
         Args:
             current_time: Current datetime
+            current_dhw_temp: The tank's temperature, to open the window early enough to heat it
 
         Returns:
             Dict with scheduling info including within_scheduled_window flag, or None
         """
+        # The window opens DHW_SCHEDULED_WINDOW_HOURS before the target, or as early as a tank
+        # too slow to heat in that time needs. A separate pre-schedule rule outside the window
+        # handled that tank, and only that one (F-143), by waiting for the cheapest hour when no
+        # hour could be spared.
+        window = DHW_SCHEDULED_WINDOW_HOURS
+        if current_dhw_temp is not None and current_dhw_temp < self.user_target_temp:
+            window = max(
+                window,
+                self.estimate_heating_time(current_dhw_temp, self.user_target_temp)
+                + DHW_AMOUNT_HEATING_BUFFER,
+            )
         closest_period = None
         closest_hours = float("inf")
 
@@ -2679,7 +2597,7 @@ class IntelligentDHWScheduler:
             if hours_until <= DHW_SCHEDULING_WINDOW_MAX and hours_until < closest_hours:
                 closest_hours = hours_until
                 # Scheduling is active when within scheduled window of target time
-                within_scheduled_window = hours_until <= DHW_SCHEDULED_WINDOW_HOURS
+                within_scheduled_window = hours_until <= window
                 closest_period = {
                     "min_amount_minutes": period.min_amount_minutes,
                     "target_temp": period.target_temp,
