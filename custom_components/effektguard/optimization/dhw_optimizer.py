@@ -269,6 +269,9 @@ class IntelligentDHWScheduler:
         # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
         # it begins and ends, not on every cycle it lasts.
         self._held_for_thermal_debt: bool = False
+        # Whether the missing high-temperature cycle has been reported: once per stretch without one,
+        # which ends when a cycle is seen (logged there), not on every cycle it lasts.
+        self._reported_hygiene_overdue: bool = False
         self.bt7_history: deque = deque(maxlen=48)  # 4 hours at the 5-minute cycle
 
         # Learned DHW heating rate (persisted across restarts)
@@ -323,6 +326,7 @@ class IntelligentDHWScheduler:
         self.bt7_history.append((timestamp, temp))
         if reached:
             self.last_legionella_boost = timestamp
+            self._reported_hygiene_overdue = False
             _LOGGER.info(
                 "Hot water reached %.1f°C at %s: high-temperature cycle seen", temp, timestamp
             )
@@ -1376,7 +1380,7 @@ class IntelligentDHWScheduler:
                 days_since_legionella is not None
                 and days_since_legionella >= DHW_LEGIONELLA_OVERDUE_DAYS
             ):
-                _LOGGER.warning(
+                (_LOGGER.debug if self._reported_hygiene_overdue else _LOGGER.warning)(
                     "No hot-water temperature above %.0f C observed for %.0f days. NIBE's "
                     "periodic increase (menu 2.9.1 on F-series, 2.4 on S-series) normally "
                     "runs every %.0f days and is enabled from the factory - check that it is "
@@ -1388,6 +1392,7 @@ class IntelligentDHWScheduler:
                     DHW_LEGIONELLA_MAX_DAYS,
                     DHW_LEGIONELLA_DETECT,
                 )
+                self._reported_hygiene_overdue = True
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
         # After emergency heating reached DHW_SAFETY_MIN (30°C), complete to comfort level
