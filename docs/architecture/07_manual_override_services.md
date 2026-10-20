@@ -9,6 +9,7 @@ flowchart TD
         B[boost_heating Service<br/>duration: 120min → +10°C]
         C[calculate_optimal_schedule<br/>Preview 24h decisions]
         D[reset_peak_tracking<br/>Clear monthly peaks]
+        D2[boost_dhw Service<br/>temporary lux, 30-180 min]
     end
 
     subgraph "Manual Override Processing"
@@ -81,7 +82,9 @@ flowchart TD
 
 ### Service-Based Control
 
-Phase 5 implements **four manual services** for user control and diagnostics:
+Phase 5 implements **five manual services** for user control and diagnostics: `force_offset`,
+`boost_heating`, `calculate_optimal_schedule`, `reset_peak_tracking` and `boost_dhw` (the last
+one is described in `docs/DHW_BLOCKING_WORKAROUND.md`):
 
 #### 1. force_offset Service
 ```yaml
@@ -155,7 +158,11 @@ def _check_manual_override(self) -> float | None:
 ### Decision Engine Integration
 
 #### Priority Override
-Manual overrides have **absolute priority** in the decision engine:
+Manual overrides take priority over every layer - **except the absolute safety floor**
+(`DecisionEngine._absolute_safety_floor`): with the indoor below 18 °C the floor is maximum heat,
+and with DM at or past the aux limit (−1500) it is 0. An override below the floor is raised to it;
+one above it is applied as asked. (Simplified sketch below; the floor check runs before the
+override is returned.)
 
 ```python
 def calculate_decision(self, nibe_state, price_data, weather_data, current_peak):
@@ -175,12 +182,11 @@ def calculate_decision(self, nibe_state, price_data, weather_data, current_peak)
     # Continue with normal layer processing...
 ```
 
-#### Complete Layer Bypass
-When manual override is active:
-- **All 7 layers are skipped** (Safety, Emergency, Effect, etc.)
-- **No calculations performed** (saves CPU, avoids conflicts)
+#### Layer Bypass
+When a manual override is active:
+- **The nine layers are skipped**; only the absolute safety floor is checked
 - **Single decision returned** with weight 1.0
-- **Clear reasoning provided** for transparency
+- **Clear reasoning provided**, including when the safety floor raised the override
 
 ### Service Validation
 

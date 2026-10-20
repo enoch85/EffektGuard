@@ -18,14 +18,15 @@ Follow [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md) to configure your developmen
 ```bash
 git clone https://github.com/enoch85/EffektGuard.git
 cd EffektGuard
-source docs/dev/activate.sh  # Activate Python 3.13 venv
+bash scripts/setup_dev.sh    # Create .venv (Python 3.15)
+source docs/dev/activate.sh  # Activate it
 pytest tests/ -v             # Verify setup
 ```
 
 ### 2. Understand the Architecture
 
 Read the architecture documentation:
-- `architecture/00_overview.md` - System overview
+- `../architecture/00_overview.md` - System overview
 - [CLAUDE.md](../../CLAUDE.md) and `docs/agent/` - core principles and rules
 - `docs/CLIMATE_ZONES.md` - Climate-aware safety system
 
@@ -73,35 +74,26 @@ See [CODE_STANDARDS.md](CODE_STANDARDS.md) for detailed guidelines:
 
 ```python
 # ✅ Good
-from .const import DM_THRESHOLD_CRITICAL
+from .const import DM_THRESHOLD_AUX_LIMIT
 
-if degree_minutes < DM_THRESHOLD_CRITICAL:
-    # Emergency recovery based on stevedvo case study
-    return emergency_recovery_offset()
+if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+    # Past the aux limit the compressor is flat out (docs/research/01_degree_minutes.md)
+    return max(offset, 0.0)
 
 # ❌ Bad
-if degree_minutes < -500:  # Magic number!
-    return 3.0
+if degree_minutes < -1500:  # Magic number!
+    return max(offset, 0.0)
 ```
 
 ### 4. Write Tests
 
 See [TESTING.md](TESTING.md) for testing guidelines.
 
-All changes must include tests:
-- **New features**: Unit tests + integration tests
-- **Bug fixes**: Test that reproduces bug + fix verification
-- **Safety changes**: 100% test coverage required
-
-```python
-def test_thermal_debt_prevention():
-    """Test that DM -500 triggers emergency recovery."""
-    tracker = ThermalDebtTracker()
-    tracker.degree_minutes = -500
-    
-    assert tracker.get_severity() == "CRITICAL"
-    assert tracker.get_recovery_offset() == 3.0
-```
+What earns a test - a safety guard, a threshold-to-response mapping, a fixed bug (name the finding) -
+and what does not (constants and labels, log text and log levels, ...) is in
+[`docs/agent/IMPLEMENTATION.md`](../agent/IMPLEMENTATION.md) (Tests). A fixed bug's test fails on
+`main` and passes on the branch; name the file for the behaviour, e.g.
+`tests/unit/dhw/test_a_slow_tank_is_heated_in_time.py`.
 
 ### 5. Format Code
 
@@ -139,7 +131,7 @@ grep -r "= 12.0" custom_components/effektguard/
 grep -r "old_function_name" custom_components/effektguard/
 
 # Test imports
-python3 -c "from custom_components.effektguard.optimization.thermal_model import ThermalModel"
+python3 -c "from custom_components.effektguard.optimization.thermal_layer import ThermalModel"
 ```
 
 ## Commit Guidelines
@@ -260,13 +252,12 @@ Before contributing NIBE-specific features, understand:
 - **Degree Minutes (DM)**: Thermal balance tracking (Menu 4.9.3)
 - **Pump modes**: Auto, Intermittent, Economy (system-dependent)
 - **UFH types**: Concrete slab, timber, radiators (different lag times)
-- **Flow temperature**: OEM research (SPF 4.0+: Outdoor + 27°C)
+- **Flow temperature**: the EN 442 emitter law (`docs/research/02_emitter_law.md`)
 
 ### Research References
 
 Always reference research when implementing NIBE behavior:
-- `IMPLEMENTATION_PLAN/02_Research/Forum_Summary.md` - Real F2040 cases
-- `IMPLEMENTATION_PLAN/02_Research/Swedish_NIBE_Forum_Findings.md` - F750 optimization
+- `docs/research/` - the evidence for the numbers in `const.py`, and what is *not* sourced
 - `docs/CLIMATE_ZONES.md` - Climate-aware safety system
 
 ### When Uncertain

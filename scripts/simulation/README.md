@@ -1,32 +1,43 @@
 # Month-long optimization simulation
 
-Drives the **real `DecisionEngine`** at 5-minute steps against a physical
-house + NIBE plant model (heating curve, degree-minute hysteresis, COP from
-the pump profile) with **real historical data**:
+Drives the **real `DecisionEngine`** (with the coordinator's volatility gate and the register's
+integer conversion) at 5-minute steps against a physical house + NIBE plant model (heating curve,
+degree-minute hysteresis, COP from the pump profile) with **real historical data** in `data/`:
 
-- `data/weather_jan2026.json` — 744 hourly Stockholm temperatures, January
-  2026 (ERA5-Land via Open-Meteo)
-- `data/prices_jan2026.json` — real Nordpool SE3 day-ahead prices, 31 days ×
-  96 quarter-hours (EUR-native × daily EUR/SEK)
+- `weather_jan2026.json` — 744 hourly Stockholm temperatures, January 2026 (ERA5-Land via Open-Meteo)
+- `prices_jan2026.json` — Nord Pool SE3 day-ahead prices from the elprisetjustnu.se API, native SEK,
+  31 days × 96 quarter-hours
+- one weather/price pair per scenario below, fetched with `fetch_scenario_data.py`
 
-Two configurations, both targeting 22.0 °C indoor:
+Five houses, all targeting 22.0 °C indoor (`TARGET_INDOOR`):
 
 | tag | house | pump profile |
 |---|---|---|
-| `wooden_f750` | timber frame, radiators, τ≈30 h | NIBE F750 (ASHP) |
-| `concrete_f1155` | concrete slab UFH, τ≈80 h | NIBE F1155 (GSHP) |
+| `wooden_f750` | timber frame, radiators | NIBE F750 (exhaust air) |
+| `concrete_f1155` | concrete slab UFH, large villa | NIBE F1155 (ground source) |
+| `apartment_f730` | apartment, deliberately oversized pump | NIBE F730 (exhaust air) |
+| `villa_s1155` | timber underfloor, large villa | NIBE S1155 (ground source) |
+| `airsource_f2040` | outdoor air | NIBE F2040 (air-to-water) |
 
-Checked invariants per step: DM never below the aux limit without response,
-indoor never below 18 °C, offset within ±10, no engine exceptions, no offset
-oscillation. Summary + violations + 30-min trace land in `output/`.
+Six scenarios (`--all-scenarios`), each a real weather window paired with the real prices of the same
+days, each with the behaviour it pins (`expect`) and its recorded known reds (`known_open`):
+`nordic_coldsnap_jan2024`, `undersized_coldsnap_jan2024` (each pump one size too small),
+`steady_winter_feb2024`, `thaw_freeze_mar2024`, `shoulder_may2024`, `autumn_volatile_oct2024`.
+
+Summary + violations + trace land in `output/`.
 
 ## Run
 
 ```bash
-# Fast 2-day synthetic self-test (part of the test procedure)
+# Fast 2-day synthetic self-test, and the DST fall-back weekend (both in CI)
 .venv/bin/python scripts/simulation/sim_harness.py --selftest
+.venv/bin/python scripts/simulation/sim_harness.py --dst
 
-# Full 31-day January run with real data (~10 s)
+# The scenario sweep (in CI), or one scenario
+.venv/bin/python scripts/simulation/sim_harness.py --all-scenarios
+.venv/bin/python scripts/simulation/sim_harness.py --scenario shoulder_may2024 --mode balanced
+
+# Full 31-day January run with real data (the nominal run)
 .venv/bin/python scripts/simulation/sim_harness.py
 
 # Matched neutral baseline (same plant, offset pinned to 0) for comparison
@@ -39,8 +50,11 @@ Or via the test runner:
 bash scripts/run_all_tests.sh simulation
 ```
 
-A run is healthy when every config reports `"violations": 0` and
-`"exceptions": 0`.
+A run is healthy when every safety invariant holds (`PASS: all safety invariants held`). The sweep
+fails only on **news**: a red no known red covers, one worse than recorded, or one that stopped
+failing. A scenario whose every failure is a recorded known red prints `FAIL*` (exit code 3 for a
+single `--scenario` run); a known red that gets worse must be re-recorded with its cause, never
+silenced.
 
 **Always compare against `--baseline` before drawing optimization
 conclusions** — an optimized run's `cost_sek` is meaningless on its own

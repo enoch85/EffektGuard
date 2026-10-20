@@ -1,44 +1,32 @@
 # Scenario 6: Phase 6 Learning Integration
 
-> ## ⚠️ THIS DESCRIBES A SUBSYSTEM THAT DOES NOT CURRENTLY DRIVE YOUR HEAT PUMP
+> ## ⚠️ LEARNED PRE-HEAT PARAMETERS DO NOT DRIVE YOUR HEAT PUMP - TWO LEARNED VALUES DO
 >
-> Everything below is wired up and runs. Observations are recorded, parameters are computed, and
-> the prediction layer *would* consume them at weight 0.65. It does not, because the confidence
-> gate is never passed — and until recently, when it *was* passed, it was passed for the wrong
-> reason.
+> Everything below is wired up and runs. Observations are recorded **hourly**
+> (`LEARNING_OBSERVATION_INTERVAL_MINUTES` = 60) into a rolling 672-observation window - 28 days -
+> and learning may engage after 96 observations (4 days). The prediction layer uses the learned
+> pre-heat parameters only above 70 % confidence (`LEARNING_CONFIDENCE_THRESHOLD`).
 >
-> **Confidence never reaches 70% at the real observation cadence.** The coordinator records one
-> observation per aligned refresh — every **5 minutes** — while `LEARNING_OBSERVATION_WINDOW`
-> (672) and `LEARNING_MIN_OBSERVATIONS` (96) are both sized for **15-minute** samples. So the
-> "672 observations = 1 week" below is really **56 hours**, the window is a rolling one, and
-> `time_confidence` is capped at 0.33 forever. Meanwhile the indoor sensor reads to 0.1 °C, and
-> over 5 minutes a building's response is smaller than that — the deltas quantise into steps of
-> 1.2 °C/h, larger than any real heating rate, so the consistency term is honestly zero.
-> Confidence settles at **0.47** against the 0.70 gate.
+> **Measured on a real house's year (2026-10-19):** the learned and fallback predictions erred by
+> 5-34 °C RMSE where "the room stays as it is" erred by about 1 °C, and confidence sat at 0.600 - below
+> the gate. Register: F-132b (strict xfail).
 >
-> **There is no "Day 1-3 → Day 4-7 → Day 8-14" timeline.** The observation window rolls. Day 90
-> sees exactly what day 3 saw.
+> **Two learned values bypass the gate.** `__init__.py` hands the decision engine the
+> `AdaptiveThermalModel`, and the prediction layer calls its `get_parameters()` every cycle, which -
+> once 96 observations exist - overwrites `thermal_mass` (read by the spot-price layer's look-ahead)
+> and `ufh_type` (the learned pre-heat horizon). That is an open item.
 >
 > Before the fix in `d111114`, the consistency term scored a **flatlined sensor** at 1.000 —
-> `std/mean` collapses to 0 when every reading is identical — so a house that had taught the model
-> nothing, or a *failed* indoor sensor, earned maximum confidence, learning engaged, and the pump
-> was driven from a flat line. It engaged on day 4, disengaged by day 7, engaged again on day 60.
-> A degenerate signal now scores zero.
->
-> **Control today is deterministic** — the heating curve, the EN 442 emitter law, weather
-> compensation, and the degree-minute safety net. None of it depends on learning.
->
-> Making learning genuinely work means sampling slowly enough that the signal exceeds the sensor's
-> resolution (≥30 min clears the gate; hourly is comfortably clear). That is a deliberate decision
-> about putting a never-validated learned model into the control path of real heating equipment,
-> and it is **open with the owner** — audit finding **F-132**.
+> `std/mean` collapses to 0 when every reading is identical — so a failed indoor sensor earned maximum
+> confidence. A degenerate signal now scores zero. The five-minute cadence this page used to describe
+> (56 hours of memory, confidence 0.47) was replaced by the hourly one.
 
 **Description**: Self-learning thermal prediction and adaptive behavior.
 
 ```mermaid
 flowchart TD
     subgraph "Observation Recording"
-        A[Every Update Cycle]
+        A[Every hour<br/>LEARNING_OBSERVATION_INTERVAL_MINUTES]
         B[Record Indoor Temp]
         C[Record Outdoor Temp]
         D[Record Heating Offset]
@@ -51,14 +39,14 @@ flowchart TD
         H[AdaptiveThermalModel]
         I[Learn Thermal Mass<br/>From response patterns]
         J[Learn UFH Type<br/>Concrete/Timber/Radiator]
-        K[Update Parameters<br/>Daily recalculation]
+        K[Update Parameters<br/>every cycle once 96 observations exist]
     end
 
     subgraph "Thermal Prediction"
         L[ThermalStatePredictor]
-        M[672 Observations<br/>56 h at the real 5-min cadence]
+        M[672 Observations<br/>28 days at the hourly cadence]
         N[Confidence ≥ 70%<br/>Use learned params]
-        O[Predict Temperature<br/>6-hour horizon]
+        O[Predict Temperature<br/>half the thermal-mass horizon]
     end
 
     subgraph "Weather Pattern Learning"
@@ -150,12 +138,12 @@ Phase 6 implements **three complementary learning systems**:
 - **Purpose**: Learn building-specific thermal characteristics
 - **Input**: Indoor/outdoor temps, heating offsets, response patterns
 - **Output**: Refined thermal mass and UFH type estimates
-- **Update Frequency**: Daily recalculation
+- **Update Frequency**: every cycle, once 96 hourly observations exist
 
 #### 2. ThermalStatePredictor  
 - **Purpose**: Predict temperature evolution based on learned behavior
-- **Input**: 672 observations (1 week × 96 quarters)
-- **Output**: 6-hour temperature predictions with confidence levels
+- **Input**: up to 672 hourly observations (28 days)
+- **Output**: temperature predictions over half the thermal-mass horizon (3 h radiators, 6 h timber, 24 h slab), with confidence
 - **Threshold**: 70% confidence required for activation
 
 #### 3. WeatherPatternLearner
@@ -166,7 +154,7 @@ Phase 6 implements **three complementary learning systems**:
 
 ### Observation Recording System
 
-Every **5-minute coordinator update** records:
+Once an **hour** (`LEARNING_OBSERVATION_INTERVAL_MINUTES`) the coordinator records:
 
 ```python
 Observation = {
@@ -211,12 +199,12 @@ learned_params = {
 ### Thermal State Prediction
 
 #### Data Requirements
-- **Minimum**: 96 observations (24 hours)
-- **Optimal**: 672 observations (1 week)
+- **Minimum**: 96 hourly observations (4 days)
+- **Window**: 672 hourly observations (28 days, rolling)
 - **Confidence**: ≥70% required for predictions
 
 #### Prediction Horizon
-**6-hour forecasts** balance:
+**Half the thermal-mass horizon** (`get_prediction_horizon()`: 6 h radiators, 12 h timber, 48 h slab) balances:
 - **Accuracy**: Shorter predictions more reliable
 - **Usefulness**: Sufficient time for pre-heating decisions
 - **Computational Cost**: Manageable calculation complexity

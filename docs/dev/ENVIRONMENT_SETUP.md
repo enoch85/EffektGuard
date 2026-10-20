@@ -4,67 +4,37 @@ This guide covers setting up the EffektGuard development environment.
 
 ## Requirements
 
-- **Python 3.13.8** or later
+- **Python 3.15** - what CI (`.python-version`) and `scripts/setup_dev.sh` use; `pyproject.toml` sets
+  the floor at 3.13
 - Git
 - Dev container support (optional but recommended)
 
 ## Quick Start
 
-### 1. Clone and Enter Project
-
 ```bash
 git clone https://github.com/enoch85/EffektGuard.git
 cd EffektGuard
+bash scripts/setup_dev.sh        # creates .venv with python3.15 and installs tests/requirements.txt
+source .venv/bin/activate        # or: source docs/dev/activate.sh
 ```
 
-### 2. Activate Virtual Environment
-
-The Python 3.13 virtual environment should auto-activate when you're in the project directory.
-
-If it doesn't, manually activate it:
-```bash
-source docs/dev/activate.sh
-# or
-source venv313/bin/activate
-```
-
-### 3. Verify Environment
+### Verify
 
 ```bash
-python --version
-# Should output: Python 3.13.8
-
-which python
-# Should output: /workspaces/EffektGuard/venv313/bin/python
+python --version                 # Python 3.15.x
+which python                     # <project>/.venv/bin/python
+bash scripts/run_all_tests.sh    # the full suite
 ```
 
-## Virtual Environment Details
+## Dependencies
 
-### Location
-- `venv313/` - Python 3.13 virtual environment with all dependencies
-
-### Auto-Activation
-The environment auto-activates via:
-- `.envrc` - direnv configuration (if direnv is installed)
-- `~/.bashrc` - Shell integration for automatic activation
-
-### Manual Activation
-```bash
-source docs/dev/activate.sh
-```
-
-### Dependencies
-All dependencies are managed in `venv313`. To reinstall:
+`tests/requirements.txt` pins `pytest-homeassistant-custom-component`, which in turn pins Home
+Assistant, NumPy and the pytest toolchain (including pytest-xdist), plus the Black version CI uses.
+To reinstall:
 
 ```bash
 pip install -r tests/requirements.txt
 ```
-
-Key dependencies:
-- Home Assistant 2025.10.2
-- pytest and testing tools
-- Black formatter (line length 100)
-- Type checking tools
 
 ## GitHub Codespaces (Option 1: Cloud)
 
@@ -73,89 +43,27 @@ Codespaces already runs inside a container, so you do not use the Dev Containers
 
 1. Create a Codespace from the repository.
 2. Open the workspace and wait for it to finish starting.
-3. Run the setup script:
-
-```bash
-bash scripts/setup_dev.sh
-```
-
-4. Activate the virtual environment when needed:
-
-```bash
-source .venv/bin/activate
-```
+3. Run `bash scripts/setup_dev.sh`, then `source .venv/bin/activate` when needed.
 
 ## Dev Container (Option 2: Local Docker)
 
 Use this option if you want a local containerized environment in VS Code.
-This project includes a dev container configuration for consistent development environments.
-
-### VS Code
 
 1. Install the "Dev Containers" extension.
 2. Open the project folder in VS Code.
 3. Run "Dev Containers: Reopen in Container".
 
-The container will automatically run the setup script to create `.venv` and install test
-dependencies.
-
-The container runs:
-- Ubuntu 24.04.2 LTS
-- Python 3.13.8
-- All required development tools
-
-## Verify Installation
-
-Run the test suite to verify everything is working:
-
-```bash
-pytest tests/ -v
-```
-
-Expected output:
-```
-======================== 715 passed, 75 warnings in ~5s =========================
-```
+The container (`.devcontainer/Dockerfile`: Ubuntu 24.04 with Python 3.15) runs the setup script to
+create `.venv` and install the test dependencies.
 
 ## Next Steps
 
-See the following guides:
 - [TESTING.md](TESTING.md) - Running and writing tests
 - [CODE_STANDARDS.md](CODE_STANDARDS.md) - Code style and conventions
 - [CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md) - How to contribute
 
 ## Troubleshooting
 
-### Virtual Environment Not Activating
-
-Manually activate:
-```bash
-source venv313/bin/activate
-```
-
-### Python Version Issues
-
-Verify Python version:
-```bash
-python --version
-```
-
-Should be 3.13.8 or later. If not, check that you're using the venv Python:
-```bash
-which python
-```
-
-### Missing Dependencies
-
-Reinstall dependencies:
-```bash
-pip install -r tests/requirements.txt
-```
-
-### Import Errors
-
-Clear Python cache and reinstall:
-```bash
-find . -type d -name __pycache__ -exec rm -r {} +
-pip install -e .
-```
+- **Wrong Python**: `which python` must point into `.venv`; if not, `source .venv/bin/activate`
+- **Missing dependencies**: `pip install -r tests/requirements.txt`
+- **Import errors**: clear `__pycache__` (`find . -type d -name __pycache__ -exec rm -r {} +`)

@@ -10,34 +10,36 @@ Home Assistant has a hard limit of **255 characters** for sensor states. When a 
 
 The `sensor.effektguard_optimization_reasoning` can generate very detailed reasoning strings, especially during critical situations (thermal debt, unusual weather, etc.).
 
-**Implementation:**
-- **State**: Truncated to 252 characters + "..." if needed
-- **Attributes**: Full reasoning available in `full_reasoning` attribute
-- **Layer Breakdown**: Individual layer decisions in `layers` attribute
+**Implementation** (`sensor.py`, key `optimization_reasoning`):
+- **State**: the reasoning, cut to 252 characters + "..." when it is longer than 255 (silently - nothing is logged)
+- **Attributes**: the full reasoning in `full_reasoning`, the decided offset in `applied_offset`, and
+  one attribute per layer, named after the layer (`Safety`, `Thermal Debt`, `Proactive`, `Peak`,
+  `Learned Pre-heat`, `Math WC`, `Weather Pre-heat`, `Spot Price`, `Comfort`), each with its
+  `reason`, `offset` and `weight`
 
 ### Example
 
-**Truncated State (255 chars max):**
+A production record (2026-10-18):
+
+**State (cut to 255 characters):**
 ```
-State WARNING: DM -522 beyond expected for 7.0°C (expected: -360) | Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C; Safety: +1.5°C; Adjusted: 27.7°C; Unusual weather (severity=0.5); Current: 35.0°C → offset: -4.8°C; Weight: 0.49...
+[Math WC] Math WC: en442_design_point; Zone: Moderate Cold; Optimal: 27.7°C; Safety: +0.5°C; Adjusted: 28.2°C; Current: 29.5°C → offset: -0.8°C; Weight: 0.20; Deferred: Moderate debt (DM -280) | [Spot Price] Q42: NORMAL (day) | Adapter: gespot_current_...
 ```
 
-**Full Reasoning in Attributes:**
+**Attributes:**
 ```yaml
 attributes:
-  full_reasoning: "State WARNING: DM -522 beyond expected for 7.0°C (expected: -360) | Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C; Safety: +1.5°C; Adjusted: 27.7°C; Unusual weather (severity=0.5); Current: 35.0°C → offset: -4.8°C; Weight: 0.49 | Spot Price Q0: CHEAP (night)"
-  applied_offset: -4.8
-  decision_timestamp: "2025-10-16T00:04:31"
-  layers:
-    - reason: "WARNING: DM -522 beyond expected for 7.0°C (expected: -360)"
-      offset: 1.5
-      weight: 0.8
-    - reason: "Math WC: kuehne; Zone: Moderate Cold; Optimal: 26.2°C"
-      offset: -4.8
-      weight: 0.49
-    - reason: "Spot Price Q0: CHEAP (night)"
-      offset: 0.0
-      weight: 0.3
+  full_reasoning: "[Math WC] Math WC: en442_design_point; Zone: Moderate Cold; ... | [Spot Price] Q42: NORMAL (day) | Adapter: gespot_current_price_se4 | Horizon: 10.0h | ..."
+  applied_offset: -3.17
+  Thermal Debt:
+    reason: "DM -280 but 1.2°C over target - let cool naturally"
+    offset: 0
+    weight: 0
+  Spot Price:
+    reason: "Q42: NORMAL (day) | Adapter: gespot_current_price_se4 | Horizon: 10.0h"
+    offset: 0
+    weight: 0.8
+  # ... one entry per layer
 ```
 
 ### Accessing Full Reasoning
@@ -64,26 +66,13 @@ entities:
 ### Layer-by-Layer Analysis
 
 ```yaml
-{% for layer in state_attr('sensor.effektguard_optimization_reasoning', 'layers') %}
-{{ layer.reason }} (offset: {{ layer.offset }}°C, weight: {{ layer.weight }})
+{% set s = 'sensor.effektguard_optimization_reasoning' %}
+{% for name in ['Safety', 'Thermal Debt', 'Proactive', 'Peak', 'Learned Pre-heat', 'Math WC', 'Weather Pre-heat', 'Spot Price', 'Comfort'] %}
+{% set layer = state_attr(s, name) %}
+{% if layer %}{{ name }}: {{ layer.reason }} (offset: {{ layer.offset }}°C, weight: {{ layer.weight }}){% endif %}
 {% endfor %}
 ```
 
 ## Other Sensors
 
 All other EffektGuard sensors stay well below the 255-character limit. Only `optimization_reasoning` required special handling due to its detailed nature.
-
-## Debug Logging
-
-When reasoning is truncated, a debug log is generated:
-```
-DEBUG: Reasoning truncated to 255 chars, full reasoning in attributes
-```
-
-Enable debug logging to see truncation events:
-```yaml
-logger:
-  default: info
-  logs:
-    custom_components.effektguard.sensor: debug
-```

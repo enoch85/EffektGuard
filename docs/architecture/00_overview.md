@@ -16,7 +16,7 @@ EffektGuard is a sophisticated Swedish heat pump optimization system with these 
 This folder contains detailed Mermaid diagrams showing how EffektGuard works in different scenarios:
 
 1. **[01_normal_optimization_cycle.md](01_normal_optimization_cycle.md)** - Standard 5-minute optimization cycle
-2. **[02_emergency_thermal_debt.md](02_emergency_thermal_debt.md)** - Context-aware emergency response + T2 thermal recovery damping
+2. **[02_emergency_thermal_debt.md](02_emergency_thermal_debt.md)** - Context-aware emergency response + T1-T3 thermal recovery damping
 3. **[03_effect_tariff_protection.md](03_effect_tariff_protection.md)** - 15-minute peak avoidance
 4. **[04_weather_preheating.md](04_weather_preheating.md)** - Predictive pre-heating
 5. **[05_spot_price_optimization.md](05_spot_price_optimization.md)** - Spot price classification
@@ -35,7 +35,7 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 - Kiruna (-25°C, Extreme Cold zone): Expects DM -900 to -1300, warning at -1300
 - **Past -1500 DM no cuts**: the offset is floored at 0 unless the room is above its band, and
   nothing raises into the saturated pump
-- **T2 thermal recovery damping** prevents overshoot when solar gain or natural warming detected
+- **T1-T3 thermal recovery damping** prevents overshoot when solar gain or natural warming is detected
 
 ### 2. Native Swedish Integration
 - **Spot price integration provides exactly 96 quarterly periods** (15-minute intervals)
@@ -44,20 +44,23 @@ This folder contains detailed Mermaid diagrams showing how EffektGuard works in 
 
 ### 3. Multi-Layer Decision Engine
 - **9 prioritized decision layers** with weighted aggregation
-- Critical layers can override others (Safety 1.0, Effect up to 1.0)
-- Advisory layers use dynamic weighted averaging (Emergency 0.8, Price 0.8, Weather 0.85, etc.)
+- Critical layers can override others (Safety 1.0; Effect and Price up to 1.0 at their critical state)
+- Thermal debt acts by tier: T1-T3 (0.65 / 0.81 / 0.91) hold a minimum recovery offset, and the
+  EMERGENCY tier floors the result at 0 (see [08](08_layer_priority_system.md))
+- Advisory layers use weighted averaging (Price 0.8, Weather pre-heat 0.85, etc.)
 
 ### 4. Self-Learning Capabilities (Phase 6)
 - **Thermal state predictor** learns building characteristics
 - **Weather pattern learning** adapts to seasonal changes
 - **Adaptive thermal model** adjusts thermal mass estimates
-- Uses 672 observations (1 week) minimum for learning
+- Observes hourly into a 672-observation (28-day) window; learning may engage after 96 (4 days)
 
 ### 5. Exhaust Air Heat Pump Optimization (F750/F730)
 - **Airflow optimization** for exhaust air heat pumps
-- Increases ventilation when compressor is struggling
-- Net gain: +1.0 kW typical (heat extraction + COP improvement - ventilation penalty)
-- Temperature-aware thresholds prevent use when outdoor penalty exceeds gains
+- Would increase ventilation when the compressor is struggling
+- Net gain is negative on the physics as written (extraction +0.41 kW, ventilation penalty -0.70 kW
+  at 0 °C), so the optimiser refuses to enhance and the feature does not fire (F-032, see
+  [11](11_airflow_optimization.md))
 
 ## Layer Architecture
 
@@ -69,7 +72,7 @@ flowchart TB
         direction LR
         TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer, ThermalModel<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
         CL["comfort_layer.py<br/>→ ComfortLayer"]
-        PrL["price_layer.py<br/>→ PriceAnalyzer<br/>+ get_fallback_prices#40;#41;"]
+        PrL["price_layer.py<br/>→ PriceAnalyzer"]
         EfL["effect_layer.py<br/>→ EffectManager"]
         WL["weather_layer.py<br/>→ WeatherPredictionLayer<br/>→ WeatherCompensationLayer<br/>→ AdaptiveClimateSystem"]
         PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
@@ -91,7 +94,7 @@ flowchart TB
     subgraph DHW["DHW OPTIMIZER - Water heating"]
         DHW1["Receives: emergency_layer #40;shared#41;"]
         DHW2["Receives: price_analyzer #40;shared#41;"]
-        DHW3["Uses: estimate_dm_recovery_time#40;#41;"]
+        DHW3["Uses: estimate_dm_recovery_time#40;#41;, get_thermal_debt_status#40;#41;"]
     end
 
     subgraph COORD["COORDINATOR"]
@@ -99,7 +102,6 @@ flowchart TB
         COORD2["Creates: ThermalStatePredictor, AdaptiveThermalModel"]
         COORD3["Creates: WeatherPatternLearner"]
         COORD4["Passes shared layers to DHWOptimizer"]
-        COORD5["Uses: get_thermal_debt_status#40;#41;, get_fallback_prices#40;#41;"]
     end
 ```
 

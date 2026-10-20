@@ -1,295 +1,96 @@
 # Testing Guide
 
-Complete guide to running and writing tests for EffektGuard.
+How the EffektGuard tests are laid out and run. **What deserves a test** - and what does not - is in
+[`docs/agent/IMPLEMENTATION.md`](../agent/IMPLEMENTATION.md) (Tests); this page does not repeat it.
 
 ## Quick Start
 
 ```bash
-# Run all tests
-pytest tests/ -v
+# Everything, organized output
+bash scripts/run_all_tests.sh
 
-# Run specific test file
-pytest tests/test_entities.py -v
+# One category (see below)
+bash scripts/run_all_tests.sh dhw
 
-# Run specific test
-pytest tests/unit/test_thermal_debt.py::test_dm_500_emergency -v
-
-# With coverage report
-pytest tests/ --cov=custom_components/effektguard --cov-report=html
+# Direct
+pytest tests/ -q
+pytest tests/unit/dhw/test_a_slow_tank_is_heated_in_time.py -q
 ```
 
 ## Test Structure
 
 ```
 tests/
-├── conftest.py              # Shared fixtures and configuration
-├── unit/                    # Unit tests (pure logic, no HA dependencies)
-│   ├── test_thermal_debt.py
-│   ├── test_decision_engine.py
+├── conftest.py              # Shared fixtures and helpers (mock hass, entry, price analyzer)
+├── test_*.py                # Integration-level tests: config flow, services, entities, reload
+├── unit/                    # One behaviour per file, named for the behaviour
+│   ├── adapters/  climate/  coordinator/  dhw/  effect/
+│   ├── learning/  models/   optimization/ utils/
+│   └── test_*.py            # Behaviours that span areas
+├── validation/              # The code against its documents, physics and ratchets
+│   ├── test_climate_zones_doc_matches_the_code.py
+│   ├── test_no_hardcoded_values.py         # with hardcoded_values_baseline.json
+│   ├── test_research_docs_still_hold.py
 │   └── ...
-├── integration/             # Integration tests (requires HA entities)
-│   ├── test_coordinator.py
-│   └── ...
-└── test_*.py               # Root level tests
+└── integration/             # (empty package)
 ```
 
-## Test Categories
+Test files are named for the behaviour they hold, e.g.
+`tests/unit/dhw/test_nibe_s_own_hot_water_cycle_is_seen.py`.
 
-### Unit Tests (`tests/unit/`)
-- Test pure Python logic
-- No Home Assistant dependencies
-- Fast execution
-- Mock external dependencies
+## Categories (`scripts/run_all_tests.sh <category>`)
 
-**Example:**
-```python
-def test_thermal_debt_prevention():
-    """Test that DM -500 triggers emergency recovery."""
-    tracker = ThermalDebtTracker()
-    tracker.degree_minutes = -500
-    
-    assert tracker.get_severity() == "CRITICAL"
-    assert tracker.get_recovery_offset() == 3.0
-```
-
-### Integration Tests (`tests/integration/`)
-- Test Home Assistant integration
-- Require mock HA entities
-- Test coordinator patterns
-- Verify entity behavior
-
-**Example:**
-```python
-async def test_coordinator_update(hass):
-    """Test coordinator data update cycle."""
-    coordinator = EffektGuardCoordinator(hass, ...)
-    await coordinator.async_refresh()
-    
-    assert coordinator.last_update_success
-```
+| Category | Runs |
+|---|---|
+| `all` | `tests/` |
+| `unit` | `tests/unit/` |
+| `validation` | `tests/validation/` |
+| `integration` | `tests/test_*.py` |
+| `optimization`, `climate`, `learning`, `models`, `dhw`, `effect` | `tests/unit/<category>/` |
+| `simulation` | The month-long simulation (real DecisionEngine + plant model) |
 
 ## Running Tests
 
-### Basic Commands
-
 ```bash
-# All tests with verbose output
-pytest tests/ -v
-
-# Quiet mode (only show failures)
-pytest tests/ -q
-
-# Stop on first failure
-pytest tests/ -x
-
-# Run last failed tests
-pytest tests/ --lf
-
-# Run only tests that match pattern
-pytest tests/ -k "thermal_debt"
+pytest tests/ -q             # Quiet
+pytest tests/ -x             # Stop on first failure
+pytest tests/ --lf           # Last failed
+pytest tests/ -k "peak"      # Name pattern
+pytest tests/ -n 4           # In parallel (pytest-xdist)
 ```
 
-### Coverage Reports
+pytest's options live in `pyproject.toml` (`asyncio_mode = "auto"`: async tests need no marker).
+`pytest-homeassistant-custom-component` provides the real `hass` fixture for tests that need Home
+Assistant itself.
 
-```bash
-# Terminal coverage report
-pytest tests/ --cov=custom_components/effektguard
+## Fixtures and helpers
 
-# HTML coverage report (opens in browser)
-pytest tests/ --cov=custom_components/effektguard --cov-report=html
-# Then open htmlcov/index.html
+`tests/conftest.py`:
+- `create_mock_hass(latitude=59.3)`, `create_mock_entry()`, `make_mock_async_all(...)` - helpers
+- `mock_price_analyzer` - a fixture wrapping `create_mock_price_analyzer()`
+- an autouse fixture that sets up Home Assistant's frame helper
 
-# Coverage with missing lines
-pytest tests/ --cov=custom_components/effektguard --cov-report=term-missing
-```
+## The other gates
 
-### Debug Mode
-
-```bash
-# Show print statements
-pytest tests/ -s
-
-# Drop into debugger on failure
-pytest tests/ --pdb
-
-# Full traceback
-pytest tests/ --tb=long
-```
-
-## Writing Tests
-
-### Test Safety-Critical Code
-
-All safety thresholds must have tests:
-
-```python
-def test_prevents_catastrophic_thermal_debt():
-    """Verify DM -500 threshold prevents heat pump damage."""
-    # Based on stevedvo's real failure: DM -500 = 15kW spikes
-    engine = DecisionEngine()
-    state = NibeState(degree_minutes=-500)
-    
-    decision = engine.calculate_decision(state, prices, weather)
-    
-    # Must trigger emergency recovery, ignore cost optimization
-    assert decision.offset >= 2.0
-    assert "EMERGENCY" in decision.reasoning
-```
-
-### Test NIBE-Specific Behavior
-
-```python
-def test_blocks_activation_wrong_pump_config():
-    """Verify open-loop with Intermittent mode blocks activation."""
-    # Based on glyn.hudson's 8-hour off period failure
-    validator = SystemConfigValidator()
-    
-    warnings = validator.validate_pump_configuration(
-        system_type="open_loop",
-        pump_mode="INTERMITTENT"
-    )
-    
-    assert len(warnings) > 0
-    assert warnings[0].severity == "CRITICAL"
-    assert warnings[0].blocks_activation is True
-```
-
-### Use Realistic NIBE Values
-
-```python
-# ✅ Good - realistic NIBE behavior
-def test_thermal_model_concrete_ufh():
-    """Test thermal lag for concrete slab UFH."""
-    model = ThermalModel(ufh_type="concrete_slab")
-    
-    # Concrete slab: 6+ hours thermal lag (glyn.hudson case study)
-    lag = model.calculate_thermal_lag()
-    assert 6.0 <= lag <= 12.0
-
-# ❌ Bad - arbitrary values
-def test_thermal_model():
-    """Test thermal model."""
-    model = ThermalModel(ufh_type="concrete_slab")
-    lag = model.calculate_thermal_lag()
-    assert lag > 0  # Too vague!
-```
-
-### Mock External Dependencies
-
-```python
-from unittest.mock import Mock, AsyncMock
-
-async def test_nibe_adapter(hass):
-    """Test NIBE adapter reads correct entities."""
-    # Mock Home Assistant state
-    hass.states.async_set("sensor.nibe_degree_minutes", "-120")
-    
-    adapter = NibeAdapter(hass, "nibe_device")
-    state = await adapter.get_current_state()
-    
-    assert state.degree_minutes == -120
-```
-
-## Test Fixtures
-
-Common fixtures are defined in `tests/conftest.py`:
-
-```python
-@pytest.fixture
-def hass():
-    """Home Assistant instance for testing."""
-    # Returns configured HA instance
-    
-@pytest.fixture
-def nibe_state():
-    """Sample NIBE state data."""
-    # Returns realistic NIBE state
-    
-@pytest.fixture
-def price_data():
-    """Sample Spot Price price data."""
-    # Returns 15-minute price data
-```
-
-## Best Practices
-
-### ✅ Do
-
-- Test real NIBE behavior patterns
-- Use realistic values from research documents
-- Test safety-critical thresholds thoroughly
-- Mock external APIs and network calls
-- Use descriptive test names
-- Add docstrings explaining what's tested
-- Reference research documents in test docstrings
-
-### ❌ Don't
-
-- Test implementation details
-- Use hardcoded magic numbers without context
-- Skip testing safety-critical code
-- Make network calls in tests
-- Test private methods directly
-- Use arbitrary test values
+Tests are one of several gates; the full list (Black, the hardcoded-value ratchet, the simulator's
+`--selftest`, `--dst` and `--all-scenarios`, the live bench, the closed loop for control changes) is in
+`CLAUDE.md` ("Before claiming it works") and `docs/agent/IMPLEMENTATION.md`.
 
 ## Continuous Integration
 
-Tests run automatically on:
-- Pull requests
-- Push to main branch
-- Manual workflow dispatch
-
-All tests must pass before merging.
+`.github/workflows/validate.yml` runs on pull requests, on pushes to `main` and in the merge queue:
+Black and the ratchet, `pip check`, `compileall`, the full suite, the simulator's three runs, the HACS
+build, HACS and Hassfest validation, workflow lint and a development-container build.
 
 ## Troubleshooting
 
-### Import Errors
-
-```bash
-# Clear Python cache
-find . -type d -name __pycache__ -exec rm -r {} +
-
-# Reinstall in development mode
-pip install -e .
-```
-
-### Async Test Issues
-
-Ensure async tests use `pytest-asyncio`:
-
-```python
-import pytest
-
-@pytest.mark.asyncio
-async def test_async_function():
-    result = await some_async_function()
-    assert result is not None
-```
-
-### Fixture Not Found
-
-Check that fixture is defined in `conftest.py` or imported correctly.
-
-### Test Hangs
-
-Check for:
-- Missing `await` in async code
-- Infinite loops
-- Network calls (should be mocked)
-
-## Test Coverage Goals
-
-- **Core logic**: 90%+ coverage
-- **Safety systems**: 100% coverage
-- **Decision engine**: 95%+ coverage
-- **Adapters**: 80%+ coverage (mock external APIs)
-
-Run coverage check:
-```bash
-pytest tests/ --cov=custom_components/effektguard --cov-report=term-missing
-```
+- **Import errors**: clear `__pycache__` (`find . -type d -name __pycache__ -exec rm -r {} +`) and check
+  that the venv is the one `scripts/setup_dev.sh` created (`.venv`, Python 3.15)
+- **A test hangs**: a missing `await`, or something real (network, clock) that should be mocked - tests
+  use no real network and no real clock
 
 ## Related Documentation
 
 - [CODE_STANDARDS.md](CODE_STANDARDS.md) - Code style conventions
 - [CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md) - How to contribute
+- [`tests/README.md`](../../tests/README.md) - The test tree in detail

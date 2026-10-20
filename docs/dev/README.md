@@ -15,10 +15,10 @@ New to EffektGuard development? Follow these steps:
 
 1. **Environment Setup** → [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)
    - Clone repository
-   - Activate Python 3.13 virtual environment
+   - Create the Python 3.15 virtual environment (`bash scripts/setup_dev.sh` → `.venv`)
    - Verify installation with tests
 
-2. **Understand Architecture** → `../../architecture/`
+2. **Understand Architecture** → `../architecture/`
    - Read `00_overview.md` for system overview
    - Review layer priority system
    - Understand climate-aware safety
@@ -61,10 +61,14 @@ custom_components/effektguard/
 ├── config_flow.py           # User configuration flow
 │
 ├── optimization/            # Pure Python optimization logic
-│   ├── decision_engine.py   # Multi-layer decision making
-│   ├── thermal_model.py     # Thermal calculations
-│   ├── effect_manager.py    # Peak power tracking
-│   ├── price_analyzer.py    # Price classification
+│   ├── decision_engine.py   # Layer aggregation, the safety layer
+│   ├── thermal_layer.py     # EmergencyLayer (T1-T3, anti-windup), ProactiveLayer (Z1-Z5)
+│   ├── effect_layer.py      # Peak power tracking (EffectManager)
+│   ├── price_layer.py       # Price classification (PriceAnalyzer)
+│   ├── weather_layer.py     # Weather compensation and pre-heat
+│   ├── comfort_layer.py     # Comfort / overshoot
+│   ├── prediction_layer.py  # Learned pre-heat
+│   ├── dhw_optimizer.py     # Hot water scheduling
 │   └── climate_zones.py     # Climate-aware thresholds
 │
 ├── adapters/                # External data interfaces
@@ -73,8 +77,10 @@ custom_components/effektguard/
 │   └── weather_adapter.py   # Weather forecast reader
 │
 └── utils/                   # Cross-cutting utilities
-    ├── validators.py        # Configuration validation
-    └── safety.py            # Thermal debt tracking
+    ├── offset.py            # The integer the offset register receives
+    ├── volatile_helpers.py  # The offset volatility gate
+    ├── emitter.py           # The EN 442 emitter law
+    └── degree_minutes.py    # Degree-minute helpers
 ```
 
 ## Key Concepts
@@ -100,17 +106,14 @@ dm_range = climate_detector.get_expected_dm_range(outdoor_temp=-10.0)
 Critical safety metric tracking thermal balance:
 - **Standard start**: DM -60
 - **Extended runs**: DM -240 (acceptable)
-- **Climate-aware warning**: Varies by zone (e.g., -700 for Stockholm at -10°C)
+- **Climate-aware warning**: Varies by zone (e.g., -740 for Stockholm at -10°C)
 - **Absolute critical**: DM -1500 (never exceed)
 
 ### Multi-Layer Decision Engine
 
-Optimization uses weighted voting across layers:
-1. Emergency Recovery (blocks all else)
-2. Effect Tariff Protection
-3. Weather Pre-heating
-4. Spot Price Optimization
-5. Normal Operation
+Optimization uses weighted voting across nine layers - Safety, Emergency (T1-T3, EMERGENCY, anti-windup),
+Proactive (Z1-Z5), Effect, Learned pre-heat, Math WC, Weather pre-heat, Spot price and Comfort; see
+`../architecture/08_layer_priority_system.md`.
 
 ## Common Tasks
 
@@ -123,8 +126,8 @@ pytest tests/ -v
 # With coverage
 pytest tests/ --cov=custom_components/effektguard --cov-report=html
 
-# Specific test
-pytest tests/unit/test_thermal_debt.py::test_dm_500_emergency -v
+# One category
+pytest tests/unit/dhw/ -q
 ```
 
 ### Formatting Code
@@ -198,13 +201,13 @@ Before submitting PR:
 
 ### User Documentation
 - `../../README.md` - User installation and setup
-- `../../docs/CLIMATE_ZONES.md` - Climate zone system
-- `../../docs/DHW_OPTIMIZATION.md` - DHW scheduling
+- `../CLIMATE_ZONES.md` - Climate zone system
+- `../DHW_OPTIMIZATION.md` - DHW scheduling
 
 ### Architecture Documentation
-- `../../architecture/00_overview.md` - System overview
-- `../../architecture/08_layer_priority_system.md` - Decision engine
-- `../../architecture/10_adaptive_climate_zones.md` - Climate adaptation
+- `../architecture/00_overview.md` - System overview
+- `../architecture/08_layer_priority_system.md` - Decision engine
+- `../architecture/10_adaptive_climate_zones.md` - Climate adaptation
 
 ### Research Documentation
 - NIBE research references are inline in code docstrings and const.py comments

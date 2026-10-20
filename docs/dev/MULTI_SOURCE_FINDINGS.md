@@ -499,8 +499,8 @@ RESIDUAL RISK (honest boundary — cannot be ruled out in this environment):
 
 ### Still open / follow-ups (not blocking issue #18)
 
-- get_current_state silent defaults (#17): surfaced but NOT redesigned —
-  needs a data-quality flag consumed by the coordinator (breaking-ish change).
+- ~~get_current_state silent defaults (#17)~~ - done: the adapter refuses missing required inputs
+  (`tests/unit/adapters/test_adapter_refuses_fabricated_data.py`).
 - Temp lux on nibe_heatpump is NOT a switch (corrected 2026-10-11): register
   48132 has five mapped states, so nibe_heatpump creates
   `select.temporary_lux_48132` (select.py takes writable coils with mappings
@@ -512,10 +512,10 @@ RESIDUAL RISK (honest boundary — cannot be ruled out in this environment):
   and input_boolean only, so these users bridge the select with an
   input_boolean helper and an automation. A generic Modbus YAML switch on
   48132 (the devbox stack above) is a switch and works directly.
-- -32768 "unknown value" guard for raw Modbus sensor glitches.
+- ~~-32768 "unknown value" guard for raw Modbus sensor glitches~~ - done: `NIBE_UNKNOWN_VALUE_MARKERS`.
 - S-series myuplink parameter-id space unverified (3 distinct ID spaces exist).
-- hacs.json (2024.1.0) vs README (2025.10+) HA version mismatch.
-- strings for da/fi/no/sv: new keys added in English pending translation.
+- ~~hacs.json (2024.1.0) vs README (2025.10+) HA version mismatch~~ - done: both 2025.11.
+- ~~strings for da/fi/no/sv pending translation~~ - done: da, fi, nb and sv carry every key, translated.
 
 ## Test stack (devbox, real e2e)
 

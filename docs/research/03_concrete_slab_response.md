@@ -6,8 +6,8 @@ One constant comes from this analysis:
 UFH_CONCRETE_PREDICTION_HORIZON = 48.0   # hours
 ```
 
-A second change this analysis argues for — a stronger pre-heat offset — has **not** been made,
-and the last section says exactly where that stands.
+A second change this analysis argues for — a stronger pre-heat offset — was made on 2026-10-11
+(`WEATHER_GENTLE_OFFSET` = 2.0 °C); the last section says why.
 
 ## The thermal model
 

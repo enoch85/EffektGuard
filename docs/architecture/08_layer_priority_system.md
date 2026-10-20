@@ -6,13 +6,13 @@
 flowchart TD
     subgraph "Layer Processing Order"
         A[1. Safety Layer<br/>Weight: 1.0 if violated<br/>Hard limit: 18°C min]
-        B[2. Emergency Layer<br/>Weight: 0.8<br/>Context-aware DM thresholds]
+        B[2. Emergency Layer<br/>T1 0.65 / T2 0.81 / T3 0.91<br/>EMERGENCY by tier; anti-windup 0.7]
         C[3. Proactive Debt Prevention<br/>Weight: 0.3-0.6<br/>Trend-based DM prediction]
         D[4. Effect Layer<br/>Weight: 0.65-1.0<br/>15-min peak protection]
         E[5. Prediction/Learning Layer<br/>Weight: varies<br/>Learned pre-heating]
         F[6. Weather Compensation<br/>Weight: varies<br/>Mathematical flow temp]
         G[7. Weather Prediction<br/>Weight: 0.85<br/>Pre-heating before cold]
-        H[8. Price Layer<br/>Weight: 0.8<br/>Forward-looking optimization]
+        H[8. Price Layer<br/>Weight: 0.8, 1.0 at PEAK<br/>Forward-looking optimization]
         I[9. Comfort Layer<br/>Weight: 0.2-1.0<br/>Temperature error correction]
     end
 
@@ -80,11 +80,16 @@ These layers can **completely override** all other considerations:
 
 1. **Safety Layer (1.0)**: Absolute temperature limits (18°C minimum indoor)
 2. **Effect Layer (1.0)**: Peak protection when critical (already at peak)
+3. **Price Layer (1.0)**: In a PEAK quarter
+
+The EMERGENCY tier (DM past the aux limit) is applied **by tier**, not by weight: the other layers
+decide and their verdict is floored at 0 (see the aggregation steps below).
 
 #### High-Priority Advisory Layers (Weight 0.8-0.85)
 These layers have **strong influence** on decisions:
 
-3. **Emergency Layer (0.8)**: Thermal debt prevention (context-aware DM thresholds)
+3. **Emergency Layer, T1-T3 (0.65 / 0.81 / 0.91)**: Thermal-debt recovery (context-aware DM thresholds);
+   anti-windup and its cooldown vote at 0.7
 4. **Price Layer (0.8)**: Forward-looking spot price optimization with adaptive horizon
 5. **Weather Prediction (0.85)**: Weather-based pre-heating before cold periods
 
@@ -138,7 +143,12 @@ if emergency_layer and emergency_layer.tier in DM_RECOVERY_TIERS:
 critical = [l for l in layers if l.weight >= LAYER_WEIGHT_SAFETY]
 if critical:
     hi, lo = max(l.offset for l in critical), min(l.offset for l in critical)
-    return clamp(hi if abs(hi) >= abs(lo) else lo)   # `>=`, so an exact tie HEATS
+    chosen = hi if abs(hi) >= abs(lo) else lo   # `>=`, so an exact tie HEATS
+    # A cost layer may coast the house within its band, not out of it: a cost cut is floored
+    # toward the comfort layer's demand, ramped by how far the house is out (_starvation_fraction).
+    if chosen < 0 and starvation > 0 and all critical layers are cost layers:
+        chosen = min(comfort.offset, chosen + (comfort.offset - chosen) * starvation)
+    return clamp(chosen)
 
 # 5. Everything else: weighted average.
 return clamp(weighted_average(layers))
@@ -157,12 +167,13 @@ Two details that look like nits and are not:
 #### Critical Layers (1.0)
 - **Safety**: Human comfort and system protection (18°C hard minimum)
 - **Effect (Critical)**: Financial protection when already at peak
+- **Price (PEAK)**: A PEAK quarter
 
 **Design Philosophy**: These concerns are **non-negotiable** and override all cost optimization.
 
 #### High-Priority Layers (0.8-0.85)
 - **Weather Prediction (0.85)**: Pre-heating is time-sensitive, must act before cold arrives
-- **Emergency (0.8)**: Heat pump damage prevention, balanced with cost optimization
+- **Emergency T1-T3 (0.65 / 0.81 / 0.91)**: Thermal-debt recovery, each tier with a minimum offset
 - **Price (0.8)**: Strong cost optimization with forward-looking and thermal storage awareness
 
 **Balances**: Critical operational needs with intelligent cost management
@@ -255,21 +266,16 @@ Non-critical layers achieve **natural balance** through weighted averaging:
 
 ### Dynamic Weight Adjustment
 
-#### Emergency Layer Scaling  
-```python
-def _emergency_layer(self, nibe_state) -> LayerDecision:
-    degree_minutes = nibe_state.degree_minutes
-    
-    if degree_minutes <= -1500:
-        weight = 1.0  # Absolute maximum
-    elif margin_to_limit < 300:
-        weight = 1.0  # Critical range
-    elif beyond_expected_warning:
-        weight = 0.8  # Warning level
-    elif approaching_expected:
-        weight = 0.5  # Caution level
-    else:
-        weight = 0.0  # Normal operation
-```
+#### Emergency Layer Tiers
+`EmergencyLayer.evaluate_layer` (thermal_layer.py) returns a tier, an offset and a weight:
+
+| Tier | When | Offset | Weight |
+|---|---|---|---|
+| `EMERGENCY` | DM past the aux limit (−1500) | none of its own: the others decide, floored at 0 | 1.0, applied by tier |
+| `T3` / `T2` / `T1` | DM past the climate-aware warning + 400 / + 200 / + 0 | 8.5 / 7.0 / 4.0, damped as the room recovers | 0.91 / 0.81 / 0.65 |
+| `ANTI_WINDUP`, `COOLDOWN` | DM falling after our own raise | holds the offset, or cuts it in proportion to the DM fall rate when it is steep; no raise during the cooldown | 0.7 |
+| OK | otherwise | 0 | 0 |
+
+There is no WARNING or CAUTION level (`docs/architecture/02_emergency_thermal_debt.md`).
 
 This **dynamic weighting system** ensures the decision engine responds appropriately to the severity of each situation while maintaining balanced optimization during normal operation.

@@ -78,11 +78,11 @@ EffektGuard continuously observes your building and estimates:
 - **Heating efficiency** - system response to offset changes (°C/°C)
 - **Weather patterns** - seasonal adaptation with unusual weather detection
 
-**These estimates do not currently influence control.** Learned parameters are used for
-pre-heating only once the model's confidence exceeds 70%, and confidence cannot presently
-reach that: the indoor temperature is read to 0.1 °C every 5 minutes, and a building's
-response over 5 minutes is smaller than the sensor's own resolution. Nothing reliable can be
-learned from that, so nothing is claimed from it.
+**Learned pre-heat parameters are used only above 70 % confidence**
+(`LEARNING_CONFIDENCE_THRESHOLD`). Learning observes hourly, into a 28-day window. Two learned
+values are applied without that gate once 96 hourly observations exist (four days of uptime): the
+thermal mass, which sets the spot-price layer's look-ahead, and the floor's response type, which sets
+the learned pre-heat horizon. That is a known open item.
 
 Control today is physics-based and deterministic — the heating curve, the EN 442 emitter law,
 weather compensation and the degree-minute safety net — none of which depends on learning.
@@ -99,15 +99,16 @@ Prices come from [GE-Spot](https://github.com/enoch85/ge-spot) (15-minute interv
 ### 💰 Smart Price Forecasting
 Multi-factor forward-looking optimization combining:
 - **Price + thermal state** - considers current indoor temp overshoot for strategic thermal storage
-- **Price + building characteristics** - adaptive horizon scales with thermal mass (2.0-8.0 hours)  
+- **Price + building characteristics** - adaptive horizon scales with thermal mass (2.5-10 hours: 5 h × 0.5-2.0)  
 - **Price + compressor dynamics** - filters brief spikes < 45 min using ramp-up/cool-down constraints
 
 ### 🌡️ Weather Compensation (Mathematical)
 Physics-based flow temperature optimization:
-- **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264) - validated against NIBE's own
-  published curve 9: it lands **0.20 °C** from it, where a straight line is out by **2.37 °C**
-- **Timbones method** - radiator-specific calculations (BS EN442)
-- **UFH adjustments** - concrete slab (-8°C), timber (-5°C)
+- **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264) - pinned to OpenEnergyMonitor's
+  published weather-compensation tool (`tests/validation/test_emitter_law_matches_openenergymonitor.py`);
+  NIBE's own curve 9 is a straight line and cannot validate it (see `docs/research/02_emitter_law.md`)
+- **One law for every emitter** - the EN 442 exponent 1.3 for radiators, the EN 1264 exponent 1.1 for
+  underfloor heating, with a 50 °C or 35 °C design flow
 - **Climate-aware margins** - automatic safety headroom by zone
 
 Uses proper heat transfer mathematics to optimize flow temperature beyond standard outdoor temp curves.
@@ -238,14 +239,14 @@ Optimization Engine (pure Python)
     ├── price_layer.py (spot price optimization)
     ├── weather_layer.py (mathematical WC + cold snap)
     ├── comfort_layer.py (temperature correction)
-    ├── dhw_optimizer.py (18 decision rules)
+    ├── dhw_optimizer.py (rule-ordered hot-water scheduling)
     ├── adaptive_learning.py (self-tuning)
     ├── savings_calculator.py (cost estimation)
     ├── airflow_optimizer.py (S-series supply air)
     └── climate_zones.py (latitude detection)
 
 Data Adapters (external interfaces)
-├── nibe_adapter.py (MyUplink read/write)
+├── nibe_adapter.py (MyUplink, nibe_heatpump or Modbus entities)
 ├── gespot_adapter.py (price data)
 └── weather_adapter.py (forecast)
 
@@ -271,10 +272,14 @@ Decision Engine → Optimization → Climate Entity → Curve Offset
 ## Technical Details
 
 ### Decision Aggregation
-Weighted average of active layers with critical layer override:
-- **Critical layers** (weight ≥ 1.0): Safety, Emergency, Effect @ peak
-- **Advisory layers** (weight < 1.0): Weighted aggregation
-- **Emergency always wins** - thermal safety > peak cost protection
+In this order (`DecisionEngine._aggregate_layers`):
+- **Safety** - indoor below 18 °C wins outright
+- **Thermal debt** - past the aux limit (EMERGENCY) the other layers decide and the result is floored
+  at 0: no cuts, and no raise of its own; in T1-T3 the tier holds a minimum recovery offset, and against
+  a critical cost layer takes a peak-aware compromise
+- **Critical layers** (weight ≥ 1.0, e.g. the effect or spot-price layer at its critical state) -
+  the heating vote wins a tie
+- **Advisory layers** (weight < 1.0) - weighted average
 
 ### Thermal Debt (Degree Minutes)
 Heat deficit tracking used by many heat pumps (NIBE Menu 4.9.3, others may vary):
@@ -313,18 +318,15 @@ fixed-speed pump. Combined with climate-aware safety margins (0.0–2.5 °C by z
 
 ### Self-Learning Status
 
-Observations are recorded every 5 minutes into a rolling 672-entry window — **56 hours**, not
-the week the window was sized for. Confidence is scored from observation count, data
-consistency and time span, and learned parameters are used for pre-heating only above 70%.
+Observations are recorded hourly (`LEARNING_OBSERVATION_INTERVAL_MINUTES`) into a rolling
+672-entry window - 28 days. Confidence is scored from observation count, data consistency and time
+span, and learned parameters are used for pre-heating only above 70 %.
 
-At the present observation cadence that threshold is not reachable, and the integration says so
-rather than pretending otherwise: a 0.1 °C indoor sensor sampled every 5 minutes quantises the
-building's response into steps of 1.2 °C/h, which is larger than any real heating rate. The
-consistency term is therefore honestly zero and confidence settles around 0.47.
-
-**Learning does not drive your heat pump today.** Making it do so means sampling slowly enough
-for the signal to exceed the sensor's resolution — a deliberate change, not a tuning tweak,
-because it would put a learned model in the control path of real heating equipment.
+Measured on a real house's year (2026-10-19), the learned predictions do not beat "the room stays as
+it is", and confidence there stays below the gate (0.600), so learned parameters stay out of the
+pre-heat decision. Two learned values do reach control without
+the confidence gate once 96 hourly observations exist: the thermal mass (the spot-price layer's
+look-ahead) and the floor's response type (the learned pre-heat horizon). That is a known open item.
 
 ## Documentation
 
