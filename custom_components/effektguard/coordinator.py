@@ -458,23 +458,28 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         update path raises would otherwise kill the task silently and permanently
         (`last_update_success` stays True while the pump holds its last offset until HA restarts).
         The `finally` re-arms so the loop survives any single bad cycle.
+
+        A failure is published as Home Assistant's own refresh publishes one: logged and handed to
+        the entities on the transition, so they go unavailable instead of showing the last good
+        cycle, and the recovery is logged.
         """
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
             # lock, so a service commanding the pump at the same moment waits its turn.
-            self.data = await self._drive_the_pump()
-            self.last_update_success = True
-            self.async_set_updated_data(self.data)
+            data = await self._drive_the_pump()
         except UpdateFailed as err:
             # Expected degradation (e.g. required NIBE sensors unreadable).
-            self.last_update_success = False
-            _LOGGER.error("Update failed: %s", err)
-        except Exception:  # noqa: BLE001 - supervisory loop; see docstring
-            self.last_update_success = False
+            self.async_set_update_error(err)
+        except Exception as err:  # noqa: BLE001 - supervisory loop; see docstring
             _LOGGER.exception(
                 "Unexpected error during EffektGuard update. The update loop will continue; "
                 "entities are marked unavailable for this cycle and no offset was written."
             )
+            self.async_set_update_error(err)
+        else:
+            if not self.last_update_success:
+                _LOGGER.info("Reading the heat pump recovered")
+            self.async_set_updated_data(data)
         finally:
             # ALWAYS re-arm. Without this the coordinator dies permanently on any
             # unhandled exception, because update_interval is None.
@@ -1003,8 +1008,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "peak_this_month": 0.0,
                     "startup_pending": True,  # Flag for entities to show proper status
                 }
-            # After first success, NIBE failures are real errors
-            _LOGGER.error("Failed to read NIBE data: %s", err)
+            # After first success, NIBE failures are real errors. Each caller reports them.
             raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
