@@ -63,6 +63,8 @@ class WeatherAdapter:
         self._last_forecast_time: datetime | None = None  # When we last got a valid forecast
         self._last_service_call_time: datetime | None = None  # When we last tried service call
         self._next_random_attempt: datetime | None = None  # Next scheduled random attempt
+        # An outage is reported when it begins and when it ends, not on every cycle it lasts.
+        self._entity_unavailable: bool = False
 
     def _schedule_next_random_attempt(self) -> None:
         """Schedule next random forecast attempt within the next hour.
@@ -107,15 +109,19 @@ class WeatherAdapter:
         # Read weather entity state
         state = self.hass.states.get(self._weather_entity)
         if not state or state.state in ["unknown", "unavailable"]:
-            _LOGGER.warning(
+            (_LOGGER.debug if self._entity_unavailable else _LOGGER.warning)(
                 "Weather entity %s unavailable (state: %s)",
                 self._weather_entity,
                 state.state if state else "missing",
             )
+            self._entity_unavailable = True
             # Schedule next random attempt if not already scheduled
             if self._next_random_attempt is None:
                 self._schedule_next_random_attempt()
             return None
+        if self._entity_unavailable:
+            _LOGGER.info("Weather entity %s is available again", self._weather_entity)
+            self._entity_unavailable = False
 
         # A weather entity reports temperatures in the user's configured unit and declares which in
         # `temperature_unit`; convert to Celsius. Without this, an imperial install feeds +23 where
