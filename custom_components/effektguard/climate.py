@@ -278,9 +278,9 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         attrs = {}
 
         if self.coordinator.data:
-            # Current offset applied
-            if "decision" in self.coordinator.data:
-                decision = self.coordinator.data["decision"]
+            # None until the pump first answers: the coordinator's startup data carries no decision,
+            # and Home Assistant adds this entity on that data.
+            if decision := self.coordinator.data.get("decision"):
                 attrs["current_offset"] = self.coordinator.current_offset
                 attrs["optimization_reasoning"] = decision.reasoning
 

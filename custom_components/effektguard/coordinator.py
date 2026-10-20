@@ -991,8 +991,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Important: even though we return early, we must keep clock-aligned scheduling
                 # running. With update_interval=None, nothing else will trigger retries.
                 self._schedule_aligned_refresh()
-                # Return minimal coordinator data to allow entities to be created
-                # They will show "unavailable" until NIBE data becomes ready
+                # Minimal data so the platforms can be set up. The entities are added on it and
+                # show no reading until the pump answers.
                 return {
                     "nibe": None,
                     "price": None,
