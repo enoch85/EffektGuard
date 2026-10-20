@@ -1,34 +1,72 @@
-"""The coordinator must feed the decision engine live power, never the daily peak.
+"""The decision gets the power its own cycle measured - from the first cycle on.
 
-`peak_today` is a daily high-water mark that only ratchets up until the midnight reset.
-Feeding it to the engine as "current power" let one unrelated household spike (an oven, a
-kettle, an EV charger) pin the effect layer to CRITICAL (weight 1.0, offset -3.0 C) for the
-rest of the day, regardless of what the heat pump was drawing. The engine must instead
-receive the live reading PROJECTED over the billing period, because the monthly record it is
-compared against is an hourly mean.
+Power was measured after the decision, so a fresh coordinator's first decision had none: peak
+protection was off for that cycle, and the log advised configuring a power sensor the installation
+had (production 2026-10-19 21:35:10 and 21:50:35, a meter configured; EG-03 of the 2026-10-20 log
+investigation). Every later decision got the previous cycle's reading. Nor may it ever get
+`peak_today`, a daily maximum: one morning spike would pin the effect layer to CRITICAL until
+midnight.
 """
 
-import inspect
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
+
+from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
+METER = "sensor.grid_import"
 
 
-class TestCoordinatorPowerContract:
-    """The coordinator must feed the engine live power, not the daily maximum."""
+async def test_each_decision_gets_the_power_of_its_own_cycle():
+    hass = MagicMock()
+    hass.config.latitude = 55.6
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda func, *args: func(*args))
+    meter = MagicMock(attributes={"unit_of_measurement": "W"})
+    hass.states.get = MagicMock(side_effect=lambda entity_id: meter if entity_id == METER else None)
+    pump = NibeState(
+        outdoor_temp=5.0,
+        indoor_temp=21.0,
+        supply_temp=35.0,
+        return_temp=30.0,
+        degree_minutes=-100.0,
+        current_offset=0.0,
+        is_heating=True,
+        is_hot_water=False,
+        timestamp=datetime(2026, 10, 19, 21, 35, 10, tzinfo=STOCKHOLM),
+    )
+    nibe = MagicMock(power_sensor_entity=METER, _power_sensor_entity=METER)
+    nibe.get_current_state = AsyncMock(return_value=pump)
+    nibe.is_enhanced_ventilation_active = AsyncMock(return_value=None)
+    engine = MagicMock()
+    engine.calculate_decision = MagicMock(
+        return_value=OptimizationDecision(offset=0.0, reasoning="t", layers=[])
+    )
+    effect = EffectManager(hass)
+    effect.record_period_measurement = AsyncMock(return_value=None)
+    effect.async_save = AsyncMock()
+    coordinator = EffektGuardCoordinator(
+        hass,
+        nibe,
+        MagicMock(get_prices=AsyncMock(return_value=None)),
+        MagicMock(get_forecast=AsyncMock(return_value=None)),
+        engine,
+        effect,
+        MagicMock(data={}, options={}),
+    )
+    coordinator._record_learning_observations = AsyncMock()
+    coordinator._schedule_aligned_refresh = MagicMock()
 
-    def test_decision_path_does_not_consume_peak_today(self):
-        """`peak_today` (a daily maximum) and `current_power_kw` (the live reading the effect
-        layer consumes) are different quantities and must not be aliased.
-        """
-        from custom_components.effektguard.coordinator import EffektGuardCoordinator
+    for watts, minute in (("5000", 12), ("2000", 17)):  # 21:12 then 21:17, the next quarter
+        meter.state = watts
+        with patch(
+            "homeassistant.util.dt.now",
+            return_value=datetime(2026, 10, 19, 21, minute, 10, tzinfo=STOCKHOLM),
+        ):
+            await coordinator._async_update_data()
 
-        update_src = inspect.getsource(EffektGuardCoordinator._read_and_decide)
-
-        assert "current_power_for_decision = self.peak_today" not in update_src, (
-            "The decision engine is being fed peak_today (a daily MAXIMUM) as current power. "
-            "One morning spike would pin the effect layer to CRITICAL until midnight."
-        )
-        assert "projected_period_mean" in update_src and "self.current_power_kw" in update_src, (
-            "The decision engine must be fed the live reading PROJECTED over the billing period "
-            "- the monthly record it is compared against is an hourly mean, so an instantaneous "
-            "spike is not the same quantity. See "
-            "tests/unit/optimization/test_peak_protection_compares_like_with_like.py."
-        )
+    powers = [call.args[4] for call in engine.calculate_decision.call_args_list]
+    assert powers == [5.0, 2.0]
