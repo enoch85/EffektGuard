@@ -9,14 +9,19 @@ IndexError (DST price lookup), ZeroDivisionError (savings), RuntimeError/numpy (
 daily-only weather entity raises on every cycle, so the first such raise must not kill the loop.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from pytest_homeassistant_custom_component.common import MockConfigEntry, MockEntityPlatform
 
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
+from custom_components.effektguard.climate import EffektGuardClimate
+from custom_components.effektguard.const import DOMAIN
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
 
 WEATHER_ENTITY = "weather.daily_only_provider"
 
@@ -82,26 +87,51 @@ class TestUpdateLoopAlwaysRearms:
         )
 
     @pytest.mark.asyncio
-    async def test_failure_marks_the_update_unsuccessful(self):
-        """Entities must go unavailable rather than serving stale data as if healthy."""
-        coordinator = make_coordinator(update_error=HomeAssistantError("boom"))
-
-        await run_refresh(coordinator)
-
-        assert coordinator.last_update_success is False, (
-            "The coordinator reported success after a failed update. Entities would keep "
-            "serving their last value and look healthy while control had stopped."
-        )
-
-    @pytest.mark.asyncio
     async def test_timer_is_rearmed_on_success_too(self):
         coordinator = make_coordinator(update_error=None)
 
         await run_refresh(coordinator)
 
         coordinator._schedule_aligned_refresh.assert_called_once()
-        assert coordinator.last_update_success is True
         coordinator.async_set_updated_data.assert_called_once()
+
+
+async def test_the_entities_show_a_failed_cycle_and_the_recovery(hass):
+    """Unavailable while the pump cannot be read, back when it can - and nothing written meanwhile.
+
+    The loop only set `last_update_success` and told no listener, so until the next good cycle every
+    entity went on showing the last one as if healthy (production 2026-10-20, five cycles while
+    myUplink failed; EG-02 of the log investigation).
+    """
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    nibe = MagicMock()
+    nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("required sensors unreadable"))
+    coordinator = EffektGuardCoordinator(
+        hass, nibe, MagicMock(), MagicMock(), MagicMock(), MagicMock(), entry
+    )
+    coordinator._schedule_aligned_refresh = MagicMock()  # the timer is not under test
+    coordinator._first_successful_update = True  # past startup, a failed read is an error
+    pump = SimpleNamespace(
+        indoor_temp=21.3, outdoor_temp=-3.2, supply_temp=35.8, degree_minutes=-150
+    )
+    good = {"nibe": pump, "decision": OptimizationDecision(offset=0.0, reasoning="good")}
+    coordinator.async_set_updated_data(good)
+    platform = MockEntityPlatform(hass, domain="climate", platform_name=DOMAIN)
+    platform.config_entry = entry
+    await platform.async_add_entities([EffektGuardClimate(coordinator, entry)])
+    assert hass.states.get("climate.effektguard").state == "heat"
+
+    await coordinator._do_aligned_refresh()
+    await coordinator._do_aligned_refresh()
+
+    assert hass.states.get("climate.effektguard").state == "unavailable"
+    nibe.set_curve_offset.assert_not_called()
+
+    coordinator._drive_the_pump = AsyncMock(return_value=good)
+    await coordinator._do_aligned_refresh()
+
+    assert hass.states.get("climate.effektguard").state == "heat"
 
 
 class TestWeatherAdapterSurvivesUnsupportedForecast:
