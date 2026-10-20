@@ -1068,6 +1068,55 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.info("Weather forecast unavailable: %s", err)
             weather_data = None
 
+        # Check for day change and save yesterday's peak
+        now = dt_util.now()
+        if not hasattr(self, "_last_update_date"):
+            self._last_update_date = now.date()
+
+        if now.date() != self._last_update_date:
+            # New day detected - save yesterday's peak and reset
+            self.yesterday_peak = self.peak_today
+            _LOGGER.info(
+                "Day change detected: Yesterday's peak was %.2f kW, resetting daily peak",
+                self.yesterday_peak,
+            )
+
+            # Record yesterday's spot savings to the calculator
+            if self._daily_spot_savings != 0.0:
+                self.savings_calculator.record_spot_savings(self._daily_spot_savings)
+                _LOGGER.info(
+                    "Recorded daily spot savings: %.2f SEK",
+                    self._daily_spot_savings,
+                )
+            self._daily_spot_savings = 0.0  # Reset for new day
+
+            # A new day may also be a new MONTH. The effect tariff bills a monthly peak, so
+            # last month's peaks must not carry over into this one - an instance that stays up
+            # across a month boundary would otherwise bill against a stale threshold.
+            month_changed = (now.year, now.month) != (
+                self._last_update_date.year,
+                self._last_update_date.month,
+            )
+            if month_changed:
+                self.effect.prune_peaks_for_current_month()
+                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
+                _LOGGER.info(
+                    "Month change detected: pruned previous month's peaks, "
+                    "monthly peak reset to %.2f kW",
+                    self.peak_this_month,
+                )
+
+            # Reset daily peak for new day
+            self.peak_today = 0.0
+            self.peak_today_time = None
+            self.peak_today_source = "unknown"
+            self.peak_today_period = None
+            self._last_update_date = now.date()
+
+        # Before the decision: the effect layer reads this cycle's power, and the day's and the
+        # month's peaks as they stand after it.
+        await self._update_peak_tracking(nibe_data)
+
         # Run optimization decision engine
         is_grace_period = False
 
@@ -1088,10 +1137,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # the effect layer to CRITICAL - weight 1.0, offset -3.0 - for the rest of
                 # the day, even with the compressor idle.
                 if self.current_power_kw is None or self.current_power_kw < 0:
+                    # None while a configured meter has not answered since start-up, or the read
+                    # failed.
                     _LOGGER.warning(
                         "No valid power measurement (%s) - disabling peak protection this "
-                        "cycle rather than acting on a guess. Configure a power sensor or "
-                        "NIBE phase currents for effect-tariff protection.",
+                        "cycle rather than acting on a guess.",
                         self.current_power_kw,
                     )
                     current_power_for_decision = 0.0  # Disable peak protection
@@ -1347,54 +1397,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Automatic control retries on the next aligned cycle.
 
         self._accumulate_spot_savings(nibe_data, price_data)
-
-        # Check for day change and save yesterday's peak
-        now = dt_util.now()
-        if not hasattr(self, "_last_update_date"):
-            self._last_update_date = now.date()
-
-        if now.date() != self._last_update_date:
-            # New day detected - save yesterday's peak and reset
-            self.yesterday_peak = self.peak_today
-            _LOGGER.info(
-                "Day change detected: Yesterday's peak was %.2f kW, resetting daily peak",
-                self.yesterday_peak,
-            )
-
-            # Record yesterday's spot savings to the calculator
-            if self._daily_spot_savings != 0.0:
-                self.savings_calculator.record_spot_savings(self._daily_spot_savings)
-                _LOGGER.info(
-                    "Recorded daily spot savings: %.2f SEK",
-                    self._daily_spot_savings,
-                )
-            self._daily_spot_savings = 0.0  # Reset for new day
-
-            # A new day may also be a new MONTH. The effect tariff bills a monthly peak, so
-            # last month's peaks must not carry over into this one - an instance that stays up
-            # across a month boundary would otherwise bill against a stale threshold.
-            month_changed = (now.year, now.month) != (
-                self._last_update_date.year,
-                self._last_update_date.month,
-            )
-            if month_changed:
-                self.effect.prune_peaks_for_current_month()
-                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
-                _LOGGER.info(
-                    "Month change detected: pruned previous month's peaks, "
-                    "monthly peak reset to %.2f kW",
-                    self.peak_this_month,
-                )
-
-            # Reset daily peak for new day
-            self.peak_today = 0.0
-            self.peak_today_time = None
-            self.peak_today_source = "unknown"
-            self.peak_today_period = None
-            self._last_update_date = now.date()
-
-        # Update peak tracking
-        await self._update_peak_tracking(nibe_data)
 
         # Record observations for learning (Phase 6)
         await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
@@ -2141,15 +2143,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
     async def _update_peak_tracking(self, nibe_data) -> None:
-        """Update peak power tracking for effect tariff optimization.
+        """Read this cycle's power for the effect layer, then book the day's and month's peaks.
 
-        Tracks 15-minute power consumption windows for Swedish Effektavgift.
-
-        Handles grid import meters with solar/battery offset by using smart fallback:
-        - If meter shows low reading BUT heat pump is running significantly,
-          use estimated power instead (solar export may offset grid import)
-        - Only record peaks above minimum threshold to avoid standby/noise
+        Runs before the decision. Only a measurement - the meter or the pump's phase currents -
+        reaches the monthly peaks; an estimate is shown, never recorded.
         """
+        # A read that fails below must not leave the last cycle's value standing as this one's.
+        self.current_power_kw = None
         try:
             # Check if we have external power sensor (whole house)
             has_external_power_sensor = hasattr(self.nibe, "_power_sensor_entity") and bool(
@@ -2267,8 +2267,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # effect tariff bills the top three quarters, so it would stand for weeks.
 
             # Publish the instantaneous reading for the effect layer (see the decision site for why
-            # it must be current power and never peak_today). This runs after the decision, so the
-            # engine reads the previous cycle's value - at most UPDATE_INTERVAL_MINUTES old.
+            # it must be current power and never peak_today). This runs before the decision.
             self.current_power_kw = current_power
 
             # The source is recorded where the value was produced, never reconstructed here from the

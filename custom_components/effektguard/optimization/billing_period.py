@@ -124,9 +124,9 @@ class BillingPeriodAccumulator:
 
         Peak PROTECTION must compare like with like: the monthly record is a period mean,
         and an instantaneous reading is not. Early in the period a spike projects to almost
-        nothing; near the boundary the accumulated period dominates. The current cycle's
-        reading is not yet in the samples when the decision runs, which is why it is passed
-        in rather than read.
+        nothing; near the boundary the accumulated period dominates. ``power_kw`` is the draw
+        now: the reading the cycle has just recorded, or one that was never billable and so is
+        not in the samples.
         """
         local_start = _period_start(now)
         absolute_start = local_start.astimezone(timezone.utc)

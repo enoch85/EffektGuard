@@ -52,8 +52,8 @@ entities other integrations publish.
 
 A `DataUpdateCoordinator` with HA's own scheduling disabled, running clock-aligned at `:XX:10`
 every 5 minutes so reads land just after the 15-minute price boundaries. Each cycle: read NIBE →
-read prices → read weather → run the decision engine in an executor → **volatility gate** → write
-the offset → update peak tracking → record learning observations → persist.
+read prices → read weather → update peak tracking → run the decision engine in an executor →
+**volatility gate** → write the offset → record learning observations → persist.
 
 **Nine layers**, each returning `(offset, weight, reason)`. Weight ≥ 1.0 wins outright; otherwise
 a weighted average, with a special case when thermal-debt recovery collides with a critical peak.
