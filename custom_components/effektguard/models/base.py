@@ -128,6 +128,13 @@ class HeatPumpProfile(ABC):
     # waits for -1500 misreports both aux energy and overshoot. Only the simulator reads it.
     aux_start_dm: float = -700.0
 
+    # Whether the pump publishes the frequency its compressor may run up to right now: 43123 "Compr.
+    # current max.freq." on the F730/F750/F1155/F1255, 31043 "Max frequency compressor" on the
+    # S1155/S1255; an F2040 behind an SMO 40 or VVM publishes none (yozik04/nibe register lists,
+    # checked 2026-10-18). CompressorSaturation judges against it where it exists, so the simulator
+    # publishes one where a real pump does. Only the simulator reads it.
+    publishes_max_frequency: bool = False
+
     # Exhaust air heat pump features
     # Only EAHP models (F730, F750) support airflow optimization
     supports_exhaust_airflow: bool = False

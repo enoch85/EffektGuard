@@ -74,6 +74,7 @@ class NibeF730Profile(HeatPumpProfile):
     rated_power_kw: tuple[float, float] = (1.27, 5.35)  # PH min..max, EN 14511
     typical_electrical_range_kw: tuple[float, float] = (1.0, 4.5)
     modulation_range: tuple[int, int] = (70, 120)
+    publishes_max_frequency: bool = True  # 43123
     modulation_type: str = "inverter"
 
     typical_cop_range: tuple[float, float] = (2.43, 5.32)  # the published COPs

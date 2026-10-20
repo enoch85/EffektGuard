@@ -948,6 +948,10 @@ class Scenario:
     # red, and this is the reviewer's note on which reds are news. Same discipline as the
     # F-124 xfail - a known defect stays visible, and fixing it must turn the note false.
     known_open: tuple[KnownRed, ...] = ()
+    # The committed weather and prices it runs on: another scenario's slug, or empty for its own.
+    data: str = ""
+    # Each pump one size too small for its house (UNDERSIZED_PUMP_FACTOR), as --undersized runs.
+    undersized: bool = False
 
 
 SCENARIOS = {
@@ -976,6 +980,50 @@ SCENARIOS = {
                         "volatility gate in the loop (eaa3986). The other four houses hold every "
                         "invariant through Sweden's coldest wave since 1999 AND the 589 ore/kWh "
                         "spike it caused."
+                    ),
+                ),
+            ),
+        ),
+        Scenario(
+            slug="undersized_coldsnap_jan2024",
+            latitude=STOCKHOLM_LATITUDE,
+            what_it_tests=(
+                "The January 2024 cold wave again, with each pump one size too small for its "
+                "house - the commonest installation fault. Sized right, only the F2040 ever runs "
+                "out of compressor; here the F750, F1155 and S1155 do too, and they publish their "
+                "maximum frequency: the saturation path a real F750 takes (#49), which no default "
+                "run reaches."
+            ),
+            expect=("comfort_held", "no_dm_past_aux_limit"),
+            data="nordic_coldsnap_jan2024",
+            undersized=True,
+            known_open=(
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="aux_kwh",
+                    houses={"concrete_f1155": 203.01},
+                    why=(
+                        "F-124 on the undersized F1155: 203.0 kWh of immersion against 133.9 forced, "
+                        "where NIBE alone burns 146.4. The wear guard judges it against the maximum "
+                        "the pump publishes. 191.9 before #54: the slab's longer pre-heat lead votes on "
+                        "22 % of cycles instead of 14 %, +11.1 kWh, 61 SEK cheaper."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="minutes below the comfort band",
+                    stat="comfort_minutes_below",
+                    houses={"airsource_f2040": 1200},
+                    why=(
+                        "The undersized F2040 is colder under EffektGuard than alone: 1200 minutes "
+                        "below the band, where NIBE alone has 585. Not attributed yet (F-124)."
+                    ),
+                ),
+                KnownRed(
+                    fails_with="past the -1500 auxiliary-heat limit",
+                    houses={"airsource_f2040": None},
+                    why=(
+                        "The undersized F2040's DM reaches -2779; NIBE alone reaches -1890 (F-124, "
+                        "F-112: its own heater starts at -760)."
                     ),
                 ),
             ),
@@ -1218,13 +1266,14 @@ def load_scenario(scenario: Scenario):
     fetcher refuses a window the archive has holes in, because a fabricated hour in the
     middle of a cold snap is exactly the hour the result turns on.
     """
-    weather_path = DATA_DIR / f"weather_{scenario.slug}.json"
-    prices_path = DATA_DIR / f"prices_{scenario.slug}.json"
+    name = scenario.data or scenario.slug
+    weather_path = DATA_DIR / f"weather_{name}.json"
+    prices_path = DATA_DIR / f"prices_{name}.json"
     for path in (weather_path, prices_path):
         if not path.exists():
             raise SystemExit(
                 f"{path.name} is missing. Fetch it with:\n"
-                f"  .venv/bin/python scripts/simulation/fetch_scenario_data.py {scenario.slug}"
+                f"  .venv/bin/python scripts/simulation/fetch_scenario_data.py {name}"
             )
 
     weather = json.load(open(weather_path))
@@ -1972,6 +2021,13 @@ def simulate(
                 is_hot_water=False,
                 timestamp=now,
                 compressor_hz=hz,
+                # What a real pump of this model publishes: the frequency it may run up to. Here
+                # that is where full load maps, so a saturated compressor sits at it (#49).
+                compressor_hz_max=(
+                    COMPRESSOR_HZ_MIN + COMPRESSOR_HZ_RANGE
+                    if house.profile.publishes_max_frequency
+                    else None
+                ),
                 power_kw=round(power_kw, 2),
             )
 
@@ -2531,7 +2587,7 @@ def main() -> int:
     excused: set[tuple[str, str]] = set()
 
     houses = HOUSES
-    if undersized:
+    if undersized or (scenario is not None and scenario.undersized):
         # THE COMMONEST INSTALLATION FAULT THERE IS: a pump one size too small for its house.
         #
         # Sizing a house at the EN 14825 AVERAGE-climate design point while fitting it with a pump
