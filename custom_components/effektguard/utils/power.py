@@ -5,15 +5,24 @@ by a factor of a thousand over what an absent unit means - which is what happene
 adapter read a unit-less sensor as kilowatts and the coordinator read the same sensor as watts.
 
 There is no defensible default: this number decides whether the house is about to set a monthly
-billing peak. An unrecognised unit is refused, and the caller withdraws whatever depends on it.
+billing peak. An unrecognised unit is refused, and the caller withdraws whatever depends on it. So
+is a state nobody has written for longer than POWER_METER_MAX_AGE_MINUTES: a reading is a
+measurement only while its source is reporting.
 """
 
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
 from homeassistant.core import State
+from homeassistant.util import dt as dt_util
 
-from ..const import KILOWATTS_PER_MEGAWATT, MILLIWATTS_PER_KILOWATT, WATTS_PER_KILOWATT
+from ..const import (
+    KILOWATTS_PER_MEGAWATT,
+    MILLIWATTS_PER_KILOWATT,
+    POWER_METER_MAX_AGE_MINUTES,
+    WATTS_PER_KILOWATT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +58,25 @@ def power_kw_from_state(state: State | None) -> float | None:
     """
     if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
         return None
+
+    # The receipt time, which moves on every write even when the value does not - a meter that has
+    # gone silent keeps a numeric, available state that passes every other check here. Without a
+    # datetime the age is unknowable (a test double; every Home Assistant State carries one) and the
+    # guard fails open, as the adapter's NIBE_READING_MAX_AGE_MINUTES guard does.
+    # tests/unit/coordinator/test_a_silent_meter_is_not_a_measurement.py
+    reported = getattr(state, "last_reported", None)
+    if isinstance(reported, datetime):
+        age = dt_util.utcnow() - reported
+        if age > timedelta(minutes=POWER_METER_MAX_AGE_MINUTES):
+            _LOGGER.debug(
+                "Power sensor %s still reads %s but was last written %.0f minutes ago (limit %d): "
+                "not this cycle's measurement",
+                state.entity_id,
+                state.state,
+                age.total_seconds() / 60,
+                POWER_METER_MAX_AGE_MINUTES,
+            )
+            return None
 
     unit = str(state.attributes.get("unit_of_measurement", "")).strip()
     factor = POWER_UNIT_FACTORS_KW.get(unit)

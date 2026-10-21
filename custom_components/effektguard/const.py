@@ -1761,6 +1761,23 @@ BILLING_PERIODS_PER_DAY: Final = 96
 # It must stay strictly below BILLING_PERIOD_MINUTES, or a single-sample quarter (a 15-minute rest
 # to the boundary) could never be refused and the rule would not bite.
 MAX_BILLING_OBSERVATION_GAP_MINUTES: Final = 10
+# How old a power-meter state may be and still be the measurement of the cycle that reads it.
+#
+# A meter whose publisher has stopped (an MQTT or P1 bridge, a template whose source froze) keeps
+# its last numeric state and stays `available`, so the availability, unit and parsing checks all
+# pass a number from hours ago. Re-read every cycle, that one state was stamped with each cycle's
+# time and billed as a period the meter never saw, and the effect layer defended the month against
+# it: a 9 kW state frozen above a 6 kW monthly peak voted CRITICAL (offset -3, weight 1.0) on every
+# cycle it stood, a heating cut held for as long as the meter stayed silent.
+#
+# `State.last_reported` is the receipt time: Home Assistant moves it on every write, changed or not
+# (core.py at the 2025.11.0 minimum in hacs.json), so a steady draw from a live meter stays fresh. A
+# whole-house meter reports every few seconds. One update interval is the window in which a reading
+# can stand for the cycle that reads it - the billing already takes each sample to hold until the
+# next cycle. Two intervals (MAX_BILLING_OBSERVATION_GAP_MINUTES) would let a period be billed on a
+# state last written a minute before it began: three cycles, one write, none of it inside the
+# period. tests/unit/coordinator/test_a_silent_meter_is_not_a_measurement.py
+POWER_METER_MAX_AGE_MINUTES: Final = UPDATE_INTERVAL_MINUTES
 
 # BASELINE_PEAK_MULTIPLIER (1.176) was deleted. It manufactured an unoptimised baseline from the
 # CURRENT peak - `baseline = peak * 1.176` - so the reported effect-tariff saving reduced to

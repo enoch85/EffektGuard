@@ -385,6 +385,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
+        # A meter that has answered before and is not answering now - unavailable, or a state nobody
+        # has written for longer than POWER_METER_MAX_AGE_MINUTES. Reported once when the silence
+        # begins and once when it ends, not on every cycle it lasts.
+        self._power_meter_silent = False
         # Learning observes hourly, not per control cycle - see _record_learning_observations
         self._last_learning_observation: datetime | None = None
         self._power_sensor_listener = None
@@ -2184,6 +2188,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if not self._power_sensor_available:
                         self._power_sensor_available = True
                         _LOGGER.debug("External power sensor marked as available")
+                    if self._power_meter_silent:
+                        _LOGGER.info(
+                            "External power meter %s is reporting again (%.3f kW)",
+                            power_entity_id,
+                            current_power,
+                        )
+                        self._power_meter_silent = False
                 elif not self._power_sensor_available:
                     # Never seen alive - wait for the listener rather than tracking peaks on nothing
                     _LOGGER.debug(
@@ -2195,19 +2206,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     return  # Exit early, event listener will trigger refresh when ready
                 else:
-                    # It has answered before and is not answering now. Everything below still runs -
-                    # the decision layers need SOME power figure - but the source stays unbillable,
-                    # so nothing invented here reaches the tariff record, and a silence longer than
-                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole hour rather than billing
-                    # a stale reading stretched across it.
-                    _LOGGER.warning(
-                        "External power meter %s did not yield a reading (state: %s). This cycle is "
-                        "not billable, and if the silence exceeds %d minutes the whole hour is "
-                        "refused rather than billed on a stale reading.",
+                    # It has answered before and is not answering now: unavailable, unreadable, or
+                    # a numeric state nobody has written for longer than POWER_METER_MAX_AGE_MINUTES,
+                    # which power_kw_from_state refuses alike. Everything below still runs - the
+                    # decision layers need SOME power figure - but the source stays unbillable, so
+                    # nothing invented here reaches the tariff record, and a silence longer than
+                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole period rather than
+                    # billing a stale reading stretched across it. Reported when the silence begins
+                    # and when it ends, not on every cycle it lasts.
+                    (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
+                        "External power meter %s is not reporting (state %s, last written %s). "
+                        "This cycle is not billable, and a silence longer than %d minutes refuses "
+                        "the whole billing period rather than billing a stale reading.",
                         power_entity_id,
                         power_state.state if power_state else "None",
+                        getattr(power_state, "last_reported", None),
                         MAX_BILLING_OBSERVATION_GAP_MINUTES,
                     )
+                    self._power_meter_silent = True
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
@@ -2254,7 +2270,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
                 power_source = POWER_SOURCE_ESTIMATE
-                _LOGGER.warning(
+                # A silent meter has already been reported once, above; this is the same silence.
+                (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
                     current_power,
