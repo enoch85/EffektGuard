@@ -604,7 +604,7 @@ class PriceAnalyzer:
 
         Returns:
             Lookahead hours (adaptive based on context):
-            - Space heating: Base hours × thermal_mass (2-8h range)
+            - Space heating: Base hours × thermal_mass (2.5-10 h: 5 h × 0.5-2.0)
             - DHW: Hours until next demand period (capped at 24h)
         """
         if heating_type == "space":

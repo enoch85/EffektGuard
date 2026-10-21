@@ -101,27 +101,31 @@ Normal Mode:
 
 ### Decision Rules (Priority Order)
 
-All DHW decisions flow through `should_start_dhw()` in `dhw_optimizer.py`. The method has **18 decision return points** organized by priority:
+All DHW decisions flow through `should_start_dhw()` in `dhw_optimizer.py`: rule-ordered early
+returns, the first rule that applies decides. The scheduled window (Lane 1) is checked first; outside
+it the rules run in this order:
 
-| Rule | Priority Reason | Triggers When | Result |
-|------|----------------|---------------|--------|
-| **0** | `DHW_AMOUNT_TARGET_REACHED_*` | Within scheduled window + amount ≥ target | Stop heating |
-| **1** | `CRITICAL_THERMAL_DEBT` | DM ≤ climate-aware warning threshold | Block - safety |
-| **2** | `SPACE_HEATING_EMERGENCY` | Indoor >0.5°C below target + outdoor <0°C | Block - safety |
-| **3a** | `DHW_SAFETY_WINDOW_Q*` | Temp <30°C + in optimal cheap window | Heat now |
-| **3b** | `DHW_SAFETY_WAITING_WINDOW_*` | Temp <30°C + better window ahead | Wait |
-| **3c** | `DHW_SAFETY_DEFERRED_PEAK_PRICE` | Temp 20-30°C + expensive + healthy DM | Wait |
-| **3d** | `DHW_SAFETY_MINIMUM` | Temp <30°C (critical) | Heat immediately |
-| **2.3a** | `DHW_HYGIENE_BOOST` | 14+ days since legionella + stable cheap | Heat to 56°C |
-| **2.5** | `DHW_COMPLETE_EMERGENCY_HEATING` | Temp 30-45°C + stable cheap | Complete heating |
-| **3.5** | `DHW_MAX_WAIT_EXCEEDED_*` | 36+ hours since last DHW + cheap/normal | Heat now |
-| **4** | `HIGH_SPACE_HEATING_DEMAND` | Demand >6kW + DM < -60 (recovering) | Block DHW |
-| **5a** | `DHW_ADEQUATE_WAITING_CHEAP_*` | Temp ≥45°C + not cheap price | Wait |
-| **5b** | `OPTIMAL_WINDOW_Q*` | Within 15min of cheapest window | Heat now |
-| **5c** | `WAITING_OPTIMAL_WINDOW_*` | Better window ahead + temp comfortable | Wait |
-| **5d** | `CHEAP_NO_WINDOW_DATA` | No price data + stable cheap + low temp | Heat now |
-| **7** | `DHW_COMFORT_LOW_CHEAP` | Temp <45°C + stable cheap | Heat now |
-| **8** | `DHW_ADEQUATE` | All conditions fail | Don't heat |
+| Rule | Priority reason | Triggers when | Result |
+|------|-----------------|---------------|--------|
+| **0 - Lane 1** | `DHW_SCHEDULED_BLOCKED_BY_SAFETY` | Inside the scheduled window, the window's safety gate refuses | Wait; owed to Rule 0.5 |
+| | `DHW_SCHEDULED_TARGET_REACHED_TEMP_*C` / `_*MIN` | Inside the window, target temperature or amount reached | Stop heating |
+| | `DHW_SCHEDULED_OPTIMAL_Q*` | Inside the window, in its cheapest window now | Heat now |
+| | `DHW_SCHEDULED_WAITING_OPTIMAL_*` | A cheaper window ahead and slack to wait for it | Wait |
+| | `DHW_PEAK_AVOIDED_SCHEDULED` | No window found and the quarter is PEAK | Wait |
+| | `DHW_SCHEDULED_PRIORITY_*H` | Otherwise inside the window | Heat now |
+| **0.5** | `DHW_SCHEDULED_RETRY_AFTER_SAFETY` | A window safety refused, now safe | Heat now |
+| **1** | `CRITICAL_THERMAL_DEBT` | DM at or below the climate-aware block threshold | Block - safety |
+| **2** | `SPACE_HEATING_EMERGENCY` | Indoor deficit above `DHW_SPACE_HEATING_DEFICIT_THRESHOLD` and outdoor below `DHW_SPACE_HEATING_OUTDOOR_THRESHOLD` | Block - safety |
+| **3** | `DHW_SAFETY_WINDOW_Q*` / `DHW_SAFETY_WAITING_WINDOW_*` / `DHW_SAFETY_DEFERRED_PEAK_PRICE` / `DHW_SAFETY_MINIMUM` | Tank below `DHW_SAFETY_MIN` (30 °C) | Heat in a cheap window, wait for one, defer at peak, or heat at once when critical |
+| **2.6** | `DHW_PEAK_AVOIDED` | PEAK price | Wait |
+| **2.3** | `DHW_HYGIENE_BOOST` | No 55 °C cycle for `DHW_LEGIONELLA_MAX_DAYS` (14) and a stable cheap period | Heat to 56 °C |
+| **2.5** | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C and a stable cheap period | Complete to the target |
+| **3.5** | `DHW_MAX_WAIT_EXCEEDED_*H` | More than `DHW_MAX_WAIT_HOURS` (36) since the last heating, cheap or normal price | Heat now |
+| **4** | `HIGH_SPACE_HEATING_DEMAND` | Demand above 6 kW and DM below `DM_THRESHOLD_START` | Block DHW |
+| **4.7** | `PEAK_AVOIDANCE_PREHEAT_*H` | Cheap or normal now, and a PEAK ahead would otherwise force heating then | Heat now |
+| **5 - Lane 2** | `DHW_ADEQUATE_WAITING_CHEAP_*` / `CHEAP_NO_WINDOW_DATA` / `OPTIMAL_WINDOW_Q*` / `WAITING_OPTIMAL_WINDOW_IN_*` / `CHEAP_ELECTRICITY_OPPORTUNITY` | Normal price optimisation | Heat in the cheapest window, or wait for it |
+| **7** | `DHW_COMFORT_OPTIMAL_*` / `DHW_COMFORT_WAITING_OPTIMAL_*` / `DHW_COMFORT_LOW_*` | Tank getting low | Heat now or in a cheaper window ahead |
+| **8** | `DHW_ADEQUATE` | Nothing above applies | Don't heat |
 
 ### Why Recommendations Change Frequently
 
@@ -134,7 +138,7 @@ All DHW decisions flow through `should_start_dhw()` in `dhw_optimizer.py`. The m
 
 **2. Time-Dependent Thresholds**
 - `optimal_window.hours_until` crosses the 0.25h (15min) activation threshold
-- `within_scheduled_window` changes when entering/leaving 6h window
+- `within_scheduled_window` changes when entering or leaving the scheduled window
 - `hours_until_target` crosses demand period boundaries
 
 **3. Rate Limiting vs Recommendation**
@@ -144,16 +148,17 @@ The coordinator has 60-minute rate limiting for actual control actions, but **re
 
 ### Two-Lane Architecture
 
-**Lane 1: Normal 24h Price Optimization**
-- Always active, regardless of scheduling
-- Finds cheapest windows over 24h lookahead
-- Rules 1-8 (except 0) handle this lane
+**Lane 1: the scheduled window** (Rule 0)
+- Active from `DHW_SCHEDULED_WINDOW_HOURS` (6 h) before a demand period's target time - or earlier
+  for a tank too slow to heat in 6 h: the window opens at the larger of 6 h and the tank's heating
+  time plus `DHW_AMOUNT_HEATING_BUFFER` (`_check_upcoming_demand_period`)
+- Stops heating once the target temperature or amount is reached
+- Waits for a cheaper window only when there is slack for it; otherwise heats (never at PEAK unless
+  the tank is critically low)
 
-**Lane 2: Scheduled Window Check**
-- Only active within `DHW_SCHEDULED_WINDOW_HOURS` (6h) of target time
-- Rule 0 checks if target amount is reached
-- Stops heating to avoid waste when target met
-- Outside the 6h window, normal price optimization continues
+**Lane 2: normal price optimisation** (Rules 0.5-8)
+- Everything outside the scheduled window: safety first, then the cheapest windows over the price
+  horizon
 
 ---
 
@@ -215,59 +220,31 @@ DHW_COOLING_RATE = 0.5        # °C per hour (well-insulated tank)
 2. Triggering our own boost would **waste energy** (double heating)
 3. Better to **detect NIBE's boost** and skip our own scheduling
 
-**Implementation:**
+**Implementation** (`IntelligentDHWScheduler.update_bt7_temperature`, fed every cycle):
 
 ```python
-class IntelligentDHWScheduler:
-    """DHW scheduler with automatic Legionella detection."""
-    
-    def __init__(self):
-        self.bt7_history: deque = deque(maxlen=48)  # 12 hours of 15-min readings
-        self.last_legionella_boost: datetime | None = None
-    
-    def update_bt7_temperature(self, temp: float, timestamp: datetime):
-        """Update BT7 history and detect NIBE's Legionella boost."""
-        self.bt7_history.append((timestamp, temp))
-        
-        # Automatic detection when NIBE runs Legionella boost
-        if self._detect_legionella_boost_completion():
-            self.last_legionella_boost = timestamp
-            _LOGGER.info("NIBE Legionella boost detected at %s", timestamp)
-    
-    def _detect_legionella_boost_completion(self) -> bool:
-        """Detect when NIBE's Legionella boost completed.
-        
-        Detection logic:
-        - BT7 peaked at ≥55°C recently (observed 55.3°C in production)
-        - Now cooling down (dropped 3°C from peak)
-        - Confirms boost completed successfully
-        """
-        if len(self.bt7_history) < 10:
-            return False
-        
-        temps = [temp for _, temp in self.bt7_history]
-        max_temp = max(temps)
-        current_temp = temps[-1]
-        
-        # Peak ≥55°C and now cooling
-        if max_temp >= 55.0 and current_temp < (max_temp - 3.0):
-            # Check not already recorded
-            if self.last_legionella_boost:
-                hours_since = (self.bt7_history[-1][0] - self.last_legionella_boost).total_seconds() / 3600
-                if hours_since < 6.0:  # Same boost event
-                    return False
-            return True
-        
-        return False
+reached = temp >= DHW_LEGIONELLA_DETECT and (
+    not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
+)
+self.bt7_history.append((timestamp, temp))  # deque(maxlen=48): 4 hours at the 5-minute cycle
+if reached:
+    self.last_legionella_boost = timestamp
+    _LOGGER.info("Hot water reached %.1f°C at %s: high-temperature cycle seen", temp, timestamp)
 ```
 
-**Benefits:**
-- ✅ Detects NIBE's automatic boosts to avoid conflicts
-- ✅ Triggers our own hygiene boosts every 14 days during cheap periods (RULE 2.3)
-- ✅ Automatic detection (no manual tracking needed)
-- ✅ Optimizes cost by scheduling during cheapest electricity
+A cycle is seen the moment BT7 reaches `DHW_LEGIONELLA_DETECT` (55 °C) - the same rule the start-up
+restore applies to the recorder's history. (It used to need the tank to cool 3 °C below its peak
+inside the 4-hour history; the owner's F750 takes 5.5-17.7 h to do that, so NIBE's own cycles went
+unseen. Fixed in #55.)
 
-**Note:** We BOTH monitor NIBE's automatic boosts AND trigger our own hygiene boosts every 14 days during cheap periods. This ensures bacteria prevention even with our lower safety thresholds (20°C critical/30°C minimum).
+**What the hygiene rule does and does not do:**
+- RULE 2.3 (`DHW_HYGIENE_BOOST`) is an opportunistic top-up into a stable cheap period when no 55 °C
+  cycle was seen for `DHW_LEGIONELLA_MAX_DAYS` (14). It **cannot perform a hygiene cycle**: the
+  temporary-lux boost stops at the pump's luxury stop temperature (53-54 °C on factory settings),
+  below the 55 °C threshold.
+- Hygiene is NIBE's own periodic increase (menu 2.9.1 F-series / 2.4 S-series, factory every 14 days
+  to 55 °C). If no cycle is seen for `DHW_LEGIONELLA_OVERDUE_DAYS` (21), EffektGuard warns that it may
+  have been switched off on the pump; it does not substitute for it.
 
 ### DHW Immersion Heater Requirement for High-Temperature Cycles
 
@@ -333,28 +310,20 @@ By scheduling the 56°C hygiene boost during **cheapest electricity periods**, w
 - Maximizes price optimization opportunities
 - DHW heats fast (1.5h), so timing flexibility is high
 
-**Two-Lane Architecture:**
+**The scheduled window** (`_check_upcoming_demand_period`):
 ```python
-def _check_upcoming_demand_period(self, current_time: datetime) -> DemandPeriodInfoDict | None:
-    """Check for demand periods with 24h monitoring and 6h active window.
-    
-    Lane 1: Normal 24h price optimization (always active)
-    Lane 2: Scheduled window check (within DHW_SCHEDULED_WINDOW_HOURS of target)
-    """
-    for period in self.demand_periods:
-        hours_until = calculate_hours_until(period, current_time)
-        
-        # Monitor within 24h for display, active scheduling within 6h
-        if hours_until <= DHW_SCHEDULING_WINDOW_MAX:  # 24 hours
-            return {
-                "min_amount_minutes": period.min_amount_minutes,
-                "target_temp": period.target_temp,
-                "availability_time": availability_time,
-                "hours_until": hours_until,
-                "within_scheduled_window": hours_until <= DHW_SCHEDULED_WINDOW_HOURS,  # 6h
-            }
-    
-    return None
+def _check_upcoming_demand_period(self, current_time, current_dhw_temp=None):
+    # The window opens DHW_SCHEDULED_WINDOW_HOURS before the target, or as early as a tank
+    # too slow to heat in that time needs.
+    window = DHW_SCHEDULED_WINDOW_HOURS
+    if current_dhw_temp is not None and current_dhw_temp < self.user_target_temp:
+        window = max(
+            window,
+            self.estimate_heating_time(current_dhw_temp, self.user_target_temp)
+            + DHW_AMOUNT_HEATING_BUFFER,
+        )
+    # ... for the closest demand period within DHW_SCHEDULING_WINDOW_MAX (24 h), in real hours:
+    #     "within_scheduled_window": hours_until <= window
 ```
 
 ### Demand Periods
@@ -372,10 +341,9 @@ DHWDemandPeriod(
 **Note:** `availability_hour` is when hot water should be READY (available), not when heating should start. The optimizer calculates backwards to determine when to start heating based on current DHW amount.
 
 **Scheduling Strategy (Two Lanes):**
-- **Lane 1 (Always Active):** Normal 24h price optimization finds cheapest windows
-- **Lane 2 (Within 6h of target):** Amount-based scheduling checks if target met
-  - If DHW amount ≥ target → Stop heating (Rule 0)
-  - If DHW amount < target → Continue to price optimization rules
+- **Lane 1 (inside the scheduled window):** heat the tank to its target before the demand period;
+  stop once the target temperature or amount is reached (Rule 0)
+- **Lane 2 (outside it):** normal price optimisation finds the cheapest windows (Rules 0.5-8)
 
 ### Price-Aware Scheduling
 
@@ -486,28 +454,20 @@ DHW_EXTENDED_RUNTIME_MINUTES = 60  # High demand period
 
 ### Unit Tests
 
-**Test Coverage (tests/test_dhw_optimizer.py):**
-- ✅ Smart scheduling during cheapest hours
-- ✅ Thermal debt blocks DHW heating
-- ✅ Space heating priority over DHW
-- ✅ Safety minimum forces heating
-- ✅ Legionella detection (monitor-only)
-- ✅ BT7 history tracking
-- ✅ Cheap electricity opportunistic heating
+The hot-water tests live in `tests/unit/dhw/` (one behaviour per file, e.g.
+`test_a_slow_tank_is_heated_in_time.py`, `test_nibe_s_own_hot_water_cycle_is_seen.py`,
+`test_every_dhw_abort_condition_is_honoured.py`):
 
-**Run Tests:**
 ```bash
-pytest tests/test_dhw_optimizer.py -v
+pytest tests/unit/dhw/ -q
 ```
-
-**Expected Result:** 7/7 tests pass
 
 ### Integration Testing
 
 **Manual Testing Checklist:**
 - [ ] Config flow accepts DHW entities
 - [ ] BT7 sensor updates tracked in history
-- [ ] Legionella detection logs "boost completed"
+- [ ] A 55 °C reading logs "high-temperature cycle seen"
 - [ ] `boost_dhw` service activates temp lux switch
 - [ ] Service cooldown prevents spam (60 min)
 - [ ] 24h scheduling finds cheap hours
@@ -529,20 +489,9 @@ pytest tests/test_dhw_optimizer.py -v
 
 ### NIBE Documentation
 
-**MyUplink API:**
-- `IMPLEMENTATION_PLAN/03_API/MyUplink_Complete_Guide.md`
-- Entity IDs for F750/F2040/S-series
-- Switch control methods
-
-**NIBE Forum Research:**
-- `IMPLEMENTATION_PLAN/02_Research/Forum_Summary.md`
-- Real-world DHW optimization cases
-- Thermal debt impact studies
-
-**Swedish NIBE Forums:**
-- `IMPLEMENTATION_PLAN/02_Research/Swedish_NIBE_Forum_Findings.md`
-- Menu 5.1.1 DHW settings
-- Legionella protection schedules
+The NIBE facts this optimiser relies on (the periodic increase, temporary lux and its luxury stop
+temperature) are sourced in the comments at RULE 2.3 in `dhw_optimizer.py`: the NIBE F750/F730/F1155
+installer manuals, menus 2.9.1 and 5.1.1, and the register map (47046/47050/47051).
 
 ### Implementation Files
 
@@ -552,12 +501,11 @@ pytest tests/test_dhw_optimizer.py -v
 - `custom_components/effektguard/__init__.py` - boost_dhw service
 
 **Tests:**
-- `tests/test_dhw_optimizer.py` - Unit tests
+- `tests/unit/dhw/` - Unit tests
 - `tests/conftest.py` - Test fixtures
 
 **Documentation:**
 - `docs/DHW_OPTIMIZATION.md` - This file
-- `IMPLEMENTATION_PLAN/POST_PHASE_5_ROADMAP.md` - Future enhancements
 
 ### Research Decisions
 

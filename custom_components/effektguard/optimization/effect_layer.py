@@ -9,7 +9,7 @@ DSOs (finding F-107, owner-gated). What the owner configures here:
   quarter-hour, not the instantaneous draw.
 - Daytime (06:00-22:00): full weight.
 - Nighttime (22:00-06:00): half the peak counts (NIGHT_TARIFF_WEIGHT). Predates the audit.
-- Monthly charge on the mean of the three highest periods (plain, date-blind top-3).
+- Monthly charge on the mean of the three highest periods, at most one per day.
 
 The 81.25 kr/kW/month rate (SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) is Ellevio's published figure,
 kept as an illustrative example for the simulator - not a claim about what any given owner pays.

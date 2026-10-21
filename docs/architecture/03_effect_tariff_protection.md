@@ -12,9 +12,9 @@ flowchart TD
     end
 
     subgraph "Monthly Peak Tracking"
-        E[Load Monthly Peaks<br/>Top 3 stored]
-        F{< 3 Peaks Recorded?}
-        G[Add New Peak]
+        E[Load Monthly Peaks<br/>Top 3 stored, at most one per day]
+        F{< 3 Peaks Recorded?<br/>or this day's peak beaten?}
+        G[Add New Peak<br/>or replace this day's]
         H[Compare vs Lowest Peak]
         I{Exceeds Lowest?}
         J[Replace Lowest Peak]
@@ -109,11 +109,14 @@ The system accounts for this when calculating effective power consumption and de
 
 ### Monthly Top-3 Peak Tracking
 
-Swedish effect tariffs are typically based on the **top 3 peaks** in a billing period:
+Swedish effect tariffs are typically based on the **top 3 peaks** in a billing period, **at most one
+per day** (`EffectManager.record_period_measurement`):
 
-1. **Peak Detection**: Every 15-minute measurement is compared against stored peaks
-2. **Replacement Logic**: New peaks replace the lowest of the current top 3
-3. **Threshold Management**: The lowest peak becomes the threshold to avoid exceeding
+1. **Peak Detection**: Every 15-minute period's mean is compared against the stored peaks
+2. **Same day**: a higher period on a day that already has a peak replaces that day's peak; a lower
+   one is ignored
+3. **Replacement Logic**: otherwise a new peak replaces the lowest of the current top 3
+4. **Threshold Management**: The lowest peak becomes the threshold to avoid exceeding
 
 ### Graduated Response System
 

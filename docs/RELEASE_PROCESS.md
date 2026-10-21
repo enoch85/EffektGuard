@@ -106,19 +106,21 @@ SUCCESS: Production release v1.3.4 completed successfully!
 All releases (beta and production) trigger automated GitHub Actions:
 
 ### Validate Workflow (`.github/workflows/validate.yml`)
-Runs on every PR and push:
-- Black formatting check
-- pytest test suite
-- HACS validation
-- Hassfest validation
+Runs on every PR and push to `main`:
+- Black formatting check and the hardcoded-value ratchet (`scripts/check_hardcoded_values.py --check`)
+- `pip check`, `compileall` and the pytest suite
+- The simulator: `--selftest`, `--dst` and `--all-scenarios`
+- A HACS distribution build, HACS validation and Hassfest validation
+- Workflow lint and a development-container build
 
 ### Release Workflow (`.github/workflows/release.yml`)
 Triggers when a version tag is pushed:
 - Creates release ZIP file
 - Generates release notes from git history
 - Creates GitHub release
-- Marks beta versions as "Pre-release"
-- Marks production versions as "Latest release"
+- Marks `-alpha`, `-beta` and `-rc` tags as "Pre-release"
+- Marks a plain `vX.Y.Z` tag as "Latest release" (to ship a final number as a pre-release, flip it
+  afterwards - see `docs/agent/RELEASING.md`)
 
 ## Manual Testing
 
@@ -204,5 +206,5 @@ Do you want to continue anyway? (y/n):
 ## See Also
 
 - [GitHub Actions Workflows](../.github/workflows/)
-- [EffektGuard Implementation Plan](../IMPLEMENTATION_PLAN/)
+- [Releasing: judgement and notes format](agent/RELEASING.md)
 - [Testing Documentation](../tests/)

@@ -2,46 +2,44 @@
 
 ## How It Works
 
-EffektGuard now **automatically controls DHW heating** using NIBE's temporary lux switch (50004) based on intelligent optimization decisions.
+EffektGuard **automatically controls DHW heating** using NIBE's temporary lux switch (50004) based on the
+hot-water optimiser's decisions (`docs/DHW_OPTIMIZATION.md`).
 
 ### Automatic Control Logic
 
 **When enabled**, EffektGuard:
-1. ✅ **Monitors** DHW temperature and thermal debt continuously
-2. ✅ **Calculates** optimal DHW heating decisions based on:
+1. ✅ **Monitors** DHW temperature and thermal debt every cycle (5 minutes)
+2. ✅ **Calculates** the hot-water decision from:
    - Thermal debt (degree minutes)
-   - Electricity prices (Spot Price)
+   - Electricity prices (spot price)
    - Space heating demand
    - Indoor temperature vs target
-   - High demand periods (morning/evening)
-3. ✅ **Controls** NIBE temporary lux switch automatically:
+   - The configured demand periods (morning/evening)
+3. ✅ **Controls** NIBE's temporary lux switch:
    - **Turns ON** when `should_heat = True` (safe to heat DHW)
-   - **Turns OFF** when `should_heat = False` (block DHW to prevent thermal debt)
+   - **Turns OFF** when `should_heat = False`, or when a running boost hits a safety abort
 
 ### Safety Features
 
-- **Critical thermal debt blocking** (DM < -240): Automatically turns OFF temporary lux
-- **Space heating priority**: Blocks DHW if house is cold (indoor < target - 0.5°C)
-- **Rate limiting**: Minimum 10 minutes between control changes
-- **Graceful degradation**: If temporary lux entity unavailable, reverts to recommendations only
+- **Thermal-debt blocking**: no DHW start at or below the climate-aware block threshold
+  (`EmergencyLayer.should_block_dhw`; fallback `DM_DHW_BLOCK_FALLBACK` = −340), and a running boost is
+  aborted past the abort threshold (fallback `DM_DHW_ABORT_FALLBACK` = −500)
+- **Space heating priority**: blocks DHW when the house is more than 0.5 °C below target and it is
+  below 0 °C outside (`DHW_SPACE_HEATING_DEFICIT_THRESHOLD`, `DHW_SPACE_HEATING_OUTDOOR_THRESHOLD`)
+- **Rate limiting**: at most one automatic START per `DHW_CONTROL_MIN_INTERVAL_MINUTES` (60); a safety
+  stop is never delayed
+- **Graceful degradation**: if the temporary lux entity is unavailable, recommendations only
 
 ## Setup Requirements
 
 ### 1. Enable Hot Water Optimization
 
-The automatic DHW control is **OFF by default** (experimental feature). To enable:
-
 **Via Home Assistant UI:**
 1. Go to Settings → Devices & Services → EffektGuard
-2. Find the "Hot Water Optimization" switch
+2. Find the "Hot Water Optimization" switch (`switch.effektguard_hot_water_optimization`)
 3. Turn it ON
 
-**Or via configuration:**
-```yaml
-# configuration.yaml (if using YAML config)
-effektguard:
-  enable_hot_water_optimization: true
-```
+EffektGuard is configured through the UI (config and options flows); there is no YAML configuration.
 
 ### 2. Configure Temporary Lux Entity
 
@@ -49,60 +47,59 @@ EffektGuard needs to know which switch controls NIBE's temporary lux:
 
 **During setup:**
 - Entity ID: `switch.temporary_lux_50004` (or your MyUplink device name)
-- This is the NIBE parameter 50004 exposed via MyUplink integration
+- This is the NIBE parameter 50004 exposed via the MyUplink integration (or the equivalent nibe_heatpump
+  or Modbus switch)
 
-**MyUplink Premium required** for write access to control the switch.
+Writes through MyUplink may require a valid myUplink subscription.
 
 ## Understanding DHW Status
 
-## Understanding DHW Status
+The `sensor.effektguard_dhw_status` shows the DHW state:
 
-The `sensor.effektguard_dhw_status` shows real-time DHW state:
+| Status | Meaning |
+|--------|---------|
+| `heating` | Compressor actively heating DHW |
+| `low` | Below `DHW_SAFETY_MIN` (30 °C), waiting to heat |
+| `pending` | Below the minimum target (45 °C), will heat soon |
+| `ready` | At normal target (45-52 °C) |
+| `hot` | Above 52 °C (high demand met, or NIBE's periodic increase) |
+| `not_configured` | No DHW temperature sensor bound |
 
-| Status | Meaning | Automatic Action |
-|--------|---------|------------------|
-| `heating` | Compressor actively heating DHW | Monitor, may turn off if thermal debt critical |
-| `pending` | Below target, will heat soon | Turn ON temporary lux if conditions safe |
-| `low` | Below 35°C safety minimum | Turn ON temporary lux immediately (safety) |
-| `ready` | At normal target (45-52°C) | Keep temporary lux OFF |
-| `hot` | Above 52°C (high demand met) | Keep temporary lux OFF |
+The `sensor.effektguard_dhw_recommendation` explains WHY, from the decision's priority reason (the
+full list is the rule table in `docs/DHW_OPTIMIZATION.md`). For example:
 
-The `sensor.effektguard_dhw_recommendation` explains WHY:
-
-| Recommendation | Meaning | Temporary Lux State |
-|----------------|---------|---------------------|
-| `Block DHW - Critical thermal debt (DM: -XXX)` | **CRITICAL** - Thermal debt too high | **OFF** (force blocking) |
-| `Block DHW - House too cold (XX°C)` | Space heating emergency | **OFF** (prioritize heating) |
-| `Delay DHW - High heating demand (X kW)` | Wait for space heating | **OFF** (temporary delay) |
-| `Heat now - Cheap electricity (cheap)` | Optimal time to heat | **ON** (boost DHW) |
-| `Heat now - Safety minimum (XX°C < 35°C)` | Health/safety critical | **ON** (must heat) |
-| `DHW OK - Temperature adequate (XX°C)` | No action needed | **OFF** (maintain) |
+| Priority reason | Meaning | Temporary Lux |
+|----------------|---------|---------------|
+| `CRITICAL_THERMAL_DEBT` | Thermal debt too deep | **OFF** (blocking) |
+| `SPACE_HEATING_EMERGENCY` | House too cold | **OFF** (space heating first) |
+| `HIGH_SPACE_HEATING_DEMAND` | High heating demand | **OFF** (temporary delay) |
+| `CHEAP_ELECTRICITY_OPPORTUNITY` | Cheap electricity | **ON** |
+| `DHW_SAFETY_MINIMUM` | Tank critically low | **ON** |
+| `DHW_ADEQUATE` | No action needed | **OFF** |
 
 ## How Temporary Lux Works
 
 ### NIBE Temporary Lux (Parameter 50004)
 
 When **ON**:
-- NIBE prioritizes DHW heating for **3 hours**
-- Compressor focuses on reaching DHW target temperature
+- NIBE heats the tank to its luxury stop temperature (53-54 °C on factory settings) with priority
 - Space heating may be delayed during this period
+- EffektGuard turns it OFF again when its decision or a safety abort says so
 
 When **OFF**:
-- NIBE follows its normal schedule (space heating + periodic DHW)
-- DHW heated based on NIBE's own comfort mode settings
-- EffektGuard can block unwanted DHW cycles during high thermal debt
+- NIBE follows its normal schedule (space heating + its own DHW comfort settings)
 
 ### Automatic vs Manual Control
 
-**Automatic control** (when Hot Water Optimization enabled):
-- EffektGuard monitors conditions every 5 minutes
-- Turns temporary lux ON/OFF based on optimization algorithm
-- Respects 10-minute rate limiting between changes
+**Automatic control** (when Hot Water Optimization is enabled):
+- EffektGuard evaluates every 5 minutes
+- Turns temporary lux ON/OFF based on the optimiser; at most one start per 60 minutes
 
 **Manual control** (always available):
-- Service: `effektguard.boost_dhw`
-- Turns ON temporary lux for 3 hours (NIBE default)
-- Useful for manual DHW boost before high demand periods
+- Service: `effektguard.boost_dhw` with an optional `duration` (minutes, 30-180, default 90)
+- The pump heats to its own lux temperature; EffektGuard keeps the boost running for the duration
+  (price optimisation will not cancel it - only the thermal-debt safety stop will) and then turns it off
+- `DHW_BOOST_COOLDOWN_MINUTES` (60) between manual boosts
 
 ## Monitoring Automatic Control
 
@@ -120,17 +117,11 @@ logger:
 
 **Example log output:**
 ```
-2025-10-16 03:42:16 INFO DHW control: Deactivating temporary lux - CRITICAL_THERMAL_DEBT (DHW: 38.9°C, DM: -370)
-2025-10-16 04:15:00 INFO DHW control: Activating temporary lux - CHEAP_ELECTRICITY_OPPORTUNITY (DHW: 42.0°C, DM: -120)
+INFO DHW control: Deactivating temporary lux - CRITICAL_THERMAL_DEBT (DHW: 38.9°C, DM: -370)
+INFO DHW control: Activating temporary lux - CHEAP_ELECTRICITY_OPPORTUNITY (DHW: 42.0°C, DM: -120)
 ```
 
 ### Dashboard Card
-
-Monitor DHW control status:
-
-### Dashboard Card
-
-Monitor DHW control status:
 
 ```yaml
 type: entities
@@ -146,7 +137,7 @@ entities:
     name: Temporary Lux
   - entity: sensor.f750_cu_3x400v_hot_water_top_bt7
     name: DHW Temperature
-  - entity: sensor.effektguard_current_degree_minutes
+  - entity: sensor.effektguard_degree_minutes
     name: Thermal Debt
 ```
 
@@ -161,121 +152,84 @@ entities:
    - Fix: Turn it ON to enable automatic control
 
 2. **Temporary lux entity not configured**
-   - Check logs for: "DHW control disabled: No temporary lux entity configured"
-   - Fix: Reconfigure EffektGuard integration, set temporary lux entity
+   - Debug log: "No temporary lux entity configured"
+   - Fix: Reconfigure EffektGuard and set the temporary lux entity
 
 3. **Temporary lux entity not found**
-   - Check: `switch.temporary_lux_50004` exists in MyUplink integration
-   - Fix: Ensure MyUplink Premium is active, entity is exposed
+   - Check: `switch.temporary_lux_50004` exists in the MyUplink integration
 
-4. **Rate limiting active**
-   - Check logs for: "DHW control rate limited"
-   - Info: Changes limited to every 10 minutes for stability
+4. **A start is rate limited**
+   - Debug log: "DHW start rate limited: ... min since last change (min 60 min)"
 
-5. **NIBE's own schedule overriding**
-   - Temporary lux controls DHW priority, not full enable/disable
-   - NIBE may still heat DHW based on comfort mode settings
-   - Consider lowering NIBE's DHW comfort temp if needed
+5. **NIBE's own schedule**
+   - Temporary lux controls DHW priority, not a full enable/disable
+   - NIBE may still heat DHW on its own comfort settings and its periodic increase
 
 ### Logs Show "No change needed" But Should Be Blocking
 
-This happens when:
-- Temporary lux is already OFF (correct state)
-- NIBE is heating from its own schedule (not lux-triggered)
-- EffektGuard has correctly disabled lux boost
-
-**This is expected behavior** - EffektGuard blocks lux-triggered heating, but NIBE may still heat DHW periodically based on its internal schedule.
+This happens when temporary lux is already OFF and NIBE is heating on its own schedule.
+**This is expected behavior** - EffektGuard blocks lux-triggered heating; NIBE may still heat DHW
+periodically on its own.
 
 ## Advanced Configuration
 
-### Custom DHW Demand Periods
+### DHW Demand Periods
 
-Configure high-demand periods (e.g., morning showers, evening baths):
-
-```yaml
-# Via EffektGuard config flow
-dhw_demand_periods:
-  - start_hour: 7
-    target_temp: 55
-    duration_hours: 2
-  - start_hour: 18
-    target_temp: 55
-    duration_hours: 3
-```
-
-EffektGuard will:
-- Pre-heat DHW during cheap electricity before demand periods
-- Ensure target temperature is reached by start time
-- Optimize timing to avoid expensive peak hours
+Configured in EffektGuard's options (Configure button): a morning and an evening hour at which hot water
+should be ready, each switchable, and the minimum hot-water amount (minutes). EffektGuard opens a
+scheduled window before each (`docs/DHW_OPTIMIZATION.md`, Two-Lane Architecture) and:
+- Heats in the cheapest window that still finishes in time
+- Ensures the target is reached by the demand time
+- Avoids PEAK prices unless the tank is critically low
 
 ### Integration with Automations
 
-Create custom rules that work with EffektGuard's DHW control:
-
 ```yaml
 automation:
-  - alias: "Override DHW blocking for guests"
+  - alias: "Boost hot water for guests"
     trigger:
       - platform: state
         entity_id: input_boolean.guests_staying
         to: "on"
     action:
-      # Temporarily disable auto control
-      - service: switch.turn_off
-        target:
-          entity_id: switch.effektguard_hot_water_optimization
-      # Manually boost DHW
       - service: effektguard.boost_dhw
         data:
-          target_temp: 55
           duration: 180
 ```
 
 ## Technical Details
 
-### Decision Priority (from DHW Optimizer)
+### Decision Priority
 
-1. **CRITICAL_THERMAL_DEBT** (DM ≤ -240): Block DHW immediately
-2. **SPACE_HEATING_EMERGENCY** (indoor < target - 0.5°C, outdoor < 0°C): Block DHW
-3. **DHW_SAFETY_MINIMUM** (DHW < 35°C): Heat DHW (limited runtime)
-4. **HIGH_SPACE_HEATING_DEMAND** (>6kW, DM < -60): Delay DHW
-5. **URGENT_DEMAND** (<2h until high-demand period): Heat DHW now
-6. **OPTIMAL_PREHEAT** (2-24h until demand, cheap prices): Heat DHW
-7. **CHEAP_ELECTRICITY** (cheap period, indoor OK): Opportunistic heating
-8. **NORMAL_DHW_HEATING** (DHW < 45°C, indoor OK): Standard heating
+The rules and their order are in `docs/DHW_OPTIMIZATION.md` (Decision Rules), taken from
+`should_start_dhw()` in `dhw_optimizer.py`.
 
 ### Rate Limiting
 
-- **Coordinator update**: Every 5 minutes
-- **DHW control changes**: Minimum 10 minutes between ON/OFF
-- **Manual boost service**: 60-minute cooldown
-- **NIBE offset changes**: 5-minute rate limit
-
-This prevents excessive API calls and allows NIBE to stabilize between changes.
+- **Coordinator update**: every 5 minutes, clock-aligned
+- **Automatic DHW starts**: at most one per 60 minutes (`DHW_CONTROL_MIN_INTERVAL_MINUTES`); stops are not delayed
+- **Manual boost service**: 60-minute cooldown (`DHW_BOOST_COOLDOWN_MINUTES`)
 
 ## Best Practices
 
 1. **Enable gradually**: Start with monitoring only, enable auto control after understanding patterns
 2. **Monitor logs**: Watch for 1-2 days to verify control decisions are correct
-3. **Adjust demand periods**: Configure your actual high-demand times for optimal pre-heating
-4. **Trust the algorithm**: DHW optimizer is conservative - prioritizes comfort and safety over savings
-5. **Manual override available**: Use `boost_dhw` service for special situations
+3. **Set demand periods**: Configure your real high-demand times for good pre-heating
+4. **Manual override available**: Use the `boost_dhw` service for special situations
 
 ## Safety Guarantees
 
-EffektGuard's DHW control includes multiple safety layers:
-
-- ✅ Never blocks DHW below 35°C (Legionella risk)
-- ✅ Never blocks during space heating emergency
-- ✅ Limits DHW runtime during high thermal debt
-- ✅ Aborts DHW if thermal debt reaches -400 during cycle
-- ✅ Respects NIBE's automatic Legionella protection (weekly 65°C boost)
+- ✅ Below `DHW_SAFETY_CRITICAL` (20 °C) price never defers heating; below `DHW_SAFETY_MIN` (30 °C) the
+  tank is heated in the next good window or at once
+- ✅ Never starts DHW during a space-heating emergency or past the thermal-debt block threshold
+- ✅ Aborts a running boost past the thermal-debt abort threshold
+- ✅ Hygiene is NIBE's own periodic increase (factory every 14 days to 55 °C); EffektGuard warns if it
+  sees none for 21 days and cannot perform it itself (temporary lux stops below 55 °C)
 
 ## Related Documentation
 
 - `docs/DHW_OPTIMIZATION.md` - Full DHW optimization algorithm
-- `architecture/07_manual_override_services.md` - Manual control services  
-- `docs/agent/PROJECT_NOTES.md` - DHW control implementation guidelines
+- `architecture/07_manual_override_services.md` - Manual control services
 
 ## Version History
 

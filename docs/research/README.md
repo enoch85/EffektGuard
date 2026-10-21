@@ -24,8 +24,8 @@ is worse than a number with no citation at all: it looks settled.
 | | |
 |---|---|
 | [01_degree_minutes.md](01_degree_minutes.md) | What DM is, NIBE menu 4.9.3, and why the auxiliary heater — not −1500 — is the number that governs a real F750 |
-| [02_emitter_law.md](02_emitter_law.md) | EN 442 / EN 1264. How flow temperature is derived, validated against NIBE's own published curve |
-| [03_concrete_slab_response.md](03_concrete_slab_response.md) | Why a concrete slab needs a 24-hour forecast horizon and a +2.0 °C pre-heat |
+| [02_emitter_law.md](02_emitter_law.md) | EN 442 / EN 1264. How flow temperature is derived; checked against NIBE's published curve, validated against OpenEnergyMonitor's tool |
+| [03_concrete_slab_response.md](03_concrete_slab_response.md) | Why a concrete slab needs a 48-hour forecast horizon and a +2.0 °C pre-heat |
 | [04_exhaust_air_recovery.md](04_exhaust_air_recovery.md) | Why "extra heat extracted" and "improved COP" are the same joules, and what that does to the airflow feature |
 
 ## What is *not* in here

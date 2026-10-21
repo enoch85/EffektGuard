@@ -11,8 +11,9 @@ flowchart TD
     end
 
     subgraph "Price Classification"
-        D[Calculate Percentiles<br/>P25, P50, P75, P90]
-        E[Price ≤ P25:<br/>CHEAP]
+        D[Calculate Percentiles<br/>P10, P25, P75, P90]
+        E0[Price ≤ P10:<br/>VERY_CHEAP]
+        E[P10 < Price ≤ P25:<br/>CHEAP]
         F[P25 < Price ≤ P75:<br/>NORMAL]
         G[P75 < Price ≤ P90:<br/>EXPENSIVE]
         H[Price > P90:<br/>PEAK]
@@ -26,9 +27,9 @@ flowchart TD
 
     subgraph "Price Layer Decision"
         L[Base Offsets:<br/>VERY_CHEAP: +4.0°C<br/>CHEAP: +1.5°C<br/>NORMAL: 0.0°C<br/>EXPENSIVE: -1.0°C<br/>PEAK: -10.0°C]
-        M[Daytime Multiplier<br/>Expensive/Peak × 1.5]
-        N[User Tolerance Factor<br/>Scale 1-10 → 0.2-2.0]
-        O[Final: -1.0 × 1.5 × tolerance<br/>Result: -1.5°C tolerance=1.0]
+        M[Daytime Multiplier<br/>EXPENSIVE × 1.5]
+        N[Tolerance 0.5-3.0 → factor 0.2-1.0<br/>× mode: comfort 0.7, balanced 1.0, savings 1.3]
+        O[Final: -1.0 × 1.5 × factor<br/>Result: -1.5°C at tolerance 3.0, balanced]
         P[Price Layer<br/>Offset: -1.5°C<br/>Weight: 0.8]
     end
 
@@ -42,6 +43,7 @@ flowchart TD
     A --> B
     B --> C
     C --> D
+    D --> E0
     D --> E
     D --> F  
     D --> G
@@ -92,11 +94,12 @@ Rather than fixed price thresholds, the system uses **percentile-based classific
 
 #### Daily Price Distribution Analysis
 1. **Collect all 96 prices** for the day
-2. **Calculate percentiles**: P25, P50, P75, P90
+2. **Calculate percentiles**: P10, P25, P75, P90
 3. **Classify each quarter** relative to the day's distribution
 
 #### Classification Bands
-- **CHEAP (≤P25)**: Bottom 25% of prices - pre-heating opportunity
+- **VERY_CHEAP (≤P10)**: Bottom 10% of prices - aggressive pre-heating
+- **CHEAP (P10-P25)**: Next 15% of prices - pre-heating opportunity
 - **NORMAL (P25-P75)**: Middle 50% of prices - maintain status quo
 - **EXPENSIVE (P75-P90)**: Top 25-10% of prices - reduce consumption
 - **PEAK (>P90)**: Top 10% of prices - minimize consumption
@@ -121,26 +124,28 @@ PEAK: -10.0°C        # Maximum reduction (MIN_OFFSET limit)
 
 ### Day/Night Multiplier
 
-During **daytime hours (Q24-Q87)**, expensive and peak periods get amplified:
+During **daytime hours (Q24-Q87)**, EXPENSIVE quarters are amplified (`PRICE_DAYTIME_MULTIPLIER`):
 - **Expensive**: -1.0°C × 1.5 = -1.5°C
-- **Peak**: -2.0°C × 1.5 = -3.0°C
+- **Peak**: already the maximum reduction (-10.0°C, `MIN_OFFSET`), not multiplied
 
 **Rationale**: Daytime consumption has full effect tariff weight, making reductions more valuable.
 
 ### User Tolerance Scaling
 
-The **tolerance setting (1-10 scale)** allows users to control optimization aggressiveness:
+The **tolerance setting (0.5-3.0)** controls optimization aggressiveness (`PriceAnalyzer`):
 
 ```
-tolerance_factor = user_tolerance / 5.0  # Range: 0.2-2.0
+tolerance_factor = 0.2 + (tolerance - 0.5) / 2.5 × 0.8      # 0.5 → 0.2, 3.0 → 1.0
+tolerance_factor ×= mode.price_tolerance_multiplier          # comfort 0.7, balanced 1.0, savings 1.3
 
 final_offset = base_offset × daytime_multiplier × tolerance_factor
+# savings mode: a PEAK quarter bypasses the tolerance and takes the full base offset
 ```
 
-#### Tolerance Examples
-- **Tolerance 1**: Very conservative (0.2× scaling)
-- **Tolerance 5**: Balanced (1.0× scaling)  
-- **Tolerance 10**: Aggressive (2.0× scaling)
+#### Tolerance Examples (balanced mode)
+- **Tolerance 0.5**: Very conservative (0.2× scaling)
+- **Tolerance 1.75**: Middle (0.6× scaling)
+- **Tolerance 3.0**: Full effect (1.0× scaling)
 
 ### Extended Optimization Horizon
 

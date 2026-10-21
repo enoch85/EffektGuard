@@ -1,112 +1,41 @@
 # Scenario 4: Weather-Based Pre-heating
 
-**Description**: Predictive pre-heating before cold periods using thermal modeling.
+**Description**: Pre-heating before a colder day: the layer decides **whether** to pre-heat; the amount
+is a constant.
 
 ```mermaid
 flowchart TD
-    subgraph "Weather Analysis"
-        A[Get 6-Hour Forecast]
-        B[Current Outdoor: 2°C]
-        C[Forecast Min: -8°C]
-        D[Temperature Drop: -10°C]
-        E[Rate: -1.67°C/hour]
+    subgraph "Forecast"
+        A[Hourly forecast, up to 48 h]
+        B[Past day: measured outdoor mean<br/>or the next 24 forecast hours]
+        C[Coldest day starting within the horizon<br/>6 h radiators / 12 h timber / 48 h slab]
+        D[Temperature drop<br/>coldest day - past day]
     end
 
-    subgraph "Thermal Mass Configuration"
-        F[Building Thermal Mass<br/>0.5-2.0 scale]
-        G[Dynamic Threshold<br/>-2.0 × thermal_mass]
-        H[Low Mass 0.5:<br/>Threshold: -1.0°C]
-        I[High Mass 2.0:<br/>Threshold: -4.0°C]
+    subgraph "Triggers - either fires"
+        E{Drop <= -4.0 C?<br/>WEATHER_FORECAST_DROP_THRESHOLD}
+        F{Indoor cooling <= -0.5 C/h<br/>with confidence > 0.4?}
     end
 
-    subgraph "Weather Layer Decision"
-        J{Drop < Threshold?}
-        K{Rate < -0.5°C/h?}
-        L[Calculate Pre-heat Target]
-        M[Weather Pre-heat<br/>Offset: calculated<br/>Weight: 0.85]
-        N[No Pre-heat Needed<br/>Offset: 0.0°C<br/>Weight: 0.0]
+    subgraph "Weather Pre-heat vote"
+        G[Offset +2.0 C<br/>WEATHER_GENTLE_OFFSET]
+        H[Weight 0.85 x thermal mass<br/>capped at 0.99]
+        N[No pre-heat<br/>offset 0, weight 0]
     end
 
-    subgraph "Thermal Model Calculation"
-        O[Account for Thermal Decay<br/>Heat loss during forecast period]
-        P[Expected Temp at End<br/>current - loss_rate × hours]
-        Q[Calculate Deficit<br/>desired - expected_end]
-        R[Add Safety Margin<br/>1.0 / thermal_mass]
-        S[Cap at +3°C Maximum<br/>Prevent excessive pre-heat]
-        T[Final Offset<br/>target - current_target]
-    end
-
-    %% Flow
     A --> B
     A --> C
     B --> D
     C --> D
-    A --> E
-    
-    F --> G
+    D --> E
+    E -->|Yes| G
+    E -->|No| F
+    F -->|Yes| G
+    F -->|No| N
     G --> H
-    G --> I
-    
-    D --> J
-    E --> K
-    J -->|Yes| K
-    K -->|Yes| L
-    K -->|No| N
-    J -->|No| N
-    
-    L --> O
-    O --> P
-    P --> Q
-    Q --> R
-    R --> S
-    S --> T
-    T --> M
-
-    %% Styling
-    style A fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style D fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style G fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style J fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style K fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style L fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style M fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style N fill:#ddd,stroke:#000,stroke-width:2px,color:#000
 ```
 
 ## Weather-Based Predictive Strategy
-
-### Dynamic Threshold Adaptation
-
-The weather layer uses **building-specific thermal mass** to determine when pre-heating is beneficial:
-
-#### Low Thermal Mass Buildings (0.5)
-- **Characteristics**: Timber frame, poor insulation
-- **Threshold**: -1.0°C temperature drop
-- **Rationale**: Fast heat loss, need early pre-heating
-
-#### Normal Thermal Mass Buildings (1.0)  
-- **Characteristics**: Standard construction
-- **Threshold**: -2.0°C temperature drop
-- **Rationale**: Balanced approach
-
-#### High Thermal Mass Buildings (2.0)
-- **Characteristics**: Concrete, excellent insulation  
-- **Threshold**: -4.0°C temperature drop
-- **Rationale**: Good heat retention, less pre-heating needed
-
-### Two-Condition Pre-heating Logic
-
-Pre-heating activates only when **both conditions** are met:
-
-1. **Significant Temperature Drop**: Forecast drop exceeds dynamic threshold
-2. **Rapid Cooling Rate**: Temperature falling faster than -0.5°C/hour
-
-This prevents unnecessary pre-heating during:
-- Gradual cooling (building can adapt naturally)
-- Small temperature variations (thermal mass handles it)
-- Forecast uncertainties (avoid overreaction)
 
 ### The Actual Algorithm
 
@@ -151,7 +80,7 @@ indoor_cooling = (trend_rate <= WEATHER_INDOOR_COOLING_CONFIRMATION    # -0.5 °
 
 if forecast_triggered or indoor_cooling:
     return WeatherLayerDecision(
-        offset=WEATHER_PREHEAT_OFFSET,                                  # +2.0 °C, a constant
+        offset=WEATHER_GENTLE_OFFSET,                                   # +2.0 °C, a constant
         weight=min(LAYER_WEIGHT_WEATHER_PREDICTION * thermal_mass, WEATHER_WEIGHT_CAP),
     )
 ```
@@ -173,7 +102,7 @@ the case that needed it least. See audit F-130.
 ### Safety Mechanisms
 
 #### The pre-heat is bounded by construction
-`WEATHER_PREHEAT_OFFSET` is **+2.0 °C**, and it is sized, not tuned: the fabric must bank 1.0 °C
+`WEATHER_GENTLE_OFFSET` is **+2.0 °C**, and it is sized, not tuned: the fabric must bank 1.0 °C
 **within the horizon the house is given**, or the pre-heat is decoration. On the simulator's
 validated plant models the previous +0.83 took **28.4 h** (radiator) and **34.6 h** (concrete slab)
 to bank that 1.0 °C, against horizons of 12 h and 24 h. It could never charge the battery before the
@@ -194,36 +123,9 @@ This reflects their ability to store and retain heat effectively.
 
 ### Integration with Other Layers
 
-The weather layer (weight 0.85) works in coordination with:
+The weather pre-heat vote (weight 0.85 × thermal mass, capped at 0.99) is aggregated with the others
+(`docs/architecture/08_layer_priority_system.md`):
 
-- **Price Layer (0.8)**: Pre-heat preferentially during cheap periods
-- **Effect Layer (0.65-1.0)**: Avoid pre-heating if it would create peaks
-- **Emergency Layer (0.8)**: Skip pre-heating if thermal debt is critical
-
-### Forecast Window Optimization
-
-The **6-hour forecast window** balances:
-- **Prediction accuracy**: Shorter forecasts are more reliable
-- **Pre-heating effectiveness**: Sufficient time for thermal preparation
-- **Energy efficiency**: Avoid excessive advance heating
-
-This window works well with typical Swedish weather patterns and building thermal characteristics.
-
-### Example Scenario
-
-**Current Conditions**:
-- Outdoor: 2°C, Indoor: 21°C target
-- 6-hour forecast minimum: -8°C (-10°C drop)
-- Rate: -1.67°C/hour
-- Building: Normal thermal mass (1.0)
-
-**Decision Process**:
-1. Drop (-10°C) > threshold (-2.0°C) ✓
-2. Rate (-1.67°C/h) < -0.5°C/h ✓
-3. Expected end temp: 21°C - heat_loss = ~19°C
-4. Deficit: 21°C - 19°C = 2°C
-5. Safety margin: 1.0°C
-6. Target: 21°C + 2°C + 1°C = 24°C
-7. Final offset: +3.0°C (capped)
-
-**Result**: Weather layer votes for +3.0°C pre-heating with weight 0.85
+- **Price Layer (0.8, 1.0 at PEAK)**: a PEAK quarter outranks the pre-heat
+- **Effect Layer (up to 1.0)**: protects the monthly peak
+- **Emergency Layer (T1-T3 0.65 / 0.81 / 0.91)**: thermal-debt recovery acts by tier

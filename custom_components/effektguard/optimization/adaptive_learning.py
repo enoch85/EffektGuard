@@ -521,7 +521,7 @@ class AdaptiveThermalModel:
             Prediction horizon in hours
         """
         if self.ufh_type == UFHType.SLOW_RESPONSE:
-            return UFH_CONCRETE_PREDICTION_HORIZON  # 24 hours
+            return UFH_CONCRETE_PREDICTION_HORIZON  # 48 hours
         elif self.ufh_type == UFHType.MEDIUM_RESPONSE:
             return UFH_TIMBER_PREDICTION_HORIZON  # 12 hours
         elif self.ufh_type == UFHType.FAST_RESPONSE:

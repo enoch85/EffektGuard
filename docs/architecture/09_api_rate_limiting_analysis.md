@@ -102,7 +102,7 @@ def on_price_entity_change(event):
 - **Graceful degradation** - continues working if API fails
 
 ### Potential Concerns
-- **Premium subscription required** for MyUplink write access
+- **A valid myUplink subscription may be required** for MyUplink write access
 - **Unknown daily/hourly limits** from NIBE
 - **Possible throttling** during high usage periods
 

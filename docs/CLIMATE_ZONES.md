@@ -139,7 +139,7 @@ The base DM thresholds adjust dynamically based on current outdoor temperature:
 **Formula:** `adjustment = (outdoor_temp - zone_avg_winter_low) × 20 DM/°C`
 
 Colder than the zone average ⇒ the difference is negative ⇒ the threshold moves **deeper**.
-Warmer ⇒ positive ⇒ **shallower**. (`climate_zones.py:231` — `temp_delta = outdoor_temp -
+Warmer ⇒ positive ⇒ **shallower**. (`ClimateZoneDetector` in `climate_zones.py` — `temp_delta = outdoor_temp -
 self.zone_info.winter_avg_low`. This document previously stated the subtraction the other way
 round, which yields the opposite sign, and then wrote the correct number anyway — so the formula
 and its own worked example disagreed. If you are deriving a threshold by hand, use the code.)
@@ -158,9 +158,10 @@ and its own worked example disagreed. If you are deriving a threshold by hand, u
 - **Adjusted: −540 DM** (tighter tolerance in mild weather)
 
 **⚠️ The WARNING band has zero width.** In every zone `normal_max == warning`
-(`DM_CRITICAL_T1_MARGIN` is 0), so a DM that is "past normal" is already "past warning". The
-intermediate WARNING/CAUTION states are unreachable. This is a known open finding — do not
-"correct" the tables to conceal it.
+(`DM_CRITICAL_T1_MARGIN` is 0), so a DM that is "past normal" is already "past warning". No DM
+could reach a WARNING or CAUTION state, so those tiers were removed: the ladder is
+`Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY` (`docs/agent/PROJECT_NOTES.md`). The equal
+columns are a design fact, not a typo — do not "correct" the tables.
 
 **⚠️ On a NIBE F750 the pump acts first.** Its own "start addition" (menu 4.9.3) defaults to
 **−700**, so the immersion heater engages *before* Stockholm's −740 warning threshold is ever
@@ -214,8 +215,7 @@ print(f"Warning threshold: {dm_range['warning']}")
 ### Integration Points
 
 1. **Decision Engine** (`decision_engine.py`): Uses climate-aware DM thresholds for emergency layer
-2. **Weather Compensation** (`weather_compensation.py`): Adds climate-based safety margins to flow temperature
-3. **Configuration** (`const.py`): Imports zone definitions from dedicated module
+2. **Weather Compensation** (`WeatherCompensationLayer` in `optimization/weather_layer.py`): Adds climate-based safety margins to flow temperature
 
 ---
 
@@ -271,7 +271,7 @@ No! Climate zones work **with** weather compensation:
 
 ## Testing
 
-Comprehensive test coverage in `tests/test_climate_zones.py` and `tests/test_decision_engine_climate_integration.py`:
+Comprehensive test coverage in `tests/unit/climate/test_climate_zones.py` and `tests/unit/optimization/test_decision_engine_climate_integration.py`:
 
 - ✅ Zone detection for all 5 zones
 - ✅ DM calculations across temperature ranges
@@ -288,8 +288,7 @@ Comprehensive test coverage in `tests/test_climate_zones.py` and `tests/test_dec
 
 ## References
 
-- Implementation plan: `IMPLEMENTATION_PLAN/FUTURE/CLIMATE_ZONE_DM_INTEGRATION.md`
 - Architecture: `architecture/10_adaptive_climate_zones.md`
-- Test suite: `tests/test_climate_zones.py`
-- Integration tests: `tests/test_decision_engine_climate_integration.py`
-- Swedish research: `IMPLEMENTATION_PLAN/02_Research/Swedish_NIBE_Forum_Findings.md`
+- Test suite: `tests/unit/climate/test_climate_zones.py`
+- Integration tests: `tests/unit/optimization/test_decision_engine_climate_integration.py`
+- Degree minutes, sourced: `research/01_degree_minutes.md`

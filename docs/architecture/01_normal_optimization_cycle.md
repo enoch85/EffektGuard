@@ -1,136 +1,137 @@
 # Scenario 1: Normal Optimization Cycle
 
-**Description**: Standard 5-minute optimization cycle with all systems operating normally.
+**Description**: The control cycle the coordinator runs every 5 minutes, clock-aligned at `:XX:10`
+(Home Assistant's own scheduling is disabled), with all systems operating normally.
 
 ```mermaid
 flowchart TD
     subgraph "HA Core"
-        A[NIBE MyUplink Entities]
-        B[Spot Price Entities] 
+        A[NIBE entities: MyUplink, nibe_heatpump or Modbus]
+        B[Spot Price Entities]
         C[Weather Entities]
-        D[HA Services]
     end
 
-    subgraph "Coordinator Update Cycle (5min)"
+    subgraph "Coordinator cycle (every 5 min, at :XX:10)"
         E[EffektGuardCoordinator._async_update_data]
-        F[Gather NIBE Data]
-        G[Gather Spot Price Prices]
-        H[Gather Weather Forecast]
-        I[Run Decision Engine]
-        J[Update Peak Tracking]
-        K[Record Learning Data]
-        L[Update All Entities]
+        F[Read NIBE]
+        G[Read prices]
+        H[Read weather]
+        J[Update peak tracking: day change, this cycle's power]
+        I[Run the decision engine in an executor]
+        V[Volatility gate]
+        WR[Write the offset]
+        K[Record learning observations]
+        PS[Persist]
+        L[Update all entities]
     end
 
     subgraph "Decision Engine Layers"
-        M[1. Safety Layer]
-        N[2. Emergency Layer]
-        O[3. Effect Layer]
-        P[4. Prediction Layer]
-        Q[5. Weather Layer]
-        R[6. Price Layer]
-        S[7. Comfort Layer]
-        T[Aggregate Weighted Votes]
+        M[Safety]
+        N[Emergency: T1-T3, EMERGENCY floor, anti-windup]
+        P1[Proactive: Z1-Z5]
+        O[Effect: peak protection]
+        P[Learned pre-heat]
+        WC[Math WC: weather compensation]
+        Q[Weather pre-heat]
+        R[Spot price]
+        S[Comfort]
+        T[Aggregate: weight >= 1.0 wins, else weighted average]
     end
 
     subgraph "Data Adapters"
         U[NibeAdapter]
-        V[GESpotAdapter]
+        VA[GESpotAdapter]
         W[WeatherAdapter]
     end
 
     subgraph "Entities Update"
         X[Climate Entity]
         Y[Sensor Entities]
-        Z[Number Entities]
+        Z[Switch Entities]
     end
 
     %% Data Flow
     A --> U
-    B --> V
+    B --> VA
     C --> W
-    
+
     E --> F
     F --> U
     U --> F
     F --> G
-    G --> V
-    V --> G
+    G --> VA
+    VA --> G
     G --> H
     H --> W
     W --> H
-    
-    H --> I
+
+    H --> J
+    J --> I
     I --> M
     M --> N
-    N --> O
+    N --> P1
+    P1 --> O
     O --> P
-    P --> Q
+    P --> WC
+    WC --> Q
     Q --> R
     R --> S
     S --> T
     T --> I
-    
-    I --> J
-    J --> K
-    K --> L
+
+    I --> V
+    V --> WR
+    WR --> K
+    K --> PS
+    PS --> L
     L --> X
     L --> Y
     L --> Z
-    
+
     %% Apply Decision
-    I -.->|Apply Offset| D
-    D -.->|number.set_value| A
+    WR -.->|offset register 47011, via the bound number entity| A
 
     %% Styling
     style E fill:#333,stroke:#fff,stroke-width:2px,color:#fff
     style I fill:#333,stroke:#fff,stroke-width:2px,color:#fff
     style T fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style M fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style N fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style O fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style P fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style Q fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style R fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style S fill:#666,stroke:#fff,stroke-width:1px,color:#fff
 ```
 
 ## Flow Description
 
-### 1. Data Collection (Every 5 minutes)
-The coordinator orchestrates data gathering from three main sources:
-- **NIBE MyUplink**: Heat pump state, temperatures, degree minutes
-- **Spot Price**: Native 15-minute electricity prices (96 quarters/day)
-- **Weather**: Forecast data for predictive optimization
+### 1. Data Collection (every 5 minutes)
+The coordinator reads, in this order:
+- **NIBE**: heat pump state, temperatures, degree minutes (MyUplink, nibe_heatpump or Modbus entities)
+- **Spot price**: native 15-minute prices (96 quarters a day)
+- **Weather**: the forecast, for pre-heating and unusual-weather detection
+
+It then updates the peak tracking - the day change and this cycle's power - **before** the
+decision, so the effect layer judges the billing period on the power of the cycle it decides.
 
 ### 2. Decision Engine Execution
-The decision engine processes data through 7 prioritized layers:
-1. **Safety Layer**: Hard temperature limits (18-24°C)
-2. **Emergency Layer**: Context-aware thermal debt prevention
-3. **Effect Layer**: 15-minute peak protection
-4. **Prediction Layer**: Learned pre-heating (Phase 6)
-5. **Weather Layer**: Weather-based pre-heating
-6. **Price Layer**: Spot price optimization
-7. **Comfort Layer**: Temperature error correction
+The decision engine runs nine layers, each returning `(offset, weight, reason)`:
+1. **Safety**: below the 18 °C floor (`MIN_TEMP_LIMIT`) maximum heat
+2. **Emergency**: thermal debt T1-T3, the EMERGENCY floor past the aux limit, anti-windup
+3. **Proactive**: early degree-minute prevention, Z1-Z5
+4. **Effect**: 15-minute effect-tariff peak protection
+5. **Learned pre-heat**: the prediction layer
+6. **Math WC**: weather compensation by the EN 442 emitter law
+7. **Weather pre-heat**: before a colder day
+8. **Spot price**: the 15-minute price classification
+9. **Comfort**: the room against its band
 
 ### 3. Decision Aggregation
-- Critical layers (weight 1.0) override all others
-- Non-critical layers use weighted averaging
-- Final offset applied via the NIBE offset number entity
+- A layer with weight ≥ 1.0 wins outright; otherwise a weighted average
+  (see [08_layer_priority_system.md](08_layer_priority_system.md))
+- The volatility gate (`utils/volatile_helpers.py`) may keep the previous offset, and
+  `utils/offset.py` turns the decision into the integer the register takes
+- The offset is written through the bound NIBE offset entity
   (MyUplink, nibe_heatpump, or a template number wrapping modbus.write_register)
 
-### 4. State Updates
-All entities are updated with:
-- Current optimization decision and reasoning
-- Peak tracking information
-- Learning data for Phase 6 capabilities
-- Diagnostic information for monitoring
+### 4. Learning and State
+- Learning observations are recorded hourly (`LEARNING_OBSERVATION_INTERVAL_MINUTES`), not every cycle
+- Peak tracking, savings and learned data are persisted
+- All entities are updated with the decision, its reasoning, peak tracking and diagnostics
 
-### 5. Learning Integration (Phase 6)
-- Records observations for adaptive learning
-- Updates thermal model parameters
-- Saves learned data periodically
-- Enhances future predictions
-
-This cycle ensures continuous optimization while maintaining safety and providing full visibility into the decision-making process.
+A cycle that cannot read the pump writes nothing: the entities go unavailable and the next cycle
+tries again.

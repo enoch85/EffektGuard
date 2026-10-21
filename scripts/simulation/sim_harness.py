@@ -27,7 +27,7 @@ The engine's wall-clock reads (dt_util.now/utcnow) are monkeypatched to the
 simulation clock each step so price-quarter and forecast logic see sim time.
 
 Outputs: summary JSON + violations + downsampled trace per config, written to
-sim-results/. Run: .venv/bin/python sim_harness.py [--selftest]
+output/. Run: .venv/bin/python sim_harness.py [--selftest]
 """
 
 import asyncio

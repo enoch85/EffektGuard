@@ -23,7 +23,7 @@ flowchart TD
     
     C -->|Integration loads| D["effektguard/__init__.py<br/>async_setup_entry()"]
     
-    D -->|Step 1| E["config_with_latitude = dict(entry.options)<br/>{target_temperature: 21.0, tolerance: 0.5, ...}"]
+    D -->|Step 1| E["config_with_latitude = dict(entry.data) + entry.options<br/>{target_temperature: 21.0, tolerance: 0.5, ...}"]
     E -->|Step 2: Inject latitude| F["config_with_latitude['latitude'] = hass.config.latitude<br/>Result: {latitude: 59.3293, ...}"]
     
     F -->|Pass config dict| G["DecisionEngine(<br/>  config=config_with_latitude,<br/>  ...)<br/>"]
@@ -81,7 +81,7 @@ flowchart TD
     G -->|55.60° YES| D4
     G -->|48.86° NO| H{Check standard<br/>0.0° - 54.5°}
     
-    H -->|48.86° YES| D5["Zone: Standard<br/>Safety margin: 0.0°C<br/>Winter avg: +5°C"]
+    H -->|48.86° YES| D5["Zone: Standard<br/>Safety margin: 0.0°C<br/>Winter avg: 0.0°C"]
     H -->|1.35° YES| D5
     
     D1 & D2 & D3 & D4 & D5 -->|Store result| K["return zone_key"]
@@ -105,16 +105,16 @@ flowchart TD
 flowchart TD
     A["Coordinator Update (every 5 min)"] -->|Trigger| B["DecisionEngine.calculate_decision()"]
     
-    B -->|Call layer 5| C["_weather_compensation_layer(nibe_state, weather_data)"]
+    B -->|Call layer 6| C["weather_comp_layer.evaluate_layer(nibe_state, weather_data, ...)"]
     
     C -->|Check config| D{self.enable_weather<br/>_compensation?}
     D -->|False| E1["Return LayerDecision:<br/>offset=0.0, weight=0.0<br/>reason='disabled'"]
     D -->|True| E2["Continue"]
     
-    E2 -->|Extract data| F["outdoor_temp = nibe_state.outdoor_temp<br/>current_flow = nibe_state.flow_temp<br/>Example: -12°C, 38°C"]
+    E2 -->|Extract data| F["outdoor_temp = nibe_state.outdoor_temp<br/>current_flow = nibe_state.flow_temp<br/>Example: Stockholm, concrete slab, -12°C, 38°C"]
     
     F -->|Calculate optimal| G["weather_comp.calculate_optimal_flow_temp()<br/>Uses the EN 442 emitter law"]
-    G -->|Result| H["flow_calc.flow_temp = 35.5°C<br/>(mathematical optimum)"]
+    G -->|Result| H["flow_calc.flow_temp = 34.0°C<br/>(the flow the emitters need)"]
     
     H -->|Check weather learner| I{self.weather_learner<br/>exists?}
     I -->|Yes| J["weather_learner.detect_unusual_weather(forecast)"]
@@ -131,20 +131,20 @@ flowchart TD
     O -->|Calculate component 1| P["base_margin = zone_info['safety_margin_base']<br/>= 1.0°C"]
     
     O -->|Calculate component 2| Q{outdoor_temp < winter_avg_low?}
-    Q -->|Yes: -12 < -10| R["temp_margin = (winter_avg_low - outdoor) × 0.1<br/>= (-10 - (-12)) × 0.1 = 0.2°C"]
+    Q -->|Yes: -12 < -8| R["temp_margin = (winter_avg_low - outdoor) × 0.1<br/>= (-8 - (-12)) × 0.1 = 0.4°C"]
     Q -->|No: outdoor >= winter_avg| S["temp_margin = 0.0°C"]
     
     R & S -->|Calculate component 3| T{unusual_weather_detected?}
     T -->|Yes| U["learning_margin = 0.5 + (unusual_severity × 1.0)<br/>Examples:<br/>  severity=0.5 → 1.0°C<br/>  severity=1.0 → 1.5°C"]
     T -->|No| V["learning_margin = 0.0°C"]
     
-    U & V -->|Sum all components| W["total_margin = base + temp + learning<br/>Example: 1.0 + 0.2 + 0.0 = 1.2°C"]
+    U & V -->|Sum all components| W["total_margin = base + temp + learning<br/>Example: 1.0 + 0.4 + 0.0 = 1.4°C"]
     
-    W -->|Return| X["safety_margin = 1.2°C"]
+    W -->|Return| X["safety_margin = 1.4°C"]
     
-    X -->|Apply to optimal| Y["adjusted_flow_temp = flow_calc.flow_temp + safety_margin<br/>= 35.5 + 1.2 = 36.7°C"]
+    X -->|A tolerance band, not an addition| Y["band = [required, required + margin] = [34.0, 35.4]°C<br/>current 38.0 is above it → adjusted_flow_temp = 35.4°C<br/>(inside the band: left alone; below: pulled up to required)"]
     
-    Y -->|Calculate offset| Z["offset = (adjusted_flow - current_flow) / 1.5<br/>= (36.7 - 38.0) / 1.5 = -0.87°C<br/>(NIBE curve sensitivity: 1.5°C per offset)"]
+    Y -->|Calculate offset| Z["offset = (adjusted_flow - current_flow) / 1.5<br/>= (35.44 - 38.0) / 1.5 = -1.71°C<br/>(NIBE curve sensitivity: 1.5°C per offset)"]
     
     style P fill:#e0e0e0,stroke:#333,color:#000
     style R fill:#d0d0d0,stroke:#333,color:#000
@@ -161,13 +161,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["climate_system.get_dynamic_weight(<br/>  outdoor_temp=-12.0,<br/>  unusual_weather_detected=False<br/>)"] -->|Get zone info| B["zone_info = CLIMATE_ZONES[self.climate_zone]<br/>winter_avg_low = -10.0°C (Cold zone)"]
+    A["climate_system.get_dynamic_weight(<br/>  outdoor_temp=-12.0,<br/>  unusual_weather_detected=False<br/>)"] -->|Get zone info| B["zone_info = CLIMATE_ZONES[self.climate_zone]<br/>winter_avg_low = -8.0°C (Cold zone)"]
     
     B -->|Check temperature severity| C{outdoor_temp vs<br/>winter_avg_low?}
     
-    C -->|"outdoor < winter_avg_low"| D1["Very cold: -12 < -10<br/>base_weight = 0.85"]
-    C -->|"outdoor < (winter_avg_low + 5)"| D2["Cold: -10 to -5<br/>base_weight = 0.75"]
-    C -->|"outdoor < 5"| D3["Mild cold: -5 to 5<br/>base_weight = 0.65"]
+    C -->|"outdoor < winter_avg_low"| D1["Very cold: -12 < -8<br/>base_weight = 0.85"]
+    C -->|"outdoor < (winter_avg_low + 5)"| D2["Cold: -8 to -3<br/>base_weight = 0.75"]
+    C -->|"outdoor < 5"| D3["Mild cold: -3 to 5<br/>base_weight = 0.65"]
     C -->|"outdoor >= 5"| D4["Warm: >= 5<br/>base_weight = 0.50"]
     
     D1 & D2 & D3 & D4 -->|Check unusual weather| E{unusual_weather<br/>_detected?}
@@ -175,13 +175,13 @@ flowchart TD
     E -->|Yes| F["boost_weight = min(0.95, base_weight + 0.15)<br/>Examples:<br/>  0.85 + 0.15 = 0.95 (capped)<br/>  0.75 + 0.15 = 0.90<br/>  0.65 + 0.15 = 0.80<br/>  0.50 + 0.15 = 0.65"]
     E -->|No| G["final_weight = base_weight<br/>(no boost)"]
     
-    F & G -->|Apply user config| H["adjusted_weight = final_weight × config['weather_compensation_weight']<br/>Default multiplier: 0.75"]
+    F & G -->|Apply user config| H["adjusted_weight = final_weight × config['weather_compensation_weight']<br/>Default multiplier: 0.49 (DEFAULT_WEATHER_COMPENSATION_WEIGHT)"]
     
-    H -->|Examples| I["Very cold + unusual: 0.95 × 0.75 = 0.71<br/>Very cold normal: 0.85 × 0.75 = 0.64<br/>Cold normal: 0.75 × 0.75 = 0.56<br/>Warm normal: 0.50 × 0.75 = 0.38"]
+    H -->|Examples| I["Very cold + unusual: 0.95 × 0.49 = 0.47<br/>Very cold normal: 0.85 × 0.49 = 0.42<br/>Cold normal: 0.75 × 0.49 = 0.37<br/>Warm normal: 0.50 × 0.49 = 0.25"]
     
     I -->|Return to layer| J["final_weight (for decision aggregation)"]
     
-    J -->|Combine with offset| K["LayerDecision(<br/>  offset=-0.87,<br/>  weight=0.64,<br/>  reason='...'<br/>)"]
+    J -->|Combine with offset| K["LayerDecision(<br/>  offset=-1.71,<br/>  weight=0.42,<br/>  reason='...'<br/>)"]
     
     style D1 fill:#404040,stroke:#333,color:#fff
     style D2 fill:#606060,stroke:#333,color:#fff
@@ -193,50 +193,13 @@ flowchart TD
 
 ---
 
-## Diagram 5: Decision Aggregation (All 8 Layers)
+## Diagram 5: Decision Aggregation
 
-**Shows how weather compensation layer vote combines with other layers.**
-
-```mermaid
-flowchart TD
-    A["DecisionEngine.calculate_decision()"] -->|Collect all layers| B["Layer Decisions (8 total)"]
-    
-    B -->|Priority 1| L1["Safety Layer<br/>offset=0.0, weight=1.0<br/>reason='Temperature within limits'"]
-    B -->|Priority 2| L2["Emergency Layer<br/>offset=0.0, weight=0.8<br/>reason='DM -180 OK'"]
-    B -->|Priority 3| L3["Effect Tariff Layer<br/>offset=0.0, weight=0.65-1.0<br/>reason='Not in peak window'"]
-    B -->|Priority 4| L4["Prediction Layer (Phase 6)<br/>offset=+0.5, weight=0.65<br/>reason='Pre-heat for cold'"]
-    B -->|Priority 5| L5["Weather Compensation Layer<br/>offset=-0.9, weight=0.64<br/>reason='Math WC: Cold zone, -12°C'"]
-    B -->|Priority 6| L6["Weather Prediction Layer<br/>offset=0.0, weight=0.85<br/>reason='Stable forecast'"]
-    B -->|Priority 7| L7["Price Layer<br/>offset=-0.5, weight=0.8<br/>reason='Expensive period'"]
-    B -->|Priority 8| L8["Comfort Layer<br/>offset=0.0, weight=0.2-1.0<br/>reason='Indoor 21.0°C in range'"]
-    
-    L1 & L2 & L3 & L4 & L5 & L6 & L7 & L8 -->|Weighted aggregation| C["Calculate weighted sum"]
-    
-    C -->|Formula| D["total_weighted_offset =<br/>Σ(layer.offset × layer.weight)"]
-    
-    D -->|Calculation| E["= (0.0×1.0) + (0.0×0.8) + (0.0×0.65)<br/>  + (0.5×0.65) + (-0.9×0.64) + (0.0×0.85)<br/>  + (-0.5×0.8) + (0.0×0.2)<br/>= 0.325 - 0.576 - 0.400<br/>= -0.651"]
-    
-    E -->|Total weights| F["total_weight = Σ(layer.weight)<br/>= 1.0 + 0.8 + 0.65 + 0.65 + 0.64 + 0.85 + 0.8 + 0.2<br/>= 5.59"]
-    
-    F -->|Final calculation| G["final_offset = total_weighted_offset / total_weight<br/>= -0.651 / 5.59<br/>= -0.116°C"]
-    
-    G -->|Round to NIBE precision| H["rounded_offset = -0.1°C"]
-    
-    H -->|Apply to heat pump| I["Climate Entity<br/>set_heating_curve_offset(-0.1)"]
-    
-    I -->|NIBE MyUplink API| J["NIBE F750 Heat Pump<br/>Heating curve adjusted<br/>Flow temp slightly reduced"]
-    
-    style L1 fill:#303030,stroke:#333,color:#fff
-    style L2 fill:#404040,stroke:#333,color:#fff
-    style L3 fill:#505050,stroke:#333,color:#fff
-    style L4 fill:#606060,stroke:#333,color:#fff
-    style L5 fill:#707070,stroke:#333,color:#fff
-    style L6 fill:#808080,stroke:#333,color:#fff
-    style L7 fill:#909090,stroke:#333,color:#000
-    style L8 fill:#a0a0a0,stroke:#333,color:#000
-    style G fill:#b0b0b0,stroke:#333,color:#000
-    style J fill:#c0c0c0,stroke:#333,color:#000
-```
+The weather compensation vote (the example's −1.71 °C at weight 0.42) is aggregated with the other
+eight layers by the rules in [08_layer_priority_system.md](08_layer_priority_system.md): a layer with
+weight ≥ 1.0 wins outright (a safety layer that is OK votes with weight 0), thermal debt acts by
+tier, and otherwise the advisory layers are weight-averaged. The register then receives a whole
+number of degrees (`utils/offset.py`: truncation plus a 1.0 °C deadband), never a fraction.
 
 ---
 
@@ -258,8 +221,9 @@ homeassistant:
 
 ### 2. Integration Initialization (`__init__.py`)
 ```python
-# Step 1: Copy user options from config flow
-config_with_latitude = dict(entry.options)
+# Step 1: Merge entry.data (switch states) and entry.options (runtime settings)
+config_with_latitude = dict(entry.data)
+config_with_latitude.update(entry.options)
 # entry.options = {
 #     "target_temperature": 21.0,
 #     "tolerance": 0.5,
@@ -285,11 +249,12 @@ decision_engine = DecisionEngine(
 # Extract latitude with default fallback
 latitude = config.get("latitude", 59.33)  # Default: Stockholm if missing
 
-# Create climate zone detector (from climate_zones.py)
-self.climate_zone_detector = ClimateZoneDetector(latitude=latitude)
+# Adaptive climate system (safety margin, dynamic weight) and the zone detector (DM thresholds)
+self.climate_system = AdaptiveClimateSystem(latitude=latitude, weather_learner=weather_learner)
+self.climate_detector = ClimateZoneDetector(latitude)
 
 # Access zone info for calculations
-zone_info = self.climate_zone_detector.zone_info
+zone_info = self.climate_detector.zone_info
 # zone_info.dm_normal_min = -450
 # zone_info.dm_normal_max = -700
 # zone_info.dm_warning_threshold = -700
@@ -318,100 +283,28 @@ _LOGGER.info(
 ```
 
 ### 5. Runtime: Weather Compensation Layer
-```python
-# Called every 5 minutes during coordinator update
-def _weather_compensation_layer(self, nibe_state, weather_data):
-    # Check if enabled
-    if not self.enable_weather_compensation:
-        return LayerDecision(offset=0.0, weight=0.0, reason="disabled")
-    
-    # Get current conditions
-    outdoor_temp = -12.0  # Example: Stockholm winter
-    current_flow = 38.0   # Current NIBE flow temperature
-    
-    # Calculate optimal flow using math formulas
-    flow_calc = self.weather_comp.calculate_optimal_flow_temp(
-        indoor_setpoint=21.0,
-        outdoor_temp=-12.0,
-        prefer_method="auto"
-    )
-    # Result: flow_calc.flow_temp = 36.0°C (EN 442 emitter law, UFH n=1.1)
-    
-    # Check for unusual weather
-    unusual_weather = False
-    unusual_severity = 0.0
-    if self.weather_learner:
-        unusual = self.weather_learner.detect_unusual_weather(...)
-        if unusual.is_unusual:
-            unusual_weather = True
-            unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
-    
-    # Get adaptive safety margin
-    safety_margin = self.climate_system.get_safety_margin(
-        outdoor_temp=-12.0,
-        unusual_weather_detected=unusual_weather,  # False in this example
-        unusual_severity=unusual_severity,          # 0.0
-    )
-    # Calculation:
-    #   base_margin = 1.0°C (Cold zone)
-    #   temp_margin = (-10.0 - (-12.0)) × 0.1 = 0.2°C (colder than avg)
-    #   learning_margin = 0.0 (no unusual weather)
-    #   total = 1.0 + 0.2 + 0.0 = 1.2°C
-    
-    # Apply safety margin
-    adjusted_flow_temp = 35.5 + 1.2 = 36.7°C
-    
-    # Calculate required offset
-    # NIBE sensitivity: 1.5°C flow change per 1°C offset
-    required_offset = (36.7 - 38.0) / 1.5 = -0.87°C
-    
-    # Get dynamic weight
-    dynamic_weight = self.climate_system.get_dynamic_weight(
-        outdoor_temp=-12.0,
-        unusual_weather_detected=False
-    )
-    # Logic:
-    #   outdoor (-12°C) < winter_avg_low (-10°C) → very cold → 0.85
-    
-    # Apply user-configured weight multiplier
-    final_weight = 0.85 × 0.75 = 0.6375
-    
-    return LayerDecision(
-        offset=-0.87,
-        weight=0.6375,
-        reason="Math WC: kuehne; Zone: Cold Continental; Optimal: 35.5°C; "
-               "Safety: +1.2°C; Adjusted: 36.7°C; Current: 38.0°C → offset: -0.9°C; "
-               "Weight: 0.64"
-    )
+
+Computed with the code (`DecisionEngine.weather_comp_layer.evaluate_layer`), Stockholm (Cold zone), a
+concrete slab (thermal mass 2.0), 21 °C target, −12 °C outdoor, current flow 38.0 °C, default weight:
+
+```text
+required flow (EN 442, design point)   34.0 °C
+safety margin                          1.0 (zone base) + (-8 - (-12)) × 0.1 = 1.4 °C
+tolerance band                         [34.0, 35.4] °C; 38.0 is above it → adjusted flow 35.4 °C
+offset                                 (35.44 - 38.0) / 1.5 = -1.71 °C
+weight                                 0.85 (colder than the zone's winter low) × 0.49 = 0.42
+
+reason: "Math WC: en442_design_point; Zone: Cold; Optimal: 34.0°C; Safety: +1.4°C;
+         Adjusted: 35.4°C; Current: 38.0°C → offset: -1.7°C; Weight: 0.42"
 ```
 
-### 6. Decision Aggregation Example
-```python
-# All layers vote (simplified):
-layers = [
-    LayerDecision(offset=0.0, weight=1.0, reason="Safety: OK"),          # Safety
-    LayerDecision(offset=0.0, weight=0.8, reason="Emergency: OK"),       # Emergency
-    LayerDecision(offset=0.0, weight=0.65, reason="Effect: Not peak"),   # Effect
-    LayerDecision(offset=0.5, weight=0.65, reason="Prediction: pre-heat"),  # Prediction
-    LayerDecision(offset=-0.9, weight=0.64, reason="Weather comp: -12°C"),  # Weather Comp
-    LayerDecision(offset=0.0, weight=0.85, reason="Weather: Stable"),    # Weather
-    LayerDecision(offset=-0.5, weight=0.8, reason="Price: Expensive"),   # Price
-    LayerDecision(offset=0.0, weight=0.2, reason="Comfort: In range"),   # Comfort
-]
+With the flow at 36.0 °C the same layer votes −0.38 °C; at 33.0 °C (below the band) +0.69 °C. Before
+this, the layer skips a cycle while hot water runs, and keeps only part of its weight while the house
+carries thermal debt (`WEATHER_COMP_DEFER_*`).
 
-# Weighted aggregation:
-total_weighted_offset = (
-    0.0×1.0 + 0.0×0.8 + 0.0×0.65 + 0.5×0.65 + (-0.9)×0.64 + 
-    0.0×0.85 + (-0.5)×0.8 + 0.0×0.2
-) = 0.325 - 0.576 - 0.400 = -0.651
+### 6. Decision Aggregation
 
-total_weight = 1.0 + 0.8 + 0.65 + 0.65 + 0.64 + 0.85 + 0.8 + 0.2 = 5.59
-
-final_offset = -0.651 / 5.59 = -0.116°C
-
-# Apply to NIBE heating curve
-climate_entity.set_offset(-0.1)  # Rounded to 0.1°C precision
-```
+See Diagram 5 and [08_layer_priority_system.md](08_layer_priority_system.md).
 
 ## Climate Zone Detection Logic
 
@@ -435,97 +328,23 @@ def _detect_zone(self) -> str:
 
 ## Real-World Examples
 
-### Example 1: Kiruna, Sweden (67.85°N, -35°C)
-```
-Initialization:
-  hass.config.latitude = 67.85
-  → Detected zone: extreme_cold
-  → winter_avg_low: -20.0°C
-  → safety_margin_base: 2.5°C
-  → dm_normal_range: (-800, -1200)
+Computed with the code for radiators (thermal mass 1.0, the default), a 21 °C target and the default
+weight 0.49. The safety margin defines a tolerance band above the required flow; the layer pulls a flow
+below the band up to the required flow and one above it down to the band's top.
 
-Runtime (outdoor = -35°C, no unusual weather):
-  1. EN 442 emitter law: 42.6°C optimal flow
-  2. Safety margin calculation:
-     - base: 2.5°C (extreme_cold)
-     - temp: (-20 - (-35)) × 0.1 = 1.5°C (colder than avg)
-     - unusual: 0.0°C (no unusual weather)
-     - total: 4.0°C
-  3. Adjusted flow: 42.0 + 4.0 = 46.0°C
-  4. Dynamic weight: 0.85 (very cold)
-  5. Final weight: 0.85 × 0.75 = 0.6375
+| | Kiruna 67.85°N, −35 °C | Stockholm 59.33°N, −10 °C | Copenhagen 55.68°N, +2 °C | Paris 48.86°N, +8 °C |
+|---|---|---|---|---|
+| Zone | extreme_cold | cold | moderate_cold | standard |
+| Winter low | −20.0 °C | −8.0 °C | −1.0 °C | 0.0 °C |
+| DM normal range | −800 to −1200 | −450 to −700 | −300 to −500 | −200 to −350 |
+| Required flow (EN 442) | 61.8 °C | 46.8 °C | 38.6 °C | 33.9 °C |
+| Safety margin | 2.5 + 1.5 = 4.0 °C | 1.0 + 0.2 = 1.2 °C | 0.5 °C | 0.0 °C |
+| Band | 61.8-65.8 °C | 46.8-48.0 °C | 38.6-39.1 °C | 33.9 °C |
+| Dynamic weight | 0.85 | 0.85 | 0.75 | 0.50 |
+| Final weight (× 0.49) | 0.42 | 0.42 | 0.37 | 0.25 |
 
-Result: Aggressive heating to prevent thermal debt in extreme cold
-```
-
-### Example 2: Stockholm, Sweden (59.33°N, -10°C)
-```
-Initialization:
-  hass.config.latitude = 59.33
-  → Detected zone: cold
-  → winter_avg_low: -8.0°C
-  → safety_margin_base: 1.0°C
-  → dm_normal_range: (-450, -700)
-
-Runtime (outdoor = -10°C, no unusual weather):
-  1. EN 442 emitter law: 36.0°C optimal flow
-  2. Safety margin calculation:
-     - base: 1.0°C (cold)
-     - temp: 0.0°C (at winter average)
-     - unusual: 0.0°C (no unusual weather)
-     - total: 1.0°C
-  3. Adjusted flow: 36.0 + 1.0 = 37.0°C
-  4. Dynamic weight: 0.75 (cold)
-  5. Final weight: 0.75 × 0.75 = 0.5625
-
-Result: Balanced approach for typical Swedish winter
-```
-
-### Example 3: Copenhagen, Denmark (55.68°N, 2°C)
-```
-Initialization:
-  hass.config.latitude = 55.68
-  → Detected zone: moderate_cold
-  → winter_avg_low: -1.0°C
-  → safety_margin_base: 0.5°C
-  → dm_normal_range: (-300, -500)
-
-Runtime (outdoor = 2°C, no unusual weather):
-  1. EN 442 emitter law: 31.5°C optimal flow
-  2. Safety margin calculation:
-     - base: 0.5°C (moderate_cold)
-     - temp: 0.0°C (warmer than winter avg)
-     - unusual: 0.0°C (no unusual weather)
-     - total: 0.5°C
-  3. Adjusted flow: 28.0 + 0.5 = 28.5°C
-  4. Dynamic weight: 0.75 (cold for Copenhagen)
-  5. Final weight: 0.75 × 0.75 = 0.5625
-
-Result: Moderate heating for Øresund region winter conditions
-```
-
-### Example 4: Paris, France (48.86°N, 8°C)
-```
-Initialization:
-  hass.config.latitude = 48.86
-  → Detected zone: standard
-  → winter_avg_low: 0.0°C
-  → safety_margin_base: 0.0°C
-  → dm_normal_range: (-200, -350)
-
-Runtime (outdoor = 8°C, no unusual weather):
-  1. EN 442 emitter law: 27.7°C optimal flow
-  2. Safety margin calculation:
-     - base: 0.0°C (standard)
-     - temp: 0.0°C (warmer than winter avg)
-     - unusual: 0.0°C (no unusual weather)
-     - total: 0.0°C
-  3. Adjusted flow: 27.7 + 0.0 = 27.7°C (the emitter law alone)
-  4. Dynamic weight: 0.50 (warm weather)
-  5. Final weight: 0.50 × 0.75 = 0.375
-
-Result: Pure mathematical optimization for mild climate
-```
+Kiruna's −35 °C lies past the default design outdoor temperature, so the emitter law extrapolates; the
+offset the layer can vote is bounded by `WEATHER_COMP_MAX_OFFSET`.
 
 ## Configuration
 
@@ -536,12 +355,13 @@ Result: Pure mathematical optimization for mild climate
 
 ### User-Configurable (Future - Phase 4 TODO)
 - `enable_weather_compensation`: Boolean (default: True)
-- `weather_compensation_weight`: 0.0-1.0 (default: 0.75)
+- `weather_compensation_weight`: 0.0-1.0 (default: 0.49, `DEFAULT_WEATHER_COMPENSATION_WEIGHT`)
 
 ### Advanced (Config file / learning)
 - `heat_loss_coefficient`: W/°C (learned or user-provided)
-- `radiator_rated_output`: Watts (optional for Timbones method)
-- `heating_type`: "radiator", "concrete_ufh", "timber" (for UFH adjustments)
+- `radiator_rated_output`: Watts (optional: anchors the emitter law on the radiators' rated output)
+- `heating_type`: "radiator", "concrete_ufh", "timber" (from thermal mass: the EN 442 / EN 1264 exponent
+  and the design flow)
 
 ## Key Benefits
 
@@ -549,7 +369,7 @@ Result: Pure mathematical optimization for mild climate
 2. **Global Coverage**: Arctic to Mediterranean with same code
 3. **Adaptive**: Combines zones + current temp + unusual weather
 4. **Safe**: Progressive margins scale with cold severity
-5. **Testable**: Clear inputs/outputs, 26 passing tests
+5. **Testable**: Clear inputs/outputs, 35 tests (`tests/unit/climate/test_adaptive_climate_zones.py`)
 6. **Maintainable**: No country-specific conditionals
 
 ## Technical Notes
@@ -692,5 +512,6 @@ fed a heat-loss coefficient where the derivation requires a dimensionless relati
 dimensionally inconsistent input went into a structurally correct law and produced numbers that
 looked plausible and were not. It drove the flow temperature of a real heat pump.
 
-Against NIBE's own published curve 9 (41.0 °C at 0 °C outdoor), the EN 442 law lands **0.20 °C** away;
-a straight line is out by **2.37 °C**. See `docs/research/02_emitter_law.md`.
+The law is pinned to OpenEnergyMonitor's published weather-compensation tool
+(`tests/validation/test_emitter_law_matches_openenergymonitor.py`). NIBE's own curve 9 is a straight line
+and cannot validate it - see `docs/research/02_emitter_law.md`.

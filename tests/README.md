@@ -9,20 +9,23 @@ tests/
 ├── conftest.py              # Shared fixtures and test configuration
 ├── requirements.txt         # Test dependencies
 │
-├── unit/                    # Unit tests for individual components
-│   ├── adapters/           # NIBE adapter tests
-│   ├── climate/            # Climate zone and weather tests
-│   ├── coordinator/        # Coordinator logic tests
-│   ├── dhw/                # DHW optimization tests
-│   ├── effect/             # Effect tariff and peak tests
-│   ├── learning/           # Self-learning and prediction tests
-│   ├── models/             # Heat pump model tests
-│   └── optimization/       # Decision engine and optimization tests
+├── unit/                    # One behaviour per file, named for the behaviour
+│   ├── adapters/           # NIBE, GE-Spot and weather adapters
+│   ├── climate/            # Climate zones and weather compensation
+│   ├── coordinator/        # The control loop
+│   ├── dhw/                # Hot-water scheduling
+│   ├── effect/             # Effect tariff and peaks
+│   ├── learning/           # Self-learning and prediction
+│   ├── models/             # Heat pump model profiles
+│   ├── optimization/       # Decision engine and layers
+│   ├── utils/              # Offset, volatility gate, helpers
+│   └── test_*.py           # Behaviours that span areas
 │
-├── validation/             # Validation and regression tests
-│   ├── test_no_hardcoded_values.py
-│   ├── test_phase1_fixes.py
-│   └── test_phase2_fixes.py
+├── validation/             # The code against its documents, physics and ratchets
+│   ├── test_no_hardcoded_values.py   # with hardcoded_values_baseline.json
+│   ├── test_climate_zones_doc_matches_the_code.py
+│   ├── test_research_docs_still_hold.py
+│   └── ...                 # 22 files
 │
 ├── integration/            # Reserved for future integration tests
 │
@@ -108,48 +111,20 @@ python -m pytest tests/ -n auto
 
 ## Test Categories
 
-### Unit Tests (37 tests organized)
+### Unit Tests (`tests/unit/`, files as of 2026-10-20)
 
-#### Optimization (9 files)
-- Decision engine integration with climate zones
-- Peak protection and effect tariff
-- Trend integration and forecasting
-- Critical scenarios and edge cases
-- Thermal recovery damping
-- Savings calculations
-
-#### Climate (6 files)
-- Adaptive climate zones (Stockholm to Kiruna)
-- Swedish climate region detection
-- Weather compensation
-- Weather-based pre-heating timing
-- Trend and forecast integration
-
-#### Learning (5 files)
-- Adaptive thermal model API
-- Learning data persistence
-- Observation recording
-- Prediction layer integration
-- Thermal predictor persistence
-
-#### Models (3 files)
-- Heat pump model definitions (F750, F2040, S735, etc.)
-- Model integration with codebase
-- F750 realistic scenarios
-
-#### DHW (2 files)
-- Comprehensive DHW optimization
-- Safety temperature thresholds
-
-#### Effect (2 files)
-- Effect manager and peak tracking
-- Predictive peak avoidance
-
-#### Coordinator (1 file)
-- Power measurement fallback logic
-
-#### Adapters (1 file)
-- NIBE power calculation from current sensors
+| Folder | Files | Covers |
+|---|---|---|
+| `optimization/` | 54 | Decision engine, layers, aggregation, damping, savings |
+| `coordinator/` | 24 | The control loop: cycle order, failures, peaks, gates |
+| `dhw/` | 14 | Hot-water scheduling, safety temperatures, the scheduled window |
+| `adapters/` | 13 | NIBE, GE-Spot and weather adapters |
+| `learning/` | 7 | Adaptive learning, observations, prediction |
+| `effect/` | 6 | Effect tariff, peaks (at most one per day) |
+| `utils/` | 5 | The offset integer, the volatility gate, helpers |
+| `climate/` | 4 | Climate zones, weather compensation |
+| `models/` | 3 | Heat pump profiles (F750, F730, F1155, F2040, S1155) |
+| (root) | 20 | Behaviours that span areas |
 
 ### Integration Tests (8 files at root)
 - Config flow with model selection
@@ -161,17 +136,16 @@ python -m pytest tests/ -n auto
 - Service rate limiting
 - Service handlers
 
-### Validation Tests (3 files)
-- No hardcoded values verification
-- Phase 1 fixes validation
-- Phase 2 fixes validation
+### Validation Tests (`tests/validation/`, 22 files)
+- The hardcoded-value ratchet (`test_no_hardcoded_values.py` + its baseline)
+- Documents against the code: climate-zone tables, research docs, the rulebook, quoted safety thresholds
+- Physics and datasheets: the emitter law against OpenEnergyMonitor, pump models, the simulated plant
+- Hygiene: naive datetimes, translations, the clock at import time
 
 ## Test Statistics
 
-- **Total Tests:** 743
-- **Pass Rate:** 100%
-- **Coverage:** Comprehensive
-- **Execution Time:** ~6 seconds
+The live count: `pytest tests/ --collect-only -q | tail -1` (2833 collected on 2026-10-20: 2832 pass,
+and F-132b is a strict xfail).
 
 ## Writing New Tests
 
@@ -216,14 +190,9 @@ async def test_[integration_scenario](hass: HomeAssistant):
 
 ## CI/CD Integration
 
-Tests are automatically run on:
-- Every commit (via GitHub Actions)
-- Pull requests
-- Release builds
+`.github/workflows/validate.yml` runs the suite on pull requests, on pushes to `main` and in the merge
+queue, with the other gates (see `docs/dev/TESTING.md`).
 
 ## Related Documentation
 - `/docs/dev/` - Developer documentation
 
----
-
-**Last Updated:** October 20, 2025

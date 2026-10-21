@@ -33,7 +33,7 @@ Configuration in `pyproject.toml`:
 ```toml
 [tool.black]
 line-length = 100
-target-version = ['py311']
+target-version = ["py313"]
 include = '\.pyi?$'
 ```
 
@@ -57,7 +57,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 # Local (relative imports)
-from .const import DOMAIN, DM_THRESHOLD_CRITICAL
+from .const import DOMAIN, DM_THRESHOLD_AUX_LIMIT
 from .optimization.decision_engine import DecisionEngine
 
 # ❌ Wrong - mixed ordering
@@ -123,11 +123,11 @@ def calculate_preheating_target(
         
     Notes:
         Based on research showing load shifting without battery is ineffective.
-        Uses moderate pre-heating to prevent thermal debt (DM < -500 catastrophic).
+        Uses moderate pre-heating to prevent thermal debt.
         
     References:
-        - Forum_Summary.md: stevedvo's thermal debt case study
-        - Enhancement_Proposals.md: Thermal model mathematics
+        - docs/research/01_degree_minutes.md: degree minutes and NIBE menu 4.9.3
+        - docs/research/03_concrete_slab_response.md: slab horizon and pre-heat size
     """
     ...
 ```
@@ -155,17 +155,16 @@ min_pump_speed = 10
 ```python
 # ✅ Do this
 from .const import (
-    DM_THRESHOLD_CRITICAL,
+    DM_THRESHOLD_AUX_LIMIT,
     UFH_CONCRETE_PREDICTION_HORIZON,
-    OPTIMAL_FLOW_DELTA_SPF_4,
 )
 
 if ufh_type == "concrete_slab":
-    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 12.0 hours
+    horizon = UFH_CONCRETE_PREDICTION_HORIZON  # 48.0 hours
 
 # ❌ Never this
 if ufh_type == "concrete_slab":
-    horizon = 12.0  # Hardcoded!
+    horizon = 48.0  # Hardcoded!
 ```
 
 ### Safety Thresholds
@@ -228,8 +227,8 @@ outdoor_temp = -10.0
 dm_range = climate_detector.get_expected_dm_range(outdoor_temp)
 
 # Thresholds adapt to location:
-# Stockholm at -10°C: warning=-700, critical=-1500
-# Kiruna at -30°C: warning=-1200, critical=-1500
+# Stockholm at -10°C: warning=-740, critical=-1500
+# Kiruna at -30°C: warning=-1400, critical=-1500
 
 if degree_minutes < dm_range["critical"]:
     # Emergency recovery
@@ -245,15 +244,13 @@ if degree_minutes < -500:  # DANGEROUS - ignores climate context!
 Always reference research for NIBE-specific decisions:
 
 ```python
-# ✅ Good - traceable to research
-# Thermal debt threshold based on stevedvo's F2040 real-world failure
-# DM -500 caused: 15kW spikes, 10°K overshoot, catastrophic inefficiency
-# Swedish term: Gradminuter (GM), NIBE Menu 4.9.3
-# Source: Forum_Summary.md, Swedish_NIBE_Forum_Findings.md
-DM_THRESHOLD_CRITICAL = -500
+# ✅ Good - traceable to research that is in the repository
+# Degree minutes (Gradminuter, NIBE menu 4.9.3); past the aux limit the compressor is flat out and
+# the immersion heater runs - see docs/research/01_degree_minutes.md
+DM_THRESHOLD_AUX_LIMIT = -1500
 
 # ❌ Bad - no justification
-DM_THRESHOLD_CRITICAL = -500  # Don't go below this
+DM_THRESHOLD_AUX_LIMIT = -1500  # Don't go below this
 ```
 
 ## Code Quality
@@ -274,8 +271,8 @@ UNUSED_THRESHOLD = -1000  # Never used
 DM_CRITICAL = -500  # Line 18
 DM_CRITICAL = -400  # Line 26 - CONFLICT!
 
-# ✅ One definition in const.py
-DM_THRESHOLD_CRITICAL = -500  # stevedvo case study
+# ✅ One definition in const.py, with its source
+DM_THRESHOLD_AUX_LIMIT = -1500  # docs/research/01_degree_minutes.md
 ```
 
 ### No Backward Compatibility
@@ -310,7 +307,7 @@ grep -r "= -500" custom_components/effektguard/
 grep -r "= 6.0" custom_components/effektguard/
 
 # Test imports
-python3 -c "from custom_components.effektguard.optimization.thermal_model import ThermalModel"
+python3 -c "from custom_components.effektguard.optimization.thermal_layer import ThermalModel"
 
 # Run Black formatting
 black custom_components/effektguard/ --check --line-length 100
@@ -345,7 +342,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(minutes=5),
+            update_interval=None,  # HA's own scheduling is off: the cycle is clock-aligned at :XX:10
         )
 ```
 
@@ -365,4 +362,4 @@ class EffektGuardClimate(CoordinatorEntity, ClimateEntity):
 
 - [TESTING.md](TESTING.md) - Testing guidelines
 - [CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md) - How to contribute
-- [ARCHITECTURE.md](../ARCHITECTURE.md) - System architecture
+- [Architecture overview](../architecture/00_overview.md) - System architecture

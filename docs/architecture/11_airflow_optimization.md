@@ -92,15 +92,15 @@ the table look better.
 The minimum compressor % increases as outdoor temperature drops:
 
 ```
-min_compressor_% = max(50, 50 + (-2.5 × outdoor_temp))
+min_compressor_% = max(61, 61 + (-2.5 × outdoor_temp))     # AIRFLOW_COMPRESSOR_BASE_THRESHOLD, _SLOPE
 ```
 
 | Outdoor °C | Minimum Compressor % |
 |------------|---------------------|
-| ≥0 | 50% |
-| -5 | 62% |
-| -10 | 75% |
-| -15 | 87% |
+| ≥0 | 61% |
+| -5 | 73.5% |
+| -10 | 86% |
+| -15 | 98.5% |
 
 ## Duration Guidelines
 
@@ -137,6 +137,7 @@ Airflow optimization is only available for exhaust air heat pumps:
 |-------|---------------------------|-------|
 | NIBE F750 | ✅ True | Exhaust air ASHP |
 | NIBE F730 | ✅ True | Exhaust air ASHP |
+| NIBE F1155 | ❌ False | Ground source (no exhaust) |
 | NIBE F2040 | ❌ False | Outdoor unit (no exhaust) |
 | NIBE S1155 | ❌ False | Ground source (no exhaust) |
 
@@ -174,7 +175,7 @@ flowchart TD
 
 | Protection | Value | Purpose |
 |------------|-------|---------|
-| Minimum enhanced duration | 5 min | Prevent rapid cycling |
+| Minimum enhanced duration | 15 min (`NIBE_VENTILATION_MIN_ENHANCED_DURATION`) | Prevent rapid cycling |
 | API rate limit | 5 min | Reduce MyUplink API calls |
 | Redundant state check | — | Skip call if already in desired state |
 
@@ -256,7 +257,7 @@ should_enhance, duration = should_enhance_airflow(
     compressor_pct=80.0,
     trend_indoor=-0.2,
 )
-# Returns: (True, 45)
+# Returns: (False, 0) - the net gain at 0 °C is negative (-0.31 kW), so it declines
 ```
 
 ### Integration with NIBE Adapter
@@ -277,4 +278,4 @@ else:
 - Carnot COP: `COP = T_hot / (T_hot - T_cold)`
 - NIBE F750 specifications: 90-252 m³/h airflow range
 - Implementation: `custom_components/effektguard/optimization/airflow_optimizer.py`
-- Tests: `tests/unit/optimization/test_airflow_optimizer.py` (33 tests)
+- Tests: `tests/unit/optimization/test_airflow_optimizer.py` (34 tests)
