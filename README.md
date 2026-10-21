@@ -4,7 +4,7 @@
 
 <img src="icons/logo.png" alt="EffektGuard Logo" width="200"/>
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.7.1-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github&style=for-the-badge)](https://github.com/sponsors/enoch85)
@@ -140,14 +140,14 @@ Production-ready safety mechanisms:
 
 ## Installation
 
-### HACS (Recommended)
+### Marketplace (Recommended)
 
-1. Open HACS → Integrations
-2. Click ⋮ → Custom repositories
-3. Add `https://github.com/enoch85/EffektGuard` as Integration
-4. Search for "EffektGuard" and install
-5. Restart Home Assistant
-6. Add integration via Settings → Devices & Services → Add Integration
+[![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+
+1. Select the button above, or find EffektGuard in Settings → Marketplace (Home Assistant 2026.11 and newer), and download it. If EffektGuard is not listed in the catalog yet, the button offers to add it as a custom repository first.
+2. Add the integration via Settings → Devices & Services → Add Integration
+
+On Home Assistant 2026.10 and older, search for "EffektGuard" in [HACS](https://hacs.xyz/) → Integrations, download it and restart Home Assistant. If it is not listed yet, first add `https://github.com/enoch85/EffektGuard` as an Integration under ⋮ → Custom repositories.
 
 ### Manual
 
