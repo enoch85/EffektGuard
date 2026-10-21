@@ -6,9 +6,13 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
-NIBE heat pump control for Home Assistant. It moves the heating-curve offset against spot prices,
-the Swedish effect tariff, the weather forecast and the pump's own degree minutes, with comfort and
-pump health ahead of savings.
+[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
+
+NIBE heat pump control for Home Assistant. Every five minutes it nudges the pump's heating curve up
+or down: more heat when electricity is cheap or a cold day is coming, less when it is expensive or a
+new monthly power peak is near - with your comfort and the pump's health ahead of the savings. The
+pump keeps all its own control; EffektGuard only moves the curve.
 
 **Use at your own risk.** This software writes to a real heat pump. You are responsible for your
 heating, your bill and your pump. Watch it closely the first weeks and turn it off if anything
@@ -32,10 +36,11 @@ looks wrong.
 
 ## Install
 
-HACS: *Integrations, three-dot menu, Custom repositories*, add
-`https://github.com/enoch85/EffektGuard` as an integration, install, restart Home Assistant.
-Manual: copy `custom_components/effektguard/` into your config directory and restart. Then
-*Settings, Devices & services, Add integration, EffektGuard*.
+Use the two buttons above: the first opens this repository in HACS (install it, restart Home
+Assistant), the second starts the setup. Without them: HACS, three-dot menu, *Custom repositories*,
+add `https://github.com/enoch85/EffektGuard` as an integration. Manual: copy
+`custom_components/effektguard/` into your config directory and restart. Then *Settings, Devices &
+services, Add integration, EffektGuard*.
 
 ## Setup
 
@@ -51,15 +56,17 @@ The config flow asks, in this order:
    Modbus, renamed entities).
 
 Everything else is found by entity-name pattern. *Reconfigure* changes the entities later.
-*Configure* holds the options: mode (comfort, balanced, savings), tolerance (0.5-3.0 °C), thermal
-mass and insulation (0.5-2.0), hot-water target, amount and schedule, and airflow rates on the
-F750/F730. The target temperature is set on the climate entity.
+*Configure* holds the options: mode and tolerance ([Your settings](#your-settings)), thermal mass
+and insulation (0.5-2.0), the hot-water target, amount and schedule, and airflow rates on the
+F750/F730.
 
 ## What you get
 
-- `climate.effektguard`: target temperature (18.5-25 °C), HEAT or OFF, presets none / eco / away
-  / comfort (balanced / savings / savings and 3 °C lower / comfort). OFF holds the offset at 0 and
-  runs no layer.
+- **Why it did what it did**: `sensor.effektguard_optimization_reasoning` - the state is a
+  summary, the attributes hold each layer's offset, weight and reason
+  ([SENSOR_STATE_LIMITS.md](docs/SENSOR_STATE_LIMITS.md)).
+- `climate.effektguard`: HEAT or OFF (OFF holds the offset at 0 and runs no layer), the target
+  temperature and the presets ([Your settings](#your-settings)).
 - Sensors (`sensor.effektguard_current_offset`, `sensor.effektguard_degree_minutes`, ...): current
   offset, degree minutes, supply, outdoor and indoor temperature, current electricity price, peak
   today, peak this month, NIBE power, compressor frequency and health, optimization reasoning,
@@ -76,12 +83,48 @@ F750/F730. The target temperature is set on the climate entity.
 
 ## How it decides
 
-Every 5 minutes, 10 seconds past the mark, the coordinator reads the pump, the prices and the
-forecast, runs nine layers (safety, thermal debt, proactive debt prevention, effect tariff, learned
-pre-heat, weather compensation, weather pre-heat, spot price, comfort), each voting an offset with a
-weight, and writes one integer offset. A layer at weight 1.0 wins outright; otherwise the weighted
-average. The degree-minute thresholds come from Home Assistant's latitude and the outdoor
-temperature, not from settings. Details in [docs/architecture/](docs/architecture/00_overview.md).
+Every five minutes, ten seconds past the mark, EffektGuard reads the pump, the prices and the
+forecast, and nine layers each vote for an offset with a weight:
+
+```mermaid
+flowchart LR
+    A["Pump readings"] --> L["Nine layers vote"]
+    B["Spot prices"] --> L
+    C["Weather forecast"] --> L
+    L --> D["One whole-degree offset"]
+    D --> E["NIBE heating curve"]
+```
+
+| Layer | What it does | When it acts |
+|---|---|---|
+| **Safety** | Raises the curve to +10 | The room is below 18 °C |
+| **Thermal debt** | Raises the curve so the pump catches up; past -1500 degree minutes it forbids any cut instead | Degree minutes (NIBE's heat-deficit counter) run deep |
+| **Proactive** | Small raises before the debt gets deep | Degree minutes start to fall |
+| **Peak** | Lowers the curve so the house does not set a new monthly power peak | Close to this month's peak; needs a power meter or the pump's phase currents |
+| **Learned pre-heat** | Raises ahead of a predicted drop in room temperature | After 24 h of history, when it predicts a drop |
+| **Weather compensation** | Nudges the curve toward the flow temperature your radiators or floor need at today's outdoor temperature | Always, with a small weight; pauses during hot water |
+| **Weather pre-heat** | Raises +2 before a colder day | The forecast drops 4 °C or more within the look-ahead (longer for a concrete slab) |
+| **Spot price** | Raises in cheap quarters, lowers in expensive ones, lets the house coast through price peaks | Whenever GE-Spot has prices; each quarter is ranked against its own day |
+| **Comfort** | Pulls the room back toward the target | The room drifts out of its band |
+
+**How the votes combine.** A vote at full weight wins: safety, a price-peak quarter, the monthly
+peak, or a room far too warm. Otherwise the result is the weighted average. Price and peak may
+soften a thermal-debt recovery but never reverse it, and may coast the house within its comfort band
+but not out of it. The result reaches the pump as a whole degree, at most every five minutes; a
+reversal of 2 °C or more within 45 minutes is held back.
+
+The degree-minute thresholds come from Home Assistant's latitude and the outdoor temperature: the
+same reading is normal in Kiruna at -30 °C and a warning in Malmö at 0 °C. Details:
+[docs/architecture/](docs/architecture/00_overview.md).
+
+## Your settings
+
+- **Target temperature**: on the climate entity, 18.5-25 °C.
+- **Tolerance** (0.5-3.0): how far the room may drift before the comfort layer acts, ±0.4 x the
+  setting (1.2 lets it drift ±0.48 °C).
+- **Mode**: *Comfort* (comfort counts 1.3x, price 0.7x), *Balanced* (both 1x) or *Savings* (comfort
+  0.7x, price 1.3x, and a price-peak quarter always cuts fully). The climate presets map to them:
+  none = Balanced, comfort = Comfort, eco = Savings, away = Savings with the target 3 °C lower.
 
 ## Safety
 
