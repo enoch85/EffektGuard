@@ -1,126 +1,81 @@
-# EffektGuard Architecture Overview
+# Architecture overview
 
-This document provides a high-level overview of the EffektGuard system architecture and the detailed flow analysis documents in this folder.
+EffektGuard reads entities that other integrations publish (a NIBE heat pump, GE-Spot prices, a
+weather forecast) and writes one thing: the heating-curve offset. It calls no external API. The
+hot-water optimizer adds one switch (NIBE temporary lux), the airflow optimizer another (increased
+ventilation, F750/F730 only).
 
-## System Overview
-
-EffektGuard is a sophisticated Swedish heat pump optimization system with these key components:
-- **Multi-layer decision engine** with 9 priority layers
-- **Native 15-minute spot price integration** for Swedish Effektavgift
-- **Context-aware thermal debt prevention** (adapts to outdoor temperature)
-- **Self-learning capabilities** with thermal prediction
-- **Effect tariff peak protection** (monthly top-3 tracking)
-
-## Architecture Documents
-
-This folder contains detailed Mermaid diagrams showing how EffektGuard works in different scenarios:
-
-1. **[01_normal_optimization_cycle.md](01_normal_optimization_cycle.md)** - Standard 5-minute optimization cycle
-2. **[02_emergency_thermal_debt.md](02_emergency_thermal_debt.md)** - Context-aware emergency response + T1-T3 thermal recovery damping
-3. **[03_effect_tariff_protection.md](03_effect_tariff_protection.md)** - 15-minute peak avoidance
-4. **[04_weather_preheating.md](04_weather_preheating.md)** - Predictive pre-heating
-5. **[05_spot_price_optimization.md](05_spot_price_optimization.md)** - Spot price classification
-6. **[06_learning_integration.md](06_learning_integration.md)** - Phase 6 self-learning
-7. **[07_manual_override_services.md](07_manual_override_services.md)** - Service-based control
-8. **[08_layer_priority_system.md](08_layer_priority_system.md)** - Decision aggregation
-9. **[09_api_rate_limiting_analysis.md](09_api_rate_limiting_analysis.md)** - MyUplink API usage analysis
-10. **[10_adaptive_climate_zones.md](10_adaptive_climate_zones.md)** - Latitude-based climate zone detection
-11. **[11_airflow_optimization.md](11_airflow_optimization.md)** - Exhaust air heat pump ventilation optimization
-
-## Key Architectural Insights
-
-### 1. Context-Aware Safety System
-- **Not fixed thresholds** - adapts degree minutes limits based on climate zone + outdoor temperature
-- Stockholm (-10°C, Cold zone): Expects DM -490 to -740, warning at -740
-- Kiruna (-25°C, Extreme Cold zone): Expects DM -900 to -1300, warning at -1300
-- **Past -1500 DM no cuts**: the offset is floored at 0 unless the room is above its band, and
-  nothing raises into the saturated pump
-- **T1-T3 thermal recovery damping** prevents overshoot when solar gain or natural warming is detected
-
-### 2. Native Swedish Integration
-- **Spot price integration provides exactly 96 quarterly periods** (15-minute intervals)
-- Perfect match for Swedish Effektavgift requirements
-- Day/night weighting: Full effect 06:00-22:00, 50% weight 22:00-06:00
-
-### 3. Multi-Layer Decision Engine
-- **9 prioritized decision layers** with weighted aggregation
-- Critical layers can override others (Safety 1.0; Effect and Price up to 1.0 at their critical state)
-- Thermal debt acts by tier: T1-T3 (0.65 / 0.81 / 0.91) hold a minimum recovery offset, and the
-  EMERGENCY tier floors the result at 0 (see [08](08_layer_priority_system.md))
-- Advisory layers use weighted averaging (Price 0.8, Weather pre-heat 0.85, etc.)
-
-### 4. Self-Learning Capabilities (Phase 6)
-- **Thermal state predictor** learns building characteristics
-- **Weather pattern learning** adapts to seasonal changes
-- **Adaptive thermal model** adjusts thermal mass estimates
-- Observes hourly into a 672-observation (28-day) window; learning may engage after 96 (4 days)
-
-### 5. Exhaust Air Heat Pump Optimization (F750/F730)
-- **Airflow optimization** for exhaust air heat pumps
-- Would increase ventilation when the compressor is struggling
-- Net gain is negative on the physics as written (extraction +0.41 kW, ventilation penalty -0.70 kW
-  at 0 °C), so the optimiser refuses to enhance and the feature does not fire (F-032, see
-  [11](11_airflow_optimization.md))
-
-## Layer Architecture
-
-The optimization system uses a **shared layer architecture** where reusable layer components are created once and shared across consumers:
+## Data flow
 
 ```mermaid
-flowchart TB
-    subgraph Layers["LAYERS - shared, reusable"]
-        direction LR
-        TL["thermal_layer.py<br/>→ EmergencyLayer, ProactiveLayer, ThermalModel<br/>+ estimate_dm_recovery_time#40;#41;<br/>+ get_thermal_debt_status#40;#41;"]
-        CL["comfort_layer.py<br/>→ ComfortLayer"]
-        PrL["price_layer.py<br/>→ PriceAnalyzer"]
-        EfL["effect_layer.py<br/>→ EffectManager"]
-        WL["weather_layer.py<br/>→ WeatherPredictionLayer<br/>→ WeatherCompensationLayer<br/>→ AdaptiveClimateSystem"]
-        PredL["prediction_layer.py<br/>→ ThermalStatePredictor"]
-        AL["adaptive_learning.py<br/>→ AdaptiveThermalModel"]
-        CZ["climate_zones.py<br/>→ ClimateZoneDetector"]
-        
-        TL ~~~ CL ~~~ PrL ~~~ EfL ~~~ WL ~~~ PredL ~~~ AL ~~~ CZ
-    end
-
-    Layers --> DE & DHW & COORD
-
-    subgraph DE["DECISION ENGINE - Space heating"]
-        DE1["Creates: EmergencyLayer, ProactiveLayer, ComfortLayer"]
-        DE2["Creates: WeatherPredictionLayer, WeatherCompensationLayer"]
-        DE3["Uses: PriceAnalyzer, EffectManager #40;injected#41;"]
-        DE4["Exposes: emergency_layer, price for sharing"]
-    end
-
-    subgraph DHW["DHW OPTIMIZER - Water heating"]
-        DHW1["Receives: emergency_layer #40;shared#41;"]
-        DHW2["Receives: price_analyzer #40;shared#41;"]
-        DHW3["Uses: estimate_dm_recovery_time#40;#41;, get_thermal_debt_status#40;#41;"]
-    end
-
-    subgraph COORD["COORDINATOR"]
-        COORD1["Creates: DecisionEngine, DHWOptimizer"]
-        COORD2["Creates: ThermalStatePredictor, AdaptiveThermalModel"]
-        COORD3["Creates: WeatherPatternLearner"]
-        COORD4["Passes shared layers to DHWOptimizer"]
-    end
+flowchart LR
+    SRC["NIBE, price and weather entities"] --> AD["adapters"]
+    AD --> CO["coordinator<br/>every 5 min at XX:10"]
+    CO --> DE["decision engine<br/>nine layers"]
+    DE --> GATE["volatility gate<br/>integer offset"]
+    GATE --> REG["NIBE offset number<br/>register 47011"]
+    CO --> DHW["DHW optimizer<br/>temporary-lux switch"]
+    CO --> ENT["climate, sensors, switches"]
 ```
 
-### Layer Sharing Flow
+## Modules
 
-1. **Coordinator** creates `DecisionEngine` which instantiates space heating layers
-2. **Coordinator** creates `ThermalStatePredictor`, `AdaptiveThermalModel`, `WeatherPatternLearner` separately
-3. **DecisionEngine** exposes `emergency_layer` and `price` (PriceAnalyzer) as properties
-4. **Coordinator** passes these shared instances to `DHWOptimizer`
-5. **DHWOptimizer** uses shared layers to gate DHW during thermal debt
+All paths under `custom_components/effektguard/`.
 
-## Production Quality Features
+| Path | Role |
+|---|---|
+| `coordinator.py` | The 5-minute control loop; the only place that writes to the pump |
+| `adapters/nibe_adapter.py`, `adapters/gespot_adapter.py`, `adapters/weather_adapter.py` | Read the NIBE, price and weather entities |
+| `optimization/decision_engine.py` | Runs the nine layers and aggregates them into one offset |
+| `optimization/thermal_layer.py` | `EmergencyLayer` (T1-T3, anti-windup, the EMERGENCY floor) and `ProactiveLayer` (Z1-Z5) |
+| `optimization/climate_zones.py` | `ClimateZoneDetector`: degree-minute thresholds from latitude and outdoor temperature |
+| `optimization/effect_layer.py` | `EffectManager`: monthly peaks and peak protection |
+| `optimization/price_layer.py` | `PriceAnalyzer`: price classification and the spot-price vote |
+| `optimization/weather_layer.py` | `WeatherCompensationLayer` (EN 442 emitter law) and `WeatherPredictionLayer` (pre-heat) |
+| `optimization/prediction_layer.py`, `optimization/adaptive_learning.py`, `optimization/weather_learning.py` | Learned pre-heat, thermal-model learning, weather patterns |
+| `optimization/comfort_layer.py` | `ComfortLayer`: the room against its band |
+| `optimization/dhw_optimizer.py` | Hot-water scheduling through the temporary-lux switch |
+| `optimization/airflow_optimizer.py` | Exhaust-air ventilation (F750/F730) |
+| `utils/offset.py`, `utils/volatile_helpers.py` | The integer the register receives; the volatility gate |
+| `models/` | Heat pump profiles: F730, F750, F1155, F2040, S1155 |
+| `climate.py`, `sensor.py`, `switch.py`, `services.yaml` | The Home Assistant entities and services |
+| `const.py` | Every numeric value |
 
-The analysis reveals this is a **production-quality system** designed for real Swedish homes:
+## How the pieces are wired
 
-- **Multiple safety layers** with graceful degradation
-- **Context-aware algorithms** that adapt from Malmö to Kiruna automatically
-- **Research-based thresholds** from Swedish NIBE forums and real-world validation
-- **Effect tariff optimization** with native quarterly precision
-- **Manual override capabilities** for diagnostic and emergency use
+- `__init__.py` builds the adapters, a `PriceAnalyzer`, an `EffectManager`, a `ThermalModel` from
+  the thermal-mass and insulation options, and the `DecisionEngine`, which creates its own layers.
+- The coordinator creates the learning objects (`ThermalStatePredictor`, `AdaptiveThermalModel`,
+  `WeatherPatternLearner`); after that the engine's `thermal` is the `AdaptiveThermalModel`.
+- The DHW scheduler receives the engine's `emergency_layer` and `price`, so hot water is blocked
+  by the same degree-minute thresholds (`should_block_dhw`: T2 or worse, or past -1500).
+- Options are hot-reloaded (`async_update_config`); changing an entity goes through
+  *Reconfigure*, which reloads the entry.
 
-The system balances cost optimization with heat pump health and comfort, using proven Swedish research and real-world validation.
+## Facts worth knowing
+
+- Nothing is a fixed threshold: `ClimateZoneDetector` derives the degree-minute band from Home
+  Assistant's latitude and the current outdoor temperature, and `thermal_layer.py` tightens it for
+  slow emitters (concrete x1.3, timber x1.15, radiators x1.0). Tables in
+  [docs/CLIMATE_ZONES.md](../CLIMATE_ZONES.md).
+- The ladder is Z1 to Z5, then T1 to T3, then EMERGENCY at DM -1500, where nothing cuts and
+  nothing raises. There is no WARNING or CAUTION tier.
+- A layer at weight 1.0 wins outright; otherwise the weighted average, with the thermal-debt
+  special cases in [08](08_layer_priority_system.md).
+- Learning observes hourly into a 28-day window; the learned pre-heat layer votes (weight 0.65)
+  once the predictor holds 24 hours of history.
+- Airflow optimization exists for the F750/F730 only and is off by default; see
+  [11](11_airflow_optimization.md).
+
+## The documents
+
+- [01_normal_optimization_cycle.md](01_normal_optimization_cycle.md): the 5-minute cycle
+- [02_emergency_thermal_debt.md](02_emergency_thermal_debt.md): the degree-minute ladder
+- [03_effect_tariff_protection.md](03_effect_tariff_protection.md): monthly peaks
+- [04_weather_preheating.md](04_weather_preheating.md): pre-heating before a colder day
+- [05_spot_price_optimization.md](05_spot_price_optimization.md): price classification
+- [06_learning_integration.md](06_learning_integration.md): learning
+- [07_manual_override_services.md](07_manual_override_services.md): services
+- [08_layer_priority_system.md](08_layer_priority_system.md): aggregation
+- [10_adaptive_climate_zones.md](10_adaptive_climate_zones.md): climate zones
+- [11_airflow_optimization.md](11_airflow_optimization.md): exhaust-air ventilation

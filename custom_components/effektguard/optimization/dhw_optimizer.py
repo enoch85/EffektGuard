@@ -218,13 +218,9 @@ class DHWDemandPeriod:
 class IntelligentDHWScheduler:
     """Intelligent DHW scheduling with thermal debt prevention.
 
-    IMPORTANT: This class MONITORS NIBE's automatic Legionella protection,
-    it does NOT trigger Legionella boosts itself to avoid waste:
-    - NIBE has fixed weekly 65°C schedule (can't be changed via API)
-    - If we trigger boost on day 6, NIBE still runs on day 7 = WASTE
-    - Instead: We detect when NIBE does it, track timing, avoid conflicts
-
-    User should manually set NIBE's schedule to cheap hours (e.g., Sunday 3 AM).
+    IMPORTANT: This class MONITORS NIBE's automatic Legionella protection (the pump's own
+    periodic increase, see DHW_LEGIONELLA_DETECT in const.py); it cannot perform one itself,
+    because temporary lux stops below the 55 C that function heats to.
 
     CLIMATE-AWARE THRESHOLDS:
     DHW blocking thresholds are now dynamic based on climate zone and outdoor temperature.
