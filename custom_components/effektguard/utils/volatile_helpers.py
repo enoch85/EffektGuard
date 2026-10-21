@@ -16,6 +16,9 @@ Offset volatility tracking:
 - Applied at coordinator level AFTER all layers have contributed
 - Blocks large offset reversals (>2°C) within the min cycle time (45 min)
 - Generic for ALL layer decisions - catches any jumpy offset regardless of source
+- The gate's POLICY - which proposals go past the tracker, what a refused one publishes - is
+  `gate_offset`, shared by the coordinator and the simulator, so the bench measures what the
+  pump gets (F-142)
 
 PEAK cluster detection: Short EXPENSIVE/NORMAL periods sandwiched between
 PEAK periods are treated as part of the PEAK cluster (not volatile).
@@ -25,6 +28,7 @@ import time
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 from ..const import (
     BENEFICIAL_CLASSIFICATIONS,
@@ -264,16 +268,9 @@ class OffsetVolatilityTracker:
     This is applied at the coordinator level AFTER all layers have contributed,
     so it catches jumpy offsets from ANY source (comfort, price, thermal, etc.).
 
-    Usage:
-        tracker = OffsetVolatilityTracker()
-
-        # Before applying offset:
-        if tracker.is_reversal_volatile(new_offset):
-            # Skip the reversal, keep previous offset
-            return tracker.last_offset
-        else:
-            tracker.record_change(new_offset, "reason")
-            return new_offset
+    Callers do not consult the tracker directly: `gate_offset` decides which proposals
+    reach it and what a refused one publishes, and both the coordinator and the simulator
+    go through it.
     """
 
     # Threshold for "large" offset change (°C difference)
@@ -402,3 +399,97 @@ class OffsetVolatilityTracker:
             f"Offset volatile: {self._last_change.offset:.1f}→{new_offset:.1f} "
             f"reversal blocked ({minutes_since:.0f}min < {self._min_duration_minutes}min)"
         )
+
+
+class OffsetProposal(Protocol):
+    """What the gate reads off a proposal: the engine's OptimizationDecision, by shape.
+
+    Named here, not imported: `decision_engine` imports this module, and a type-only import the
+    other way is still a cycle to the import-structure test.
+    """
+
+    offset: float
+    reasoning: str
+    is_manual_override: bool
+    is_emergency: bool
+    anti_windup_active: bool
+    saturation_capped: bool
+
+
+@dataclass(frozen=True)
+class GatedOffset:
+    """What the volatility gate lets through to the register, and why."""
+
+    offset: float  # the proposal, or the offset the tracker held on to
+    reasoning: str  # the proposal's, with the refusal in front of it when held
+    blocked: bool  # the tracker refused the proposal and kept its last offset
+    bypass: str | None  # the path that took the proposal past the tracker, else None
+
+
+def gate_offset(
+    tracker: OffsetVolatilityTracker,
+    decision: OffsetProposal,
+    *,
+    optimization_enabled: bool = True,
+    track: bool = True,
+) -> GatedOffset:
+    """The coordinator's gate on a proposal: what reaches the register, what the tracker records.
+
+    One policy for the coordinator and the simulator. The tracker alone is not the policy: the
+    simulator once shared the class and ran every proposal through it, while the coordinator
+    took the paths below past it, so the bench measured a gate the pump never had.
+
+    - `track=False`: observe only. The proposal is neither held nor recorded, as during start-up
+      observation, where nothing is applied and the tracker is seeded from the pump's own offset
+      when observation ends.
+    - A user command is authoritative and is recorded, never held: a manual override
+      (force_offset, boost), or optimization switched OFF, whose neutral offset must not be
+      swapped for the last automatic one behind an OFF display.
+    - Three safety paths are recorded without consulting the tracker, because holding them for
+      45 minutes is the harm they exist to stop. An EMERGENCY decision (indoor below
+      MIN_TEMP_LIMIT, or DM past the aux limit): a held cut leaves DM falling with the immersion
+      heater running. An ANTI-WINDUP decision: on 31 January 2026 a blocked reduction 10 -> 3 C
+      held the spiral for 45 minutes while DM fell from -1566 to -1855. The wear guard's
+      WITHDRAWAL of a raise the saturated compressor cannot follow (F-124) - only the withdrawal;
+      the cap stops at the pump's own curve, so a cut onto a saturated compressor is still held.
+    - Otherwise a volatile reversal is refused: the tracker's last offset is published, with the
+      refusal in front of the proposal's reasoning, and nothing is recorded. Anything else is
+      recorded as the new baseline.
+
+    Args:
+        tracker: The caller's tracker; its state is what the policy reads and records.
+        decision: The engine's proposal, with the flags its layers set.
+        optimization_enabled: The master switch. OFF is a user command, not the engine's.
+        track: False while the decision is only observed, never applied.
+
+    Returns:
+        The offset and reasoning to publish, whether the proposal was held, and which path - if
+        any - took it past the tracker.
+    """
+    if not track:
+        return GatedOffset(decision.offset, decision.reasoning, blocked=False, bypass=None)
+
+    if decision.is_manual_override:
+        bypass = "Manual override"
+    elif not optimization_enabled:
+        bypass = "Optimization off"
+    elif decision.is_emergency:
+        bypass = "Emergency decision"
+    elif decision.anti_windup_active:
+        bypass = "Anti-windup active"
+    elif decision.saturation_capped and decision.offset < (tracker.last_offset or 0.0):
+        bypass = "Compressor saturated"
+    else:
+        bypass = None
+
+    if bypass is None and tracker.is_reversal_volatile(decision.offset):
+        refusal = tracker.get_volatile_reason(decision.offset)
+        return GatedOffset(
+            tracker.last_offset or 0.0,
+            f"[{refusal}] {decision.reasoning}",
+            blocked=True,
+            bypass=None,
+        )
+
+    tracker.record_change(decision.offset, decision.reasoning)
+    return GatedOffset(decision.offset, decision.reasoning, blocked=False, bypass=bypass)
