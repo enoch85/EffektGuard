@@ -61,6 +61,9 @@ _LOGGER = logging.getLogger(__name__)
 # coordinator - so a user could boost to +10 C, reload to clear the cooldown, and boost again.
 # single_config_entry is true, so a module global cannot leak across entries.
 # See tests/unit/test_the_boost_cooldown_survives_a_reload.py.
+# Stamped in UTC: a cooldown is an elapsed duration, and on the local clock the subtraction is
+# wall-clock arithmetic - 50 real minutes after a boost at 02:50 CEST on the night the clocks go
+# back it still reported 3300 s of a 45-minute cooldown remaining.
 _service_last_called: dict[str, datetime] = {}
 
 
@@ -77,7 +80,7 @@ def _check_service_cooldown(service_name: str, cooldown_minutes: int) -> tuple[b
         - remaining_time_seconds: Seconds remaining in cooldown (0 if allowed)
     """
     service_key = f"{DOMAIN}_{service_name}"
-    now = dt_util.now()
+    now = dt_util.utcnow()
 
     if service_key not in _service_last_called:
         return True, 0
@@ -97,7 +100,7 @@ def _check_service_cooldown(service_name: str, cooldown_minutes: int) -> tuple[b
 def _update_service_timestamp(service_name: str) -> None:
     """Update the last called timestamp for a service."""
     service_key = f"{DOMAIN}_{service_name}"
-    _service_last_called[service_key] = dt_util.now()
+    _service_last_called[service_key] = dt_util.utcnow()
 
 
 PLATFORMS: list[Platform] = [
@@ -518,10 +521,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
             # Calculate hourly schedule for next 24 hours
             schedule = []
-            current_time = dt_util.now()
+            now = dt_util.utcnow()
 
             for hour_offset in range(24):
-                forecast_time = current_time + timedelta(hours=hour_offset)
+                # Real hours ahead, stepped in UTC; the local clock is for the labels below
+                forecast_time = now + timedelta(hours=hour_offset)
+                local_time = dt_util.as_local(forecast_time)
 
                 # Locate the native interval by timestamp: positions and
                 # classifications stay aligned even on 92/100-quarter DST days
@@ -552,8 +557,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
                 schedule.append(
                     {
-                        "time": forecast_time.strftime("%Y-%m-%d %H:%M"),
-                        "hour": forecast_time.hour,
+                        "time": local_time.strftime("%Y-%m-%d %H:%M"),
+                        "hour": local_time.hour,
                         "quarter": period.quarter_of_day if period else None,
                         "classification": classification,
                         "estimated_offset": round(estimated_offset, 2),
@@ -563,7 +568,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 )
 
             _LOGGER.info("Calculated optimal schedule for next 24 hours")
-            return {"schedule": schedule, "generated_at": current_time.isoformat()}
+            return {"schedule": schedule, "generated_at": dt_util.as_local(now).isoformat()}
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to calculate optimal schedule: %s", err)

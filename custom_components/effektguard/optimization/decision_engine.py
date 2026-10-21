@@ -352,11 +352,14 @@ class DecisionEngine:
 
         if duration_minutes > 0:
             self._manual_override_one_shot = False
-            self._manual_override_until = dt_util.now() + timedelta(minutes=duration_minutes)
+            # A deadline in UTC. On the local clock `now + timedelta` is wall-clock arithmetic:
+            # a 60-minute override set at 02:30 CEST on the night the clocks go back expired at
+            # 03:30 CET, 120 real minutes later.
+            self._manual_override_until = dt_util.utcnow() + timedelta(minutes=duration_minutes)
             _LOGGER.info(
                 "Manual override set: %s°C until %s",
                 offset,
-                self._manual_override_until.strftime("%Y-%m-%d %H:%M"),
+                dt_util.as_local(self._manual_override_until).strftime("%Y-%m-%d %H:%M"),
             )
         else:
             self._manual_override_one_shot = True
@@ -390,7 +393,7 @@ class DecisionEngine:
 
         # Check if time-based override expired
         if self._manual_override_until:
-            if dt_util.now() >= self._manual_override_until:
+            if dt_util.utcnow() >= self._manual_override_until:
                 _LOGGER.info("Manual override expired, returning to automatic")
                 self.clear_manual_override()
                 return None

@@ -7,7 +7,7 @@ Phase 1 implementation tests for DHW_NEXT_BOOST_IMPLEMENTATION_PLAN.md
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from custom_components.effektguard.const import (
@@ -38,7 +38,7 @@ def scheduler_with_climate():
     scheduler = IntelligentDHWScheduler(
         climate_detector=climate_detector, price_analyzer=mock_analyzer
     )
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 
@@ -47,7 +47,7 @@ def scheduler_no_climate():
     """Scheduler without climate zone detector (fallback thresholds)."""
     mock_analyzer = create_mock_price_analyzer()
     scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 

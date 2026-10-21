@@ -56,6 +56,7 @@ from ..const import (
     WEATHER_WEIGHT_CAP,
 )
 from ..utils.emitter import en442_flow_temp
+from ..utils.time_utils import seconds_between
 from .climate_zones import ClimateZoneDetector
 
 _LOGGER = logging.getLogger(__name__)
@@ -857,8 +858,8 @@ class WeatherCompensationLayer:
         # After DHW stops, flow temperature remains elevated (45-55°C).
         # Wait for it to normalize before using weather compensation.
         if dhw_heating_end is not None:
-            now = get_current_datetime() if get_current_datetime else dt_util.now()
-            minutes_since_dhw = (now - dhw_heating_end).total_seconds() / 60
+            now = get_current_datetime() if get_current_datetime else dt_util.utcnow()
+            minutes_since_dhw = seconds_between(dhw_heating_end, now) / 60
             if minutes_since_dhw < DHW_WEATHER_COOLDOWN_MINUTES:
                 _LOGGER.debug(
                     "Weather comp skipped: DHW cooldown (%.1f min < %d min, flow=%.1f°C)",

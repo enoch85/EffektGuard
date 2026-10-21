@@ -70,7 +70,9 @@ from ..const import (
 )
 from homeassistant.util import dt as dt_util
 
+from ..adapters.gespot_adapter import index_containing
 from ..utils.price_math import price_savings_fraction
+from ..utils.time_utils import after, seconds_between
 from .thermal_layer import estimate_dm_recovery_time, get_thermal_debt_status
 from .price_layer import PriceAnalyzer
 from ..utils.volatile_helpers import get_volatile_info
@@ -377,7 +379,7 @@ class IntelligentDHWScheduler:
             start_time, start_temp = temps[heating_start_idx]
             end_time, end_temp = temps[heating_end_idx]
 
-            duration_hours = (end_time - start_time).total_seconds() / 3600
+            duration_hours = seconds_between(start_time, end_time) / 3600
             temp_change = end_temp - start_temp
 
             if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
@@ -916,15 +918,9 @@ class IntelligentDHWScheduler:
                         if optimal_window:
                             # Check if waiting is worth it (significant savings AND reachable in time)
                             # Get current price for comparison
-                            current_quarter_price = next(
-                                (
-                                    p.price
-                                    for p in price_periods
-                                    if p.start_time
-                                    <= current_time
-                                    < p.start_time + timedelta(minutes=MINUTES_PER_QUARTER)
-                                ),
-                                None,
+                            index = index_containing(price_periods, current_time)
+                            current_quarter_price = (
+                                price_periods[index].price if index is not None else None
                             )
 
                             # `is not None`, NOT truthiness (0.00 is a real Nordic price), and the
@@ -1012,20 +1008,13 @@ class IntelligentDHWScheduler:
                         # Heat NOW (priority) - not PEAK price
                         if optimal_window:
                             # Get current price for logging
-                            # QuarterPeriod spans 15 minutes from start_time
-                            current_quarter_price = (
-                                next(
-                                    (
-                                        p.price
-                                        for p in price_periods
-                                        if p.start_time
-                                        <= current_time
-                                        < p.start_time + timedelta(minutes=15)
-                                    ),
-                                    None,
-                                )
+                            index = (
+                                index_containing(price_periods, current_time)
                                 if price_periods
                                 else None
+                            )
+                            current_quarter_price = (
+                                price_periods[index].price if index is not None else None
                             )
 
                             _LOGGER.info(
@@ -1315,22 +1304,9 @@ class IntelligentDHWScheduler:
         # NIBE's cycle; if none is seen far past its interval, warn (below) - do not substitute.
         days_since_legionella = None
         if self.last_legionella_boost:
-            try:
-                days_since_legionella = (
-                    current_time - self.last_legionella_boost
-                ).total_seconds() / 86400.0
-            except TypeError:
-                # Handle timezone mismatch between naive and aware datetimes
-                # Convert both to naive for comparison
-                current_naive = (
-                    current_time.replace(tzinfo=None) if current_time.tzinfo else current_time
-                )
-                last_boost_naive = (
-                    self.last_legionella_boost.replace(tzinfo=None)
-                    if self.last_legionella_boost.tzinfo
-                    else self.last_legionella_boost
-                )
-                days_since_legionella = (current_naive - last_boost_naive).total_seconds() / 86400.0
+            days_since_legionella = (
+                seconds_between(self.last_legionella_boost, current_time) / 86400.0
+            )
 
         legionella_needed = (
             days_since_legionella is None or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS
@@ -1660,13 +1636,9 @@ class IntelligentDHWScheduler:
 
                 if optimal_window:
                     # Get current price for comparison
-                    current_quarter_price = next(
-                        (
-                            p.price
-                            for p in price_periods
-                            if p.start_time <= current_time < p.start_time + timedelta(minutes=15)
-                        ),
-                        None,
+                    index = index_containing(price_periods, current_time)
+                    current_quarter_price = (
+                        price_periods[index].price if index is not None else None
                     )
 
                     # `price_savings_fraction`, not the arithmetic inline: the naive
@@ -1785,8 +1757,7 @@ class IntelligentDHWScheduler:
         # Calculate hours until availability if demand period exists
         next_demand_hours = None
         if next_demand:
-            hours_until = (next_demand["availability_time"] - current_time).total_seconds() / 3600
-            next_demand_hours = max(0, hours_until)
+            next_demand_hours = max(0, next_demand["hours_until"])
 
         if self.price_analyzer:
             return self.price_analyzer.calculate_lookahead_hours(
@@ -1861,7 +1832,7 @@ class IntelligentDHWScheduler:
                 target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
                 outdoor_temp=outdoor_temp,
             )
-            earliest_allowed = current_time + timedelta(hours=recovery_hours)
+            earliest_allowed = after(current_time, timedelta(hours=recovery_hours))
 
         # 2. Preference: the next cheap price window (candidate start)
         candidate = None
@@ -1881,23 +1852,31 @@ class IntelligentDHWScheduler:
         temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
         if temp_margin > 0:
             hours_until_low = temp_margin / DHW_COOLING_RATE
-            deadline = current_time + timedelta(hours=hours_until_low)
+            deadline = after(current_time, timedelta(hours=hours_until_low))
 
         if candidate is None and deadline is None and earliest_allowed == current_time:
-            return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
+            return after(current_time, timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS))
 
         # Without a price window, the meaningful recommendation is the
         # moment heating becomes necessary (the deadline)
         if candidate is None:
             candidate = deadline
 
+        # Ranked by instant (`key=datetime.timestamp`), not by the wall clock, which on the night
+        # the clocks go back puts 02:15 CET before 02:45 CEST.
         # Wait for the cheap window, but never start before the hard
         # constraint allows...
-        next_opportunity = max(earliest_allowed, candidate or earliest_allowed)
+        next_opportunity = max(
+            earliest_allowed, candidate or earliest_allowed, key=datetime.timestamp
+        )
         # ...and never later than the deadline (which itself cannot beat
         # the hard constraint)
         if deadline is not None:
-            next_opportunity = min(next_opportunity, max(earliest_allowed, deadline))
+            next_opportunity = min(
+                next_opportunity,
+                max(earliest_allowed, deadline, key=datetime.timestamp),
+                key=datetime.timestamp,
+            )
 
         _LOGGER.debug(
             "Next DHW opportunity for %s: %s (allowed from %s, window %s, deadline %s)",
@@ -1927,11 +1906,11 @@ class IntelligentDHWScheduler:
         """
         if not price_periods or not self.price_analyzer:
             # No price data - try again in 1 hour (conservative fallback)
-            return current_time + timedelta(hours=1)
+            return after(current_time, timedelta(hours=1))
 
         # Search through upcoming periods for the first non-peak
         for period in price_periods:
-            if period.start_time <= current_time:
+            if seconds_between(current_time, period.start_time) <= 0:
                 continue
 
             classification = self.price_analyzer.get_classification_for_period(period)
@@ -1946,7 +1925,7 @@ class IntelligentDHWScheduler:
 
         # No non-peak period found in forecast - try again in 2 hours
         _LOGGER.warning("No non-peak period found in price forecast - will retry in 2 hours")
-        return current_time + timedelta(hours=2)
+        return after(current_time, timedelta(hours=2))
 
     def _predict_dm_at_time(
         self,
@@ -1971,7 +1950,7 @@ class IntelligentDHWScheduler:
         Returns:
             Predicted DM value at target_time
         """
-        hours_ahead = (target_time - current_time).total_seconds() / 3600
+        hours_ahead = seconds_between(current_time, target_time) / 3600
 
         if hours_ahead <= 0:
             return current_dm
@@ -1981,7 +1960,7 @@ class IntelligentDHWScheduler:
         if weather_forecast:
             for forecast_hour in weather_forecast:
                 if hasattr(forecast_hour, "datetime") and hasattr(forecast_hour, "temperature"):
-                    if forecast_hour.datetime >= target_time:
+                    if seconds_between(target_time, forecast_hour.datetime) >= 0:
                         predicted_outdoor_temp = forecast_hour.temperature
                         break
 
@@ -2049,9 +2028,10 @@ class IntelligentDHWScheduler:
         # Find upcoming PEAK periods in next 24 hours
         peak_periods = []
         for period in price_periods:
-            if period.start_time <= current_time:
+            starts_in = seconds_between(current_time, period.start_time)
+            if starts_in <= 0:
                 continue
-            if period.start_time > current_time + timedelta(hours=24):
+            if starts_in > timedelta(hours=24).total_seconds():
                 break
 
             classification = self.price_analyzer.get_classification_for_period(period)
@@ -2064,12 +2044,12 @@ class IntelligentDHWScheduler:
 
         # Check each PEAK period
         for peak in peak_periods:
-            hours_until_peak = (peak.start_time - current_time).total_seconds() / 3600
+            hours_until_peak = seconds_between(current_time, peak.start_time) / 3600
 
             # Estimate: will DHW be blocked by thermal debt 2 hours before this peak?
-            check_time = peak.start_time - timedelta(hours=2)
-            if check_time <= current_time:
-                check_time = current_time + timedelta(minutes=30)
+            check_time = after(peak.start_time, -timedelta(hours=2))
+            if seconds_between(current_time, check_time) <= 0:
+                check_time = after(current_time, timedelta(minutes=30))
 
             predicted_dm = self._predict_dm_at_time(
                 target_time=check_time,
