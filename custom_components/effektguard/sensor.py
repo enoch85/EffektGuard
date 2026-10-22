@@ -29,6 +29,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BILLING_PERIOD_MINUTES,
     BILLABLE_POWER_SOURCES,
+    CONF_INDOOR_TEMP_METHOD,
+    DEFAULT_INDOOR_TEMP_METHOD,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
@@ -827,7 +829,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
 
                         if additional_sensors:
                             # User has configured additional sensors
-                            attrs["calculation_method"] = config.get("indoor_temp_method", "median")
+                            attrs["calculation_method"] = config.get(
+                                CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
+                            )
                             attrs["sensor_count"] = len(additional_sensors) + 1  # +1 for NIBE
 
                             # Show each additional sensor value

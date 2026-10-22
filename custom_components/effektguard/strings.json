@@ -69,6 +69,7 @@
           "power_sensor_entity": "Power meter sensor",
           "nibe_temp_lux_entity": "Temporary lux switch (DHW)",
           "additional_indoor_sensors": "Additional indoor temperature sensors",
+          "indoor_temp_method": "Indoor temperature calculation method",
           "outdoor_temp_entity": "Override: outdoor temperature (BT1)",
           "indoor_temp_entity": "Override: indoor temperature (BT50/room sensor)",
           "supply_temp_entity": "Override: supply temperature (BT2/BT25)",
@@ -267,6 +268,15 @@
     "no_dhw_control_entity": {
       "title": "No hot-water control entity",
       "description": "EffektGuard drives hot water by switching NIBE's temporary lux on and off, and no entity for it is configured - hot-water optimisation is NOT running, and any scheduled boost shown by its sensors will not happen. MyUplink provides a temporary-lux switch on F-series pumps (parameter 50004). On F-series, SMO and VVM pumps the local nibe_heatpump integration exposes Temporary Lux (register 48132) as a select instead, which EffektGuard cannot drive directly: create an input_boolean helper and an automation that sets the select to \"ONE TIME INCREASE\" when the helper turns on and \"OFF\" when it turns off. S-series pumps have no temporary-lux register in nibe_heatpump. Choose the switch or the helper under Reconfigure. Space-heating optimisation is unaffected."
+    }
+  },
+  "selector": {
+    "indoor_temp_method": {
+      "options": {
+        "interquartile_mean": "Interquartile mean (recommended)",
+        "median": "Median",
+        "average": "Average"
+      }
     }
   }
 }

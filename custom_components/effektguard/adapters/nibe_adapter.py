@@ -78,6 +78,7 @@ from ..const import (
 )
 from ..utils.offset import integer_offset_for
 from ..utils.power import power_kw_from_state
+from ..utils.room_temperature import combine_room_temperatures
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -312,7 +313,7 @@ class NibeAdapter:
         indoor_temp = measured_indoor if indoor_temp_valid else DEFAULT_INDOOR_TEMP
 
         # Pass the MEASURED value, never the placeholder: _calculate_multi_sensor_temperature's
-        # docstring forbids seeding the median with DEFAULT_INDOOR_TEMP, which would drag the
+        # docstring forbids seeding the combination with DEFAULT_INDOOR_TEMP, which would drag the
         # combined reading toward the target and mask a real deviation.
         if self._additional_indoor_sensors:
             combined = await self._calculate_multi_sensor_temperature(measured_indoor)
@@ -1236,12 +1237,13 @@ class NibeAdapter:
 
         Args:
             nibe_temp: Temperature from NIBE BT50, or None when there is no room sensor.
-                A placeholder must NEVER be passed here - seeding the median with
+                A placeholder must NEVER be passed here - seeding the combination with
                 DEFAULT_INDOOR_TEMP would drag the combined reading toward the target and
                 mask a real deviation.
 
         Returns:
-            Combined temperature using the configured method (median/average), or None
+            Combined temperature using the configured method (interquartile mean, median or
+            average), or None
             when no sensor produced a usable reading.
         """
         # Start with the NIBE sensor, if there is one
@@ -1255,7 +1257,7 @@ class NibeAdapter:
         # report when their value changes, so half an hour of silence is a steady room, not a dead
         # sensor. Aging them out made the owner's median hop 0.3-0.6 °C each time one left and came
         # back, with no room changing (484 warnings in 16.5 hours, 2026-10-17/18). One that freezes
-        # but stays available is one vote in a median.
+        # but stays available is one vote among the others.
         for entity_id in self._additional_indoor_sensors:
             temp = await self._read_temperature(entity_id, check_age=False)
             if temp is None:
@@ -1280,24 +1282,13 @@ class NibeAdapter:
         if len(temps) == 1:
             return temps[0]
 
-        if self._indoor_temp_method == "median":
-            # Median is more robust to outliers (recommended)
-            temps_sorted = sorted(temps)
-            n = len(temps_sorted)
-            if n % 2 == 0:
-                result = (temps_sorted[n // 2 - 1] + temps_sorted[n // 2]) / 2
-            else:
-                result = temps_sorted[n // 2]
-            method_name = "median"
-        else:
-            # Average (mean)
-            result = sum(temps) / len(temps)
-            method_name = "average"
+        # See DEFAULT_INDOOR_TEMP_METHOD: the median followed one sensor at a time and jumped.
+        result = combine_room_temperatures(temps, self._indoor_temp_method)
 
         _LOGGER.info(
             "Multi-sensor indoor temp: %.1f°C (%s of %d sensors: %s)",
             result,
-            method_name,
+            self._indoor_temp_method,
             len(temps),
             ", ".join(f"{t:.1f}°C" for t in temps),
         )

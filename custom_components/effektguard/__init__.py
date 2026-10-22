@@ -31,13 +31,18 @@ from .const import (
     CONF_TARGET_INDOOR_TEMP,
     ATTR_DURATION,
     ATTR_OFFSET,
+    CONF_INDOOR_TEMP_METHOD,
     CONF_NIBE_TEMP_LUX_ENTITY,
+    CONFIG_ENTRY_MINOR_VERSION,
+    CONFIG_ENTRY_VERSION,
     DHW_BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_DEFAULT_DURATION_MINUTES,
     DHW_BOOST_MAX_DURATION_MINUTES,
     DHW_BOOST_MIN_DURATION_MINUTES,
     DOMAIN,
     HEATING_BOOST_COOLDOWN_MINUTES,
+    INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN,
+    INDOOR_TEMP_METHOD_MEDIAN,
     MAX_OFFSET,
     MIN_OFFSET,
     SERVICE_BOOST_DHW,
@@ -107,6 +112,31 @@ PLATFORMS: list[Platform] = [
     # Number and Select entities removed - configuration sliders only in Options flow (Configure button)
     # This prevents duplicate controls in Controls panel
 ]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Bring an entry made by an older EffektGuard up to date.
+
+    1.1 -> 1.2: the median, which the setup stored by default, becomes the interquartile mean (see
+    DEFAULT_INDOOR_TEMP_METHOD). Median and average stay selectable in Reconfigure.
+    """
+    if entry.version > CONFIG_ENTRY_VERSION:
+        # Made by a newer EffektGuard: this one cannot know what its data means.
+        return False
+
+    if entry.minor_version < CONFIG_ENTRY_MINOR_VERSION:
+        data = dict(entry.data)
+        if data.get(CONF_INDOOR_TEMP_METHOD) == INDOOR_TEMP_METHOD_MEDIAN:
+            data[CONF_INDOOR_TEMP_METHOD] = INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN
+            _LOGGER.info(
+                "Room sensors are now combined by their interquartile mean instead of the median "
+                "(Reconfigure offers the median again)"
+            )
+        hass.config_entries.async_update_entry(
+            entry, data=data, minor_version=CONFIG_ENTRY_MINOR_VERSION
+        )
+
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
