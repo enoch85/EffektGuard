@@ -115,6 +115,16 @@ deliberate design fact, not a typo - do not "fix" a table to hide it.
   exactly the dead zone, so there is no in-band correction at all - and ±1.2 gives 0.48 °C. Reasoning
   about the comfort layer from the slider's value puts its edge 2.5× too far out.
 
+- **Arithmetic on local datetimes is wall-clock arithmetic.** Two aware datetimes that share a
+  tzinfo compare, subtract and add a `timedelta` on the wall clock - PEP 495 ignores `fold` - so on
+  the night the clocks go back 02:40 CET minus 02:50 CEST is −10 minutes, 02:30 CEST plus 60 minutes
+  is 03:30 CET (120 real minutes), and 02:05 CET lies inside the price interval that began at 02:00
+  CEST. Five places did this: the price lookup, the cheapest-window search, the manual override, the
+  aligned timer (an hour with no cycle, then back-to-back cycles) and the service cooldowns. Keep
+  deadlines and stamps in `dt_util.utcnow()`, measure with `utils/time_utils.seconds_between`, shift
+  with `after`, and keep `dt_util.now()` for labels and wall-clock schedules - the 07:00 hot-water
+  window, the billing-period number, the calendar month a peak belongs to.
+
 ---
 
 ## The numbers a maintainer reads

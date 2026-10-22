@@ -136,7 +136,7 @@ class CompressorHealthMonitor:
             CompressorStats with current and historical data
         """
         if timestamp is None:
-            timestamp = dt_util.now()
+            timestamp = dt_util.utcnow()
 
         # Clamp and warning message both bound by COMPRESSOR_HZ_MAX, so they cannot disagree.
         if hz < 0 or hz > COMPRESSOR_HZ_MAX:
