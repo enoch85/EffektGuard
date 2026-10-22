@@ -1072,7 +1072,11 @@ class PriceAnalyzer:
         else:
             final_offset = adjusted_offset + forecast_adjustment
 
-        # Check for strategic overshoot context when pre-heating
+        # Check for strategic overshoot context when pre-heating. Past the mode's allowed overshoot
+        # the pre-heat is taken back, down to zero - a vote at or below zero has none to take back.
+        # Applied to one, the zero floor RAISED it: in debt (DM < -400) the gate above makes a
+        # PEAK quarter's forecast positive, and a warm house's -2 PEAK cut became 0 at weight 1.0,
+        # overriding the comfort layer's coast too, in the dearest quarter of the day.
         strategic_context = ""
         max_overshoot = mode_config.preheat_overshoot_allowed
         if forecast_adjustment > 0 and nibe_state.indoor_temp > target_temp:
@@ -1082,7 +1086,7 @@ class PriceAnalyzer:
                     f" | Strategic storage: +{overshoot:.1f}°C overshoot OK "
                     f"(≤{max_overshoot:.1f}°C)"
                 )
-            else:
+            elif final_offset > 0:
                 final_offset = max(final_offset - (overshoot - max_overshoot), 0)
                 strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
 
