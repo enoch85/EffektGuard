@@ -273,8 +273,10 @@ class IntelligentDHWScheduler:
         # Uses weighted average of observations for accuracy
         self.learned_heating_rate: float | None = None
         self.heating_rate_observations: int = 0  # Count for weighted average
-        # When the last heating cycle learned from ended: each cycle is one observation.
-        self._learned_cycle_end: datetime | None = None
+        # When the last heating cycle learned from ended (a POSIX timestamp): each cycle is one
+        # observation. Not a datetime: two aware local datetimes in the hour the clocks go back
+        # compare by wall time, so a different cycle could pass for this one.
+        self._learned_cycle_end: float | None = None
 
         # Set user target temperature
         # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
@@ -380,12 +382,14 @@ class IntelligentDHWScheduler:
         if heating_end_idx == len(temps) - 1:
             return  # still heating: learned once it has ended
         end_time, end_temp = temps[heating_end_idx]
-        if end_time == self._learned_cycle_end:
+        if end_time.timestamp() == self._learned_cycle_end:
             return  # this cycle is already one observation
-        self._learned_cycle_end = end_time
+        self._learned_cycle_end = end_time.timestamp()
 
         start_time, start_temp = temps[heating_start_idx]
-        duration_hours = (end_time - start_time).total_seconds() / 3600
+        # On the absolute timeline: aware local datetimes subtract by wall time, an hour off across
+        # the clock change.
+        duration_hours = (end_time.timestamp() - start_time.timestamp()) / 3600
         temp_change = end_temp - start_temp
 
         if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
