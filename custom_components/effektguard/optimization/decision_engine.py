@@ -607,8 +607,10 @@ class DecisionEngine:
         if price_data:
             self.price.update_prices(price_data)
 
-        # Validate power consumption if model available
-        if self.heat_pump_model and hasattr(nibe_state, "power_kw"):
+        # Validate power consumption if model available. A missing reading (power_kw None: no
+        # sensor, and the adapter's own estimate failed) has nothing to validate; compared, it
+        # raised TypeError, and the coordinator's safe default wrote 0 °C for that cycle.
+        if self.heat_pump_model and getattr(nibe_state, "power_kw", None) is not None:
             validation = self._validate_power_consumption(
                 nibe_state.power_kw, nibe_state.outdoor_temp
             )
