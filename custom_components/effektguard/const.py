@@ -26,7 +26,7 @@ CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.te
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
-CONF_INDOOR_TEMP_METHOD: Final = "indoor_temp_method"  # average, median, weighted
+CONF_INDOOR_TEMP_METHOD: Final = "indoor_temp_method"  # one of INDOOR_TEMP_METHODS
 CONF_ENABLE_PRICE_OPTIMIZATION: Final = "enable_price_optimization"
 CONF_ENABLE_PEAK_PROTECTION: Final = "enable_peak_protection"
 CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
@@ -48,7 +48,31 @@ DEFAULT_INSULATION_QUALITY: Final = 1.0
 DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.49  # User-configurable weight (matches layer weight)
-DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
+# How the room sensors (BT50 and any extra ones) become one indoor temperature.
+#
+# The median follows one sensor at a time: when a sensor in the middle moves, or one crosses the
+# middle, the reading moves with it - the owner's nine sensors made it jump 0.3-0.6 °C with no room
+# changing, and the comfort ramp turned each jump into -2..-5 °C on the offset. The interquartile
+# mean drops the lowest and highest quarter of the sensors and averages the rest, so no single
+# sensor moves it by more than a fraction of its own change, and an outlier room is still left out.
+# On v0.7.0's 3.6 days in production (open-loop replay, every layer computed) it took the pump from
+# 19.6 to 15.1 writes a day and from 8.1 to 6.2 reversals, at the same mean temperature (-0.02 °C).
+INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN: Final = "interquartile_mean"
+INDOOR_TEMP_METHOD_MEDIAN: Final = "median"
+INDOOR_TEMP_METHOD_AVERAGE: Final = "average"
+INDOOR_TEMP_METHODS: Final = (
+    INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN,
+    INDOOR_TEMP_METHOD_MEDIAN,
+    INDOOR_TEMP_METHOD_AVERAGE,
+)
+DEFAULT_INDOOR_TEMP_METHOD: Final = INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN
+# The config entry version. Minor 2: the median the setup stored by default became the
+# interquartile mean (async_migrate_entry).
+CONFIG_ENTRY_VERSION: Final = 1
+CONFIG_ENTRY_MINOR_VERSION: Final = 2
+# The share of sensors the interquartile mean drops at EACH end, rounded down: none of three, one of
+# four to seven, two of the owner's nine.
+INDOOR_SENSOR_TRIM_FRACTION: Final = 0.25
 DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 DEFAULT_DHW_MORNING_HOUR: Final = 7  # Default morning DHW availability hour (07:00)
 DEFAULT_DHW_EVENING_HOUR: Final = 18  # Default evening DHW availability hour (18:00)
