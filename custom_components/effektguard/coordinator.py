@@ -700,7 +700,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def _cancel_our_dhw_boost(self) -> None:
         """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
 
-        Called on unload. A boost the OWNER started is left alone.
+        Called on unload, and when Home Assistant stops. A boost the OWNER started is left alone.
         """
         # Whatever happens below, the entry is going away - no service window survives it.
         self._service_boost_until = None
@@ -762,7 +762,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         - Learning module data (thermal model, weather patterns)
         - Effect tracking state (monthly peaks)
 
-        Called during integration unload or reload.
+        Called during integration unload or reload, and when Home Assistant stops (it does not
+        unload config entries then - see async_setup_entry).
 
         IDEMPOTENT BY DESIGN. This runs TWICE per unload: the base DataUpdateCoordinator
         registers `config_entry.async_on_unload(self.async_shutdown)` in its __init__, and

@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, Platform
+from homeassistant.core import Event, HomeAssistant, SupportsResponse
 from homeassistant.exceptions import (
     ConfigEntryNotReady,
     HomeAssistantError,
@@ -140,6 +140,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # This ensures coordinator is fully initialized before setting up event listeners
     # Event listener provides instant detection when external power sensor becomes available
     coordinator.setup_power_sensor_listener()
+
+    # Home Assistant stops without unloading its config entries, so on a restart the coordinator's
+    # shutdown never ran - and with it the cleanup of a hot-water boost EffektGuard started, which
+    # ran on to NIBE's own lux timeout with nothing left to stop it. The shutdown is idempotent.
+    async def _shut_down_on_stop(_event: Event) -> None:
+        await coordinator.async_shutdown()
+
+    entry.async_on_unload(hass.bus.async_listen(EVENT_HOMEASSISTANT_STOP, _shut_down_on_stop))
 
     # Forward setup to platforms (only if coordinator initialized successfully)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
