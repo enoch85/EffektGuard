@@ -615,6 +615,21 @@ class TestStatusParsing:
         assert state.is_heating is True
         assert state.is_hot_water is False
 
+    async def test_an_off_priority_is_no_hot_water_charge(self, monkeypatch):
+        """Priority 10 is Off: a third of the owner's charges end there rather than in Heating,
+        and read as "cannot say" they were never seen to end."""
+        states = required_core_states() + [
+            make_state("sensor.gotham_city_priority", "Off", {}),
+            make_state("sensor.gotham_city_status_compressor", "Running", {}),
+        ]
+        hass = make_hass(states, [], monkeypatch)
+        adapter = NibeAdapter(hass, {})
+        await adapter.discover_entities()
+
+        state = await adapter.get_current_state()
+        assert state.is_hot_water is False
+        assert state.is_heating is True  # from compressor status, not prio
+
     async def test_unknown_priority_leaves_status_reads_untouched(self, monkeypatch):
         """MyUplink priority enums are not fully documented (raw 31 observed): an
         unknown value must not override the compressor-status read, and it says

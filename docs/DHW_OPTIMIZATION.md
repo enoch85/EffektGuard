@@ -58,10 +58,9 @@ default 14 °C/h) plus a 0.5 h buffer. Only the closest availability hour within
 | 2.6 | `DHW_PEAK_AVOIDED` | Peak price, tank at least 20 °C | Wait for the next non-peak quarter |
 | 2.3 | `DHW_HYGIENE_BOOST` | No 55 °C reading for 14 days (or never), stable cheap | Heat (see Hygiene) |
 | 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap | Heat to target |
-| 3.5 | `DHW_MAX_WAIT_EXCEEDED_*H` | More than 36 h since the last heating, price `cheap` or `normal` | Heat |
 | 4 | `HIGH_SPACE_HEATING_DEMAND` | Heating demand above 6 kW and DM below −60 | Block |
 | 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Price very cheap, cheap or normal; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
-| 5 | `DHW_ADEQUATE_WAITING_CHEAP_*` | Tank at least 45 °C and the price class is not `cheap` | Wait for the next cheap window |
+| 5 | `DHW_ADEQUATE_WAITING_CHEAP_*` | Tank at least 45 °C and the price is neither `cheap` nor `very_cheap` | Wait for the next cheap window |
 | 5 | `OPTIMAL_WINDOW_Q*` / `WAITING_OPTIMAL_WINDOW_IN_*` | Tank below target + 5 °C; the cheapest window in the look-ahead starts within 15 min, or later while the tank is at least 45 °C | Heat to target + 5 °C (at most 60 °C); or wait |
 | 5 | `CHEAP_NO_WINDOW_DATA` / `CHEAP_ELECTRICITY_OPPORTUNITY` | No price window data; stable cheap; tank below 50 °C | Heat |
 | 7 | `DHW_COMFORT_OPTIMAL_*` / `DHW_COMFORT_WAITING_OPTIMAL_*` | Tank 30-45 °C at normal price; a window at least 15 % cheaper within 6 h | Heat when it starts; wait until then |
@@ -99,7 +98,9 @@ on, a lux entity is configured, and not during the start-up grace period.
   refuses to start it. Price and the ordinary thermal-debt block do not end it.
 - **Starts are rate-limited**: at most one start per 60 min (`DHW_CONTROL_MIN_INTERVAL_MINUTES`)
   after the last start or stop. Stops are never delayed.
-- On unload EffektGuard turns off a boost it started; one the household started is left alone.
+- Only a boost EffektGuard started is stopped: one the household switched on (pump panel, MyUplink)
+  is left alone, by the control loop and on unload or a Home Assistant stop.
+- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped.
 - NIBE's own lux timeout still ends the boost underneath; the decision's `max_runtime_minutes` is
   for display only.
 

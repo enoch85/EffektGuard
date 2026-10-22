@@ -62,7 +62,6 @@ def _decide(scheduler, *, tank: float, price: str, indoor: float, outdoor: float
         price_classification=price,
         current_time=NOW,
         price_periods=None,
-        hours_since_last_dhw=5.0,
     )
 
 

@@ -67,6 +67,7 @@ from ..const import (
     NIBE_POWER_FACTOR,
     NIBE_PRIO_HEATING_STATES,
     NIBE_PRIO_HOT_WATER_STATES,
+    NIBE_PRIO_OFF_STATES,
     NIBE_STATUS_ACTIVE_STATES,
     NIBE_SWITCH_DISCOVERY_PATTERNS,
     NIBE_TEMPERATURE_KEYS,
@@ -352,9 +353,9 @@ class NibeAdapter:
         # integration publishes a separate hot-water status. A name match on "hot_water" finds
         # settings and counters instead - on a MyUplink F750 the comfort mode, the hot-water
         # hours - so none is read as one. None when the priority cannot say: a tank charge then
-        # reads as space heating, so nothing may judge the compressor on it.
+        # reads as space heating, so nothing may judge the compressor on it. Off says it: no charge.
         prio = self._read_prio_state()
-        is_hot_water = {"hot_water": True, "heating": False}.get(prio)
+        is_hot_water = {"hot_water": True, "heating": False, "off": False}.get(prio)
 
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_temperature(self._entity_cache.get("dhw_top_temp"))
@@ -1135,7 +1136,7 @@ class NibeAdapter:
         not fully documented).
 
         Returns:
-            "hot_water", "heating", "other", or None when unavailable/unknown
+            "hot_water", "heating", "off", "other", or None when unavailable/unknown
         """
         prio_entity = self._entity_cache.get("prio")
         if not prio_entity:
@@ -1150,6 +1151,8 @@ class NibeAdapter:
             return "hot_water"
         if prio_lower in NIBE_PRIO_HEATING_STATES:
             return "heating"
+        if prio_lower in NIBE_PRIO_OFF_STATES:
+            return "off"
         return "other"
 
     async def get_power_consumption(self) -> tuple[float | None, bool]:

@@ -47,7 +47,6 @@ def _recommendation():
         price_classification="cheap",
         current_time=NOW,
         price_periods=None,
-        hours_since_last_dhw=5.0,
         thermal_trend_rate=DHW_TREND_RATE_THRESHOLD - 0.2,
     )
 

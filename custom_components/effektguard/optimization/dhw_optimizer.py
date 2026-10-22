@@ -38,7 +38,6 @@ from ..const import (
     DHW_LEGIONELLA_PREVENT_TEMP,
     DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
-    DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_OPTIMAL_WINDOW_MIN_SAVINGS,
     DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER,
@@ -276,6 +275,10 @@ class IntelligentDHWScheduler:
         # Uses weighted average of observations for accuracy
         self.learned_heating_rate: float | None = None
         self.heating_rate_observations: int = 0  # Count for weighted average
+        # The pump's hot-water charge in progress, as its priority reports it: (POSIX time, BT7) at
+        # its first reading. A charge is one observation, learned when the priority leaves hot
+        # water, so a reading that pauses mid-charge cannot split it, nor a restart repeat it.
+        self._charge_start: tuple[float, float] | None = None
 
         # Set user target temperature
         # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
@@ -306,7 +309,9 @@ class IntelligentDHWScheduler:
         if self.price_analyzer:
             _LOGGER.info("DHW optimizer initialized with shared PriceAnalyzer for window search")
 
-    def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
+    def update_bt7_temperature(
+        self, temp: float, timestamp: datetime, charging: bool | None = None
+    ) -> None:
         """Update the BT7 history, and see NIBE's high-temperature cycle when the tank reaches it.
 
         A cycle is seen the moment BT7 reaches DHW_LEGIONELLA_DETECT - the rule the recorder
@@ -317,11 +322,13 @@ class IntelligentDHWScheduler:
         Args:
             temp: Current DHW temperature (BT7 top preferred, BT6 charging acceptable)
             timestamp: Current timestamp
+            charging: Whether the pump's priority is hot water; None when it cannot say
         """
         reached = temp >= DHW_LEGIONELLA_DETECT and (
             not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
         )
         self.bt7_history.append((timestamp, temp))
+        self._learn_from_the_charge(temp, timestamp, charging)
         if reached:
             self.last_legionella_boost = timestamp
             self._reported_hygiene_overdue = False
@@ -330,77 +337,58 @@ class IntelligentDHWScheduler:
             )
 
     def calculate_heating_rate(self) -> float:
-        """Calculate actual DHW heating rate from recent temperature history.
+        """The DHW heating rate in °C/hour: the learned rate, or the default until there is one.
 
-        Analyzes BT7 temperature history to find heating cycles and calculate
-        the real heating rate in °C/hour. This is more accurate than static
-        estimates because it adapts to actual heat pump performance.
-
-        Returns:
-            Heating rate in °C/hour. Returns learned rate if available,
-            otherwise default estimate if insufficient data.
-
-        Based on debug log analysis from 2025-12-22:
-        - 19:00 → 20:00: 23.8°C → 37.8°C = 14°C in 60 min = 14°C/hour
+        A query, not a measurement. Learning happens where the readings arrive
+        (_learn_from_the_charge): it used to happen here, so the most recent cycle in
+        the 4-hour history was learned again on every call - three calls a cycle, 36 observations
+        of one cycle an hour, and the "learned" rate was the last cycle's.
         """
-        if len(self.bt7_history) < 6:  # Need at least 30 min of data (5 min intervals)
-            # Return learned rate if available, otherwise default
-            if self.learned_heating_rate is not None:
-                return self.learned_heating_rate
-            return DHW_DEFAULT_HEATING_RATE
-
-        # Find the most recent heating cycle (temperature increasing)
-        temps = list(self.bt7_history)
-
-        # Look for continuous temperature increase
-        heating_start_idx = None
-        heating_end_idx = None
-
-        for i in range(len(temps) - 1, 0, -1):
-            curr_temp = temps[i][1]
-            prev_temp = temps[i - 1][1]
-
-            # If temperature dropped, this is the end of heating
-            if curr_temp < prev_temp - 0.5:  # 0.5°C tolerance for noise
-                if heating_end_idx is None:
-                    continue  # Skip if we haven't found rising temp yet
-                heating_start_idx = i
-                break
-            elif curr_temp > prev_temp + 0.3:  # Temperature rising
-                if heating_end_idx is None:
-                    heating_end_idx = i
-
-        # Calculate rate if we found a valid heating period
-        if heating_start_idx is not None and heating_end_idx is not None:
-            start_time, start_temp = temps[heating_start_idx]
-            end_time, end_temp = temps[heating_end_idx]
-
-            duration_hours = seconds_between(start_time, end_time) / 3600
-            temp_change = end_temp - start_temp
-
-            if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
-                calculated_rate = temp_change / duration_hours
-                # Same plausibility band that gates the restore path - a rate that cannot be
-                # learned must not be loadable from storage either.
-                if DHW_HEATING_RATE_MIN <= calculated_rate <= DHW_HEATING_RATE_MAX:
-                    # Update learned rate with weighted average
-                    self._update_learned_rate(calculated_rate)
-                    _LOGGER.debug(
-                        "DHW heating rate calculated: %.1f°C/hour (%.1f°C in %.1f min), "
-                        "learned rate: %.1f°C/hour (%d observations)",
-                        calculated_rate,
-                        temp_change,
-                        duration_hours * 60,
-                        self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
-                        self.heating_rate_observations,
-                    )
-                    # Return learned rate (more stable than single measurement)
-                    return self.learned_heating_rate or calculated_rate
-
-        # Return learned rate if available, otherwise default
         if self.learned_heating_rate is not None:
             return self.learned_heating_rate
         return DHW_DEFAULT_HEATING_RATE
+
+    def _learn_from_the_charge(
+        self, temp: float, timestamp: datetime, charging: bool | None
+    ) -> None:
+        """Learn the heating rate from each hot-water charge the pump runs - once, when it ends.
+
+        The charge is the pump's own: its priority is hot water from the first reading to the
+        reading where it is not. Read off the BT7 curve instead, one of the owner's 53 charges in
+        13 days of October 2026 was learned. The rate is BT7's rise over that span, on the absolute
+        timeline (aware local datetimes subtract by wall time, an hour off across the clock
+        change). A priority that cannot say (unavailable, unknown) ends the charge unlearned.
+        """
+        if charging is None:
+            self._charge_start = None
+            return
+        if charging:
+            if self._charge_start is None:
+                self._charge_start = (timestamp.timestamp(), temp)
+            return
+        if self._charge_start is None:
+            return
+        start_time, start_temp = self._charge_start
+        self._charge_start = None
+
+        duration_hours = (timestamp.timestamp() - start_time) / 3600
+        temp_change = temp - start_temp
+
+        if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
+            calculated_rate = temp_change / duration_hours
+            # Same plausibility band that gates the restore path - a rate that cannot be
+            # learned must not be loadable from storage either.
+            if DHW_HEATING_RATE_MIN <= calculated_rate <= DHW_HEATING_RATE_MAX:
+                self._update_learned_rate(calculated_rate)
+                _LOGGER.debug(
+                    "DHW heating rate calculated: %.1f°C/hour (%.1f°C in %.1f min), "
+                    "learned rate: %.1f°C/hour (%d observations)",
+                    calculated_rate,
+                    temp_change,
+                    duration_hours * 60,
+                    self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
+                    self.heating_rate_observations,
+                )
 
     def _update_learned_rate(self, new_rate: float) -> None:
         """Update learned heating rate with weighted average.
@@ -668,7 +656,6 @@ class IntelligentDHWScheduler:
         price_classification: str,  # "very_cheap", "cheap", "normal", "expensive", "peak"
         current_time: datetime,
         price_periods: list | None = None,  # QuarterPeriod list for window scheduling
-        hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
         dhw_amount_minutes: float | None = None,  # Current hot water amount from sensor
         weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
@@ -688,7 +675,6 @@ class IntelligentDHWScheduler:
             price_classification: Current electricity price classification
             current_time: Current datetime
             price_periods: Optional list of QuarterPeriod for window-based scheduling
-            hours_since_last_dhw: Optional hours since last DHW heating (for max wait check)
             is_volatile: True if current price classification run is too brief (<45 min).
                 When volatile=True and price is cheap, DHW waits for stable cheap window
                 instead of triggering immediately. Matches space heating behavior.
@@ -700,9 +686,12 @@ class IntelligentDHWScheduler:
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
-        # Helper: Check if price is beneficial (cheap or very_cheap) AND stable
+        # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 5 and 7 spelled their
+        # own lists and left it out - RULE 5 waited through a very cheap night for a dearer cheap
+        # quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
         is_cheap_price = price_classification in ["cheap", "very_cheap"]
         is_stable_cheap = is_cheap_price and not is_volatile
+        is_acceptable_price = is_cheap_price or price_classification == "normal"
         indoor_deficit = target_indoor_temp - indoor_temp
 
         # Determine DM blocking using shared EmergencyLayer or fallback to local logic
@@ -1398,25 +1387,6 @@ class IntelligentDHWScheduler:
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
-        # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
-        # Must heat every 36 hours (hygiene, comfort)
-        if hours_since_last_dhw and hours_since_last_dhw > DHW_MAX_WAIT_HOURS:
-            # Only heat during cheap/normal prices (avoid expensive/peak even with max wait)
-            if price_classification in ["cheap", "normal"]:
-                _LOGGER.warning(
-                    "DHW maximum wait exceeded: %.1f hours (limit %.0fh)",
-                    hours_since_last_dhw,
-                    DHW_MAX_WAIT_HOURS,
-                )
-                return DHWScheduleDecision(
-                    should_heat=True,
-                    priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
-                    target_temp=self.user_target_temp,
-                    max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
-                    recommended_start_time=None,  # Heating now - no future time needed
-                )
-
         # === RULE 4: HIGH SPACE HEATING DEMAND - DELAY DHW ===
         # NOTE: Legionella prevention is handled by NIBE automatically
         # We monitor when it happens (update_bt7_temperature) but don't trigger it
@@ -1448,7 +1418,7 @@ class IntelligentDHWScheduler:
         # === RULE 4.7: PREDICTIVE PRE-HEATING TO AVOID PEAK ===
         # If we're in cheap/normal pricing AND an upcoming PEAK period would force us
         # to heat during peak (due to predicted thermal debt + DHW cooling), pre-heat NOW
-        if price_classification in ("very_cheap", "cheap", "normal"):
+        if is_acceptable_price:
             should_preheat, preheat_reason = self._should_preheat_to_avoid_peak(
                 current_time=current_time,
                 current_dhw_temp=current_dhw_temp,
@@ -1487,7 +1457,7 @@ class IntelligentDHWScheduler:
         # Logic: Heat to target temp during cheapest available window
         # If DHW is adequate (≥45°C), wait for CHEAP prices
 
-        if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
+        if current_dhw_temp >= MIN_DHW_TARGET_TEMP and not is_cheap_price:
             _LOGGER.info(
                 "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - waiting for cheap",
                 current_dhw_temp,
@@ -1609,7 +1579,6 @@ class IntelligentDHWScheduler:
         #
         # PRICE LOOKAHEAD: Before heating at normal price, check if cheaper window coming
         # that would save significant money without risking comfort.
-        is_acceptable_price = price_classification in ["cheap", "normal"]
         if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_acceptable_price:
             # Check for cheaper window in the coming hours (use scheduled window hours)
             comfort_lookahead_hours = DHW_SCHEDULED_WINDOW_HOURS
@@ -2296,7 +2265,6 @@ class IntelligentDHWScheduler:
         price_classification: str,
         current_time: datetime,
         price_periods: list | None,
-        hours_since_last_dhw: float,
         thermal_trend_rate: float = 0.0,
         climate_zone_name: str | None = None,
         weather_current_temp: float | None = None,
@@ -2324,7 +2292,6 @@ class IntelligentDHWScheduler:
             price_classification: Price classification (very_cheap/cheap/normal/expensive/peak)
             current_time: Current datetime
             price_periods: Price period list for window scheduling
-            hours_since_last_dhw: Hours since last DHW heating
             thermal_trend_rate: Indoor temp change rate (°C/hour)
             climate_zone_name: Climate zone name for display
             weather_current_temp: Current weather temp for opportunity detection
@@ -2422,7 +2389,6 @@ class IntelligentDHWScheduler:
             price_classification=price_classification,
             current_time=current_time,
             price_periods=price_periods,
-            hours_since_last_dhw=hours_since_last_dhw,
             is_volatile=is_volatile,
             dhw_amount_minutes=dhw_amount_minutes,
             weather_forecast=weather_forecast,

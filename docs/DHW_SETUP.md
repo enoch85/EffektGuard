@@ -90,7 +90,10 @@ DHW start rate limited: 23.4 min since last change (min 60 min)
   "No hot-water control entity"), or the entity no longer exists ("Temporary lux entity ... not
   found" in the log).
 - **Status is `not_configured`**: no BT7 sensor was found ("DHW sensor (BT7) not found" in the
-  log). Set the BT7 override in the config flow.
+  log). Set the BT7 override in the config flow. While BT7 is unreadable EffektGuard starts nothing
+  and stops a boost it started.
+- **A boost started on the pump or in MyUplink is not stopped**: by design - EffektGuard only stops
+  the boosts it started.
 - **A start does not happen when expected**: one start per 60 min after the last start or stop;
   nothing is controlled during the start-up grace period after a restart.
 - **The pump heats hot water while EffektGuard says "block"**: temporary lux is a boost, not an

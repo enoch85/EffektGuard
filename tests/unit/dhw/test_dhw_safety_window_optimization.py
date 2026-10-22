@@ -130,7 +130,6 @@ def test_safety_deferral_finds_upcoming_cheap_window(
         price_classification="expensive",
         current_time=datetime(2025, 10, 26, 20, 0),  # 20:00 - expensive period
         price_periods=price_periods_with_cheap_window,
-        hours_since_last_dhw=22.0,  # Yesterday
     )
 
     # Should NOT heat now (price expensive)
@@ -158,7 +157,6 @@ def test_safety_deferral_heats_when_in_cheap_window(dhw_optimizer, price_periods
         price_classification="cheap",  # Window is cheap
         current_time=datetime(2025, 10, 26, 22, 5),  # 22:05 - IN cheap window
         price_periods=price_periods_with_cheap_window,
-        hours_since_last_dhw=22.0,
     )
 
     # Should heat NOW (we're in the cheap window!)
@@ -181,7 +179,6 @@ def test_safety_critical_always_heats_immediately(dhw_optimizer, price_periods_w
         price_classification="expensive",
         current_time=datetime(2025, 10, 26, 20, 0),  # Expensive period
         price_periods=price_periods_with_cheap_window,
-        hours_since_last_dhw=22.0,
     )
 
     # Should heat immediately at critical temp
@@ -208,7 +205,6 @@ def test_no_window_found_falls_back_to_defer(dhw_optimizer):
         price_classification="expensive",
         current_time=base_time,
         price_periods=expensive_periods,
-        hours_since_last_dhw=22.0,
     )
 
     # When all prices are equal, window finder picks first available window (now)
@@ -230,7 +226,6 @@ def test_safety_deferral_respects_thermal_debt(dhw_optimizer, price_periods_with
         price_classification="expensive",
         current_time=datetime(2025, 10, 26, 20, 0),
         price_periods=price_periods_with_cheap_window,
-        hours_since_last_dhw=22.0,
     )
 
     # Critical thermal debt (DM -450 < -340 block threshold) blocks ALL DHW

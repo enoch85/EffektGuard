@@ -1260,7 +1260,6 @@ DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_SCHEDULED_WINDOW_HOURS: Final = 6  # Hours before target time when scheduling becomes active
-DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
 # DHW amount-based scheduling (minutes of hot water available)
 # Schedule time = when water should be AVAILABLE (ready), not when heating starts
@@ -1697,6 +1696,7 @@ NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
     {"hot water", "hot_water", "20", "20.0"}
 )
 NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
+NIBE_PRIO_OFF_STATES: Final[frozenset[str]] = frozenset({"off", "10", "10.0"})
 
 # Compressor frequency above this means the compressor is running.
 # Used to derive is_heating when no parseable status entity exists

@@ -58,7 +58,6 @@ def _ask(scheduler, thermal_debt: float, indoor: float, when=IN_THE_RUN_UP, dhw_
         price_classification="expensive",
         current_time=when,
         price_periods=None,
-        hours_since_last_dhw=8.0,
     )
 
 
@@ -211,7 +210,6 @@ def test_what_is_owed_is_what_the_window_would_have_done(target, dhw_temp, amoun
         price_classification="peak",
         current_time=LONG_AFTER,
         price_periods=None,
-        hours_since_last_dhw=8.0,
         dhw_amount_minutes=amount,
     )
 
