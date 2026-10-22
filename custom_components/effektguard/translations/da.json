@@ -83,7 +83,6 @@
       "gespot_entity_not_found": "Spotpris-enhed ikke fundet"
     },
     "abort": {
-      "nibe_not_found": "Ingen NIBE-integration fundet. Installer og konfigurer MyUplink (sky) eller nibe_heatpump (lokal Modbus/NibeGW) først.",
       "reconfigure_successful": "Omkonfigurering gennemført"
     }
   },
@@ -250,13 +249,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Gennemtving forskydning af varmekurven",
+      "description": "Tilsidesæt varmekurvens forskydning manuelt i en begrænset periode",
+      "fields": {
+        "offset": {
+          "name": "Forskydning",
+          "description": "Varmekurvens forskydning, der skal anvendes (-10 til +10°C)"
+        },
+        "duration": {
+          "name": "Varighed",
+          "description": "Hvor længe tilsidesættelsen skal gælde (minutter, 0 = indtil næste optimeringscyklus)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nulstil effekttoppe",
+      "description": "Nulstil månedens effekttoppe (bruges, når en ny afregningsperiode begynder)"
+    },
     "boost_heating": {
       "name": "Boost opvarmning",
-      "description": "Midlertidigt forøg opvarmning for hurtig komfort"
+      "description": "Maksimer opvarmningen midlertidigt uanset omkostning (nødtilstand for komfort)",
+      "fields": {
+        "duration": {
+          "name": "Varighed",
+          "description": "Boostets varighed (minutter)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Boost varmtvand",
-      "description": "Start øjeblikkelig varmtvandscyklus"
+      "description": "Start et øjeblikkeligt varmtvandsboost via NIBEs midlertidige luksus. Pumpen opvarmer til sin egen luksustemperatur; EffektGuard holder boostet kørende i den ønskede tid (prisoptimeringen afbryder det ikke - kun sikkerhedsstoppet for termisk gæld gør) og slukker det derefter.",
+      "fields": {
+        "duration": {
+          "name": "Varighed",
+          "description": "Hvor længe boostet må køre, før EffektGuard slukker det (minutter)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Beregn optimal plan",
+      "description": "Forhåndsvis optimeringsplanen for de næste 24 timer ud fra de aktuelle forhold"
     }
   },
   "issues": {

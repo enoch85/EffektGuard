@@ -1,137 +1,74 @@
-# Scenario 1: Normal Optimization Cycle
+# The control cycle
 
-**Description**: The control cycle the coordinator runs every 5 minutes, clock-aligned at `:XX:10`
-(Home Assistant's own scheduling is disabled), with all systems operating normally.
+`EffektGuardCoordinator` runs every 5 minutes, 10 seconds past the mark (`:00:10`, `:05:10`, ...),
+on its own timer. Home Assistant's coordinator scheduling is off (`update_interval=None`), so the
+reads land just after each 15-minute price boundary. One cycle:
 
 ```mermaid
-flowchart TD
-    subgraph "HA Core"
-        A[NIBE entities: MyUplink, nibe_heatpump or Modbus]
-        B[Spot Price Entities]
-        C[Weather Entities]
-    end
-
-    subgraph "Coordinator cycle (every 5 min, at :XX:10)"
-        E[EffektGuardCoordinator._async_update_data]
-        F[Read NIBE]
-        G[Read prices]
-        H[Read weather]
-        J[Update peak tracking: day change, this cycle's power]
-        I[Run the decision engine in an executor]
-        V[Volatility gate]
-        WR[Write the offset]
-        K[Record learning observations]
-        PS[Persist]
-        L[Update all entities]
-    end
-
-    subgraph "Decision Engine Layers"
-        M[Safety]
-        N[Emergency: T1-T3, EMERGENCY floor, anti-windup]
-        P1[Proactive: Z1-Z5]
-        O[Effect: peak protection]
-        P[Learned pre-heat]
-        WC[Math WC: weather compensation]
-        Q[Weather pre-heat]
-        R[Spot price]
-        S[Comfort]
-        T[Aggregate: weight >= 1.0 wins, else weighted average]
-    end
-
-    subgraph "Data Adapters"
-        U[NibeAdapter]
-        VA[GESpotAdapter]
-        W[WeatherAdapter]
-    end
-
-    subgraph "Entities Update"
-        X[Climate Entity]
-        Y[Sensor Entities]
-        Z[Switch Entities]
-    end
-
-    %% Data Flow
-    A --> U
-    B --> VA
-    C --> W
-
-    E --> F
-    F --> U
-    U --> F
-    F --> G
-    G --> VA
-    VA --> G
-    G --> H
-    H --> W
-    W --> H
-
-    H --> J
-    J --> I
-    I --> M
-    M --> N
-    N --> P1
-    P1 --> O
-    O --> P
-    P --> WC
-    WC --> Q
-    Q --> R
-    R --> S
-    S --> T
-    T --> I
-
-    I --> V
-    V --> WR
-    WR --> K
-    K --> PS
-    PS --> L
-    L --> X
-    L --> Y
-    L --> Z
-
-    %% Apply Decision
-    WR -.->|offset register 47011, via the bound number entity| A
-
-    %% Styling
-    style E fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style I fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style T fill:#333,stroke:#fff,stroke-width:2px,color:#fff
+flowchart LR
+    R["Read NIBE<br/>prices, weather"] --> P["Peak tracking"]
+    P --> D["Decision engine<br/>nine layers"]
+    D --> V["Volatility gate"]
+    V --> W["Write the offset"]
+    W --> L["Learning, persistence<br/>hot water, airflow, entities"]
 ```
 
-## Flow Description
+## Reads
 
-### 1. Data Collection (every 5 minutes)
-The coordinator reads, in this order:
-- **NIBE**: heat pump state, temperatures, degree minutes (MyUplink, nibe_heatpump or Modbus entities)
-- **Spot price**: native 15-minute prices (96 quarters a day)
-- **Weather**: the forecast, for pre-heating and unusual-weather detection
+- **NIBE** (`NibeAdapter.get_current_state`): required. At start-up the coordinator waits up to 12
+  cycles (`STARTUP_MAX_GRACE_ATTEMPTS`) for the entities to appear. After the first success a
+  failed read raises `UpdateFailed`: the entities go unavailable, nothing is written, and the next
+  cycle tries again.
+- **Prices** (`GESpotAdapter.get_prices`): GE-Spot's `today_interval_prices` and
+  `tomorrow_interval_prices`. Missing prices mean the price layer abstains and a repair issue is
+  raised; nothing is invented.
+- **Weather** (`WeatherAdapter.get_forecast`): the hourly forecast. Missing weather stands the
+  pre-heat layer down; weather compensation runs on the pump's own sensors.
+- **Peak tracking** (`_update_peak_tracking`) runs before the decision: power from the external
+  meter, else the pump's phase currents, else an estimate that is shown but never recorded. The
+  effect layer is given the 15-minute period mean this cycle projects to, not the instant.
 
-It then updates the peak tracking - the day change and this cycle's power - **before** the
-decision, so the effect layer judges the billing period on the power of the cycle it decides.
+## Decision
 
-### 2. Decision Engine Execution
-The decision engine runs nine layers, each returning `(offset, weight, reason)`:
-1. **Safety**: below the 18 °C floor (`MIN_TEMP_LIMIT`) maximum heat
-2. **Emergency**: thermal debt T1-T3, the EMERGENCY floor past the aux limit, anti-windup
-3. **Proactive**: early degree-minute prevention, Z1-Z5
-4. **Effect**: 15-minute effect-tariff peak protection
-5. **Learned pre-heat**: the prediction layer
-6. **Math WC**: weather compensation by the EN 442 emitter law
-7. **Weather pre-heat**: before a colder day
-8. **Spot price**: the 15-minute price classification
-9. **Comfort**: the room against its band
+`DecisionEngine.calculate_decision` runs in an executor. The layers, in order, each return
+`(offset, weight, reason)`: safety, thermal debt (`EmergencyLayer`), proactive (`ProactiveLayer`),
+effect tariff, learned pre-heat, weather compensation ("Math WC"), weather pre-heat, spot price,
+comfort. `_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)); a trend
+step then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating
+below +3 into a room cooling that fast), and `_limit_for_compressor_wear` caps a raise the saturated
+compressor cannot follow.
 
-### 3. Decision Aggregation
-- A layer with weight ≥ 1.0 wins outright; otherwise a weighted average
-  (see [08_layer_priority_system.md](08_layer_priority_system.md))
-- The volatility gate (`utils/volatile_helpers.py`) may keep the previous offset, and
-  `utils/offset.py` turns the decision into the integer the register takes
-- The offset is written through the bound NIBE offset entity
-  (MyUplink, nibe_heatpump, or a template number wrapping modbus.write_register)
+With the master switch off the decision is offset 0 and no layer runs. A manual override
+(`force_offset`, `boost_heating`) replaces the layers, floored by `_absolute_safety_floor`.
 
-### 4. Learning and State
-- Learning observations are recorded hourly (`LEARNING_OBSERVATION_INTERVAL_MINUTES`), not every cycle
-- Peak tracking, savings and learned data are persisted
-- All entities are updated with the decision, its reasoning, peak tracking and diagnostics
+## Start-up
 
-A cycle that cannot read the pump writes nothing: the entities go unavailable and the next cycle
-tries again.
+A 120-second lockout (`STARTUP_GRACE_MIN_INTERVAL`), then one observation cycle
+(`STARTUP_GRACE_UPDATES`), before the first write. An explicit service command bypasses both.
+
+## Write
+
+- **Volatility gate** (`OffsetVolatilityTracker`): a change of 2 °C or more that reverses direction
+  within 45 minutes keeps the previous offset. Manual overrides, OFF, emergencies (the 18 °C floor
+  or DM past -1500), anti-windup and a withdrawn raise on a saturated compressor bypass it.
+- **The integer** (`utils/offset.py`): only the whole degrees of the pending demand (asked minus
+  the register) are written, truncated, clamped to -10..+10 and to the number entity's own range.
+- **The write** (`NibeAdapter.set_curve_offset`): `number.set_value` on the configured offset
+  entity, at most once every 5 minutes (`SERVICE_RATE_LIMIT_MINUTES`) unless forced. An unchanged
+  integer is not rewritten.
+- **The other two actuators** have their own limits: increased ventilation
+  ([11](11_airflow_optimization.md)) and the hot-water temporary lux
+  ([DHW_OPTIMIZATION.md](../DHW_OPTIMIZATION.md)). Nothing else is written; EffektGuard calls no
+  external API.
+
+## After the write
+
+- Learning: the thermal predictor records every cycle; the `AdaptiveThermalModel` once an hour
+  (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); the weather pattern once a day.
+- Persistence: the effect peaks every cycle, learned data at most hourly.
+- Hot-water control runs when its switch is on, airflow control when its switch is on
+  (F750/F730); both are skipped during start-up observation and on read-only refreshes.
+- The returned data updates the climate entity, the sensors and the switches.
+
+A read-only refresh (a reload, an options change, a bookkeeping service) runs the same reads and
+decision but writes nothing.

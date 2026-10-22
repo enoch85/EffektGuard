@@ -522,16 +522,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             int(self.last_applied_offset),
                         )
 
-                # Restore adaptive thermal model
+                # Restore adaptive thermal model. Not its thermal mass: setup gives the model the
+                # owner's setting (_create_coordinator), which a stored value must not outrank.
                 if "thermal_model" in learned_data:
                     thermal_data = learned_data["thermal_model"]
-                    self.adaptive_learning.thermal_mass = thermal_data.get("thermal_mass", 1.0)
                     self.adaptive_learning.ufh_type = thermal_data.get("ufh_type", "unknown")
-                    _LOGGER.info(
-                        "Restored thermal model: mass=%.2f, UFH=%s",
-                        self.adaptive_learning.thermal_mass,
-                        self.adaptive_learning.ufh_type,
-                    )
+                    _LOGGER.info("Restored thermal model: UFH=%s", self.adaptive_learning.ufh_type)
 
                 # Restore thermal predictor (temperature trends)
                 if "thermal_predictor" in learned_data:
@@ -669,6 +665,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
         except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
+            return False
+
+        if on and self._shutdown_requested:
+            # The entry unloaded while the call was in flight, and its cleanup found no boost of
+            # ours to cancel - the record below is made only now. Stop it here, or it runs to
+            # NIBE's lux timeout with nothing left to stop it.
+            _LOGGER.info(
+                "The entry unloaded while a hot-water boost was starting on %s - switching it off",
+                self.temp_lux_entity,
+            )
+            await self._set_temporary_lux(False)
             return False
 
         # Ours if we switched it on; not ours once it is off, whoever asked for that.

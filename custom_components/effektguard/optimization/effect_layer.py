@@ -315,14 +315,13 @@ class EffectManager:
         timestamp: datetime,
         source: str = POWER_SOURCE_EXTERNAL_METER,
     ) -> PeakEvent | None:
-        """Record one completed BILLING PERIOD - an HOUR, which is what the tariff bills.
+        """Record one completed BILLING PERIOD (BILLING_PERIOD_MINUTES) by its mean power.
 
-        The tariff bills the mean power over a whole hour, so a 15-minute 9 kW hot-water cycle in an
-        otherwise idle hour is a 3 kW billed peak, not 9 - recording the quarter-hour mean overstates
-        it and throttles the pump to defend the difference.
+        The tariff bills the mean power over the period, not the instantaneous draw: a 9 kW spike
+        lasting five minutes of an otherwise idle period is a third of that in the bill.
 
         Args:
-            power_kw: MEAN power over the hour, in kW
+            power_kw: MEAN power over the period, in kW
             period: the billing period of the day (0-95)
             timestamp: Measurement timestamp
             source: Where the reading came from. A NIBE-currents peak is a valid CONTROL threshold
@@ -342,8 +341,8 @@ class EffectManager:
             return None
 
         # A plausibility CEILING, for the same reason the floor exists. A peak is persisted for a
-        # month and every later hour is judged against it, so one impossible reading (a mis-scaled
-        # unit once put 5 000 000 kW here) makes every real hour look safe and disables peak
+        # month and every later period is judged against it, so one impossible reading (a mis-scaled
+        # unit once put 5 000 000 kW here) makes every real period look safe and disables peak
         # protection until the month rolls over. Nothing behind a domestic main fuse reaches
         # PEAK_RECORDING_MAXIMUM, so no real house is refused.
         if power_kw > PEAK_RECORDING_MAXIMUM:
@@ -695,7 +694,7 @@ class EffectManager:
                 reason="Disabled by user",
             )
 
-        # The billing period is the HOUR - see the module docstring and BILLING_PERIOD_MINUTES.
+        # The billing period is BILLING_PERIOD_MINUTES long - see the module docstring.
         current_period = get_current_billing_period()
 
         limit_decision = self.should_limit_power(current_power, current_period)
