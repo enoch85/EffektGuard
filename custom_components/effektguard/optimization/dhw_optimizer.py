@@ -810,7 +810,7 @@ class IntelligentDHWScheduler:
                 # This lane deliberately outranks the thermal-debt block (RULE 1) and the
                 # space-heating checks (RULES 2 and 4) - a scheduled shower is one the owner wants -
                 # but it does NOT outrank safety (this gate), which it once did.
-                unsafe = self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp)
+                unsafe = self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp)
                 if unsafe:
                     # Not cancelled. OWED, and settled once the house is out of danger, even after
                     # the window has closed (see RULE 0.5).
@@ -1089,7 +1089,7 @@ class IntelligentDHWScheduler:
             if current_dhw_temp >= self.user_target_temp:
                 # Settled - by this rule, or by the pump's own schedule. Either way, nothing is owed.
                 self._scheduled_window_owed = False
-            elif self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
+            elif self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
                 _LOGGER.info(
                     "Resuming the scheduled DHW that safety refused: house is safe again "
                     "(DM %.0f, indoor %.1f°C)",
@@ -2157,20 +2157,21 @@ class IntelligentDHWScheduler:
 
         return "\n".join(lines)
 
-    def scheduled_dhw_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
-        """Why a SCHEDULED hot-water cycle must not run, or None if it may.
+    def hot_water_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
+        """Why hot water the owner asked for must not run, or None if it may.
 
-        A scheduled window outranks thermal debt and space-heating demand (deliberate priority), but
-        not the two points at which the house is in trouble:
+        A scheduled window and a boost_dhw boost outrank thermal debt, space-heating demand and
+        price (deliberate priority), but not the two points at which the house is in trouble:
 
           * indoor below MIN_TEMP_LIMIT - the safety layer already commands maximum heat, which DHW
             would take the compressor away from;
           * degree minutes at the absolute limit - the immersion heater is engaging.
 
         The scheduled path's ABORT conditions are built from these same two tests
-        (scheduled_dhw_abort_conditions): if a cycle can start in a state its own abort conditions
-        reject, it starts/aborts/rate-limits/restarts, cycling the compressor and heating no water.
-        One predicate, both ends.
+        (scheduled_dhw_abort_conditions), and the coordinator refuses and stops a boost_dhw boost on
+        this predicate itself: if a cycle can start in a state its own stop rejects, it
+        starts/aborts/rate-limits/restarts, cycling the compressor and heating no water. One
+        predicate, both ends.
         """
         if indoor_temp < MIN_TEMP_LIMIT:
             return (
@@ -2189,7 +2190,7 @@ class IntelligentDHWScheduler:
     def scheduled_dhw_abort_conditions(self) -> list[str]:
         """The abort conditions for a scheduled cycle: the safety gate, and nothing else.
 
-        Built from the same two thresholds as `scheduled_dhw_unsafe_reason`, so a cycle that was
+        Built from the same two thresholds as `hot_water_unsafe_reason`, so a cycle that was
         permitted to start cannot be aborted by the state it started in.
         """
         return [
