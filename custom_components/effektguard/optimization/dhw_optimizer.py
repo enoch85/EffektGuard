@@ -694,9 +694,12 @@ class IntelligentDHWScheduler:
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
-        # Helper: Check if price is beneficial (cheap or very_cheap) AND stable
+        # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 3.5, 5 and 7 spelled
+        # their own lists and left it out - RULE 5 waited through a very cheap night for a dearer
+        # cheap quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
         is_cheap_price = price_classification in ["cheap", "very_cheap"]
         is_stable_cheap = is_cheap_price and not is_volatile
+        is_acceptable_price = is_cheap_price or price_classification == "normal"
         indoor_deficit = target_indoor_temp - indoor_temp
 
         # Determine DM blocking using shared EmergencyLayer or fallback to local logic
@@ -1422,7 +1425,7 @@ class IntelligentDHWScheduler:
         # Must heat every 36 hours (hygiene, comfort)
         if hours_since_last_dhw and hours_since_last_dhw > DHW_MAX_WAIT_HOURS:
             # Only heat during cheap/normal prices (avoid expensive/peak even with max wait)
-            if price_classification in ["cheap", "normal"]:
+            if is_acceptable_price:
                 _LOGGER.warning(
                     "DHW maximum wait exceeded: %.1f hours (limit %.0fh)",
                     hours_since_last_dhw,
@@ -1468,7 +1471,7 @@ class IntelligentDHWScheduler:
         # === RULE 4.7: PREDICTIVE PRE-HEATING TO AVOID PEAK ===
         # If we're in cheap/normal pricing AND an upcoming PEAK period would force us
         # to heat during peak (due to predicted thermal debt + DHW cooling), pre-heat NOW
-        if price_classification in ("very_cheap", "cheap", "normal"):
+        if is_acceptable_price:
             should_preheat, preheat_reason = self._should_preheat_to_avoid_peak(
                 current_time=current_time,
                 current_dhw_temp=current_dhw_temp,
@@ -1507,7 +1510,7 @@ class IntelligentDHWScheduler:
         # Logic: Heat to target temp during cheapest available window
         # If DHW is adequate (≥45°C), wait for CHEAP prices
 
-        if current_dhw_temp >= MIN_DHW_TARGET_TEMP and price_classification != "cheap":
+        if current_dhw_temp >= MIN_DHW_TARGET_TEMP and not is_cheap_price:
             _LOGGER.info(
                 "DHW: Adequate (%.1f°C ≥ %.1f°C), price %s - waiting for cheap",
                 current_dhw_temp,
@@ -1629,7 +1632,6 @@ class IntelligentDHWScheduler:
         #
         # PRICE LOOKAHEAD: Before heating at normal price, check if cheaper window coming
         # that would save significant money without risking comfort.
-        is_acceptable_price = price_classification in ["cheap", "normal"]
         if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_acceptable_price:
             # Check for cheaper window in the coming hours (use scheduled window hours)
             comfort_lookahead_hours = DHW_SCHEDULED_WINDOW_HOURS
