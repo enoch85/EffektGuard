@@ -279,7 +279,7 @@
     },
     "boost_dhw": {
       "name": "Boosta varmvatten",
-      "description": "Starta en omedelbar varmvattenboost via NIBEs tillfälliga lyx. Pumpen värmer till sin egen lyxtemperatur; EffektGuard låter boosten pågå under den begärda tiden (prisoptimeringen avbryter den inte - bara säkerhetsstoppet för termisk skuld gör det) och stänger sedan av den.",
+      "description": "Starta en omedelbar varmvattenboost via NIBEs tillfälliga lyx. Pumpen värmer till sin egen lyxtemperatur; EffektGuard låter boosten pågå under den begärda tiden och stänger sedan av den. Prisoptimeringen avbryter den inte; bara säkerhetsstoppet gör det - gradminuter vid gränsen för tillsatsvärme eller ett hus under sitt säkerhetsgolv, som också gör att boosten vägras.",
       "fields": {
         "duration": {
           "name": "Varaktighet",

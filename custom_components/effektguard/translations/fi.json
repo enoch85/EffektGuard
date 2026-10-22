@@ -279,7 +279,7 @@
     },
     "boost_dhw": {
       "name": "Tehosta lämmintä vettä",
-      "description": "Käynnistä välitön lämpimän veden tehostus NIBEn tilapäisellä luksuksella. Pumppu lämmittää omaan luksuslämpötilaansa; EffektGuard pitää tehostuksen käynnissä pyydetyn ajan (hintaoptimointi ei keskeytä sitä - vain lämpövelan turvapysäytys keskeyttää) ja kytkee sen sitten pois.",
+      "description": "Käynnistä välitön lämpimän veden tehostus NIBEn tilapäisellä luksuksella. Pumppu lämmittää omaan luksuslämpötilaansa; EffektGuard pitää tehostuksen käynnissä pyydetyn ajan ja kytkee sen sitten pois. Hintaoptimointi ei keskeytä sitä; vain turvapysäytys keskeyttää - asteminuutit lisälämmön rajalla tai talo alle turvarajansa, mikä myös estää tehostuksen.",
       "fields": {
         "duration": {
           "name": "Kesto",

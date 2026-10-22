@@ -67,12 +67,14 @@ from ..const import (
     NIBE_POWER_FACTOR,
     NIBE_PRIO_HEATING_STATES,
     NIBE_PRIO_HOT_WATER_STATES,
+    NIBE_PRIO_OFF_STATES,
     NIBE_STATUS_ACTIVE_STATES,
     NIBE_SWITCH_DISCOVERY_PATTERNS,
     NIBE_TEMPERATURE_KEYS,
     NIBE_UNKNOWN_VALUE_MARKERS,
     NIBE_VOLTAGE_PER_PHASE,
     SERVICE_RATE_LIMIT_MINUTES,
+    UPDATE_INTERVAL_MINUTES,
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
@@ -142,6 +144,11 @@ class NibeState:
         but BT6 is better for triggering DHW heating cycles.
         """
         return self.dhw_charging_temp if self.dhw_charging_temp is not None else self.dhw_top_temp
+
+
+def _control_interval(moment: datetime) -> int:
+    """The control interval `moment` falls in, counted on the absolute timeline."""
+    return int(moment.timestamp() // timedelta(minutes=UPDATE_INTERVAL_MINUTES).total_seconds())
 
 
 class NibeAdapter:
@@ -327,9 +334,13 @@ class NibeAdapter:
             "return temperature (BT3)",
         )
 
-        # Read current offset
+        # Read current offset. The register changes only when it is written, and a template number
+        # (the README's local Modbus recipe) reports only when its value changes, so half an hour of
+        # silence is a steady offset, not a dead sensor. Aged out, it read as 0.0 while the register
+        # held its value: the anti-windup could not see a held raise, and the offset sensor showed
+        # 0. The readings that prove the pump is alive - BT1, BT25/BT63, degree minutes - keep it.
         current_offset = await self._read_entity_float(
-            self._entity_cache.get("offset"), default=0.0
+            self._entity_cache.get("offset"), default=0.0, check_age=False
         )
 
         # Read compressor status
@@ -342,9 +353,9 @@ class NibeAdapter:
         # integration publishes a separate hot-water status. A name match on "hot_water" finds
         # settings and counters instead - on a MyUplink F750 the comfort mode, the hot-water
         # hours - so none is read as one. None when the priority cannot say: a tank charge then
-        # reads as space heating, so nothing may judge the compressor on it.
+        # reads as space heating, so nothing may judge the compressor on it. Off says it: no charge.
         prio = self._read_prio_state()
-        is_hot_water = {"hot_water": True, "heating": False}.get(prio)
+        is_hot_water = {"hot_water": True, "heating": False, "off": False}.get(prio)
 
         # Read DHW temperatures (optional - BT7 top, BT6 charging/bottom)
         dhw_top_temp = await self._read_temperature(self._entity_cache.get("dhw_top_temp"))
@@ -459,14 +470,18 @@ class NibeAdapter:
             nibe_heatpump number (e.g. number.heat_offset_s1_47011), or a
             template number wrapping modbus.write_register.
         """
-        # Rate limiting - minimum time between writes
+        # One write per control interval. Measured as five minutes since the last write, a cycle
+        # whose read and decide work ran a few milliseconds faster than the one before it fell
+        # inside the limit and was skipped, so the register followed a cycle late - about every
+        # other write on consecutive cycles. Cycles run at :X0:10 and :X5:10, each inside its own
+        # interval whatever its work took.
         now = dt_util.utcnow()
         if (
             not force_write
             and self._last_write
-            and now - self._last_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
+            and _control_interval(self._last_write) == _control_interval(now)
         ):
-            _LOGGER.debug("Skipping offset write, too soon since last write")
+            _LOGGER.debug("Skipping offset write: this control interval has already written")
             return None
 
         # Get offset entity
@@ -930,12 +945,16 @@ class NibeAdapter:
         self,
         entity_id: str | None,
         default: float | None = None,
+        *,
+        check_age: bool = True,
     ) -> float | None:
         """Read float value from entity.
 
         Args:
             entity_id: Entity ID to read
             default: Default value if entity unavailable
+            check_age: Reject a reading older than NIBE_READING_MAX_AGE_MINUTES. Off only for the
+                offset register - see get_current_state.
 
         Returns:
             Float value or default
@@ -956,7 +975,7 @@ class NibeAdapter:
         # age is unknowable, so fail OPEN and use the reading - this is an extra guard, and raising
         # from the read path would be worse than the staleness it catches.
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
-        if isinstance(reported, datetime):
+        if check_age and isinstance(reported, datetime):
             age = dt_util.utcnow() - reported
             if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
                 _LOGGER.warning(
@@ -1128,7 +1147,7 @@ class NibeAdapter:
         not fully documented).
 
         Returns:
-            "hot_water", "heating", "other", or None when unavailable/unknown
+            "hot_water", "heating", "off", "other", or None when unavailable/unknown
         """
         prio_entity = self._entity_cache.get("prio")
         if not prio_entity:
@@ -1143,6 +1162,8 @@ class NibeAdapter:
             return "hot_water"
         if prio_lower in NIBE_PRIO_HEATING_STATES:
             return "heating"
+        if prio_lower in NIBE_PRIO_OFF_STATES:
+            return "off"
         return "other"
 
     async def get_power_consumption(self) -> tuple[float | None, bool]:

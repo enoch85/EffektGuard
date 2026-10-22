@@ -5,6 +5,8 @@ must pass the same plausibility band (DHW_HEATING_RATE_MIN..MAX) as a learned on
 hand-edited .storage file could otherwise load 0.0 or 0.1 and make the scheduler panic-heat forever.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from custom_components.effektguard.const import (
@@ -67,6 +69,25 @@ class TestCorruptStoredHeatingRateIsRejected:
 
         # The heating rate after it in the same method must still have been restored.
         assert optimizer.learned_heating_rate == pytest.approx(18.0)
+
+    def test_a_legionella_timestamp_without_an_offset_is_ignored(self):
+        """Without an offset it cannot be measured against Home Assistant's aware clock: restored,
+        it raised TypeError in every hot-water decision."""
+        optimizer = self._optimizer()
+
+        optimizer.restore_from_persistence({"last_legionella_boost": "2026-10-20T10:00:00"})
+
+        optimizer.should_start_dhw(
+            current_dhw_temp=46.0,
+            thermal_debt_dm=-200.0,
+            space_heating_demand_kw=0.0,
+            outdoor_temp=5.0,
+            indoor_temp=21.0,
+            target_indoor_temp=21.0,
+            price_classification="normal",
+            current_time=datetime(2026, 10, 22, 10, tzinfo=timezone.utc),
+        )
+        assert optimizer.last_legionella_boost is None
 
     def test_estimate_heating_time_never_divides_by_a_bad_rate(self):
         """Defence in depth: the divisor itself is guarded."""

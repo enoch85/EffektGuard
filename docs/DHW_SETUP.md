@@ -49,7 +49,8 @@ The last two are myuplink entity ids for an F750; use your pump's.
 
 `effektguard.boost_dhw` turns temporary lux on at once, with `duration` 30-180 min (default 90).
 The pump heats to its own luxury stop temperature; EffektGuard keeps the switch on for the duration
-(price optimisation does not cancel it, the thermal-debt safety stop does) and then turns it off.
+and then turns it off, with or without hot-water optimisation. Price does not cancel it; the safety
+gate does (DM at −1500 or the house below 18 °C), and refuses to start it.
 Calls are 60 min apart at least, and refused while optimisation is off.
 
 ```yaml
@@ -89,7 +90,10 @@ DHW start rate limited: 23.4 min since last change (min 60 min)
   "No hot-water control entity"), or the entity no longer exists ("Temporary lux entity ... not
   found" in the log).
 - **Status is `not_configured`**: no BT7 sensor was found ("DHW sensor (BT7) not found" in the
-  log). Set the BT7 override in the config flow.
+  log). Set the BT7 override in the config flow. While BT7 is unreadable EffektGuard starts nothing
+  and stops a boost it started.
+- **A boost started on the pump or in MyUplink is not stopped**: by design - EffektGuard only stops
+  the boosts it started.
 - **A start does not happen when expected**: one start per 60 min after the last start or stop;
   nothing is controlled during the start-up grace period after a restart.
 - **The pump heats hot water while EffektGuard says "block"**: temporary lux is a boost, not an

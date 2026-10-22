@@ -227,14 +227,15 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         )
         m.setattr("custom_components.effektguard.coordinator.Store.async_save", AsyncMock())
 
-        # Mock dt_util.now to control time
+        # Mock both of dt_util's clocks to control time: the lockout deadline is kept in UTC
         start_time = datetime(2025, 12, 19, 4, 0, 0, tzinfo=timezone.utc)
         current_time = start_time
 
-        def mock_now():
+        def mock_now(*_args):
             return current_time
 
         m.setattr(dt_util, "now", mock_now)
+        m.setattr(dt_util, "utcnow", mock_now)
 
         coordinator = EffektGuardCoordinator(
             hass=hass,
