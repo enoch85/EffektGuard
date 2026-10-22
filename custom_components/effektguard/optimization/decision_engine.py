@@ -44,6 +44,8 @@ from ..const import (
     MIN_TEMP_LIMIT,
     POWER_VALIDATION_MARGIN,
     SAFETY_EMERGENCY_OFFSET,
+    WEAR_GUARD_COOLING_RATE,
+    WEAR_GUARD_STEADY_ROOM_RATE,
     TOLERANCE_RANGE_MULTIPLIER,
     TREND_BOOST_OFFSET_LIMIT,
     TREND_DAMPING_COOLING_BOOST,
@@ -898,20 +900,26 @@ class DecisionEngine:
         passes - half at the target, all of it at the band's lower edge, where immersion heat is
         the heat the house is short of. Starting at the target instead left a house that the guard
         had kept from banking immersion heat colder than the band through a peak-price cut or a
-        boost to the ventilation (closed loop on the owner's F750). A cooling room gets all of it
-        too: on a slab the room falls for hours after the guard holds back, and what was held back
-        is the reserve the house lacks by the time it reaches the band's lower edge. A cut stands,
-        and the absolute safety floor bounds the cap: below MIN_TEMP_LIMIT the house gets
-        everything.
+        boost to the ventilation (closed loop on the owner's F750). A cooling room earns a share
+        too, all of it once it falls at WEAR_GUARD_COOLING_RATE: on a slab the room falls for hours
+        after the guard holds back, and what was held back is the reserve the house lacks by the
+        time it reaches the band's lower edge. The share grows with the rate from
+        WEAR_GUARD_STEADY_ROOM_RATE instead of switching on the slope's sign: a steady room read to
+        0.1 °C has a two-hour slope that flips between -0.05 and +0.05 °C/h, and a sign test moved
+        a saturated compressor's whole raise on and off the register with it. A cut stands, and the absolute safety floor bounds the cap: below
+        MIN_TEMP_LIMIT the house gets everything.
         """
         cap = max(0.0, self._absolute_safety_floor(nibe_state) or 0.0)
-        if not saturated or offset <= cap or trend_rate < 0:
+        if not saturated or offset <= cap:
             return offset, ""
 
-        need = 0.0
+        cooling = (trend_rate - WEAR_GUARD_STEADY_ROOM_RATE) / (
+            WEAR_GUARD_COOLING_RATE - WEAR_GUARD_STEADY_ROOM_RATE
+        )
+        need = min(max(cooling, 0.0), 1.0)
         if getattr(nibe_state, "indoor_temp_valid", True):
             short = self.target_temp + self.tolerance_range - nibe_state.indoor_temp
-            need = max(short / (2 * self.tolerance_range), 0.0)
+            need = max(short / (2 * self.tolerance_range), need)
         held = cap + (offset - cap) * need
         if held >= offset or math.isclose(held, offset):
             return offset, ""

@@ -79,8 +79,9 @@ Still inside `calculate_decision`, in this order:
   cools at 0.3 °C/h or more (only below +3 °C); a cut is × 0.75 while the room cools fast.
 - Compressor wear guard (`_limit_for_compressor_wear`): when the compressor is at its maximum
   frequency, a raise is withheld for a room at the top of its band or above, half of it passes at
-  the target, all of it at the bottom of the band or while the room is cooling. Below 18 °C
-  everything passes.
+  the target, all of it at the bottom of the band. A cooling room earns a share too: none for one
+  sensor tick in the trend's two hours (a steady room), all of it at two. Below 18 °C everything
+  passes.
 - Clamp to -10..+10 (`_clamp_offset`).
 
 The coordinator then applies the offset volatility gate
