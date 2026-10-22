@@ -1082,8 +1082,9 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
 #
 # 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
-# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
-# today can be broken by the guard. (Audit F-015.)
+# less often than this cannot support five-minute heat-pump control anyway. (Audit F-015.) It
+# guards the readings that drive the pump. The room thermometers and the offset register are read
+# without it: they report only when their value changes, so silence there is a steady value.
 NIBE_READING_MAX_AGE_MINUTES: Final = 30
 
 STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
