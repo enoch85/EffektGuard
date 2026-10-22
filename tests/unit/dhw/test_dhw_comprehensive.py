@@ -12,7 +12,7 @@ This replaces multiple separate DHW test files with one comprehensive suite.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.effektguard.const import (
@@ -154,7 +154,7 @@ def scheduler_with_morning_demand():
     scheduler = IntelligentDHWScheduler(
         demand_periods=[demand_period], price_analyzer=mock_analyzer
     )
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 
@@ -843,7 +843,7 @@ class TestHeatingRateLearning:
     def test_persistence_roundtrip(self):
         """Heating rate survives save/restore cycle."""
         scheduler = create_dhw_scheduler()
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Build up learned data
         scheduler.last_legionella_boost = now - timedelta(days=5)

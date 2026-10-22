@@ -705,6 +705,14 @@ RAPID_COOLING_OUTDOOR_THRESHOLD: Final = 0.0  # Cold weather threshold for boost
 # Source: DUPLICATE_CONSTANTS_ANALYSIS.md - 78% duplicate reduction
 THERMAL_CHANGE_MODERATE: Final = 0.3  # °C or °C/h - moderate temperature change threshold
 THERMAL_CHANGE_MODERATE_COOLING: Final = -0.2  # °C/h - moderate cooling rate threshold
+# The compressor wear guard's cooling share. The slowest cooling the predictor's two-hour slope can
+# show is one BT50 tick (0.1 °C) over the window, and a steady room's slope flips between -0.05, 0
+# and +0.05 °C/h on that tick alone: no share there. Two ticks - a room 0.2 °C down in two hours,
+# the case #45 gave the whole raise - get the whole raise. Between, a share in proportion. Ramped
+# to THERMAL_CHANGE_MODERATE_COOLING instead, the closed loop spent 275 more minutes below the band
+# (balanced and comfort) for 8 % less immersion heat; to two ticks, 65 minutes for 4 %.
+WEAR_GUARD_STEADY_ROOM_RATE: Final = -0.05  # °C/h - one tick over two hours
+WEAR_GUARD_COOLING_RATE: Final = 2 * WEAR_GUARD_STEADY_ROOM_RATE  # °C/h - two ticks
 
 # Consolidated multipliers (Oct 19, 2025 - Deduplication)
 # Standard multipliers used across multiple contexts for consistency
@@ -1500,8 +1508,14 @@ NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when se
 #
 # These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
 # catch a value that cannot be a temperature at all, not to second-guess a working sensor.
-INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+#
+# Indoor, the deci-degree mistake goes both ways. A missing scale reads a room ten times too warm,
+# above the maximum; a scale applied twice reads it a tenth, and a room no warmer than the maximum
+# then reads no more than the minimum. Anything between is a room, however cold - and a cold room is
+# the one the 18 C safety floor exists for. NIBE's Modbus registers hold tenths of a degree.
+NIBE_DECI_DEGREE_FACTOR: Final = 10
 INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = INDOOR_SENSOR_PLAUSIBLE_MAX / NIBE_DECI_DEGREE_FACTOR
 
 # Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
 # habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
