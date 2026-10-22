@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from custom_components.effektguard.const import DHW_LEGIONELLA_OVERDUE_DAYS
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.effektguard import _create_coordinator
+from custom_components.effektguard.const import DHW_LEGIONELLA_OVERDUE_DAYS, DOMAIN
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
 NOON = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
@@ -86,3 +89,17 @@ def test_a_restart_remembers_the_run():
     restarted.restore_from_persistence(scheduler.get_dhw_state_for_persistence())
 
     assert _decide(restarted, NOON + timedelta(days=1)) != "DHW_HYGIENE_BOOST"
+
+
+async def test_a_counted_run_is_saved_at_once_with_no_cycle_ever_seen(hass, hass_storage):
+    """The immediate save ran only once a cycle had been seen; a pump whose cycle EffektGuard has
+    never seen is exactly the one the fallback is for."""
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    before = await _create_coordinator(hass, entry)
+    before.dhw_optimizer.last_hygiene_fallback = NOON
+    await before._save_dhw_state_immediate()
+
+    after = (await _create_coordinator(hass, entry)).dhw_optimizer  # restart
+
+    assert after.last_hygiene_fallback == NOON
