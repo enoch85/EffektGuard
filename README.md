@@ -2,11 +2,12 @@
 
 <img src="icons/logo.png" alt="EffektGuard logo" width="160"/>
 
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.7.1-blue)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
-[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Open EffektGuard in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
 [![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
 NIBE heat pump control for Home Assistant. Every five minutes it nudges the pump's heating curve up
@@ -36,11 +37,13 @@ looks wrong.
 
 ## Install
 
-Use the two buttons above: the first opens this repository in HACS (install it, restart Home
-Assistant), the second starts the setup. Without them: HACS, three-dot menu, *Custom repositories*,
-add `https://github.com/enoch85/EffektGuard` as an integration. Manual: copy
-`custom_components/effektguard/` into your config directory and restart. Then *Settings, Devices &
-services, Add integration, EffektGuard*.
+Use the two buttons above: the first opens EffektGuard in the Marketplace (Home Assistant 2026.11
+and newer; download it), the second starts the setup. If EffektGuard is not in the catalog yet, the
+first button offers to add it as a custom repository. On Home Assistant 2026.10 and older use
+[HACS](https://hacs.xyz/): find EffektGuard under *Integrations* (or first add
+`https://github.com/enoch85/EffektGuard` as an integration under *Custom repositories*), download it
+and restart. Manual: copy `custom_components/effektguard/` into your config directory and restart.
+Then *Settings, Devices & services, Add integration, EffektGuard*.
 
 ## Setup
 
