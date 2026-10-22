@@ -4,30 +4,43 @@ NIBE's Modbus registers hold deci-degrees, so a hand-written YAML that omits `sc
 reports BT50's 21.3 C as 213.0 C, BT1's -3.2 as -32.0, BT2's 35.8 as 358.0. The
 plausibility band must cover the sensor the HEAT PUMP sends (BT50), not only the
 user-added room sensors originally checked. An implausible required sensor (outdoor,
-supply) raises UpdateFailed; an implausible BT50 degrades to "no room sensor" (comfort
-layers abstain, 18 C floor unaffected). The placeholder must never seed the multi-sensor
-median - DEFAULT_INDOOR_TEMP would drag a cold house toward the target and mask the
+supply) raises UpdateFailed; an implausible BT50 degrades to "no room sensor" (the comfort
+layers and the 18 C safety floor abstain, degree minutes protect the pump). A cold room is not
+implausible: it is the room the safety floor exists for. The placeholder must never seed the
+multi-sensor median - DEFAULT_INDOOR_TEMP would drag a cold house toward the target and mask the
 deviation, which _calculate_multi_sensor_temperature's own docstring forbids.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
 from custom_components.effektguard.adapters.nibe_adapter import NibeAdapter
 from custom_components.effektguard.const import (
     DEFAULT_INDOOR_TEMP,
     INDOOR_SENSOR_PLAUSIBLE_MAX,
     INDOOR_SENSOR_PLAUSIBLE_MIN,
+    LAYER_WEIGHT_SAFETY,
     NIBE_OUTDOOR_PLAUSIBLE_MAX,
     NIBE_OUTDOOR_PLAUSIBLE_MIN,
     NIBE_WATER_PLAUSIBLE_MAX,
     NIBE_WATER_PLAUSIBLE_MIN,
+    SAFETY_EMERGENCY_OFFSET,
 )
+from custom_components.effektguard.models.nibe import NibeF750Profile
+from custom_components.effektguard.optimization.decision_engine import (
+    SAFETY_LAYER_NAME,
+    DecisionEngine,
+)
+from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 
 def _adapter(states: dict[str, str]) -> NibeAdapter:
@@ -90,14 +103,66 @@ class TestTheRoomSensorTheHeatPumpSends:
         assert state.indoor_temp_valid is True
         assert state.indoor_temp == pytest.approx(21.3)
 
-    @pytest.mark.parametrize("reading", [15.0, 21.3, 30.0])
+    @pytest.mark.parametrize("reading", [8.0, 14.9, 21.3, 30.0])
     @pytest.mark.asyncio
-    async def test_the_whole_habitable_band_is_accepted(self, reading):
+    async def test_every_room_temperature_is_accepted_however_cold(self, reading):
         """The band's job is to catch a value that cannot be a temperature, not to second-guess."""
         state = await _adapter({**HEALTHY, "sensor.bt50": str(reading)}).get_current_state()
 
         assert state.indoor_temp_valid is True
         assert INDOOR_SENSOR_PLAUSIBLE_MIN <= state.indoor_temp <= INDOOR_SENSOR_PLAUSIBLE_MAX
+
+    @pytest.mark.asyncio
+    async def test_a_bt50_scaled_twice_is_not_a_room_temperature(self):
+        """21.3 C with the deci-degree scale applied twice reads 2.13 - not a room, however cold."""
+        state = await _adapter({**HEALTHY, "sensor.bt50": "2.13"}).get_current_state()
+
+        assert state.indoor_temp_valid is False
+
+
+class TestAColdRoomGetsTheSafetyFloor:
+    """The 18 C floor fires through the adapter, not only on a reading handed to the engine."""
+
+    @pytest.mark.parametrize("reading", ["8.0", "14.9", "17.9"])
+    @pytest.mark.asyncio
+    async def test_a_cold_room_at_a_price_peak_is_heated_not_cut(self, reading):
+        now = datetime(2026, 1, 15, 18, 5, tzinfo=timezone.utc)
+        midnight = now.replace(hour=0, minute=0)
+        peak = range(72, 76)  # 18:00-19:00, the evening peak this test sits in
+        prices = PriceData(
+            today=[
+                QuarterPeriod(
+                    start_time=midnight + timedelta(minutes=15 * q),
+                    price=1000.0 if q in peak else 40.0 + q,
+                )
+                for q in range(96)
+            ],
+            tomorrow=[],
+            has_tomorrow=False,
+        )
+        engine = DecisionEngine(
+            price_analyzer=PriceAnalyzer(),
+            effect_manager=EffectManager(MagicMock()),
+            thermal_model=ThermalModel(0.7, 1.0),
+            config={"target_indoor_temp": 22.0, "tolerance": 0.5, "latitude": 59.33},
+            heat_pump_model=NibeF750Profile(),
+        )
+
+        with (
+            patch.object(dt_util, "now", lambda *args: now),
+            patch.object(dt_util, "utcnow", lambda: now),
+        ):
+            state = await _adapter({**HEALTHY, "sensor.bt50": reading}).get_current_state()
+            decision = engine.calculate_decision(state, prices, None, 0.0, 0.0)
+
+        safety = next(layer for layer in decision.layers if layer.name == SAFETY_LAYER_NAME)
+        assert (
+            safety.weight == LAYER_WEIGHT_SAFETY and decision.offset == SAFETY_EMERGENCY_OFFSET
+        ), (
+            f"A room at {reading} C during a price peak got {decision.offset:+.1f} C "
+            f"(safety layer: {safety.reason!r}). Below 18 C the safety floor must raise the curve "
+            f"to {SAFETY_EMERGENCY_OFFSET:+.0f} C whatever the price says."
+        )
 
 
 class TestTheRequiredSensors:

@@ -33,7 +33,9 @@ looks wrong.
   price optimization.
 - Optional: a weather entity with an hourly forecast (Met.no works) for pre-heating before cold
   days, and a whole-house power meter for peak tracking (without one the pump's own phase currents
-  are used when it exposes them).
+  are used when it exposes them). The meter's value counts until Home Assistant shows it
+  unavailable, so a meter that can freeze should declare that (MQTT `expire_after`, a template's
+  `availability`).
 
 ## Install
 

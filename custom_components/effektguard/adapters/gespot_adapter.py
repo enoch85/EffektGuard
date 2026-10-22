@@ -18,6 +18,7 @@ This adapter:
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, NotRequired, TypedDict
@@ -32,7 +33,7 @@ from ..const import (
     NATIVE_DAY_QUARTER_COUNTS,
     MINUTES_PER_QUARTER,
 )
-from ..utils.time_utils import QUARTERS_PER_HOUR
+from ..utils.time_utils import QUARTERS_PER_HOUR, seconds_between
 
 if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
@@ -97,6 +98,25 @@ class QuarterPeriod:
         return DAYTIME_START_HOUR <= self.start_time.hour < DAYTIME_END_HOUR
 
 
+def index_containing(periods: list[QuarterPeriod], when: datetime) -> int | None:
+    """The index of the interval in ``periods`` containing ``when``, or None.
+
+    Containment is decided on the absolute timeline, not by comparing the local datetimes: two
+    aware datetimes with the same tzinfo compare by wall clock (PEP 495 ignores ``fold``), so in
+    the second 02:xx hour of the autumn clock change 02:05 CET matched the interval that began at
+    02:00 CEST, an hour earlier, and the first hour's prices were served for the second. A naive
+    timestamp against an aware one resolves to None rather than raising - price lookups must
+    never crash pump control.
+    """
+    try:
+        for index, period in enumerate(periods):
+            if 0 <= seconds_between(period.start_time, when) < QUARTER_DURATION.total_seconds():
+                return index
+    except TypeError:
+        return None
+    return None
+
+
 @dataclass
 class PriceData:
     """Price data for optimization.
@@ -108,30 +128,13 @@ class PriceData:
     tomorrow: list[QuarterPeriod]  # Native intervals for tomorrow (if available)
     has_tomorrow: bool
 
-    @staticmethod
-    def _index_containing(periods: list[QuarterPeriod], when: datetime) -> int | None:
-        """Return the index of the interval in ``periods`` containing ``when``.
-
-        Timestamp containment, rather than wall-clock quarter numbers,
-        preserves both occurrences of the repeated hour when daylight saving
-        time ends. Mixed naive/aware timestamps resolve to None rather than
-        raising - price lookups must never crash pump control.
-        """
-        try:
-            for index, period in enumerate(periods):
-                if period.start_time <= when < period.start_time + QUARTER_DURATION:
-                    return index
-        except TypeError:
-            return None
-        return None
-
     def get_period_index(self, when: datetime) -> int | None:
         """Return the index into ``today`` of the interval containing ``when``."""
-        return self._index_containing(self.today, when)
+        return index_containing(self.today, when)
 
     def get_tomorrow_period_index(self, when: datetime) -> int | None:
         """Return the index into ``tomorrow`` of the interval containing ``when``."""
-        return self._index_containing(self.tomorrow, when)
+        return index_containing(self.tomorrow, when)
 
     def get_period(self, when: datetime) -> QuarterPeriod | None:
         """Return today's native price interval containing ``when``."""
@@ -280,6 +283,12 @@ class GESpotAdapter:
                 # every genuine quarter of the day and wins the most aggressive pre-heating the
                 # price layer can command. KeyError below drops the interval instead.
                 price = float(item["value"])
+                # float() accepts "nan" and "inf", and they are no more a price than a missing
+                # value: a NaN in the look-ahead made min() return NaN, which nothing equals, and the
+                # price layer's search raised StopIteration - an exception the decision does not
+                # catch - so every cycle failed until the NaN left the window.
+                if not math.isfinite(price):
+                    raise ValueError(f"not a finite price: {price}")
 
                 # Create period with just datetime and price (all else derived)
                 periods.append(QuarterPeriod(start_time=start_time, price=price))

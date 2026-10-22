@@ -140,7 +140,6 @@ def test_oct28_failure_scenario_at_03_45():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.4,  # Last heating at 19:24 Oct 27
     )
 
     # With fixes applied:
@@ -196,7 +195,6 @@ def test_oct28_at_04_00_exactly():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.7,
     )
 
     # MUST heat when exactly in the optimal window
@@ -252,7 +250,6 @@ def test_oct28_at_03_50_also_within_window():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.5,
     )
 
     # Should heat with 15-min buffer (0.25 hours = 15 minutes)
@@ -289,7 +286,6 @@ def test_rule1_blocks_at_warning_threshold():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.0,
     )
 
     assert (
@@ -308,7 +304,6 @@ def test_rule1_blocks_at_warning_threshold():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.0,
     )
 
     assert decision2.should_heat is False
@@ -325,7 +320,6 @@ def test_rule1_blocks_at_warning_threshold():
         price_classification="cheap",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=8.0,
     )
 
     # Should heat (not blocked by RULE 1, DHW below minimum, cheap price)
@@ -367,7 +361,6 @@ def test_comparison_operator_fix():
         price_classification="normal",  # Not cheap - should wait for cheap
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=4.0,
     )
 
     # Should wait for cheap prices (DHW adequate at 45°C, price is normal)
@@ -417,7 +410,6 @@ def test_october_28_would_not_need_manual_boost():
             price_classification="cheap",
             current_time=current_time,
             price_periods=price_periods,
-            hours_since_last_dhw=8.4,
         )
 
         if decision.should_heat:

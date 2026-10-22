@@ -40,7 +40,6 @@ def _decide(dhw: float, dm: float, indoor: float):
         price_classification="normal",
         current_time=NOW,
         price_periods=[],
-        hours_since_last_dhw=6.0,
     )
 
 

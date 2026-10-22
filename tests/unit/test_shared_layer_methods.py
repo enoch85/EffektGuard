@@ -419,7 +419,6 @@ class TestDHWOptimizerCalculateRecommendation:
             price_classification="normal",
             current_time=datetime.now(),
             price_periods=None,
-            hours_since_last_dhw=12.0,
         )
 
         assert isinstance(result, DHWRecommendation)
@@ -441,7 +440,6 @@ class TestDHWOptimizerCalculateRecommendation:
             price_classification="cheap",
             current_time=datetime.now(),
             price_periods=None,
-            hours_since_last_dhw=8.0,
             thermal_trend_rate=-0.5,  # Cooling rapidly
         )
 
@@ -464,7 +462,6 @@ class TestDHWOptimizerCalculateRecommendation:
             price_classification="normal",
             current_time=datetime.now(),
             price_periods=None,
-            hours_since_last_dhw=12.0,
         )
 
         assert "thermal_debt_status" in result.details
@@ -484,7 +481,6 @@ class TestDHWOptimizerCalculateRecommendation:
             price_classification="normal",
             current_time=datetime.now(),
             price_periods=None,
-            hours_since_last_dhw=12.0,
             climate_zone_name="Nordic",
         )
 
@@ -504,7 +500,6 @@ class TestDHWOptimizerCalculateRecommendation:
             price_classification="CHEAP",
             current_time=datetime.now(),
             price_periods=None,
-            hours_since_last_dhw=12.0,
         )
 
         assert "DHW Planning Summary" in result.summary

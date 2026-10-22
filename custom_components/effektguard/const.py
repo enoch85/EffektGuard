@@ -1082,8 +1082,9 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
 #
 # 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
-# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
-# today can be broken by the guard. (Audit F-015.)
+# less often than this cannot support five-minute heat-pump control anyway. (Audit F-015.) It
+# guards the readings that drive the pump. The room thermometers and the offset register are read
+# without it: they report only when their value changes, so silence there is a steady value.
 NIBE_READING_MAX_AGE_MINUTES: Final = 30
 
 STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
@@ -1259,7 +1260,6 @@ DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_SCHEDULED_WINDOW_HOURS: Final = 6  # Hours before target time when scheduling becomes active
-DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
 # DHW amount-based scheduling (minutes of hot water available)
 # Schedule time = when water should be AVAILABLE (ready), not when heating starts
@@ -1509,8 +1509,14 @@ NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when se
 #
 # These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
 # catch a value that cannot be a temperature at all, not to second-guess a working sensor.
-INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+#
+# Indoor, the deci-degree mistake goes both ways. A missing scale reads a room ten times too warm,
+# above the maximum; a scale applied twice reads it a tenth, and a room no warmer than the maximum
+# then reads no more than the minimum. Anything between is a room, however cold - and a cold room is
+# the one the 18 C safety floor exists for. NIBE's Modbus registers hold tenths of a degree.
+NIBE_DECI_DEGREE_FACTOR: Final = 10
 INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = INDOOR_SENSOR_PLAUSIBLE_MAX / NIBE_DECI_DEGREE_FACTOR
 
 # Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
 # habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
@@ -1690,6 +1696,7 @@ NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
     {"hot water", "hot_water", "20", "20.0"}
 )
 NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
+NIBE_PRIO_OFF_STATES: Final[frozenset[str]] = frozenset({"off", "10", "10.0"})
 
 # Compressor frequency above this means the compressor is running.
 # Used to derive is_heating when no parseable status entity exists
