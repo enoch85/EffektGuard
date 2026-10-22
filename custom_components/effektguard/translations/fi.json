@@ -83,7 +83,6 @@
       "gespot_entity_not_found": "Spot-hinta-yksikköä ei löytynyt"
     },
     "abort": {
-      "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ja määritä ensin MyUplink (pilvi) tai nibe_heatpump (paikallinen Modbus/NibeGW).",
       "reconfigure_successful": "Uudelleenmääritys onnistui"
     }
   },
@@ -250,13 +249,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Pakota lämpökäyrän siirtymä",
+      "description": "Ohita lämpökäyrän siirtymä käsin tilapäisesti",
+      "fields": {
+        "offset": {
+          "name": "Siirtymä",
+          "description": "Käytettävä lämpökäyrän siirtymä (välillä -10 ja +10°C)"
+        },
+        "duration": {
+          "name": "Kesto",
+          "description": "Kuinka kauan ohitus on voimassa (minuuttia, 0 = seuraavaan optimointikierrokseen asti)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nollaa huipputehojen seuranta",
+      "description": "Nollaa kuukauden huipputehojen seuranta (käytetään uuden laskutuskauden alkaessa)"
+    },
     "boost_heating": {
       "name": "Tehosta lämmitystä",
-      "description": "Lisää väliaikaisesti lämmitystä nopeaa mukavuutta varten"
+      "description": "Maksimoi lämmitys tilapäisesti kustannuksista riippumatta (mukavuuden hätätila)",
+      "fields": {
+        "duration": {
+          "name": "Kesto",
+          "description": "Tehostuksen kesto (minuuttia)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Tehosta lämmintä vettä",
-      "description": "Käynnistä välitön lämpimän veden kierros"
+      "description": "Käynnistä välitön lämpimän veden tehostus NIBEn tilapäisellä luksuksella. Pumppu lämmittää omaan luksuslämpötilaansa; EffektGuard pitää tehostuksen käynnissä pyydetyn ajan ja kytkee sen sitten pois. Hintaoptimointi ei keskeytä sitä; vain turvapysäytys keskeyttää - asteminuutit lisälämmön rajalla tai talo alle turvarajansa, mikä myös estää tehostuksen.",
+      "fields": {
+        "duration": {
+          "name": "Kesto",
+          "description": "Kuinka kauan tehostus saa kestää ennen kuin EffektGuard kytkee sen pois (minuuttia)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Laske optimaalinen aikataulu",
+      "description": "Esikatsele optimointiaikataulua seuraaville 24 tunnille nykyisten olosuhteiden perusteella"
     }
   },
   "issues": {

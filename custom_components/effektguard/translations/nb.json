@@ -83,7 +83,6 @@
       "gespot_entity_not_found": "Spotpris-enhet ikke funnet"
     },
     "abort": {
-      "nibe_not_found": "Ingen NIBE-integrasjon funnet. Installer og konfigurer MyUplink (sky) eller nibe_heatpump (lokal Modbus/NibeGW) først.",
       "reconfigure_successful": "Omkonfigurering fullført"
     }
   },
@@ -250,13 +249,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Tving forskyvning av varmekurven",
+      "description": "Overstyr varmekurvens forskyvning manuelt i en begrenset periode",
+      "fields": {
+        "offset": {
+          "name": "Forskyvning",
+          "description": "Varmekurvens forskyvning som skal brukes (-10 til +10°C)"
+        },
+        "duration": {
+          "name": "Varighet",
+          "description": "Hvor lenge overstyringen skal gjelde (minutter, 0 = til neste optimaliseringssyklus)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nullstill effekttopper",
+      "description": "Nullstill månedens effekttopper (brukes når en ny faktureringsperiode begynner)"
+    },
     "boost_heating": {
       "name": "Boost oppvarming",
-      "description": "Midlertidig øk oppvarming for rask komfort"
+      "description": "Maksimer oppvarmingen midlertidig uansett kostnad (nødmodus for komfort)",
+      "fields": {
+        "duration": {
+          "name": "Varighet",
+          "description": "Boostens varighet (minutter)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Boost varmtvann",
-      "description": "Start umiddelbar varmtvannssyklus"
+      "description": "Start en umiddelbar varmtvannsboost via NIBEs midlertidige luksus. Pumpen varmer til sin egen luksustemperatur; EffektGuard holder boosten i gang i den forespurte tiden og slår den deretter av. Prisoptimaliseringen avbryter den ikke; bare sikkerhetsstoppet gjør det - gradminutter ved grensen for tilleggsvarme eller et hus under sitt sikkerhetsgulv, som også gjør at boosten avvises.",
+      "fields": {
+        "duration": {
+          "name": "Varighet",
+          "description": "Hvor lenge boosten kan pågå før EffektGuard slår den av (minutter)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Beregn optimal plan",
+      "description": "Forhåndsvis optimaliseringsplanen for de neste 24 timene ut fra gjeldende forhold"
     }
   },
   "issues": {

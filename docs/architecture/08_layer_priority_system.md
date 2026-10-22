@@ -1,281 +1,101 @@
-# Layer Priority and Weight System
+# Layer aggregation
 
-**Description**: How the 9-layer decision engine aggregates votes with priorities.
+How `DecisionEngine.calculate_decision` (`optimization/decision_engine.py`) turns nine layer votes
+into the one offset the coordinator writes. Each layer returns a `LayerDecision` with a name, an
+offset in °C, a weight and a reason; the name is the attribute the reasoning sensor publishes
+([SENSOR_STATE_LIMITS.md](../SENSOR_STATE_LIMITS.md)). A manual override skips all of this
+([07](07_manual_override_services.md)).
 
-```mermaid
-flowchart TD
-    subgraph "Layer Processing Order"
-        A[1. Safety Layer<br/>Weight: 1.0 if violated<br/>Hard limit: 18°C min]
-        B[2. Emergency Layer<br/>T1 0.65 / T2 0.81 / T3 0.91<br/>EMERGENCY by tier; anti-windup 0.7]
-        C[3. Proactive Debt Prevention<br/>Weight: 0.3-0.6<br/>Trend-based DM prediction]
-        D[4. Effect Layer<br/>Weight: 0.65-1.0<br/>15-min peak protection]
-        E[5. Prediction/Learning Layer<br/>Weight: varies<br/>Learned pre-heating]
-        F[6. Weather Compensation<br/>Weight: varies<br/>Mathematical flow temp]
-        G[7. Weather Prediction<br/>Weight: 0.85<br/>Pre-heating before cold]
-        H[8. Price Layer<br/>Weight: 0.8, 1.0 at PEAK<br/>Forward-looking optimization]
-        I[9. Comfort Layer<br/>Weight: 0.2-1.0<br/>Temperature error correction]
-    end
+## The nine layers
 
-    subgraph "Aggregation Logic"
-        J{Any Critical Layers?<br/>Weight >= 1.0}
-        K[Take Strongest Critical Vote<br/>Safety/Effect critical override]
-        L[Weighted Average<br/>All layers with weight > 0]
-        M[Formula:<br/>Sum offset × weight / Sum weight]
-    end
+| Name in the sensor | Module | Weight |
+|---|---|---|
+| `Safety` | `decision_engine.py` `_safety_layer` | 1.0 with +10 °C when indoor < 18 °C (`MIN_TEMP_LIMIT`); 0 otherwise; abstains without a room sensor |
+| `Thermal Debt`, `T1`, `T2`, `T3`, `Anti-windup`, `Anti-windup Cooldown` | `thermal_layer.py` `EmergencyLayer` | by tier, table below |
+| `Proactive` | `thermal_layer.py` `ProactiveLayer` | Z1-Z5: 0.3, 0.4, 0.5, 0.55, 0.6 |
+| `Peak` | `effect_layer.py` `EffectManager` | 1.0 at the monthly peak (offset -3); 0.85 predictive (-1.5); 0.75 / 0.65 warning (-1.0 / -0.5); else 0 |
+| `Learned Pre-heat` | `prediction_layer.py` | 0.65 when it votes (`LAYER_WEIGHT_PREDICTION`), see [06](06_learning_integration.md) |
+| `Math WC` | `weather_layer.py` `WeatherCompensationLayer` | 0.50-0.95 by outdoor temperature × 0.49, reduced under thermal debt ([10](10_adaptive_climate_zones.md)) |
+| `Weather Pre-heat` | `weather_layer.py` `WeatherPredictionLayer` | 0.85 × thermal mass, capped at 0.99 |
+| `Spot Price` | `price_layer.py` `PriceAnalyzer` | 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 in a PEAK quarter or PEAK cluster; × 0.3 while prices are volatile |
+| `Comfort` | `comfort_layer.py` | 0.2 × the mode multiplier inside the band; ramps to 1.0 at 1.5 °C above target; 0.5 below the band |
 
-    subgraph "Example Aggregation"
-        N[Safety: 0.0°C × 0.0<br/>Emergency: 0.0°C × 0.0<br/>Proactive: 0.0°C × 0.0<br/>Effect: 0.0°C × 0.0<br/>Prediction: +1.0°C × 0.5<br/>Weather: +0.5°C × 0.85<br/>Price: -1.5°C × 0.8<br/>Comfort: -0.2°C × 0.2]
-        O[Total Weight: 2.35<br/>Weighted Sum: -0.275<br/>Final: -0.12°C]
-    end
+`Spot Price` and `Peak` are flagged `is_cost_layer`; the cascade treats them differently.
 
-    subgraph "Critical Override Example"
-        P[Safety: +5.0°C × 1.0<br/>All others ignored<br/>Final: +5.0°C]
-    end
+### Thermal-debt tiers
 
-    %% Flow
-    A --> J
-    B --> J
-    C --> J
-    D --> J
-    E --> J
-    F --> J
-    G --> J
-    H --> J
-    I --> J
-    
-    J -->|Yes| K
-    J -->|No| L
-    L --> M
-    
-    M --> N
-    N --> O
-    
-    K --> P
-
-    %% Styling
-    style A fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style B fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style C fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style D fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style E fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style F fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style G fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style H fill:#666,stroke:#fff,stroke-width:1px,color:#fff
-    style I fill:#999,stroke:#fff,stroke-width:1px,color:#fff
-    
-    style J fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style K fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style L fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style P fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-```
-
-## Decision Engine Architecture
-
-### Nine-Layer Hierarchy
-
-The decision engine processes layers in **strict priority order**:
-
-#### Critical Layers (Weight >= 1.0)
-These layers can **completely override** all other considerations:
-
-1. **Safety Layer (1.0)**: Absolute temperature limits (18°C minimum indoor)
-2. **Effect Layer (1.0)**: Peak protection when critical (already at peak)
-3. **Price Layer (1.0)**: In a PEAK quarter
-
-The EMERGENCY tier (DM past the aux limit) is applied **by tier**, not by weight: the other layers
-decide and their verdict is floored at 0 (see the aggregation steps below).
-
-#### High-Priority Advisory Layers (Weight 0.8-0.85)
-These layers have **strong influence** on decisions:
-
-3. **Emergency Layer, T1-T3 (0.65 / 0.81 / 0.91)**: Thermal-debt recovery (context-aware DM thresholds);
-   anti-windup and its cooldown vote at 0.7
-4. **Price Layer (0.8)**: Forward-looking spot price optimization with adaptive horizon
-5. **Weather Prediction (0.85)**: Weather-based pre-heating before cold periods
-
-#### Medium-Priority Layers (Weight 0.3-0.85)
-These layers **contribute based on conditions**:
-
-6. **Effect Layer (0.65-0.85)**: Peak protection when predictive/warning states
-7. **Proactive Debt Prevention (0.3-0.6)**: Trend-based future DM prediction
-8. **Prediction/Learning**: Learned pre-heating using thermal model
-9. **Weather Compensation**: Mathematical flow temperature optimization
-
-#### Reactive Layer (Weight 0.2-1.0)
-Provides **responsive temperature correction**:
-
-10. **Comfort Layer (0.2-1.0)**: Dynamic weight based on temperature error severity
-
-### Aggregation Algorithm
-
-> ⚠️ **This section previously reproduced a version of `_aggregate_layers` that no longer
-> exists, and whose behaviour was a bug.** It showed a single "critical layer override" whose
-> tie-break was `if abs(max_offset) > abs(min_offset)`. With the emergency layer asking for
-> **+10.0** at DM −1520 and a cost layer at critical weight asking for **−10.0**, `abs(+10) >
-> abs(−10)` is **False** — so it returned **−10.0: maximum cooling, in a thermal-debt
-> emergency.** The stated philosophy ("take the stronger absolute vote… when in doubt, protect
-> the heat pump") *was* the defect. Do not restore it. What follows is the algorithm that runs.
-
-`_aggregate_layers` is an ordered cascade, not a vote. The invariant it exists to enforce:
-
-> **A cost layer (spot price, effect tariff) must NEVER reduce heating while the thermal-debt
-> layer is actively recovering.**
-
-```python
-# 1. Safety layer - indoor below MIN_TEMP_LIMIT. Absolute; nothing else is consulted.
-if safety_layer and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
-    return clamp(safety_layer.offset)
-
-# 2. EMERGENCY tier - DM past DM_THRESHOLD_AUX_LIMIT. No cuts, and no raise of its own (F-124):
-#    a cut deepens a shortfall the immersion heater pays for, a raise cannot add compressor heat.
-if emergency_layer and emergency_layer.tier == DM_TIER_EMERGENCY:
-    return max(aggregate(layers without emergency_layer), 0.0)
-
-# 3. Recovery tiers T1/T2/T3 - debt past the climate-aware warning threshold.
-#    A critical cost layer may MODERATE the response, never reverse it.
-if emergency_layer and emergency_layer.tier in DM_RECOVERY_TIERS:
-    floor = DM_CRITICAL_PEAK_AWARE_OFFSETS[emergency_layer.tier]   # by TIER, not by weight
-    if has_critical_cost_layer(layers):
-        return clamp(floor)                       # peak-aware compromise
-    return clamp(max(weighted_average(layers), floor))   # never below the tier's floor
-
-# 4. Any remaining critical layers, with no recovery in progress.
-critical = [l for l in layers if l.weight >= LAYER_WEIGHT_SAFETY]
-if critical:
-    hi, lo = max(l.offset for l in critical), min(l.offset for l in critical)
-    chosen = hi if abs(hi) >= abs(lo) else lo   # `>=`, so an exact tie HEATS
-    # A cost layer may coast the house within its band, not out of it: a cost cut is floored
-    # toward the comfort layer's demand, ramped by how far the house is out (_starvation_fraction).
-    if chosen < 0 and starvation > 0 and all critical layers are cost layers:
-        chosen = min(comfort.offset, chosen + (comfort.offset - chosen) * starvation)
-    return clamp(chosen)
-
-# 5. Everything else: weighted average.
-return clamp(weighted_average(layers))
-```
-
-Two details that look like nits and are not:
-
-- **Tiers are read from `EmergencyLayerDecision.tier`, never inferred from a weight or an offset
-  magnitude.** Damping mutates the offset and a weight is a tuning knob, so inferring from either
-  lets a damped or retuned tier fall through into the cost-layer override path.
-- **The tie-break at step 4 is `>=`, not `>`.** On an exact tie the heating vote wins; `>` once
-  returned the −10 price cut against the old +10 aux-limit vote.
-
-### Layer Weight Rationale
-
-#### Critical Layers (1.0)
-- **Safety**: Human comfort and system protection (18°C hard minimum)
-- **Effect (Critical)**: Financial protection when already at peak
-- **Price (PEAK)**: A PEAK quarter
-
-**Design Philosophy**: These concerns are **non-negotiable** and override all cost optimization.
-
-#### High-Priority Layers (0.8-0.85)
-- **Weather Prediction (0.85)**: Pre-heating is time-sensitive, must act before cold arrives
-- **Emergency T1-T3 (0.65 / 0.81 / 0.91)**: Thermal-debt recovery, each tier with a minimum offset
-- **Price (0.8)**: Strong cost optimization with forward-looking and thermal storage awareness
-
-**Balances**: Critical operational needs with intelligent cost management
-
-#### Effect Layer Dynamic Weighting
-- **Critical (1.0)**: Already at peak - immediate action required
-- **Predictive (0.85)**: Will approach peak soon (<1kW margin) - act now
-- **Warning Rising (0.75)**: Close to peak + demand rising - caution
-- **Warning Stable (0.65)**: Close to peak + demand stable - monitor
-
-#### Comfort Layer Dynamic Weighting
-- **Within the band**: gentle steering, `-COMFORT_CORRECTION_MULT` × deviation at
-  `LAYER_WEIGHT_COMFORT_MIN` × the mode's multiplier
-- **Above the band**: one straight ramp from that vote at the band edge to
-  `OVERSHOOT_PROTECTION_OFFSET_MAX` at `LAYER_WEIGHT_COMFORT_CRITICAL` at
-  `OVERSHOOT_PROTECTION_FULL` above target, where the full coast wins outright. Prices do not move it
-- **Below the band**: a firm boost at `LAYER_WEIGHT_COMFORT_MAX`
-
-**Purpose**: Graduated response matching severity while allowing optimization when comfortable
-
-### Example Scenarios
-
-#### Normal Operation (No Critical Layers)
-```
-Safety:     0.0°C × 0.0 = 0.00    (within limits)
-Emergency:  0.0°C × 0.0 = 0.00    (DM normal)
-Proactive:  0.0°C × 0.0 = 0.00    (trend normal)
-Effect:     0.0°C × 0.0 = 0.00    (peak safe)
-Prediction: +1.0°C × 0.5 = 0.50   (learned pre-heat)
-Weather:    +0.5°C × 0.85 = 0.43  (mild pre-heat)  
-Price:      -1.5°C × 0.8 = -1.20  (expensive period)
-Comfort:    -0.2°C × 0.2 = -0.04  (slightly warm)
-
-Total Weight: 2.35
-Weighted Sum: 0.50 + 0.43 - 1.20 - 0.04 = -0.31
-Final Decision: -0.31 / 2.35 = -0.13°C
-```
-
-**Result**: Slight reduction, **price optimization wins** over pre-heating signals during expensive period.
-
-#### Critical Safety Override
-```
-Safety:     +5.0°C × 1.0 = 5.00   (too cold: 17°C indoor)
-Emergency:  +0.5°C × 0.5 = 0.25   (minor thermal debt)  
-Effect:     0.0°C × 0.0 = 0.00    (peak safe)
-[All other layers ignored due to critical override]
-
-Final Decision: +5.0°C
-```
-
-**Result**: **Maximum heating** regardless of cost or other factors.
-
-#### Critical Layer Override
-```
-Safety:     +5.0°C  weight 1.0   (too cold: 17°C indoor)
-Emergency:  +2.0°C  weight 0.8   (moderate thermal debt)
-Effect:     -1.0°C  weight 0.65  (warning state)
-
-Step 1 of the cascade matches: the safety layer is at LAYER_WEIGHT_SAFETY.
-It RETURNS. No weighted average is computed and no other layer is consulted.
-
-Final Decision: +5.0°C
-```
-
-**Result**: **Safety override** - maximum heating regardless of cost or peak risk.
-
-### Conflict Resolution Strategy
-
-#### Critical Layer Conflicts
-The cascade decides by **priority**, not by magnitude. Safety, then the EMERGENCY tier, then the
-recovery tiers, then any other critical layer, then the weighted average — the first one that
-matches returns.
-
-Only step 4 compares two critical layers directly, and it prefers the **heating** vote on an
-exact tie (`abs(hi) >= abs(lo)`). "Take the stronger absolute vote" is **not** the rule, and was
-never a safe one: the strongest absolute vote in a thermal-debt emergency can be a cost layer
-demanding −10.0.
-
-⚠️ **Both cost layers promote themselves to critical weight.** The price layer (in PEAK quarters)
-and the effect layer (at the monthly peak) reach `LAYER_WEIGHT_SAFETY`. That is why steps 2 and 3
-exist at all: without them, a critical cost layer would sit in step 4 alongside the emergency
-layer and could win. An earlier version of this document asserted that only Safety and Effect ever
-reach 1.0 — it does not hold, and reasoning from it produced real defects.
-
-#### Advisory Layer Balance
-Non-critical layers achieve **natural balance** through weighted averaging:
-- Competing influences moderate each other
-- User tolerance settings scale optimization aggressiveness  
-- No single layer dominates unless situation is truly critical
-
-### Dynamic Weight Adjustment
-
-#### Emergency Layer Tiers
-`EmergencyLayer.evaluate_layer` (thermal_layer.py) returns a tier, an offset and a weight:
+`EmergencyLayer.evaluate_layer` returns a tier with its offset and weight. The thresholds are the
+climate-aware ones from [10](10_adaptive_climate_zones.md).
 
 | Tier | When | Offset | Weight |
 |---|---|---|---|
-| `EMERGENCY` | DM past the aux limit (−1500) | none of its own: the others decide, floored at 0 | 1.0, applied by tier |
-| `T3` / `T2` / `T1` | DM past the climate-aware warning + 400 / + 200 / + 0 | 8.5 / 7.0 / 4.0, damped as the room recovers | 0.91 / 0.81 / 0.65 |
-| `ANTI_WINDUP`, `COOLDOWN` | DM falling after our own raise | holds the offset, or cuts it in proportion to the DM fall rate when it is steep; no raise during the cooldown | 0.7 |
-| OK | otherwise | 0 | 0 |
+| `EMERGENCY` | DM at or past -1500 (`DM_THRESHOLD_AUX_LIMIT`) and the room not more than 0.4 × tolerance above target | none of its own: the other layers decide, floored at 0 | 1.0 |
+| `T3` / `T2` / `T1` | DM past the warning threshold by 400 / 200 / 0 (T3 capped at -1450) | 8.5 / 7.0 / 4.0, damped as the room recovers to no less than 2.0 / 1.5 / 1.0 | 0.91 / 0.81 / 0.65 |
+| `ANTI_WINDUP`, `COOLDOWN` | DM falling 50 DM/h or faster within 90 min of our own raise | holds the offset; cuts it by abs(rate)/100 °C when the fall is past 100 DM/h; no raise for 30 min | 0.7 |
+| `OK` | otherwise, including a room more than 0.4 × tolerance above target | 0 | 0 |
 
-There is no WARNING or CAUTION level (`docs/architecture/02_emergency_thermal_debt.md`).
+Tier weights are multiplied by 0.3 while prices are volatile. There is no WARNING or CAUTION tier.
 
-This **dynamic weighting system** ensures the decision engine responds appropriately to the severity of each situation while maintaining balanced optimization during normal operation.
+## The cascade
+
+`_aggregate_layers` is an ordered cascade, not a vote. Its invariant: a cost layer never reduces
+heating while thermal-debt recovery is running.
+
+```mermaid
+flowchart TD
+    A["Nine layer votes"] --> B["Safety at weight 1.0?"]
+    B -->|yes| C["Safety offset: max heat"]
+    B -->|no| D["Thermal-debt tier?"]
+    D -->|EMERGENCY| E["Aggregate the other eight<br/>floor the result at 0"]
+    D -->|T1 T2 T3| F["Cost layer at weight 1.0?"]
+    F -->|yes| G["The tier's peak-aware offset<br/>0.5, 0.75 or 1.0"]
+    F -->|no| H["Weighted average<br/>never below the peak-aware offset"]
+    D -->|none| I["Any layer at weight 1.0?"]
+    I -->|yes| J["Larger absolute vote wins<br/>a tie heats<br/>a cost cut is floored by Comfort"]
+    I -->|no| K["Weighted average"]
+```
+
+1. **Safety** at weight 1.0 returns its offset. Nothing else is consulted.
+2. **EMERGENCY tier**: the other eight layers are aggregated by these same rules and the result is
+   floored at 0. No cuts, and no raise of its own: the compressor is flat out, so a raise only buys
+   immersion heat.
+3. **T1 / T2 / T3**: with a cost layer at weight 1.0 the result is the tier's peak-aware offset
+   (`DM_CRITICAL_PEAK_AWARE_OFFSETS`: 0.5 / 0.75 / 1.0). Otherwise the weighted average of all
+   layers, never below that offset. The tier is read from the decision, never inferred from a
+   weight or an offset: damping changes the offset, and a weight is a tuning knob.
+4. **Other critical layers** (`Peak` at the monthly peak, `Spot Price` in a PEAK quarter, `Comfort`
+   at a full overshoot): the vote with the larger absolute offset wins; on an exact tie the heating
+   vote wins (`>=`). When every critical layer is a cost layer and the room is below its comfort
+   band, the cut is pulled toward the `Comfort` layer's own offset in proportion to how far out the
+   room is (`_starvation_fraction`: 0 at target - 0.4 × tolerance, 1 at target - tolerance). A cost
+   layer may coast the house within its band, not out of it.
+5. **Everything else**: Σ offset × weight / Σ weight.
+
+## After the cascade
+
+Still inside `calculate_decision`, in this order:
+
+- Trend damping: a raise is × 0.75 while the room warms at 0.3 °C/h or more, and × 1.15 while it
+  cools at 0.3 °C/h or more (only below +3 °C); a cut is × 0.75 while the room cools fast.
+- Compressor wear guard (`_limit_for_compressor_wear`): when the compressor is at its maximum
+  frequency, a raise is withheld for a room at the top of its band or above, half of it passes at
+  the target, all of it at the bottom of the band. A cooling room earns a share too: none for one
+  sensor tick in the trend's two hours (a steady room), all of it at two. Below 18 °C everything
+  passes.
+- Clamp to -10..+10 (`_clamp_offset`).
+
+The coordinator then applies the offset volatility gate
+([01](01_normal_optimization_cycle.md)) and writes whole degrees only (`utils/offset.py`).
+
+## Worked example
+
+Normal day, no critical layer, Safety / Thermal Debt / Proactive / Peak all at weight 0:
+
+```
+Learned Pre-heat  +1.0 × 0.65 = +0.65
+Math WC           +0.5 × 0.42 = +0.21
+Weather Pre-heat   0.0 × 0.00
+Spot Price        -1.5 × 0.80 = -1.20
+Comfort           -0.2 × 0.20 = -0.04
+Sum of weights 2.07, weighted sum -0.38, offset -0.18 °C: inside the 1 °C deadband, no write
+```

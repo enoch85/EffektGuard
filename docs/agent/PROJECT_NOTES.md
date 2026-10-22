@@ -64,6 +64,7 @@ solved a problem. If you do fix one, the note must turn false in the same commit
 | F-112 | Ladder rescale against the pump's real aux-start DM; 68 tests encode the −1500 world | parked in a git stash |
 | F-124 | Air-source saturation trap: the optimiser burns more immersion heat than the capacity deficit forces in deep cold - on 2026-10-17, 35.75 kWh against 20.4 forced (1.7×) in `nordic_coldsnap_jan2024` and 76.75 against 47.8 (1.6×) in `steady_winter_feb2024`, with the coordinator's volatility gate in the bench. The scenarios' known reds hold the aux kWh, and the sweep fails if it rises. The aux-limit tier fed it with +10 until it became a no-cut floor (undersized F2040 cold snap on 2026-10-17: 1797 → 1188 kWh, 1133 with the wear guard as well; NIBE alone 1048). The wear guard caps raises while `CompressorSaturation` sees the compressor at its ceiling (54.25 / 87.25 kWh before it had that trigger; in the owner's closed loop on 2026-10-17, fit N at slider 1.2, immersion 306 → 254 kWh) and lets a share through for a room low in its band, all of it for a cooling room. Its ceiling is the maximum frequency the pump publishes (F750, F730, F1155, S1155): a ceiling learned as the highest level held in 24 hours hid the saturation in 32-48 % of the owner's saturation-like hours of Dec 2025 - Feb 2026 (hourly statistics, checked 2026-10-17), because the F750's maximum moves (70-120 Hz, often several times an hour, October 2026). An F2040 publishes none and is judged on the learned ceiling. What still burns above the forced share is not attributed yet. `undersized_coldsnap_jan2024` fits each pump one size too small, so the F750, F1155 and S1155 saturate at their published maximum too: the F1155 burns 203.0 kWh against 133.9 forced (NIBE alone 146.4; 191.9 before #54, whose longer slab pre-heat lead votes on 22 % of cycles instead of 14 % - +11.1 kWh, 61 SEK cheaper), and the F2040 spends 1200 minutes below the band where NIBE alone spends 585 | scenario `known_open` |
 | F-132b | Learning confidence ceiling | strict `xfail` |
+| — | A power meter that freezes while Home Assistant still shows it available is read as live: its last value is billed and defended. Home Assistant has no heartbeat for an unchanged value (template and MQTT sensors do not rewrite one, so `last_reported` stops too), and the owner's meter sits unchanged at 0 W import for hours under solar, so a meter is out only when it is unavailable | open with the owner |
 | ~~F-142~~ | **Withdrawn 2026-10-03, and it was mine.** I reported the offset limit-cycling from a bench that never ran `OffsetVolatilityTracker`, so it measured the engine's raw proposals as writes. With the real gate: 8-16 reversals/day against a 24 budget, scenario passes. Kept here because the guard is load-bearing - weaken it and `thaw_freeze` goes red | closed in `eaa3986` |
 | — | No heating-season concept of our own; the recovery ladder can fire at +20 °C. Above the pump's menu 4.9.2 stop temperature its own cutoff overrides it, but inside the season DM can drift to the S1155's aux start (−460) and run its immersion heater (0.6 kWh in `shoulder_may2024`) | scenario `known_open` |
 | — | Mild-weather COP extrapolates above the EN 14511 rating points, so shoulder-season **cost** figures are optimistic. Control decisions do not depend on it | scenario `known_open` |
@@ -113,6 +114,16 @@ deliberate design fact, not a typo - do not "fix" a table to hide it.
   `TOLERANCE_RANGE_MULTIPLIER` × the slider: the default ±0.5 gives a 0.2 °C band - in balanced mode
   exactly the dead zone, so there is no in-band correction at all - and ±1.2 gives 0.48 °C. Reasoning
   about the comfort layer from the slider's value puts its edge 2.5× too far out.
+
+- **Arithmetic on local datetimes is wall-clock arithmetic.** Two aware datetimes that share a
+  tzinfo compare, subtract and add a `timedelta` on the wall clock - PEP 495 ignores `fold` - so on
+  the night the clocks go back 02:40 CET minus 02:50 CEST is −10 minutes, 02:30 CEST plus 60 minutes
+  is 03:30 CET (120 real minutes), and 02:05 CET lies inside the price interval that began at 02:00
+  CEST. Five places did this: the price lookup, the cheapest-window search, the manual override, the
+  aligned timer (an hour with no cycle, then back-to-back cycles) and the service cooldowns. Keep
+  deadlines and stamps in `dt_util.utcnow()`, measure with `utils/time_utils.seconds_between`, shift
+  with `after`, and keep `dt_util.now()` for labels and wall-clock schedules - the 07:00 hot-water
+  window, the billing-period number, the calendar month a peak belongs to.
 
 ---
 
