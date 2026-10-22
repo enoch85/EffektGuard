@@ -1225,8 +1225,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     decision.reasoning = f"[Startup Lockout] {decision.reasoning}"
                 elif self._startup_update_count < self._startup_grace_updates:
-                    # Phase 2: Observation cycles (one per update interval)
-                    self._startup_update_count += 1
+                    # Phase 2: Observation cycles (one per update interval). A read is not one:
+                    # counted, a few reads in a row would end the observation early.
+                    if apply:
+                        self._startup_update_count += 1
                     is_grace_period = True
                     cycles_left = self._startup_grace_updates - self._startup_update_count
                     _LOGGER.info(
@@ -1263,13 +1265,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # The gate between the engine and the register. Its policy - which proposals go past the
         # tracker, what a refused one publishes - is gate_offset, shared with the simulator so the
         # bench measures what the pump gets (F-142). During start-up nothing is applied, so nothing
-        # is tracked; the tracker is seeded from the pump's own offset when start-up ends.
+        # is tracked; the tracker is seeded from the pump's own offset when start-up ends. A read is
+        # gated as a control cycle would be, so what it publishes matches the register, and records
+        # nothing, so a decision nobody applied cannot become the baseline that later reaches it.
         previous_offset = self._offset_volatility_tracker.last_offset
         gated = gate_offset(
             self._offset_volatility_tracker,
             decision,
             optimization_enabled=optimization_enabled,
             track=not is_grace_period,
+            record=apply,
         )
         if gated.blocked:
             _LOGGER.info("Offset change blocked: %s", gated.reasoning)

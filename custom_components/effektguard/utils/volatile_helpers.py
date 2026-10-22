@@ -432,6 +432,7 @@ def gate_offset(
     *,
     optimization_enabled: bool = True,
     track: bool = True,
+    record: bool = True,
 ) -> GatedOffset:
     """The coordinator's gate on a proposal: what reaches the register, what the tracker records.
 
@@ -442,6 +443,10 @@ def gate_offset(
     - `track=False`: observe only. The proposal is neither held nor recorded, as during start-up
       observation, where nothing is applied and the tracker is seeded from the pump's own offset
       when observation ends.
+    - `record=False`: a read, not a control cycle. The policy below decides what is published, as
+      it would for a control cycle now, but nothing is recorded. A recorded read became the
+      baseline the next control cycle's reversal check compared against, and when that check
+      refused, the published - and written - offset was the read's, which no cycle had applied.
     - A user command is authoritative and is recorded, never held: a manual override
       (force_offset, boost), or optimization switched OFF, whose neutral offset must not be
       swapped for the last automatic one behind an OFF display.
@@ -461,6 +466,7 @@ def gate_offset(
         decision: The engine's proposal, with the flags its layers set.
         optimization_enabled: The master switch. OFF is a user command, not the engine's.
         track: False while the decision is only observed, never applied.
+        record: False for a read-only refresh: gated as a control cycle, recorded as nothing.
 
     Returns:
         The offset and reasoning to publish, whether the proposal was held, and which path - if
@@ -491,5 +497,6 @@ def gate_offset(
             bypass=None,
         )
 
-    tracker.record_change(decision.offset, decision.reasoning)
+    if record:
+        tracker.record_change(decision.offset, decision.reasoning)
     return GatedOffset(decision.offset, decision.reasoning, blocked=False, bypass=bypass)
