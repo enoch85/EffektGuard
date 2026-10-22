@@ -56,7 +56,7 @@ default 14 °C/h) plus a 0.5 h buffer. Only the closest availability hour within
 | 3 | `DHW_SAFETY_MINIMUM` | Tank below 30 °C | Heat to 30 °C now |
 | 3 | `DHW_SAFETY_WINDOW_Q*` / `DHW_SAFETY_WAITING_WINDOW_IN_*` / `DHW_SAFETY_DEFERRED_PEAK_PRICE` | Tank 20-30 °C at expensive or peak price with DM more than 20 above the block | Heat in the cheapest window instead; wait for it; or just defer |
 | 2.6 | `DHW_PEAK_AVOIDED` | Peak price, tank at least 20 °C | Wait for the next non-peak quarter |
-| 2.3 | `DHW_HYGIENE_BOOST` | No 55 °C reading for 14 days (or never), stable cheap | Heat (see Hygiene) |
+| 2.3 | `DHW_HYGIENE_BOOST` | No high-temperature cycle or fallback run for 21 days (or never), stable cheap | Heat (see Hygiene) |
 | 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap | Heat to target |
 | 4 | `HIGH_SPACE_HEATING_DEMAND` | Heating demand above 6 kW and DM below −60 | Block |
 | 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Price very cheap, cheap or normal; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
@@ -115,9 +115,11 @@ and immersion heater), and EffektGuard cannot block it. What EffektGuard does:
   `sensor.effektguard_dhw_status`.
 - Warns once in the log if no such cycle is seen for 21 days (`DHW_LEGIONELLA_OVERDUE_DAYS`): check
   that the periodic increase is still enabled on the pump.
-- Rule 2.3 is a cheap-period top-up, not a hygiene cycle: temporary lux stops at the pump's luxury
-  stop temperature (53-54 °C on factory settings), below 55 °C. The 56 °C
-  `DHW_LEGIONELLA_PREVENT_TEMP` is never written to the pump.
+- Rule 2.3 is the fallback until it is: one temporary-lux run in a stable cheap period, then again
+  after another 21 days. Lux heats to the pump's luxury stop temperature, not 55 °C - on an F750
+  54.3-55.3 °C on BT7 with the immersion heater - so a run counts once it has run its course (the
+  charge it started ended with the fallback still on). The 56 °C `DHW_LEGIONELLA_PREVENT_TEMP` is
+  never written to the pump.
 
 ## Where things live
 

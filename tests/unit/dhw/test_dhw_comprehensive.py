@@ -345,19 +345,13 @@ class TestSafetyRules:
         assert decision.should_heat is False
         assert decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND"
 
-    def test_hygiene_boost_after_14_days(self):
-        """RULE 2.7: Hygiene boost when DHW hasn't been above 60°C in 14 days.
-
-        With new low thresholds (10°C/20°C), bacteria can grow in 20-45°C range.
-        Ensure high-temp cycle (60°C) every 14 days for Legionella prevention.
-        """
+    def test_hygiene_fallback_once_the_cycle_is_overdue(self):
+        """RULE 2.3: the fallback runs once NIBE's own cycle is overdue (21 days without one)."""
         from datetime import timedelta
 
         scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
-
-        # Simulate last Legionella boost was 15 days ago
-        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+        scheduler.last_legionella_boost = current_time - timedelta(days=22)
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=45.0,  # Normal temp, but needs hygiene boost
@@ -409,8 +403,8 @@ class TestSafetyRules:
         scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
 
-        # 15 days since last boost, but expensive price
-        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+        # Overdue, but expensive price
+        scheduler.last_legionella_boost = current_time - timedelta(days=22)
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=45.0,
