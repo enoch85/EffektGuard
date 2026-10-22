@@ -348,7 +348,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_was_active = False  # Track DHW state (is_hot_water OR temp_lux)
         # True while a temporary-lux boost that EFFEKTGUARD started is still running. The owner may
         # also start one from the heat pump's own panel or their own automation, and that one is
-        # none of our business - so shutdown only cancels a boost we are responsible for.
+        # none of our business - so neither shutdown nor the optimiser cancels a boost we did not
+        # start.
         self._lux_boost_is_ours = False
         # While set, a boost_dhw SERVICE call owns the lux switch: ordinary price optimization
         # may not cancel it before this instant. Safety still may - see _apply_dhw_control.
@@ -1961,6 +1962,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return
 
         is_lux_on = temp_lux_state.state == "on"
+
+        # The optimiser stops only a boost EffektGuard started, as the unload cleanup does. A lux the
+        # household switched on - on the pump's panel, in MyUplink, by its own automation - used to
+        # be turned off at the next cycle by any decision not to heat. Off, by anyone, ends ours: a
+        # household boost started after it is not mistaken for it.
+        if not is_lux_on:
+            self._lux_boost_is_ours = False
+        elif not self._lux_boost_is_ours:
+            _LOGGER.debug("Temporary lux is on and EffektGuard did not start it - leaving it alone")
+            return
 
         # Use pre-calculated decision from _calculate_dhw_recommendation()
         # This avoids duplicate optimizer calls and log spam
