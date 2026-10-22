@@ -1136,7 +1136,14 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
-        if (
+        # The one rule between an ordinary boost and the room. It refuses the start here and,
+        # decided again on the next cycle, stops a running boost: there is no second, stricter test
+        # in the abort conditions to disagree with it. (There was - `indoor_temp < target - 0.5` at
+        # any outdoor temperature - so at 0 C and above a boost started in a room that low was
+        # aborted five minutes later and restarted an hour on, a compressor start and stop each
+        # time.) Below the safety floor nothing ordinary runs at any outdoor temperature: the
+        # scheduled window, which outranks this rule, stops there too.
+        if self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp) is not None or (
             indoor_deficit > DHW_SPACE_HEATING_DEFICIT_THRESHOLD
             and outdoor_temp < DHW_SPACE_HEATING_OUTDOOR_THRESHOLD
         ):
@@ -1197,10 +1204,7 @@ class IntelligentDHWScheduler:
                             priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                             target_temp=DHW_SAFETY_MIN,
                             max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                            abort_conditions=[
-                                f"thermal_debt < {dm_abort_threshold:.0f}",
-                                f"indoor_temp < {target_indoor_temp - 0.5}",
-                            ],
+                            abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                             recommended_start_time=optimal_window.start_time,
                         )
                     elif optimal_window:
@@ -1261,10 +1265,7 @@ class IntelligentDHWScheduler:
                 priority_reason="DHW_SAFETY_MINIMUM",
                 target_temp=DHW_SAFETY_MIN,  # Only heat to safe level, not full target
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
@@ -1346,10 +1347,7 @@ class IntelligentDHWScheduler:
                     priority_reason="DHW_HYGIENE_BOOST",
                     target_temp=DHW_LEGIONELLA_PREVENT_TEMP,
                     max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
             elif is_cheap_price and is_volatile:
@@ -1407,10 +1405,7 @@ class IntelligentDHWScheduler:
                 priority_reason="DHW_COMPLETE_EMERGENCY_HEATING",
                 target_temp=self.user_target_temp,
                 max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
@@ -1429,10 +1424,7 @@ class IntelligentDHWScheduler:
                     priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
                     target_temp=self.user_target_temp,
                     max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
 
@@ -1493,7 +1485,6 @@ class IntelligentDHWScheduler:
                     max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
                         f"dhw_temp >= {self.user_target_temp}",
                     ],
                     recommended_start_time=None,  # Heating now
@@ -1555,10 +1546,7 @@ class IntelligentDHWScheduler:
                             priority_reason="CHEAP_NO_WINDOW_DATA",
                             target_temp=self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET,
                             max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                            abort_conditions=[
-                                f"thermal_debt < {dm_abort_threshold:.0f}",
-                                f"indoor_temp < {target_indoor_temp - 0.5}",
-                            ],
+                            abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                             recommended_start_time=None,  # Heating now - no future time needed
                         )
 
@@ -1582,10 +1570,7 @@ class IntelligentDHWScheduler:
                             self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
                         ),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                        ],
+                        abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                         recommended_start_time=optimal_window.start_time,
                     )
 
@@ -1624,10 +1609,7 @@ class IntelligentDHWScheduler:
                         self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
                     ),
                     max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
 
@@ -1707,10 +1689,7 @@ class IntelligentDHWScheduler:
                         priority_reason=f"DHW_COMFORT_OPTIMAL_@{optimal_window.avg_price:.1f}öre",
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                        ],
+                        abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                         recommended_start_time=None,  # Heating now - no future time needed
                     )
                 else:
@@ -1736,10 +1715,7 @@ class IntelligentDHWScheduler:
                 priority_reason=f"DHW_COMFORT_LOW_{price_classification.upper()}",
                 target_temp=self.user_target_temp,
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
