@@ -1495,6 +1495,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             await self._end_user_dhw_boost_when_due(nibe_data, now_time)
 
         # Calculate DHW status and tracking
+        dhw_decision = None  # the hot-water optimiser's decision this cycle, if it has one
+        current_dhw_temp = None
         dhw_status = "not_configured"
         dhw_next_boost = None
         dhw_last_heated = self.last_dhw_heated
@@ -1599,23 +1601,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Don't fail entire coordinator update for DHW subsystem issue
                 # Core heating optimization continues to work
 
-            # Apply DHW control based on optimizer decision (if hot water optimization enabled)
-            if (
-                optimization_enabled
-                and self.entry.data.get("enable_hot_water_optimization", False)
-                and dhw_result is not None
-                and dhw_result.decision is not None
-            ):
-                if not apply:
-                    _LOGGER.debug("Read-only refresh: not applying DHW control")
-                elif is_grace_period:
-                    _LOGGER.info("Skipping DHW control during startup grace period")
-                else:
-                    await self._apply_dhw_control(
-                        dhw_result.decision,
-                        current_dhw_temp,
-                        now_time,
-                    )
+            if dhw_result is not None:
+                dhw_decision = dhw_result.decision
         else:
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
@@ -1633,6 +1620,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_recommendation = "NIBE data unavailable"
                 dhw_planning_summary = "NIBE data unavailable"
                 dhw_planning_details = {}
+
+        # Apply DHW control (if hot water optimization enabled) - with or without a decision: no
+        # decision (no tank reading, or the optimiser failed) stops a boost the optimiser started.
+        if optimization_enabled and self.entry.data.get("enable_hot_water_optimization", False):
+            if not apply:
+                _LOGGER.debug("Read-only refresh: not applying DHW control")
+            elif is_grace_period:
+                _LOGGER.info("Skipping DHW control during startup grace period")
+            else:
+                await self._apply_dhw_control(dhw_decision, current_dhw_temp, now_time)
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
@@ -1920,7 +1917,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         return False
 
     async def _apply_dhw_control(
-        self, decision, current_dhw_temp: float, now_time: datetime
+        self, decision, current_dhw_temp: float | None, now_time: datetime
     ) -> None:
         """Apply automatic DHW control based on optimizer decision.
 
@@ -1928,8 +1925,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         pre-calculated decision from optimizer.
 
         Args:
-            decision: DHWScheduleDecision from optimizer (reused from recommendation)
-            current_dhw_temp: Current DHW temperature
+            decision: DHWScheduleDecision from optimizer (reused from recommendation), or None
+                when the optimiser has none this cycle
+            current_dhw_temp: Current DHW temperature, None without a reading
             now_time: Current datetime
         """
         # Check temporary lux entity
@@ -1971,6 +1969,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self._lux_boost_is_ours = False
         elif not self._lux_boost_is_ours:
             _LOGGER.debug("Temporary lux is on and EffektGuard did not start it - leaving it alone")
+            return
+
+        # Our boost runs while the optimiser decides to heat. Without a decision - BT7 unavailable,
+        # stale or unreadable, or the optimiser failed - nothing supervises it: it used to run on
+        # unchecked until BT7 returned or NIBE's own lux timeout. Stop it; start nothing.
+        if decision is None:
+            if is_lux_on:
+                _LOGGER.warning(
+                    "DHW control: no hot-water decision this cycle (no tank reading, or the "
+                    "optimiser failed) - stopping the temporary lux EffektGuard started"
+                )
+                if await self._set_temporary_lux(False):
+                    self._last_dhw_control_time = now_time
             return
 
         # Use pre-calculated decision from _calculate_dhw_recommendation()
