@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_point_in_time
@@ -743,9 +743,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return
 
         state = self.hass.states.get(self.temp_lux_entity) if self.temp_lux_entity else None
-        if state is None or state.state != STATE_ON:
+        if state is None or state.state == STATE_OFF:
             # NIBE's own lux timeout, or the household, ended it first.
             self._service_boost_until = None
+            return
+        if state.state != STATE_ON:
+            # Unavailable or unknown is not an end: the boost may well be running. Next reading.
             return
 
         unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
@@ -754,13 +757,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if unsafe is None and now_time < self._service_boost_until:
             return
 
+        # The window closes with the switch: a stop that failed is tried again next cycle.
+        if not await self._set_temporary_lux(False):
+            return
+        self._service_boost_until = None
+        self._last_dhw_control_time = now_time
         if unsafe:
             _LOGGER.warning("User DHW boost stopped for safety: %s", unsafe)
         else:
             _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
-        self._service_boost_until = None
-        if await self._set_temporary_lux(False):
-            self._last_dhw_control_time = now_time
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.

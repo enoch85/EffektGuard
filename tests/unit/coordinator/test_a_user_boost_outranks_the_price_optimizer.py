@@ -76,6 +76,7 @@ class _House:
         self.indoor = 21.0
         self.lux = "off"
         self.switch_calls: list[str] = []
+        self.fail_next_stop = False
 
         async def read():
             return SimpleNamespace(
@@ -94,6 +95,9 @@ class _House:
 
         async def switch(domain, service, data, blocking=False):
             self.switch_calls.append(service)
+            if service == "turn_off" and self.fail_next_stop:
+                self.fail_next_stop = False
+                raise HomeAssistantError("the pump's cloud did not answer")
             self.lux = STATE_ON if service == "turn_on" else "off"
 
         hass = create_mock_hass()
@@ -215,6 +219,45 @@ async def test_the_safety_gate_stops_a_user_boost(dm, indoor, hot_water_optimisa
         f"boost is still running"
     )
     assert house.coordinator._service_boost_until is None
+
+
+@pytest.mark.asyncio
+async def test_a_safety_stop_that_failed_is_tried_again():
+    with freeze_time(NOW) as clock:
+        house = _House(hot_water_optimisation=False, tank=45.0)
+        await house.boost()
+
+        house.dm = DM_THRESHOLD_AUX_LIMIT - 100
+        house.fail_next_stop = True
+        for _ in range(2):
+            clock.tick(CYCLE)
+            await house.cycle()
+
+    assert house.switch_calls == ["turn_on", "turn_off", "turn_off"] and house.lux == "off", (
+        f"one failed stop at DM {house.dm:.0f} and the boost was given up on: {house.switch_calls}, "
+        f"lux {house.lux}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_reading_does_not_end_a_user_boost():
+    """A myUplink poll that fails reads the switch unavailable for a minute; the boost runs on."""
+    with freeze_time(NOW) as clock:
+        house = _House(hot_water_optimisation=False, tank=45.0)
+        await house.boost()
+
+        house.lux = "unavailable"
+        clock.tick(CYCLE)
+        await house.cycle()
+
+        house.lux, house.dm = STATE_ON, DM_THRESHOLD_AUX_LIMIT - 100
+        clock.tick(CYCLE)
+        await house.cycle()
+
+    assert house.switch_calls == ["turn_on", "turn_off"], (
+        f"after one unavailable reading the boost at DM {house.dm:.0f} was left running: "
+        f"{house.switch_calls}"
+    )
 
 
 @pytest.mark.asyncio
