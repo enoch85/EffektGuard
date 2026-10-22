@@ -88,7 +88,7 @@ from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor, CompressorSaturation
 from .utils.power import power_kw_from_state
 from .utils.time_utils import get_current_billing_period, seconds_between
-from .utils.volatile_helpers import OffsetVolatilityTracker
+from .utils.volatile_helpers import OffsetVolatilityTracker, gate_offset
 
 if TYPE_CHECKING:
     from .models.types import EffektGuardConfigDict
@@ -1323,91 +1323,29 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Fall back to safe operation (no offset)
                 decision = get_safe_default_decision()
 
-        # Check for volatile offset reversal before applying
-        # Prevents rapid back-and-forth that the heat pump can't follow
-        # (same logic as price volatility)
-        # Skip volatility tracking during startup - we're not applying offsets yet
-        #
-        # Anti-windup bypass (Feb 2026): When anti-windup is active, it means the system
-        # detected a self-induced DM spiral (raising S1 makes BT25-S1 gap grow → DM drops
-        # faster). The volatile blocker must NOT block anti-windup reductions — doing so
-        # keeps the harmful high offset active for 45 minutes while DM plunges.
-        # Jan 31 2026 incident: volatile blocked anti-windup reduction 10→3°C for 45 min,
-        # DM dropped from -1566 to -1855.
-        if is_grace_period:
-            # During startup, don't track decisions - they're not being applied
-            # The tracker will be initialized with actual NIBE offset when startup completes
-            pass
-        elif decision.is_manual_override:
-            # User-commanded offsets (force_offset/boost services) are
-            # authoritative — the volatile blocker must never defer an
-            # explicit user command for 45 minutes
-            _LOGGER.info(
-                "Manual override: bypassing volatile check (offset → %.1f°C)",
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif not optimization_enabled:
-            # OFF is a user command as well: its neutral offset must never be swapped for the last
-            # automatic one, which kept the pump on it for up to 45 minutes behind an OFF display.
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.is_emergency:
-            # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
-            # The volatile blocker damps price-driven flip-flopping; it must never defer a safety
-            # recovery. Blocking here would hold the previous (often negative) offset for up to
-            # 45 minutes while DM keeps falling and the immersion heater runs.
-            _LOGGER.warning(
-                "Emergency decision: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
-                (
-                    self._offset_volatility_tracker.last_offset
-                    if self._offset_volatility_tracker.last_offset is not None
-                    else 0.0
-                ),
+        # The gate between the engine and the register. Its policy - which proposals go past the
+        # tracker, what a refused one publishes - is gate_offset, shared with the simulator so the
+        # bench measures what the pump gets (F-142). During start-up nothing is applied, so nothing
+        # is tracked; the tracker is seeded from the pump's own offset when start-up ends.
+        previous_offset = self._offset_volatility_tracker.last_offset
+        gated = gate_offset(
+            self._offset_volatility_tracker,
+            decision,
+            optimization_enabled=optimization_enabled,
+            track=not is_grace_period,
+        )
+        if gated.blocked:
+            _LOGGER.info("Offset change blocked: %s", gated.reasoning)
+            decision = OptimizationDecision(offset=gated.offset, reasoning=gated.reasoning)
+        elif gated.bypass is not None:
+            _LOGGER.log(
+                logging.WARNING if decision.is_emergency else logging.INFO,
+                "%s: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
+                gated.bypass,
+                previous_offset or 0.0,
                 decision.offset,
                 decision.reasoning,
             )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.anti_windup_active:
-            # Anti-windup is a safety mechanism — always apply immediately
-            # Record the change so volatile tracker knows the new baseline
-            _LOGGER.info(
-                "Anti-windup active: bypassing volatile check (offset %.1f°C → %.1f°C)",
-                (
-                    self._offset_volatility_tracker.last_offset
-                    if self._offset_volatility_tracker.last_offset is not None
-                    else 0.0
-                ),
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.saturation_capped and decision.offset < (
-            self._offset_volatility_tracker.last_offset or 0.0
-        ):
-            # The wear guard withdrew a raise the saturated compressor cannot follow. Held for 45
-            # minutes it buys no heat, only a deeper DM deficit and the immersion heater sooner
-            # (F-124). Only the withdrawal passes: the cap stops at the pump's own curve.
-            _LOGGER.info(
-                "Compressor saturated: bypassing volatile check (offset %.1f°C → %.1f°C)",
-                self._offset_volatility_tracker.last_offset,
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
-            volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
-            _LOGGER.info(
-                "Offset change blocked: %s (keeping %.1f°C)",
-                volatile_reason,
-                self._offset_volatility_tracker.last_offset,
-            )
-            # Keep the previous offset (last_offset is always set when is_reversal_volatile is True)
-            last_offset = self._offset_volatility_tracker.last_offset or 0.0
-            decision = OptimizationDecision(
-                offset=last_offset,
-                reasoning=f"[{volatile_reason}] {decision.reasoning}",
-            )
-        else:
-            # Record the new offset for volatility tracking
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
 
         self.last_decision_time = dt_util.utcnow()
 
