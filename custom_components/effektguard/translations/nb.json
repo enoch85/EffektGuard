@@ -69,6 +69,7 @@
           "power_sensor_entity": "Effektmålersensor",
           "nibe_temp_lux_entity": "Midlertidig luksus-bryter (varmtvann)",
           "additional_indoor_sensors": "Ekstra innendørs temperatursensorer",
+          "indoor_temp_method": "Beregningsmetode for innetemperatur",
           "outdoor_temp_entity": "Overstyr: utetemperatur (BT1)",
           "indoor_temp_entity": "Overstyr: innetemperatur (BT50/romsensor)",
           "supply_temp_entity": "Overstyr: turtemperatur (BT2/BT25)",
@@ -300,6 +301,15 @@
     "no_dhw_control_entity": {
       "title": "Ingen entitet for varmtvannsstyring",
       "description": "EffektGuard styrer varmtvann ved å slå NIBEs midlertidige luksus av og på, og ingen entitet for det er konfigurert - varmtvannsoptimaliseringen kjører IKKE, og en planlagt kjøring som sensorene viser vil ikke skje. MyUplink har en bryter for midlertidig luksus på F-seriens pumper (parameter 50004). På pumper i F-serien, SMO og VVM eksponerer den lokale integrasjonen nibe_heatpump i stedet Temporary Lux (register 48132) som en select-entitet, som EffektGuard ikke kan styre direkte: opprett en input_boolean-hjelper og en automasjon som setter select-entiteten til \"ONE TIME INCREASE\" når hjelperen slås på og til \"OFF\" når den slås av. S-seriens pumper har ikke noe register for midlertidig luksus i nibe_heatpump. Velg bryteren eller hjelperen under Omkonfigurer. Varmeoptimaliseringen påvirkes ikke."
+    }
+  },
+  "selector": {
+    "indoor_temp_method": {
+      "options": {
+        "interquartile_mean": "Interkvartilt gjennomsnitt (anbefalt)",
+        "median": "Median",
+        "average": "Gjennomsnitt"
+      }
     }
   }
 }

@@ -77,6 +77,7 @@ def _make_coordinator(decision: OptimizationDecision) -> EffektGuardCoordinator:
 
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
 
     coordinator = EffektGuardCoordinator(
         hass=hass,

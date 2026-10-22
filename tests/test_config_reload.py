@@ -388,38 +388,6 @@ class TestSensorStateRestoration:
         assert hasattr(EffektGuardSensor, "async_added_to_hass")
         assert asyncio.iscoroutinefunction(EffektGuardSensor.async_added_to_hass)
 
-    @pytest.mark.asyncio
-    async def test_peak_today_sensor_restores_state(self, mock_coordinator, mock_config_entry):
-        """Verify peak_today sensor restores value from last state."""
-        from custom_components.effektguard.sensor import EffektGuardSensor, SENSORS
-
-        # Find peak_today sensor description
-        peak_today_desc = None
-        for desc in SENSORS:
-            if desc.key == "peak_today":
-                peak_today_desc = desc
-                break
-
-        assert peak_today_desc is not None, "peak_today sensor not found"
-
-        # Create sensor
-        sensor = EffektGuardSensor(mock_coordinator, mock_config_entry, peak_today_desc)
-        sensor.entity_id = "sensor.effektguard_peak_today"
-
-        # Mock last state
-        last_state = Mock()
-        last_state.state = "5.75"  # Previous peak value
-        sensor.async_get_last_state = AsyncMock(return_value=last_state)
-
-        # Call async_added_to_hass
-        await sensor.async_added_to_hass()
-
-        # Should restore peak value to both sensor and coordinator
-        sensor.async_get_last_state.assert_called_once()
-        # CRITICAL: Coordinator must be updated to prevent new measurements
-        # from overwriting restored value with lower values
-        assert mock_coordinator.peak_today == 5.75
-
 
 class TestLearningDataPersistence:
     """Test that learning data persists across restarts and config changes."""

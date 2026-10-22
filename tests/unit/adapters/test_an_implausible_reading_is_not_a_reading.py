@@ -256,8 +256,8 @@ class TestThePlaceholderNeverSeedsTheMedian:
 
         state = await adapter.get_current_state()
 
-        # median of [21.3 (BT50), 20.0, 22.0]
-        assert state.indoor_temp == pytest.approx(21.3)
+        # 21.3 (BT50), 20.0 and 22.0: the interquartile mean of three sensors is their mean
+        assert state.indoor_temp == pytest.approx((21.3 + 20.0 + 22.0) / 3)
         assert state.indoor_temp_valid is True
 
 
