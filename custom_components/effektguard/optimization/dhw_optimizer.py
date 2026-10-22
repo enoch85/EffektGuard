@@ -260,7 +260,7 @@ class IntelligentDHWScheduler:
         self.last_legionella_boost: datetime | None = None
         # A scheduled window that SAFETY refused. The owner asked for hot water and safety said not
         # yet - which is a debt to be settled the moment the house is out of danger, not a shower
-        # silently cancelled. Cleared when the water reaches target.
+        # silently cancelled. Cleared when the tank is where the window itself stops forcing heat.
         self._scheduled_window_owed: bool = False
         # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
         # it begins and ends, not on every cycle it lasts.
@@ -748,12 +748,26 @@ class IntelligentDHWScheduler:
 
         # Check if scheduling is active (user configured demand periods)
         upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
-        scheduled_min_amount: float | None = None
+        scheduled_min_amount: float | None = (
+            upcoming_demand["min_amount_minutes"] if upcoming_demand else None
+        )
         within_scheduled_window: bool = False
         hours_until_target: float | None = None
 
+        # What a scheduled window forces: heat while the tank is short of the target temperature
+        # and amount AND below MIN_DHW_TARGET_TEMP; from there it leaves the tank to price
+        # optimisation, and stops at the target. Lane 1 and RULE 0.5 (a window safety refused,
+        # settled later) both read it, so what is owed is what the window would have done.
+        temp_target_reached = current_dhw_temp >= self.user_target_temp
+        amount_target_reached = (
+            dhw_amount_minutes is not None
+            and scheduled_min_amount is not None
+            and dhw_amount_minutes >= scheduled_min_amount
+        )
+        target_reached = temp_target_reached or amount_target_reached
+        scheduled_heating_due = not target_reached and current_dhw_temp < MIN_DHW_TARGET_TEMP
+
         if upcoming_demand:
-            scheduled_min_amount = upcoming_demand["min_amount_minutes"]
             within_scheduled_window = upcoming_demand["within_scheduled_window"]
             hours_until_target = upcoming_demand["hours_until"]
 
@@ -794,15 +808,6 @@ class IntelligentDHWScheduler:
                 hours_with_buffer,
                 hours_until_target,
             )
-
-            # Check if target is reached (either temperature OR amount)
-            temp_target_reached = current_dhw_temp >= self.user_target_temp
-            amount_target_reached = (
-                dhw_amount_minutes is not None
-                and scheduled_min_amount is not None
-                and dhw_amount_minutes >= scheduled_min_amount
-            )
-            target_reached = temp_target_reached or amount_target_reached
 
             if within_scheduled_window:
                 # === LANE 1: SCHEDULED WINDOW - PRIORITY MODE ===
@@ -871,7 +876,7 @@ class IntelligentDHWScheduler:
                         abort_conditions=[],
                         recommended_start_time=next_opportunity,
                     )
-                elif current_dhw_temp >= MIN_DHW_TARGET_TEMP:
+                elif not scheduled_heating_due:
                     # Temp is adequate (≥45°C) - can wait for cheap prices
                     # Fall through to normal price optimization rules
                     _LOGGER.debug(
@@ -1085,8 +1090,12 @@ class IntelligentDHWScheduler:
         # When safety refuses a scheduled window (LANE 1), the shower is OWED, not cancelled. Once
         # the house is safe again, heat it now - even after the window has closed and even though the
         # ordinary thermal-debt block below would refuse it - carrying the window's own priority.
+        # What is owed is what the window would have done (scheduled_heating_due), no more. Settled
+        # on the target alone, the debt never cleared for a target above the pump's luxury stop,
+        # where temporary lux ends (the options allow up to DHW_MAX_TEMP; see const.py, Legionella),
+        # and forced lux at any price on every cycle, indefinitely.
         if self._scheduled_window_owed:
-            if current_dhw_temp >= self.user_target_temp:
+            if not scheduled_heating_due:
                 # Settled - by this rule, or by the pump's own schedule. Either way, nothing is owed.
                 self._scheduled_window_owed = False
             elif self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
