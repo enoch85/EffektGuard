@@ -327,9 +327,13 @@ class NibeAdapter:
             "return temperature (BT3)",
         )
 
-        # Read current offset
+        # Read current offset. The register changes only when it is written, and a template number
+        # (the README's local Modbus recipe) reports only when its value changes, so half an hour of
+        # silence is a steady offset, not a dead sensor. Aged out, it read as 0.0 while the register
+        # held its value: the anti-windup could not see a held raise, and the offset sensor showed
+        # 0. The readings that prove the pump is alive - BT1, BT25/BT63, degree minutes - keep it.
         current_offset = await self._read_entity_float(
-            self._entity_cache.get("offset"), default=0.0
+            self._entity_cache.get("offset"), default=0.0, check_age=False
         )
 
         # Read compressor status
@@ -919,12 +923,16 @@ class NibeAdapter:
         self,
         entity_id: str | None,
         default: float | None = None,
+        *,
+        check_age: bool = True,
     ) -> float | None:
         """Read float value from entity.
 
         Args:
             entity_id: Entity ID to read
             default: Default value if entity unavailable
+            check_age: Reject a reading older than NIBE_READING_MAX_AGE_MINUTES. Off only for the
+                offset register - see get_current_state.
 
         Returns:
             Float value or default
@@ -945,7 +953,7 @@ class NibeAdapter:
         # age is unknowable, so fail OPEN and use the reading - this is an extra guard, and raising
         # from the read path would be worse than the staleness it catches.
         reported = getattr(state, "last_reported", None) or getattr(state, "last_updated", None)
-        if isinstance(reported, datetime):
+        if check_age and isinstance(reported, datetime):
             age = dt_util.utcnow() - reported
             if age > timedelta(minutes=NIBE_READING_MAX_AGE_MINUTES):
                 _LOGGER.warning(
