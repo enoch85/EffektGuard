@@ -2997,6 +2997,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Called when Legionella boost is detected to persist across reboots.
         Critical for safety - ensures we don't lose track of last boost time.
+
+        The whole state, as the hourly save writes it: a hand-built dict of the boost time alone
+        replaced the stored learned heating rate, which a restart before the next hourly save lost.
         """
         try:
             # Load existing learning data to preserve other modules
@@ -3004,9 +3007,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Update DHW state
             if self.dhw_optimizer and self.dhw_optimizer.last_legionella_boost:
-                existing_data["dhw_state"] = {
-                    "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
-                }
+                existing_data["dhw_state"] = self.dhw_optimizer.get_dhw_state_for_persistence()
                 existing_data["last_updated"] = dt_util.utcnow().isoformat()
                 existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
