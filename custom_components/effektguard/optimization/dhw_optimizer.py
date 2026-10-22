@@ -273,6 +273,8 @@ class IntelligentDHWScheduler:
         # Uses weighted average of observations for accuracy
         self.learned_heating_rate: float | None = None
         self.heating_rate_observations: int = 0  # Count for weighted average
+        # When the last heating cycle learned from ended: each cycle is one observation.
+        self._learned_cycle_end: datetime | None = None
 
         # Set user target temperature
         # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
@@ -319,6 +321,7 @@ class IntelligentDHWScheduler:
             not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
         )
         self.bt7_history.append((timestamp, temp))
+        self._learn_from_the_last_heating_cycle()
         if reached:
             self.last_legionella_boost = timestamp
             self._reported_hygiene_overdue = False
@@ -327,24 +330,29 @@ class IntelligentDHWScheduler:
             )
 
     def calculate_heating_rate(self) -> float:
-        """Calculate actual DHW heating rate from recent temperature history.
+        """The DHW heating rate in °C/hour: the learned rate, or the default until there is one.
 
-        Analyzes BT7 temperature history to find heating cycles and calculate
-        the real heating rate in °C/hour. This is more accurate than static
-        estimates because it adapts to actual heat pump performance.
+        A query, not a measurement. Learning happens where the readings arrive
+        (_learn_from_the_last_heating_cycle): it used to happen here, so the most recent cycle in
+        the 4-hour history was learned again on every call - three calls a cycle, 36 observations
+        of one cycle an hour, and the "learned" rate was the last cycle's.
+        """
+        if self.learned_heating_rate is not None:
+            return self.learned_heating_rate
+        return DHW_DEFAULT_HEATING_RATE
 
-        Returns:
-            Heating rate in °C/hour. Returns learned rate if available,
-            otherwise default estimate if insufficient data.
+    def _learn_from_the_last_heating_cycle(self) -> None:
+        """Learn the most recent heating cycle in the BT7 history - once, when it has ended.
+
+        Analyzes BT7 temperature history to find the latest heating cycle and its real rate in
+        °C/hour. A cycle still rising at the newest reading is not finished; one already learned
+        (same end) is not learned again.
 
         Based on debug log analysis from 2025-12-22:
         - 19:00 → 20:00: 23.8°C → 37.8°C = 14°C in 60 min = 14°C/hour
         """
         if len(self.bt7_history) < 6:  # Need at least 30 min of data (5 min intervals)
-            # Return learned rate if available, otherwise default
-            if self.learned_heating_rate is not None:
-                return self.learned_heating_rate
-            return DHW_DEFAULT_HEATING_RATE
+            return
 
         # Find the most recent heating cycle (temperature increasing)
         temps = list(self.bt7_history)
@@ -367,37 +375,34 @@ class IntelligentDHWScheduler:
                 if heating_end_idx is None:
                     heating_end_idx = i
 
-        # Calculate rate if we found a valid heating period
-        if heating_start_idx is not None and heating_end_idx is not None:
-            start_time, start_temp = temps[heating_start_idx]
-            end_time, end_temp = temps[heating_end_idx]
+        if heating_start_idx is None or heating_end_idx is None:
+            return
+        if heating_end_idx == len(temps) - 1:
+            return  # still heating: learned once it has ended
+        end_time, end_temp = temps[heating_end_idx]
+        if end_time == self._learned_cycle_end:
+            return  # this cycle is already one observation
+        self._learned_cycle_end = end_time
 
-            duration_hours = (end_time - start_time).total_seconds() / 3600
-            temp_change = end_temp - start_temp
+        start_time, start_temp = temps[heating_start_idx]
+        duration_hours = (end_time - start_time).total_seconds() / 3600
+        temp_change = end_temp - start_temp
 
-            if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
-                calculated_rate = temp_change / duration_hours
-                # Same plausibility band that gates the restore path - a rate that cannot be
-                # learned must not be loadable from storage either.
-                if DHW_HEATING_RATE_MIN <= calculated_rate <= DHW_HEATING_RATE_MAX:
-                    # Update learned rate with weighted average
-                    self._update_learned_rate(calculated_rate)
-                    _LOGGER.debug(
-                        "DHW heating rate calculated: %.1f°C/hour (%.1f°C in %.1f min), "
-                        "learned rate: %.1f°C/hour (%d observations)",
-                        calculated_rate,
-                        temp_change,
-                        duration_hours * 60,
-                        self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
-                        self.heating_rate_observations,
-                    )
-                    # Return learned rate (more stable than single measurement)
-                    return self.learned_heating_rate or calculated_rate
-
-        # Return learned rate if available, otherwise default
-        if self.learned_heating_rate is not None:
-            return self.learned_heating_rate
-        return DHW_DEFAULT_HEATING_RATE
+        if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
+            calculated_rate = temp_change / duration_hours
+            # Same plausibility band that gates the restore path - a rate that cannot be
+            # learned must not be loadable from storage either.
+            if DHW_HEATING_RATE_MIN <= calculated_rate <= DHW_HEATING_RATE_MAX:
+                self._update_learned_rate(calculated_rate)
+                _LOGGER.debug(
+                    "DHW heating rate calculated: %.1f°C/hour (%.1f°C in %.1f min), "
+                    "learned rate: %.1f°C/hour (%d observations)",
+                    calculated_rate,
+                    temp_change,
+                    duration_hours * 60,
+                    self.learned_heating_rate or DHW_DEFAULT_HEATING_RATE,
+                    self.heating_rate_observations,
+                )
 
     def _update_learned_rate(self, new_rate: float) -> None:
         """Update learned heating rate with weighted average.
