@@ -262,8 +262,11 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         await coordinator._async_update_data()
         assert coordinator._startup_update_count == 0  # Still lockout
 
-        # Update 4: 2 minutes later (lockout passed, first observation)
+        # Update 4: 2 minutes later (lockout passed): a read is not an observation cycle...
         current_time = start_time + timedelta(minutes=2)
         await coordinator._async_update_data()
-        # With STARTUP_GRACE_UPDATES=1, count goes to 1, which means grace ends
+        assert coordinator._startup_update_count == 0
+
+        # ...the control cycle is. With STARTUP_GRACE_UPDATES=1 the count goes to 1 and grace ends.
+        await coordinator._drive_the_pump()
         assert coordinator._startup_update_count == 1  # Observation cycle done
