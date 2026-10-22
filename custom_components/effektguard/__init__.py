@@ -306,6 +306,12 @@ async def _create_coordinator(
 
     # Connect thermal predictor and weather learner to decision engine (Phase 6)
     # CRITICAL: Use adaptive learning model for UFH-specific prediction horizons (enoch85 feedback)
+    # It carries the owner's building settings, as the rest of the engine was built from them above
+    # and as a hot reload writes them (async_update_config). Swapped in bare, the price layer's
+    # look-ahead and the learned pre-heat ran on 1.0, or on what learning last saved, after every
+    # restart until the options were saved again.
+    coordinator.adaptive_learning.thermal_mass = thermal_model.thermal_mass
+    coordinator.adaptive_learning.insulation_quality = thermal_model.insulation_quality
     decision_engine.thermal = coordinator.adaptive_learning  # AdaptiveThermalModel
     decision_engine.predictor = coordinator.thermal_predictor
     decision_engine.weather_learner = coordinator.weather_learner
