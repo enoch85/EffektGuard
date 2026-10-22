@@ -18,6 +18,7 @@ This adapter:
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, NotRequired, TypedDict
@@ -280,6 +281,12 @@ class GESpotAdapter:
                 # every genuine quarter of the day and wins the most aggressive pre-heating the
                 # price layer can command. KeyError below drops the interval instead.
                 price = float(item["value"])
+                # float() accepts "nan" and "inf", and they are no more a price than a missing
+                # value: a NaN in the look-ahead made min() return NaN, which nothing equals, and the
+                # price layer's search raised StopIteration - an exception the decision does not
+                # catch - so every cycle failed until the NaN left the window.
+                if not math.isfinite(price):
+                    raise ValueError(f"not a finite price: {price}")
 
                 # Create period with just datetime and price (all else derived)
                 periods.append(QuarterPeriod(start_time=start_time, price=price))
