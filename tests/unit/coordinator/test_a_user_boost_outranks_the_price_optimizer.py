@@ -118,6 +118,7 @@ class _House:
         )
         effect = MagicMock()
         effect.async_save = AsyncMock()
+        effect.get_monthly_peak_summary = MagicMock(return_value={"count": 0, "highest": 0.0})
         data = {
             "enable_optimization": True,
             "enable_hot_water_optimization": hot_water_optimisation,
