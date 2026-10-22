@@ -49,7 +49,8 @@ The last two are myuplink entity ids for an F750; use your pump's.
 
 `effektguard.boost_dhw` turns temporary lux on at once, with `duration` 30-180 min (default 90).
 The pump heats to its own luxury stop temperature; EffektGuard keeps the switch on for the duration
-(price optimisation does not cancel it, the thermal-debt safety stop does) and then turns it off.
+and then turns it off, with or without hot-water optimisation. Price does not cancel it; the safety
+gate does (DM at −1500 or the house below 18 °C), and refuses to start it.
 Calls are 60 min apart at least, and refused while optimisation is off.
 
 ```yaml
