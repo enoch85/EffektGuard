@@ -587,6 +587,17 @@ class NibeAdapter:
             _LOGGER.error("Failed to set NIBE offset: %s", err)
             return None
 
+    def holds(self, offset: float) -> bool:
+        """Whether the register holds what `offset` asks for: written, or nothing to write.
+
+        False after a write that failed or was skipped, which set_curve_offset's None does not
+        tell apart from a write that was not needed.
+        """
+        return (
+            self._last_nibe_offset is not None
+            and integer_offset_for(offset, self._last_nibe_offset) == self._last_nibe_offset
+        )
+
     async def set_enhanced_ventilation(self, enabled: bool, *, force_write: bool = False) -> bool:
         """Enable or disable enhanced ventilation for exhaust air heat pumps.
 

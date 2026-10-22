@@ -1276,6 +1276,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # gated as a control cycle would be, so what it publishes matches the register, and records
         # nothing, so a decision nobody applied cannot become the baseline that later reaches it.
         previous_offset = self._offset_volatility_tracker.last_offset
+        previous_change = self._offset_volatility_tracker.last_change
         gated = gate_offset(
             self._offset_volatility_tracker,
             decision,
@@ -1345,6 +1346,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if explicit_command:
                     raise
                 # Automatic control retries on the next aligned cycle.
+            # A write that failed or was skipped is no baseline either: the gate's record is taken
+            # back, so the next cycle is compared with what the pump holds.
+            if not self.nibe.holds(decision.offset):
+                self._offset_volatility_tracker.last_change = previous_change
 
         self._accumulate_spot_savings(nibe_data, price_data)
 

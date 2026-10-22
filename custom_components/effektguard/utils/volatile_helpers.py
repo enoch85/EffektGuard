@@ -313,6 +313,15 @@ class OffsetVolatilityTracker:
         """Get the last recorded offset."""
         return self._last_change.offset if self._last_change else None
 
+    @property
+    def last_change(self) -> OffsetChangeInfo | None:
+        """The last recorded change - for a caller that must take back one that never applied."""
+        return self._last_change
+
+    @last_change.setter
+    def last_change(self, change: OffsetChangeInfo | None) -> None:
+        self._last_change = change
+
     def record_change(self, offset: float, reason: str = "") -> None:
         """Record an offset change.
 
