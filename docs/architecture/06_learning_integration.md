@@ -39,10 +39,11 @@ anything, and 192 with offset steps above 1 °C before it classifies the respons
 
 ## What bypasses the gate
 
-`__init__.py` hands the engine the `AdaptiveThermalModel` as its thermal model. Every cycle the
-prediction layer calls `thermal_model.get_parameters()`, which is `update_learned_parameters()`:
-once 96 observations exist it overwrites `thermal_mass` and `ufh_type` on the model, whatever the
-confidence. From there:
+`__init__.py` hands the engine the `AdaptiveThermalModel` as its thermal model, set to the owner's
+thermal mass and insulation. Every cycle the prediction layer calls
+`thermal_model.get_parameters()`, which is `update_learned_parameters()`: once 96 observations
+exist it overwrites `thermal_mass` and `ufh_type` on the model, whatever the confidence. From
+there:
 
 - `thermal_mass` sets the `Spot Price` look-ahead (`PRICE_FORECAST_BASE_HORIZON` 5 h × thermal
   mass) and scales the predictor's fallback temperature model. The DM thermal-mass buffer does not
@@ -61,6 +62,7 @@ predictor every 5 minutes, and on shutdown. Keys: `version`, `last_updated`, `la
 `thermal_model` (`thermal_mass`, `ufh_type`, `learned_parameters`, `observation_count`),
 `thermal_predictor`, `weather_patterns`, `weather_summary`, `dhw_state`.
 
-A restart restores `thermal_mass`, `ufh_type`, the predictor's snapshots and the weather patterns.
+A restart restores `ufh_type`, the predictor's snapshots and the weather patterns; the thermal mass
+starts again from the owner's setting.
 The hourly observations themselves are not saved: the window starts empty, and the model does not
 re-learn until it has run another 4 days.
