@@ -87,7 +87,7 @@ from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor, CompressorSaturation
 from .utils.power import power_kw_from_state
-from .utils.time_utils import get_current_billing_period
+from .utils.time_utils import get_current_billing_period, seconds_between
 from .utils.volatile_helpers import OffsetVolatilityTracker
 
 if TYPE_CHECKING:
@@ -370,8 +370,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
         self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
-        # Startup grace: timeout after which observation cycles begin
-        self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
+        # Startup grace: timeout after which observation cycles begin. A deadline in UTC - on the
+        # local clock a restart at 02:59 CEST on the night the clocks go back stayed locked out
+        # until 03:01 CET, 62 real minutes.
+        self._startup_grace_timeout = dt_util.utcnow() + timedelta(
+            seconds=STARTUP_GRACE_MIN_INTERVAL
+        )
 
         # Whether the "no price source" repair issue is currently raised.
         self._price_issue_active = False
@@ -396,10 +400,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         to ensure consistent timing relative to 15-minute spot price quarters.
         The +10 seconds gives sensors time to update before we read them.
 
+        Computed in UTC so that consecutive ticks are five REAL minutes apart. On the local clock
+        `now + timedelta` is wall-clock arithmetic: at 02:55:10 CEST on the night the clocks go
+        back it scheduled 03:00:10 CET, 65 minutes away, and inside the repeated hour it scheduled
+        ticks up to 55 minutes in the past, which Home Assistant fires at once. Every UTC offset is
+        a multiple of 15 minutes, so the ticks still land at :XX:10 on the local clock.
+
         Returns:
-            Next aligned datetime
+            Next aligned datetime, in UTC
         """
-        now = dt_util.now()
+        now = dt_util.utcnow()
         # Align to 5-minute boundaries (UPDATE_INTERVAL_MINUTES)
         minutes_past = now.minute % UPDATE_INTERVAL_MINUTES
         seconds_past = now.second
@@ -445,10 +455,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self._clock_aligned = True
             _LOGGER.info(
                 "Clock aligned to %s (updates every 5 min at :00:10, :05:10, :10:10, etc.)",
-                next_time.strftime("%H:%M:%S"),
+                dt_util.as_local(next_time).strftime("%H:%M:%S"),
             )
         else:
-            _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
+            _LOGGER.debug("Next update at %s", dt_util.as_local(next_time).strftime("%H:%M:%S"))
 
     async def _do_aligned_refresh(self) -> None:
         """Perform one refresh and ALWAYS re-arm the next aligned update.
@@ -1177,14 +1187,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Track DHW transition: active → inactive triggers weather layer cooldown
                 # When DHW stops, flow temp remains elevated - needs cooldown period
                 # Uses DHW_WEATHER_COOLDOWN_MINUTES (30 min) before weather comp re-enables
+                # Stamped in UTC: the cooldown and the cycle duration are elapsed times
                 if self.dhw_was_active and not dhw_is_active:
-                    self.dhw_heating_end = dt_util.now()
+                    self.dhw_heating_end = dt_util.utcnow()
                     _LOGGER.info(
                         "DHW heating stopped - triggering weather layer cooldown (%d min)",
                         DHW_WEATHER_COOLDOWN_MINUTES,
                     )
                 elif not self.dhw_was_active and dhw_is_active:
-                    self.dhw_heating_start = dt_util.now()
+                    self.dhw_heating_start = dt_util.utcnow()
                     _LOGGER.info(
                         "DHW heating started (is_hot_water=%s, temp_lux=%s)",
                         is_hot_water,
@@ -1216,7 +1227,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 # Startup grace period: lockout + observation cycles
-                now = dt_util.now()
+                now = dt_util.utcnow()
 
                 if explicit_command and decision.is_manual_override:
                     _LOGGER.info("Explicit user command bypasses startup observation")
@@ -1413,7 +1424,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Save learned data if changed (every hour to avoid excessive writes)
         if self._learned_data_changed:
-            now = dt_util.now()
+            now = dt_util.utcnow()
             if (
                 self._last_learning_save is None
                 or (now - self._last_learning_save).total_seconds() > 3600
@@ -1962,7 +1973,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if self._last_dhw_control_time is None:
             return False
 
-        minutes_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
+        minutes_since_last = seconds_between(self._last_dhw_control_time, now_time) / 60
         if minutes_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
             _LOGGER.debug(
                 "DHW start rate limited: %.1f min since last change (min %d min)",
