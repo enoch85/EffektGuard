@@ -496,7 +496,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info(
             "DHW boost activated via NIBE temporary lux on %s for %s minutes. The pump decides "
             "the lux temperature; EffektGuard ends the boost when the window closes, unless "
-            "NIBE's own lux timeout or the thermal-debt safety stop ends it first.",
+            "NIBE's own lux timeout or the safety stop (degree minutes at the auxiliary-heat "
+            "limit, or the house below its safety floor) ends it first.",
             temp_lux_entity,
             duration,
         )
