@@ -4,10 +4,12 @@ Verifies that boost_heating and force_offset services respect cooldown periods
 and prevent excessive calls that could harm heat pump operation.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 from freezegun import freeze_time
+from homeassistant.util import dt as dt_util
 
 # Import the module to access private functions for testing
 import custom_components.effektguard as effektguard_module
@@ -116,6 +118,68 @@ class TestServiceCooldownHelpers:
 
             assert is_allowed is False
             assert 179 <= remaining <= 181  # Allow 1 second tolerance
+
+
+class TestTheCooldownCountsRealMinutes:
+    """A cooldown is an elapsed duration, so it is measured on the absolute timeline.
+
+    It used to subtract two local datetimes, which for one tzinfo is wall-clock arithmetic (PEP
+    495 ignores `fold`): 50 real minutes after a boost at 02:50 CEST on the night the clocks go
+    back it still reported 3300 s of the 45-minute cooldown remaining, and on the night they go
+    forward 15 real minutes counted as 75 and let the next boost through.
+    """
+
+    STOCKHOLM = ZoneInfo("Europe/Stockholm")
+
+    def _clock_at(self, monkeypatch, instant_utc: datetime) -> None:
+        """Both of dt_util's clocks from one instant: `now()` local with `fold`, as HA gives it."""
+        monkeypatch.setattr(
+            dt_util, "now", lambda tz=None: instant_utc.astimezone(tz or self.STOCKHOLM)
+        )
+        monkeypatch.setattr(dt_util, "utcnow", lambda: instant_utc)
+
+    @pytest.mark.parametrize(
+        "night, called_at_utc, checked_at_utc, allowed, remaining_seconds",
+        [
+            (
+                "the clocks go back: 02:50 CEST to 02:40 CET is 50 real minutes",
+                datetime(2026, 10, 25, 0, 50, tzinfo=timezone.utc),
+                datetime(2026, 10, 25, 1, 40, tzinfo=timezone.utc),
+                True,
+                0,
+            ),
+            (
+                "the clocks go forward: 01:50 CET to 03:05 CEST is 15 real minutes",
+                datetime(2027, 3, 28, 0, 50, tzinfo=timezone.utc),
+                datetime(2027, 3, 28, 1, 5, tzinfo=timezone.utc),
+                False,
+                (HEATING_BOOST_COOLDOWN_MINUTES - 15) * 60,
+            ),
+        ],
+    )
+    def test_the_cooldown_counts_real_minutes_across_the_clock_change(
+        self,
+        clear_service_timestamps,
+        monkeypatch,
+        night,
+        called_at_utc,
+        checked_at_utc,
+        allowed,
+        remaining_seconds,
+    ):
+        self._clock_at(monkeypatch, called_at_utc)
+        effektguard_module._update_service_timestamp("boost_heating")
+
+        self._clock_at(monkeypatch, checked_at_utc)
+        verdict = effektguard_module._check_service_cooldown(
+            "boost_heating", HEATING_BOOST_COOLDOWN_MINUTES
+        )
+
+        assert verdict == (allowed, remaining_seconds), (
+            f"{night}, against a {HEATING_BOOST_COOLDOWN_MINUTES}-minute cooldown: expected "
+            f"(allowed={allowed}, {remaining_seconds} s remaining), got {verdict}. The elapsed time "
+            f"was measured on the wall clock."
+        )
 
 
 class TestBoostHeatingCooldown:

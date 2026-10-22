@@ -70,7 +70,9 @@ from ..const import (
 )
 from homeassistant.util import dt as dt_util
 
+from ..adapters.gespot_adapter import index_containing
 from ..utils.price_math import price_savings_fraction
+from ..utils.time_utils import after, seconds_between
 from .thermal_layer import estimate_dm_recovery_time, get_thermal_debt_status
 from .price_layer import PriceAnalyzer
 from ..utils.volatile_helpers import get_volatile_info
@@ -260,7 +262,7 @@ class IntelligentDHWScheduler:
         self.last_legionella_boost: datetime | None = None
         # A scheduled window that SAFETY refused. The owner asked for hot water and safety said not
         # yet - which is a debt to be settled the moment the house is out of danger, not a shower
-        # silently cancelled. Cleared when the water reaches target.
+        # silently cancelled. Cleared when the tank is where the window itself stops forcing heat.
         self._scheduled_window_owed: bool = False
         # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
         # it begins and ends, not on every cycle it lasts.
@@ -373,7 +375,7 @@ class IntelligentDHWScheduler:
             start_time, start_temp = temps[heating_start_idx]
             end_time, end_temp = temps[heating_end_idx]
 
-            duration_hours = (end_time - start_time).total_seconds() / 3600
+            duration_hours = seconds_between(start_time, end_time) / 3600
             temp_change = end_temp - start_temp
 
             if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
@@ -454,7 +456,11 @@ class IntelligentDHWScheduler:
         # BT7-history recovery that follows.
         if "last_legionella_boost" in state:
             try:
-                self.last_legionella_boost = datetime.fromisoformat(state["last_legionella_boost"])
+                restored = datetime.fromisoformat(state["last_legionella_boost"])
+                if restored.tzinfo is None:
+                    # Saved with its offset by every release; one without cannot be placed in time.
+                    raise ValueError("no UTC offset")
+                self.last_legionella_boost = restored
                 _LOGGER.info(
                     "Restored last Legionella boost: %s",
                     self.last_legionella_boost,
@@ -748,12 +754,26 @@ class IntelligentDHWScheduler:
 
         # Check if scheduling is active (user configured demand periods)
         upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
-        scheduled_min_amount: float | None = None
+        scheduled_min_amount: float | None = (
+            upcoming_demand["min_amount_minutes"] if upcoming_demand else None
+        )
         within_scheduled_window: bool = False
         hours_until_target: float | None = None
 
+        # What a scheduled window forces: heat while the tank is short of the target temperature
+        # and amount AND below MIN_DHW_TARGET_TEMP; from there it leaves the tank to price
+        # optimisation, and stops at the target. Lane 1 and RULE 0.5 (a window safety refused,
+        # settled later) both read it, so what is owed is what the window would have done.
+        temp_target_reached = current_dhw_temp >= self.user_target_temp
+        amount_target_reached = (
+            dhw_amount_minutes is not None
+            and scheduled_min_amount is not None
+            and dhw_amount_minutes >= scheduled_min_amount
+        )
+        target_reached = temp_target_reached or amount_target_reached
+        scheduled_heating_due = not target_reached and current_dhw_temp < MIN_DHW_TARGET_TEMP
+
         if upcoming_demand:
-            scheduled_min_amount = upcoming_demand["min_amount_minutes"]
             within_scheduled_window = upcoming_demand["within_scheduled_window"]
             hours_until_target = upcoming_demand["hours_until"]
 
@@ -795,22 +815,13 @@ class IntelligentDHWScheduler:
                 hours_until_target,
             )
 
-            # Check if target is reached (either temperature OR amount)
-            temp_target_reached = current_dhw_temp >= self.user_target_temp
-            amount_target_reached = (
-                dhw_amount_minutes is not None
-                and scheduled_min_amount is not None
-                and dhw_amount_minutes >= scheduled_min_amount
-            )
-            target_reached = temp_target_reached or amount_target_reached
-
             if within_scheduled_window:
                 # === LANE 1: SCHEDULED WINDOW - PRIORITY MODE ===
                 #
                 # This lane deliberately outranks the thermal-debt block (RULE 1) and the
                 # space-heating checks (RULES 2 and 4) - a scheduled shower is one the owner wants -
                 # but it does NOT outrank safety (this gate), which it once did.
-                unsafe = self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp)
+                unsafe = self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp)
                 if unsafe:
                     # Not cancelled. OWED, and settled once the house is out of danger, even after
                     # the window has closed (see RULE 0.5).
@@ -871,7 +882,7 @@ class IntelligentDHWScheduler:
                         abort_conditions=[],
                         recommended_start_time=next_opportunity,
                     )
-                elif current_dhw_temp >= MIN_DHW_TARGET_TEMP:
+                elif not scheduled_heating_due:
                     # Temp is adequate (≥45°C) - can wait for cheap prices
                     # Fall through to normal price optimization rules
                     _LOGGER.debug(
@@ -912,15 +923,9 @@ class IntelligentDHWScheduler:
                         if optimal_window:
                             # Check if waiting is worth it (significant savings AND reachable in time)
                             # Get current price for comparison
-                            current_quarter_price = next(
-                                (
-                                    p.price
-                                    for p in price_periods
-                                    if p.start_time
-                                    <= current_time
-                                    < p.start_time + timedelta(minutes=MINUTES_PER_QUARTER)
-                                ),
-                                None,
+                            index = index_containing(price_periods, current_time)
+                            current_quarter_price = (
+                                price_periods[index].price if index is not None else None
                             )
 
                             # `is not None`, NOT truthiness (0.00 is a real Nordic price), and the
@@ -1008,20 +1013,13 @@ class IntelligentDHWScheduler:
                         # Heat NOW (priority) - not PEAK price
                         if optimal_window:
                             # Get current price for logging
-                            # QuarterPeriod spans 15 minutes from start_time
-                            current_quarter_price = (
-                                next(
-                                    (
-                                        p.price
-                                        for p in price_periods
-                                        if p.start_time
-                                        <= current_time
-                                        < p.start_time + timedelta(minutes=15)
-                                    ),
-                                    None,
-                                )
+                            index = (
+                                index_containing(price_periods, current_time)
                                 if price_periods
                                 else None
+                            )
+                            current_quarter_price = (
+                                price_periods[index].price if index is not None else None
                             )
 
                             _LOGGER.info(
@@ -1085,11 +1083,15 @@ class IntelligentDHWScheduler:
         # When safety refuses a scheduled window (LANE 1), the shower is OWED, not cancelled. Once
         # the house is safe again, heat it now - even after the window has closed and even though the
         # ordinary thermal-debt block below would refuse it - carrying the window's own priority.
+        # What is owed is what the window would have done (scheduled_heating_due), no more. Settled
+        # on the target alone, the debt never cleared for a target above the pump's luxury stop,
+        # where temporary lux ends (the options allow up to DHW_MAX_TEMP; see const.py, Legionella),
+        # and forced lux at any price on every cycle, indefinitely.
         if self._scheduled_window_owed:
-            if current_dhw_temp >= self.user_target_temp:
+            if not scheduled_heating_due:
                 # Settled - by this rule, or by the pump's own schedule. Either way, nothing is owed.
                 self._scheduled_window_owed = False
-            elif self.scheduled_dhw_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
+            elif self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp) is None:
                 _LOGGER.info(
                     "Resuming the scheduled DHW that safety refused: house is safe again "
                     "(DM %.0f, indoor %.1f°C)",
@@ -1136,7 +1138,14 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
-        if (
+        # The one rule between an ordinary boost and the room. It refuses the start here and,
+        # decided again on the next cycle, stops a running boost: there is no second, stricter test
+        # in the abort conditions to disagree with it. (There was - `indoor_temp < target - 0.5` at
+        # any outdoor temperature - so at 0 C and above a boost started in a room that low was
+        # aborted five minutes later and restarted an hour on, a compressor start and stop each
+        # time.) Below the safety floor nothing ordinary runs at any outdoor temperature: the
+        # scheduled window, which outranks this rule, stops there too.
+        if self.hot_water_unsafe_reason(thermal_debt_dm, indoor_temp) is not None or (
             indoor_deficit > DHW_SPACE_HEATING_DEFICIT_THRESHOLD
             and outdoor_temp < DHW_SPACE_HEATING_OUTDOOR_THRESHOLD
         ):
@@ -1197,10 +1206,7 @@ class IntelligentDHWScheduler:
                             priority_reason=f"DHW_SAFETY_WINDOW_Q{optimal_window.quarters[0]}_@{optimal_window.avg_price:.1f}öre",
                             target_temp=DHW_SAFETY_MIN,
                             max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                            abort_conditions=[
-                                f"thermal_debt < {dm_abort_threshold:.0f}",
-                                f"indoor_temp < {target_indoor_temp - 0.5}",
-                            ],
+                            abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                             recommended_start_time=optimal_window.start_time,
                         )
                     elif optimal_window:
@@ -1261,10 +1267,7 @@ class IntelligentDHWScheduler:
                 priority_reason="DHW_SAFETY_MINIMUM",
                 target_temp=DHW_SAFETY_MIN,  # Only heat to safe level, not full target
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
@@ -1311,22 +1314,9 @@ class IntelligentDHWScheduler:
         # NIBE's cycle; if none is seen far past its interval, warn (below) - do not substitute.
         days_since_legionella = None
         if self.last_legionella_boost:
-            try:
-                days_since_legionella = (
-                    current_time - self.last_legionella_boost
-                ).total_seconds() / 86400.0
-            except TypeError:
-                # Handle timezone mismatch between naive and aware datetimes
-                # Convert both to naive for comparison
-                current_naive = (
-                    current_time.replace(tzinfo=None) if current_time.tzinfo else current_time
-                )
-                last_boost_naive = (
-                    self.last_legionella_boost.replace(tzinfo=None)
-                    if self.last_legionella_boost.tzinfo
-                    else self.last_legionella_boost
-                )
-                days_since_legionella = (current_naive - last_boost_naive).total_seconds() / 86400.0
+            days_since_legionella = (
+                seconds_between(self.last_legionella_boost, current_time) / 86400.0
+            )
 
         legionella_needed = (
             days_since_legionella is None or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS
@@ -1346,10 +1336,7 @@ class IntelligentDHWScheduler:
                     priority_reason="DHW_HYGIENE_BOOST",
                     target_temp=DHW_LEGIONELLA_PREVENT_TEMP,
                     max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
             elif is_cheap_price and is_volatile:
@@ -1407,10 +1394,7 @@ class IntelligentDHWScheduler:
                 priority_reason="DHW_COMPLETE_EMERGENCY_HEATING",
                 target_temp=self.user_target_temp,
                 max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
@@ -1429,10 +1413,7 @@ class IntelligentDHWScheduler:
                     priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
                     target_temp=self.user_target_temp,
                     max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
 
@@ -1493,7 +1474,6 @@ class IntelligentDHWScheduler:
                     max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
                     abort_conditions=[
                         f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
                         f"dhw_temp >= {self.user_target_temp}",
                     ],
                     recommended_start_time=None,  # Heating now
@@ -1555,10 +1535,7 @@ class IntelligentDHWScheduler:
                             priority_reason="CHEAP_NO_WINDOW_DATA",
                             target_temp=self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET,
                             max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                            abort_conditions=[
-                                f"thermal_debt < {dm_abort_threshold:.0f}",
-                                f"indoor_temp < {target_indoor_temp - 0.5}",
-                            ],
+                            abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                             recommended_start_time=None,  # Heating now - no future time needed
                         )
 
@@ -1582,10 +1559,7 @@ class IntelligentDHWScheduler:
                             self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
                         ),
                         max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                        ],
+                        abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                         recommended_start_time=optimal_window.start_time,
                     )
 
@@ -1624,10 +1598,7 @@ class IntelligentDHWScheduler:
                         self.user_target_temp + DHW_PREHEAT_TARGET_OFFSET, DHW_MAX_TEMP
                     ),
                     max_runtime_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                    abort_conditions=[
-                        f"thermal_debt < {dm_abort_threshold:.0f}",
-                        f"indoor_temp < {target_indoor_temp - 0.5}",
-                    ],
+                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
 
@@ -1656,13 +1627,9 @@ class IntelligentDHWScheduler:
 
                 if optimal_window:
                     # Get current price for comparison
-                    current_quarter_price = next(
-                        (
-                            p.price
-                            for p in price_periods
-                            if p.start_time <= current_time < p.start_time + timedelta(minutes=15)
-                        ),
-                        None,
+                    index = index_containing(price_periods, current_time)
+                    current_quarter_price = (
+                        price_periods[index].price if index is not None else None
                     )
 
                     # `price_savings_fraction`, not the arithmetic inline: the naive
@@ -1707,10 +1674,7 @@ class IntelligentDHWScheduler:
                         priority_reason=f"DHW_COMFORT_OPTIMAL_@{optimal_window.avg_price:.1f}öre",
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                        abort_conditions=[
-                            f"thermal_debt < {dm_abort_threshold:.0f}",
-                            f"indoor_temp < {target_indoor_temp - 0.5}",
-                        ],
+                        abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                         recommended_start_time=None,  # Heating now - no future time needed
                     )
                 else:
@@ -1736,10 +1700,7 @@ class IntelligentDHWScheduler:
                 priority_reason=f"DHW_COMFORT_LOW_{price_classification.upper()}",
                 target_temp=self.user_target_temp,
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                abort_conditions=[
-                    f"thermal_debt < {dm_abort_threshold:.0f}",
-                    f"indoor_temp < {target_indoor_temp - 0.5}",
-                ],
+                abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
 
@@ -1781,8 +1742,7 @@ class IntelligentDHWScheduler:
         # Calculate hours until availability if demand period exists
         next_demand_hours = None
         if next_demand:
-            hours_until = (next_demand["availability_time"] - current_time).total_seconds() / 3600
-            next_demand_hours = max(0, hours_until)
+            next_demand_hours = max(0, next_demand["hours_until"])
 
         if self.price_analyzer:
             return self.price_analyzer.calculate_lookahead_hours(
@@ -1857,7 +1817,7 @@ class IntelligentDHWScheduler:
                 target_dm=dm_block_threshold + DM_RECOVERY_SAFETY_BUFFER,
                 outdoor_temp=outdoor_temp,
             )
-            earliest_allowed = current_time + timedelta(hours=recovery_hours)
+            earliest_allowed = after(current_time, timedelta(hours=recovery_hours))
 
         # 2. Preference: the next cheap price window (candidate start)
         candidate = None
@@ -1877,23 +1837,31 @@ class IntelligentDHWScheduler:
         temp_margin = current_dhw_temp - MIN_DHW_TARGET_TEMP
         if temp_margin > 0:
             hours_until_low = temp_margin / DHW_COOLING_RATE
-            deadline = current_time + timedelta(hours=hours_until_low)
+            deadline = after(current_time, timedelta(hours=hours_until_low))
 
         if candidate is None and deadline is None and earliest_allowed == current_time:
-            return current_time + timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS)
+            return after(current_time, timedelta(hours=SPACE_HEATING_DEMAND_DROP_HOURS))
 
         # Without a price window, the meaningful recommendation is the
         # moment heating becomes necessary (the deadline)
         if candidate is None:
             candidate = deadline
 
+        # Ranked by instant (`key=datetime.timestamp`), not by the wall clock, which on the night
+        # the clocks go back puts 02:15 CET before 02:45 CEST.
         # Wait for the cheap window, but never start before the hard
         # constraint allows...
-        next_opportunity = max(earliest_allowed, candidate or earliest_allowed)
+        next_opportunity = max(
+            earliest_allowed, candidate or earliest_allowed, key=datetime.timestamp
+        )
         # ...and never later than the deadline (which itself cannot beat
         # the hard constraint)
         if deadline is not None:
-            next_opportunity = min(next_opportunity, max(earliest_allowed, deadline))
+            next_opportunity = min(
+                next_opportunity,
+                max(earliest_allowed, deadline, key=datetime.timestamp),
+                key=datetime.timestamp,
+            )
 
         _LOGGER.debug(
             "Next DHW opportunity for %s: %s (allowed from %s, window %s, deadline %s)",
@@ -1923,11 +1891,11 @@ class IntelligentDHWScheduler:
         """
         if not price_periods or not self.price_analyzer:
             # No price data - try again in 1 hour (conservative fallback)
-            return current_time + timedelta(hours=1)
+            return after(current_time, timedelta(hours=1))
 
         # Search through upcoming periods for the first non-peak
         for period in price_periods:
-            if period.start_time <= current_time:
+            if seconds_between(current_time, period.start_time) <= 0:
                 continue
 
             classification = self.price_analyzer.get_classification_for_period(period)
@@ -1942,7 +1910,7 @@ class IntelligentDHWScheduler:
 
         # No non-peak period found in forecast - try again in 2 hours
         _LOGGER.warning("No non-peak period found in price forecast - will retry in 2 hours")
-        return current_time + timedelta(hours=2)
+        return after(current_time, timedelta(hours=2))
 
     def _predict_dm_at_time(
         self,
@@ -1967,7 +1935,7 @@ class IntelligentDHWScheduler:
         Returns:
             Predicted DM value at target_time
         """
-        hours_ahead = (target_time - current_time).total_seconds() / 3600
+        hours_ahead = seconds_between(current_time, target_time) / 3600
 
         if hours_ahead <= 0:
             return current_dm
@@ -1977,7 +1945,7 @@ class IntelligentDHWScheduler:
         if weather_forecast:
             for forecast_hour in weather_forecast:
                 if hasattr(forecast_hour, "datetime") and hasattr(forecast_hour, "temperature"):
-                    if forecast_hour.datetime >= target_time:
+                    if seconds_between(target_time, forecast_hour.datetime) >= 0:
                         predicted_outdoor_temp = forecast_hour.temperature
                         break
 
@@ -2045,9 +2013,10 @@ class IntelligentDHWScheduler:
         # Find upcoming PEAK periods in next 24 hours
         peak_periods = []
         for period in price_periods:
-            if period.start_time <= current_time:
+            starts_in = seconds_between(current_time, period.start_time)
+            if starts_in <= 0:
                 continue
-            if period.start_time > current_time + timedelta(hours=24):
+            if starts_in > timedelta(hours=24).total_seconds():
                 break
 
             classification = self.price_analyzer.get_classification_for_period(period)
@@ -2060,12 +2029,12 @@ class IntelligentDHWScheduler:
 
         # Check each PEAK period
         for peak in peak_periods:
-            hours_until_peak = (peak.start_time - current_time).total_seconds() / 3600
+            hours_until_peak = seconds_between(current_time, peak.start_time) / 3600
 
             # Estimate: will DHW be blocked by thermal debt 2 hours before this peak?
-            check_time = peak.start_time - timedelta(hours=2)
-            if check_time <= current_time:
-                check_time = current_time + timedelta(minutes=30)
+            check_time = after(peak.start_time, -timedelta(hours=2))
+            if seconds_between(current_time, check_time) <= 0:
+                check_time = after(current_time, timedelta(minutes=30))
 
             predicted_dm = self._predict_dm_at_time(
                 target_time=check_time,
@@ -2157,20 +2126,21 @@ class IntelligentDHWScheduler:
 
         return "\n".join(lines)
 
-    def scheduled_dhw_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
-        """Why a SCHEDULED hot-water cycle must not run, or None if it may.
+    def hot_water_unsafe_reason(self, thermal_debt_dm: float, indoor_temp: float) -> str | None:
+        """Why hot water the owner asked for must not run, or None if it may.
 
-        A scheduled window outranks thermal debt and space-heating demand (deliberate priority), but
-        not the two points at which the house is in trouble:
+        A scheduled window and a boost_dhw boost outrank thermal debt, space-heating demand and
+        price (deliberate priority), but not the two points at which the house is in trouble:
 
           * indoor below MIN_TEMP_LIMIT - the safety layer already commands maximum heat, which DHW
             would take the compressor away from;
           * degree minutes at the absolute limit - the immersion heater is engaging.
 
         The scheduled path's ABORT conditions are built from these same two tests
-        (scheduled_dhw_abort_conditions): if a cycle can start in a state its own abort conditions
-        reject, it starts/aborts/rate-limits/restarts, cycling the compressor and heating no water.
-        One predicate, both ends.
+        (scheduled_dhw_abort_conditions), and the coordinator refuses and stops a boost_dhw boost on
+        this predicate itself: if a cycle can start in a state its own stop rejects, it
+        starts/aborts/rate-limits/restarts, cycling the compressor and heating no water. One
+        predicate, both ends.
         """
         if indoor_temp < MIN_TEMP_LIMIT:
             return (
@@ -2189,7 +2159,7 @@ class IntelligentDHWScheduler:
     def scheduled_dhw_abort_conditions(self) -> list[str]:
         """The abort conditions for a scheduled cycle: the safety gate, and nothing else.
 
-        Built from the same two thresholds as `scheduled_dhw_unsafe_reason`, so a cycle that was
+        Built from the same two thresholds as `hot_water_unsafe_reason`, so a cycle that was
         permitted to start cannot be aborted by the state it started in.
         """
         return [
@@ -2405,6 +2375,19 @@ class IntelligentDHWScheduler:
                 f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
             )
 
+            # A decision, not None: the coordinator applies control only on a decision, so with
+            # none a running boost was neither abort-checked nor stopped for as long as the room
+            # cooled - which a hot-water run in the cold helps cause. The block that refuses a start
+            # here now stops a running boost too.
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason="INDOOR_COOLING_RAPIDLY",
+                dm_block_threshold=self.get_dm_block_and_abort_thresholds(outdoor_temp)[0],
+            )
             return DHWRecommendation(
                 recommendation=recommendation,
                 summary=planning_summary,
@@ -2416,8 +2399,16 @@ class IntelligentDHWScheduler:
                     "indoor_temp": indoor_temp,
                     "indoor_trend": thermal_trend_rate,
                     "indoor_deficit": indoor_deficit,
+                    "recommended_start_time": next_opportunity,
                 },
-                decision=None,
+                decision=DHWScheduleDecision(
+                    should_heat=False,
+                    priority_reason="INDOOR_COOLING_RAPIDLY",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=0,
+                    abort_conditions=[],
+                    recommended_start_time=next_opportunity,
+                ),
             )
 
         # Get decision from should_start_dhw
