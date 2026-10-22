@@ -136,32 +136,38 @@ async def test_a_read_is_not_a_start_up_observation_cycle():
     assert coordinator._startup_update_count == 1
 
 
+def _on_a_real_adapter(coordinator, pump, *, failing_write: int) -> list[int]:
+    """Drive `pump` through a real NibeAdapter; the `failing_write`-th write raises."""
+    attempts: list[int] = []
+
+    async def set_value(domain, service, data, **_):
+        attempts.append(data["value"])
+        if len(attempts) == failing_write:
+            raise HomeAssistantError("the pump's cloud did not answer")
+        pump["offset"] = data["value"]
+
+    hass = coordinator.hass
+    hass.services.async_call = AsyncMock(side_effect=set_value)
+    hass.states.get = MagicMock(
+        side_effect=lambda entity_id: (
+            SimpleNamespace(state=str(pump["offset"]), attributes={"min": -10, "max": 10})
+            if entity_id == "number.offset"
+            else None
+        )
+    )
+    adapter = NibeAdapter(hass, {"nibe_entity": "number.offset"})
+    adapter.get_current_state = coordinator.nibe.get_current_state
+    adapter.is_enhanced_ventilation_active = coordinator.nibe.is_enhanced_ventilation_active
+    coordinator.nibe = adapter
+    return attempts
+
+
 @pytest.mark.asyncio
 async def test_an_offset_whose_write_failed_is_not_the_baseline():
     """The pump stays where it was when a write fails, and the next cycle is compared with that."""
-    attempts = []
     with freeze_time(START) as frozen:
         coordinator, pump, clock = _coordinator([1.0, 3.0, 1.0])
-
-        async def set_value(domain, service, data, **_):
-            attempts.append(data["value"])
-            if len(attempts) == 2:
-                raise HomeAssistantError("the pump's cloud did not answer")
-            pump["offset"] = data["value"]
-
-        hass = coordinator.hass
-        hass.services.async_call = AsyncMock(side_effect=set_value)
-        hass.states.get = MagicMock(
-            side_effect=lambda entity_id: (
-                SimpleNamespace(state=str(pump["offset"]), attributes={"min": -10, "max": 10})
-                if entity_id == "number.offset"
-                else None
-            )
-        )
-        adapter = NibeAdapter(hass, {"nibe_entity": "number.offset"})
-        adapter.get_current_state = coordinator.nibe.get_current_state
-        adapter.is_enhanced_ventilation_active = coordinator.nibe.is_enhanced_ventilation_active
-        coordinator.nibe = adapter
+        attempts = _on_a_real_adapter(coordinator, pump, failing_write=2)
 
         for _ in range(3):
             frozen.move_to(clock["now"])
@@ -173,3 +179,21 @@ async def test_an_offset_whose_write_failed_is_not_the_baseline():
         f"the engine proposed +1, +3, +1 and the +3 write failed; writes {attempts}, register "
         f"{pump['offset']}: the failed +3 became the baseline and was written in place of +1"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_heating_command_that_failed_is_not_the_baseline():
+    """A command reports its failure to the caller; its record goes back all the same."""
+    with freeze_time(START) as frozen:
+        coordinator, pump, clock = _coordinator([1.0, 3.0])
+        _on_a_real_adapter(coordinator, pump, failing_write=2)
+        with patch.object(dt_util, "utcnow", return_value=clock["now"]):
+            await coordinator._drive_the_pump()
+        clock["now"] += timedelta(minutes=5)
+        frozen.move_to(clock["now"])
+
+        with patch.object(dt_util, "utcnow", return_value=clock["now"]):
+            with pytest.raises(HomeAssistantError):
+                await coordinator._drive_the_pump(explicit_command=True)
+
+    assert coordinator._offset_volatility_tracker.last_offset == 1.0
