@@ -89,19 +89,22 @@ class TestMonthlyPeakIsTheHighest:
         # Which is exactly why assigning it to peak_this_month was wrong.
         assert effect.get_monthly_peak_summary()["highest"] == pytest.approx(6.0)
 
-    def test_coordinator_reads_the_summary_not_the_event(self):
-        """Regression guard on the coordinator's assignment."""
-        import inspect
-
+    @pytest.mark.asyncio
+    async def test_coordinator_reads_the_summary_not_the_event(self, hass):
+        """The coordinator's monthly peak is the record's highest, whatever was recorded last."""
         from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
-        src = inspect.getsource(EffektGuardCoordinator._update_peak_tracking)
-
-        assert "self.peak_this_month = peak_event.effective_power" not in src, (
-            "peak_this_month is being set to the LATEST peak. A 6.0 kW peak followed by a "
-            "2.0 kW quarter would silently drop the monthly peak to 2.0 kW."
+        coordinator = EffektGuardCoordinator.__new__(EffektGuardCoordinator)
+        coordinator.effect = EffectManager(hass)
+        await coordinator.effect.record_period_measurement(6.0, DAYTIME_PERIOD, OCTOBER)
+        await coordinator.effect.record_period_measurement(
+            2.0, DAYTIME_PERIOD + 4, OCTOBER + timedelta(days=1)
         )
-        assert 'get_monthly_peak_summary()["highest"]' in src
+
+        assert coordinator.peak_this_month == pytest.approx(6.0), (
+            "peak_this_month follows the LATEST peak. A 6.0 kW peak followed by a 2.0 kW period "
+            "would silently drop the monthly peak to 2.0 kW."
+        )
 
 
 class TestPredictiveBranchNeedsAPeakHistory:

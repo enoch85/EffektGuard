@@ -439,7 +439,6 @@ def coordinator_with_external_meter():
     )
 
     coordinator.peak_today = 0.0
-    coordinator.peak_this_month = 0.0
 
     return coordinator
 
@@ -483,7 +482,6 @@ def coordinator_without_external_meter():
     )
 
     coordinator.peak_today = 0.0
-    coordinator.peak_this_month = 0.0
 
     return coordinator
 

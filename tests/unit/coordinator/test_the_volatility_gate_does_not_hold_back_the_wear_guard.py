@@ -76,7 +76,10 @@ async def _registers(engine, register: int = 0, cycles: int = CYCLES) -> list[in
         gespot_adapter=MagicMock(get_prices=AsyncMock(return_value=None)),
         weather_adapter=MagicMock(get_forecast=AsyncMock(return_value=None)),
         decision_engine=engine,
-        effect_manager=MagicMock(async_save=AsyncMock()),
+        effect_manager=MagicMock(
+            async_save=AsyncMock(),
+            get_monthly_peak_summary=MagicMock(return_value={"count": 0, "highest": 0.0}),
+        ),
         entry=MagicMock(data={"enable_optimization": True}, options={}),
     )
     coordinator._startup_grace_timeout = dt_util.now() - timedelta(seconds=5)
