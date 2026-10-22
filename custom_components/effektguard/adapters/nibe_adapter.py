@@ -73,6 +73,7 @@ from ..const import (
     NIBE_UNKNOWN_VALUE_MARKERS,
     NIBE_VOLTAGE_PER_PHASE,
     SERVICE_RATE_LIMIT_MINUTES,
+    UPDATE_INTERVAL_MINUTES,
     TEMP_FACTOR_MAX,
     TEMP_FACTOR_MIN,
 )
@@ -142,6 +143,11 @@ class NibeState:
         but BT6 is better for triggering DHW heating cycles.
         """
         return self.dhw_charging_temp if self.dhw_charging_temp is not None else self.dhw_top_temp
+
+
+def _control_interval(moment: datetime) -> int:
+    """The control interval `moment` falls in, counted on the absolute timeline."""
+    return int(moment.timestamp() // timedelta(minutes=UPDATE_INTERVAL_MINUTES).total_seconds())
 
 
 class NibeAdapter:
@@ -463,14 +469,18 @@ class NibeAdapter:
             nibe_heatpump number (e.g. number.heat_offset_s1_47011), or a
             template number wrapping modbus.write_register.
         """
-        # Rate limiting - minimum time between writes
+        # One write per control interval. Measured as five minutes since the last write, a cycle
+        # whose read and decide work ran a few milliseconds faster than the one before it fell
+        # inside the limit and was skipped, so the register followed a cycle late - about every
+        # other write on consecutive cycles. Cycles run at :X0:10 and :X5:10, each inside its own
+        # interval whatever its work took.
         now = dt_util.utcnow()
         if (
             not force_write
             and self._last_write
-            and now - self._last_write < timedelta(minutes=SERVICE_RATE_LIMIT_MINUTES)
+            and _control_interval(self._last_write) == _control_interval(now)
         ):
-            _LOGGER.debug("Skipping offset write, too soon since last write")
+            _LOGGER.debug("Skipping offset write: this control interval has already written")
             return None
 
         # Get offset entity
