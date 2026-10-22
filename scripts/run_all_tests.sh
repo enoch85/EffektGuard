@@ -215,7 +215,7 @@ if [ -n "$MARKERS" ]; then
 fi
 
 if [ "$PARALLEL" = true ]; then
-    if command -v pytest-xdist &> /dev/null; then
+    if python -c "import xdist" &> /dev/null; then
         PYTEST_ARGS="$PYTEST_ARGS -n auto"
         echo -e "${CYAN}⚡ Parallel execution enabled${NC}"
     else
@@ -226,7 +226,7 @@ fi
 
 # Coverage options
 if [ "$COVERAGE" = true ]; then
-    if command -v pytest-cov &> /dev/null; then
+    if python -c "import pytest_cov" &> /dev/null; then
         PYTEST_ARGS="$PYTEST_ARGS --cov=custom_components/effektguard --cov-report=term-missing --cov-report=html"
         echo -e "${CYAN}📈 Coverage reporting enabled${NC}"
     else
