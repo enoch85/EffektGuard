@@ -389,6 +389,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # has written for longer than POWER_METER_MAX_AGE_MINUTES. Reported once when the silence
         # begins and once when it ends, not on every cycle it lasts.
         self._power_meter_silent = False
+        # The last-resort estimate is reported once, until a real measurement is seen again
+        self._power_fallback_reported = False
         # Learning observes hourly, not per control cycle - see _record_learning_observations
         self._last_learning_observation: datetime | None = None
         self._power_sensor_listener = None
@@ -2270,12 +2272,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
                 power_source = POWER_SOURCE_ESTIMATE
-                # A silent meter has already been reported once, above; this is the same silence.
-                (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
+                # Reported once: on an install with no meter it is every cycle the compressor stands
+                # still, and a silent meter has already been reported above. A real measurement
+                # (the meter, or the pump's phase currents) re-arms it.
+                quiet = self._power_meter_silent or self._power_fallback_reported
+                (_LOGGER.debug if quiet else _LOGGER.warning)(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
                     current_power,
                 )
+                self._power_fallback_reported = True
+            elif power_source in (POWER_SOURCE_EXTERNAL_METER, POWER_SOURCE_NIBE_CURRENTS):
+                self._power_fallback_reported = False
 
             # Do NOT override a low meter reading with a compressor-draw estimate on the assumption
             # that solar is masking grid import. The grid bills grid IMPORT, which is exactly what
