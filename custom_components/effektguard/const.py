@@ -1681,6 +1681,7 @@ NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
     {"hot water", "hot_water", "20", "20.0"}
 )
 NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
+NIBE_PRIO_OFF_STATES: Final[frozenset[str]] = frozenset({"off", "10", "10.0"})
 
 # Compressor frequency above this means the compressor is running.
 # Used to derive is_heating when no parseable status entity exists

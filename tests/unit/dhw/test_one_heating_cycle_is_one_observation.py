@@ -1,67 +1,44 @@
-"""One heating cycle of the tank is one observation of its heating rate.
+"""A hot-water charge is learned once, when the pump's priority leaves hot water.
 
-`calculate_heating_rate` found the most recent heating cycle in the 4-hour BT7 history and fed it
-to the learned rate on every call. It is called three times a coordinator cycle (Lane 1's estimate
-and `_check_upcoming_demand_period`, which runs twice), so one cycle was learned 36 times an hour
-for as long as it stayed in the history, and the weighted average was the last cycle's rate
-(review DHW F11). Learning now happens where the readings arrive, once per finished cycle.
+Through the control cycle: tests/unit/coordinator/test_one_hot_water_charge_is_one_observation.py.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
-from custom_components.effektguard.optimization.dhw_optimizer import (
-    DHWDemandPeriod,
-    IntelligentDHWScheduler,
-)
-from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
+from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
-STOCKHOLM = ZoneInfo("Europe/Stockholm")
-START = datetime(2026, 1, 15, 0, 0, tzinfo=STOCKHOLM)
+START = datetime(2026, 1, 15, 6, 0, tzinfo=timezone.utc)
 STEP = timedelta(minutes=5)
-RATE = 14.0  # °C/hour: 44 -> 58 C over the hour below
+CHARGE = [(44.0 + k, True) for k in range(8)] + [(52.0, False)]
 
 
-def test_a_heating_cycle_is_learned_once_however_often_it_is_asked_about():
-    detector = ClimateZoneDetector(latitude=59.33)
-    scheduler = IntelligentDHWScheduler(
-        demand_periods=[DHWDemandPeriod(availability_hour=7, target_temp=50.0, duration_hours=2)],
-        climate_detector=detector,
-        emergency_layer=EmergencyLayer(detector, heating_type="radiator"),
-        user_target_temp=50.0,
-    )
-    cooling = [46.0, 45.4, 44.8, 44.0]
-    heating = [44.0 + RATE * k / 12 for k in range(1, 13)]
-    readings = cooling + heating
-
-    now = START
-    for temp in readings:
-        scheduler.update_bt7_temperature(temp, now)
+def _feed(scheduler: IntelligentDHWScheduler, readings, now: datetime) -> datetime:
+    for temp, charging in readings:
+        scheduler.update_bt7_temperature(temp, now, charging)
         now += STEP
+    return now
 
-    # An hour of coordinator cycles after the cycle: a reading and a recommendation each.
-    for _ in range(12):
-        scheduler.update_bt7_temperature(readings[-1], now)
-        scheduler.calculate_recommendation(
-            current_dhw_temp=readings[-1],
-            thermal_debt=-200.0,
-            space_heating_demand=1.0,
-            outdoor_temp=0.0,
-            indoor_temp=21.0,
-            target_indoor=21.0,
-            price_classification="normal",
-            current_time=now,
-            price_periods=None,
-        )
-        now += STEP
 
-    assert scheduler.heating_rate_observations == 1, (
-        f"one heating cycle became {scheduler.heating_rate_observations} observations of the "
-        f"heating rate in an hour"
-    )
-    assert scheduler.learned_heating_rate == pytest.approx(RATE)
+def test_a_restart_does_not_learn_a_charge_twice():
+    scheduler = IntelligentDHWScheduler()
+    now = _feed(scheduler, CHARGE, START)
+
+    restarted = IntelligentDHWScheduler()
+    restarted.restore_from_persistence(scheduler.get_dhw_state_for_persistence())
+    restarted.bt7_history.extend(scheduler.bt7_history)
+    _feed(restarted, [(52.0, False)] * 12, now)
+
+    assert scheduler.heating_rate_observations == restarted.heating_rate_observations == 1
+
+
+def test_a_priority_that_cannot_say_is_not_timed_across():
+    """Unavailable mid-charge ends the span; the rest of the charge is measured on its own."""
+    scheduler = IntelligentDHWScheduler()
+    _feed(scheduler, CHARGE[:4] + [(48.0, None)] + CHARGE[4:], START)
+
+    assert scheduler.heating_rate_observations == 1
+    assert scheduler.learned_heating_rate == pytest.approx(4.0 / (20 / 60))  # 48 -> 52 C

@@ -1561,7 +1561,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
 
             # Update DHW optimizer with temperature history
-            self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
+            self.dhw_optimizer.update_bt7_temperature(
+                current_dhw_temp, now_time, getattr(nibe_data, "is_hot_water", None)
+            )
 
             # If Legionella boost was newly detected, save state immediately
             if (

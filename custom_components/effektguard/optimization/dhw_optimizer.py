@@ -273,10 +273,10 @@ class IntelligentDHWScheduler:
         # Uses weighted average of observations for accuracy
         self.learned_heating_rate: float | None = None
         self.heating_rate_observations: int = 0  # Count for weighted average
-        # When the last heating cycle learned from ended (a POSIX timestamp): each cycle is one
-        # observation. Not a datetime: two aware local datetimes in the hour the clocks go back
-        # compare by wall time, so a different cycle could pass for this one.
-        self._learned_cycle_end: float | None = None
+        # The pump's hot-water charge in progress, as its priority reports it: (POSIX time, BT7) at
+        # its first reading. A charge is one observation, learned when the priority leaves hot
+        # water, so a reading that pauses mid-charge cannot split it, nor a restart repeat it.
+        self._charge_start: tuple[float, float] | None = None
 
         # Set user target temperature
         # Priority: 1) Explicit parameter, 2) First demand period, 3) DEFAULT_DHW_TARGET_TEMP
@@ -307,7 +307,9 @@ class IntelligentDHWScheduler:
         if self.price_analyzer:
             _LOGGER.info("DHW optimizer initialized with shared PriceAnalyzer for window search")
 
-    def update_bt7_temperature(self, temp: float, timestamp: datetime) -> None:
+    def update_bt7_temperature(
+        self, temp: float, timestamp: datetime, charging: bool | None = None
+    ) -> None:
         """Update the BT7 history, and see NIBE's high-temperature cycle when the tank reaches it.
 
         A cycle is seen the moment BT7 reaches DHW_LEGIONELLA_DETECT - the rule the recorder
@@ -318,12 +320,13 @@ class IntelligentDHWScheduler:
         Args:
             temp: Current DHW temperature (BT7 top preferred, BT6 charging acceptable)
             timestamp: Current timestamp
+            charging: Whether the pump's priority is hot water; None when it cannot say
         """
         reached = temp >= DHW_LEGIONELLA_DETECT and (
             not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
         )
         self.bt7_history.append((timestamp, temp))
-        self._learn_from_the_last_heating_cycle()
+        self._learn_from_the_charge(temp, timestamp, charging)
         if reached:
             self.last_legionella_boost = timestamp
             self._reported_hygiene_overdue = False
@@ -335,7 +338,7 @@ class IntelligentDHWScheduler:
         """The DHW heating rate in °C/hour: the learned rate, or the default until there is one.
 
         A query, not a measurement. Learning happens where the readings arrive
-        (_learn_from_the_last_heating_cycle): it used to happen here, so the most recent cycle in
+        (_learn_from_the_charge): it used to happen here, so the most recent cycle in
         the 4-hour history was learned again on every call - three calls a cycle, 36 observations
         of one cycle an hour, and the "learned" rate was the last cycle's.
         """
@@ -343,54 +346,31 @@ class IntelligentDHWScheduler:
             return self.learned_heating_rate
         return DHW_DEFAULT_HEATING_RATE
 
-    def _learn_from_the_last_heating_cycle(self) -> None:
-        """Learn the most recent heating cycle in the BT7 history - once, when it has ended.
+    def _learn_from_the_charge(
+        self, temp: float, timestamp: datetime, charging: bool | None
+    ) -> None:
+        """Learn the heating rate from each hot-water charge the pump runs - once, when it ends.
 
-        Analyzes BT7 temperature history to find the latest heating cycle and its real rate in
-        °C/hour. A cycle still rising at the newest reading is not finished; one already learned
-        (same end) is not learned again.
-
-        Based on debug log analysis from 2025-12-22:
-        - 19:00 → 20:00: 23.8°C → 37.8°C = 14°C in 60 min = 14°C/hour
+        The charge is the pump's own: its priority is hot water from the first reading to the
+        reading where it is not. Read off the BT7 curve instead, one of the owner's 53 charges in
+        13 days of October 2026 was learned. The rate is BT7's rise over that span, on the absolute
+        timeline (aware local datetimes subtract by wall time, an hour off across the clock
+        change). A priority that cannot say (unavailable, unknown) ends the charge unlearned.
         """
-        if len(self.bt7_history) < 6:  # Need at least 30 min of data (5 min intervals)
+        if charging is None:
+            self._charge_start = None
             return
-
-        # Find the most recent heating cycle (temperature increasing)
-        temps = list(self.bt7_history)
-
-        # Look for continuous temperature increase
-        heating_start_idx = None
-        heating_end_idx = None
-
-        for i in range(len(temps) - 1, 0, -1):
-            curr_temp = temps[i][1]
-            prev_temp = temps[i - 1][1]
-
-            # If temperature dropped, this is the end of heating
-            if curr_temp < prev_temp - 0.5:  # 0.5°C tolerance for noise
-                if heating_end_idx is None:
-                    continue  # Skip if we haven't found rising temp yet
-                heating_start_idx = i
-                break
-            elif curr_temp > prev_temp + 0.3:  # Temperature rising
-                if heating_end_idx is None:
-                    heating_end_idx = i
-
-        if heating_start_idx is None or heating_end_idx is None:
+        if charging:
+            if self._charge_start is None:
+                self._charge_start = (timestamp.timestamp(), temp)
             return
-        if heating_end_idx == len(temps) - 1:
-            return  # still heating: learned once it has ended
-        end_time, end_temp = temps[heating_end_idx]
-        if end_time.timestamp() == self._learned_cycle_end:
-            return  # this cycle is already one observation
-        self._learned_cycle_end = end_time.timestamp()
+        if self._charge_start is None:
+            return
+        start_time, start_temp = self._charge_start
+        self._charge_start = None
 
-        start_time, start_temp = temps[heating_start_idx]
-        # On the absolute timeline: aware local datetimes subtract by wall time, an hour off across
-        # the clock change.
-        duration_hours = (end_time.timestamp() - start_time.timestamp()) / 3600
-        temp_change = end_temp - start_temp
+        duration_hours = (timestamp.timestamp() - start_time) / 3600
+        temp_change = temp - start_temp
 
         if duration_hours > 0.1 and temp_change > 2.0:  # At least 6 min and 2°C change
             calculated_rate = temp_change / duration_hours
