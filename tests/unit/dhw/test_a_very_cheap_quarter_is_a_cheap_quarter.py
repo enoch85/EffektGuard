@@ -59,7 +59,6 @@ def _decide(price: str, *, tank: float, volatile: bool, prices):
         price_classification=price,
         current_time=NOW,
         price_periods=prices,
-        hours_since_last_dhw=5.0,
         is_volatile=volatile,
     )
 

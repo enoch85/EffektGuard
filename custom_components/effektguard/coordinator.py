@@ -1729,7 +1729,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         # Gather HA-specific data
         target_indoor = self.held_target
-        hours_since_last = await self._calculate_hours_since_last_dhw()
 
         # Get thermal trend from predictor
         thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
@@ -1796,7 +1795,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             price_classification=price_classification,
             current_time=now_time,
             price_periods=price_periods,
-            hours_since_last_dhw=hours_since_last,
             thermal_trend_rate=trend_rate,
             climate_zone_name=climate_zone_name,
             weather_current_temp=weather_current_temp,
@@ -1806,95 +1804,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
         return result
-
-    async def _get_last_dhw_heating_time(self) -> datetime | None:
-        """Get timestamp when temporary lux was last activated.
-
-        Reads from MyUplink entity's last_changed attribute (source of truth).
-        Falls back to Home Assistant history API if entity is currently OFF.
-
-        Returns:
-            datetime: Last time DHW heating was activated (UTC)
-            None: If no history available
-        """
-        if not self.temp_lux_entity:
-            _LOGGER.debug("No temporary lux entity configured")
-            return None
-
-        # Try to read from current entity state
-        state = self.hass.states.get(self.temp_lux_entity)
-        if state:
-            if state.state == STATE_ON:
-                # Currently ON - last_changed is when it turned ON
-                _LOGGER.debug("DHW temp lux currently ON, last_changed: %s", state.last_changed)
-                return state.last_changed
-
-            # Entity is OFF - check history for last ON state
-            try:
-                from homeassistant.components import recorder
-
-                # Look back 48 hours
-                start_time = dt_util.utcnow() - timedelta(hours=48)
-                end_time = dt_util.utcnow()
-
-                # Get recorder instance and use its executor
-                # (get_instance/history are runtime attributes not in HA type stubs)
-                rec = recorder.get_instance(self.hass)  # type: ignore[attr-defined]
-                if rec is None:
-                    _LOGGER.warning("Recorder not available, cannot check DHW history")
-                    return None
-
-                # Get state history using recorder instance executor
-                states = await rec.async_add_executor_job(
-                    recorder.history.state_changes_during_period,  # type: ignore[attr-defined]
-                    self.hass,
-                    start_time,
-                    end_time,
-                    self.temp_lux_entity,
-                )
-
-                if self.temp_lux_entity in states:
-                    entity_states = states[self.temp_lux_entity]
-
-                    # Find most recent ON state
-                    for state_obj in reversed(entity_states):
-                        if state_obj.state == STATE_ON:
-                            _LOGGER.debug(
-                                "Last DHW heating from history: %s", state_obj.last_changed
-                            )
-                            return state_obj.last_changed
-
-                _LOGGER.debug("No ON state in history for %s", self.temp_lux_entity)
-
-            except (AttributeError, KeyError, ValueError, OSError) as err:
-                _LOGGER.error("Failed to read DHW heating history: %s", err)
-
-        else:
-            _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
-
-        # Fall back to stored value (if any)
-        if self._last_dhw_control_time is not None:
-            _LOGGER.debug("Using fallback stored DHW time: %s", self._last_dhw_control_time)
-            return self._last_dhw_control_time
-
-        return None
-
-    async def _calculate_hours_since_last_dhw(self) -> float:
-        """Calculate hours since last DHW heating.
-
-        Returns:
-            float: Hours since last heating (0.0+), or 24.0 if unknown
-        """
-        last_time = await self._get_last_dhw_heating_time()
-
-        if last_time is None:
-            _LOGGER.debug("Unknown DHW heating history - assuming 24 hours for safety")
-            return 24.0  # Safe assumption
-
-        now = dt_util.utcnow()
-        hours = (now - last_time).total_seconds() / 3600
-
-        return max(0.0, hours)  # Never negative
 
     async def _apply_airflow_decision(self, decision) -> None:
         """Apply automatic ventilation control based on airflow optimizer decision.

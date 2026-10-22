@@ -38,7 +38,6 @@ from ..const import (
     DHW_LEGIONELLA_PREVENT_TEMP,
     DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
-    DHW_MAX_WAIT_HOURS,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_OPTIMAL_WINDOW_MIN_SAVINGS,
     DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER,
@@ -662,7 +661,6 @@ class IntelligentDHWScheduler:
         price_classification: str,  # "very_cheap", "cheap", "normal", "expensive", "peak"
         current_time: datetime,
         price_periods: list | None = None,  # QuarterPeriod list for window scheduling
-        hours_since_last_dhw: float | None = None,  # Hours since last DHW heating
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
         dhw_amount_minutes: float | None = None,  # Current hot water amount from sensor
         weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
@@ -682,7 +680,6 @@ class IntelligentDHWScheduler:
             price_classification: Current electricity price classification
             current_time: Current datetime
             price_periods: Optional list of QuarterPeriod for window-based scheduling
-            hours_since_last_dhw: Optional hours since last DHW heating (for max wait check)
             is_volatile: True if current price classification run is too brief (<45 min).
                 When volatile=True and price is cheap, DHW waits for stable cheap window
                 instead of triggering immediately. Matches space heating behavior.
@@ -694,9 +691,9 @@ class IntelligentDHWScheduler:
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
-        # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 3.5, 5 and 7 spelled
-        # their own lists and left it out - RULE 5 waited through a very cheap night for a dearer
-        # cheap quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
+        # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 5 and 7 spelled their
+        # own lists and left it out - RULE 5 waited through a very cheap night for a dearer cheap
+        # quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
         is_cheap_price = price_classification in ["cheap", "very_cheap"]
         is_stable_cheap = is_cheap_price and not is_volatile
         is_acceptable_price = is_cheap_price or price_classification == "normal"
@@ -1420,25 +1417,6 @@ class IntelligentDHWScheduler:
                 abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
             )
-
-        # === RULE 3.5: MAXIMUM WAIT TIME EXCEEDED ===
-        # Must heat every 36 hours (hygiene, comfort)
-        if hours_since_last_dhw and hours_since_last_dhw > DHW_MAX_WAIT_HOURS:
-            # Only heat during cheap/normal prices (avoid expensive/peak even with max wait)
-            if is_acceptable_price:
-                _LOGGER.warning(
-                    "DHW maximum wait exceeded: %.1f hours (limit %.0fh)",
-                    hours_since_last_dhw,
-                    DHW_MAX_WAIT_HOURS,
-                )
-                return DHWScheduleDecision(
-                    should_heat=True,
-                    priority_reason=f"DHW_MAX_WAIT_EXCEEDED_{hours_since_last_dhw:.1f}H",
-                    target_temp=self.user_target_temp,
-                    max_runtime_minutes=DHW_EXTENDED_RUNTIME_MINUTES,
-                    abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
-                    recommended_start_time=None,  # Heating now - no future time needed
-                )
 
         # === RULE 4: HIGH SPACE HEATING DEMAND - DELAY DHW ===
         # NOTE: Legionella prevention is handled by NIBE automatically
@@ -2314,7 +2292,6 @@ class IntelligentDHWScheduler:
         price_classification: str,
         current_time: datetime,
         price_periods: list | None,
-        hours_since_last_dhw: float,
         thermal_trend_rate: float = 0.0,
         climate_zone_name: str | None = None,
         weather_current_temp: float | None = None,
@@ -2342,7 +2319,6 @@ class IntelligentDHWScheduler:
             price_classification: Price classification (very_cheap/cheap/normal/expensive/peak)
             current_time: Current datetime
             price_periods: Price period list for window scheduling
-            hours_since_last_dhw: Hours since last DHW heating
             thermal_trend_rate: Indoor temp change rate (°C/hour)
             climate_zone_name: Climate zone name for display
             weather_current_temp: Current weather temp for opportunity detection
@@ -2440,7 +2416,6 @@ class IntelligentDHWScheduler:
             price_classification=price_classification,
             current_time=current_time,
             price_periods=price_periods,
-            hours_since_last_dhw=hours_since_last_dhw,
             is_volatile=is_volatile,
             dhw_amount_minutes=dhw_amount_minutes,
             weather_forecast=weather_forecast,
