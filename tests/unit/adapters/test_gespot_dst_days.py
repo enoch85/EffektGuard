@@ -8,6 +8,7 @@ quarter numbers are ambiguous during the repeated autumn hour.
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo
 
 from custom_components.effektguard.adapters.gespot_adapter import (
     GESpotAdapter,
@@ -16,6 +17,8 @@ from custom_components.effektguard.adapters.gespot_adapter import (
 )
 from custom_components.effektguard.const import MINUTES_PER_QUARTER, QUARTERS_PER_DAY
 from custom_components.effektguard.utils.time_utils import resolve_period_index
+
+STOCKHOLM = ZoneInfo("Europe/Stockholm")
 
 
 def make_adapter() -> GESpotAdapter:
@@ -80,6 +83,38 @@ class TestAutumnDstDay:
         price_data = PriceData(today=periods, tomorrow=[], has_tomorrow=False)
         assert price_data.get_period(first_hour).price == 10.0
         assert price_data.get_period(second_hour).price == 90.0
+
+    def test_the_second_02xx_hour_is_found_in_the_areas_own_zone(self):
+        """A live GE-Spot publishes datetime objects in the area's ZoneInfo, and `dt_util.now()`
+        is in that same zone. Two aware datetimes with one tzinfo compare by wall clock - PEP 495
+        ignores `fold` - so every lookup in the second 02:xx hour matched the interval that began
+        an hour earlier and was served the first hour's price."""
+        two_am_cest = datetime(2026, 10, 25, 0, 0, tzinfo=timezone.utc)
+        raw = [
+            {
+                "time": (two_am_cest + timedelta(minutes=MINUTES_PER_QUARTER * q)).astimezone(
+                    STOCKHOLM
+                ),
+                "value": float(q),
+            }
+            for q in range(8)  # 02:00-02:45 CEST, then 02:00-02:45 CET
+        ]
+        price_data = PriceData(
+            today=make_adapter()._parse_periods(raw), tomorrow=[], has_tomorrow=False
+        )
+
+        served = [
+            price_data.get_period(
+                (two_am_cest + timedelta(minutes=MINUTES_PER_QUARTER * q + 5)).astimezone(STOCKHOLM)
+            ).price
+            for q in range(8)
+        ]
+
+        assert served == [float(q) for q in range(8)], (
+            f"five minutes into each of the eight quarters of the repeated hour the prices served "
+            f"were {served}. The second 02:xx hour (fold=1) was served the first hour's prices - "
+            f"the price layer voted on prices an hour stale through the whole repeated hour."
+        )
 
 
 class TestDegenerateDays:

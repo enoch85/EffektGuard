@@ -684,3 +684,46 @@ class TestTheBillingPeriodMeanIsTheOwnersQuarter:
             f"billed {recorded['power_kw']:.2f} kW. 1 kW stood for ten minutes and 9 kW for five: "
             f"the period's mean power is 3.67 kW. Counting the samples instead gives 5.0."
         )
+
+
+def _no_data(**currents) -> NibeState:
+    """A cycle with no meter, no Hz sensor and, unless given, no phase currents."""
+    return NibeState(
+        outdoor_temp=5.0,
+        indoor_temp=21.0,
+        supply_temp=35.0,
+        return_temp=30.0,
+        degree_minutes=-50.0,
+        current_offset=0.0,
+        is_heating=False,
+        is_hot_water=False,
+        timestamp=datetime.now(),
+        phase1_current=currents.get("phase1_current"),
+        phase2_current=None,
+        phase3_current=None,
+        compressor_hz=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_last_resort_estimate_is_reported_once(
+    coordinator_without_external_meter, caplog
+):
+    """On an install with no meter the fallback is every cycle the compressor stands still: a
+    warning every five minutes for a configuration fact. A real measurement re-arms it."""
+    coordinator = coordinator_without_external_meter
+
+    def warned() -> int:
+        return sum(
+            "Power estimation fallback" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
+
+    for _ in range(3):
+        await coordinator._update_peak_tracking(_no_data())
+    assert warned() == 1, f"{warned()} warnings in three cycles of the same missing data"
+
+    await coordinator._update_peak_tracking(_no_data(phase1_current=4.0))
+    await coordinator._update_peak_tracking(_no_data())
+    assert warned() == 2, "the fallback after a real measurement was not reported"

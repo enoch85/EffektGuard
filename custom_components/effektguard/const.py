@@ -1082,8 +1082,9 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
 #
 # 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
-# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
-# today can be broken by the guard. (Audit F-015.)
+# less often than this cannot support five-minute heat-pump control anyway. (Audit F-015.) It
+# guards the readings that drive the pump. The room thermometers and the offset register are read
+# without it: they report only when their value changes, so silence there is a steady value.
 NIBE_READING_MAX_AGE_MINUTES: Final = 30
 
 STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
@@ -1509,8 +1510,14 @@ NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when se
 #
 # These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
 # catch a value that cannot be a temperature at all, not to second-guess a working sensor.
-INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+#
+# Indoor, the deci-degree mistake goes both ways. A missing scale reads a room ten times too warm,
+# above the maximum; a scale applied twice reads it a tenth, and a room no warmer than the maximum
+# then reads no more than the minimum. Anything between is a room, however cold - and a cold room is
+# the one the 18 C safety floor exists for. NIBE's Modbus registers hold tenths of a degree.
+NIBE_DECI_DEGREE_FACTOR: Final = 10
 INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = INDOOR_SENSOR_PLAUSIBLE_MAX / NIBE_DECI_DEGREE_FACTOR
 
 # Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
 # habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes

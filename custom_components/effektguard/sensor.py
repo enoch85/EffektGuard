@@ -38,6 +38,7 @@ from .const import (
 )
 from .coordinator import EffektGuardCoordinator
 from .optimization.effect_layer import effective_tariff_power_kw
+from .utils.time_utils import seconds_between
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -725,8 +726,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             # Add schedule stability indicator (Phase 2 - Jan 2026)
             native_val = self.native_value
             if native_val and isinstance(native_val, datetime):
-                time_until = native_val - dt_util.now()
-                hours_until = time_until.total_seconds() / 3600
+                hours_until = seconds_between(dt_util.now(), native_val) / 3600
 
                 # Mark as "confirmed" if within 30 minutes (imminent)
                 # Mark as "planning" if further out (may change)
@@ -973,10 +973,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_hour"] = self.coordinator.peak_today_time.hour
 
                 # Calculate time since peak for context
-                now = dt_util.now()
-                time_since = now - self.coordinator.peak_today_time
-                hours = int(time_since.total_seconds() // 3600)
-                minutes = int((time_since.total_seconds() % 3600) // 60)
+                since_peak = seconds_between(self.coordinator.peak_today_time, dt_util.now())
+                hours = int(since_peak // 3600)
+                minutes = int((since_peak % 3600) // 60)
                 if hours > 0:
                     attrs["time_since_peak"] = f"{hours}h {minutes}m ago"
                 else:
@@ -1293,8 +1292,8 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 heating_start = self.coordinator.data.get("dhw_heating_start")
                 if heating_start:
                     attrs["heating_start"] = (
-                        heating_start.strftime("%H:%M:%S")
-                        if hasattr(heating_start, "strftime")
+                        dt_util.as_local(heating_start).strftime("%H:%M:%S")
+                        if isinstance(heating_start, datetime)
                         else str(heating_start)
                     )
 
@@ -1302,15 +1301,15 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 heating_end = self.coordinator.data.get("dhw_heating_end")
                 if heating_end:
                     attrs["heating_end"] = (
-                        heating_end.strftime("%H:%M:%S")
-                        if hasattr(heating_end, "strftime")
+                        dt_util.as_local(heating_end).strftime("%H:%M:%S")
+                        if isinstance(heating_end, datetime)
                         else str(heating_end)
                     )
 
                     # Calculate duration if we have both start and end
                     heating_start = self.coordinator.data.get("dhw_heating_start")
                     if heating_start and heating_end:
-                        duration_minutes = (heating_end - heating_start).total_seconds() / 60
+                        duration_minutes = seconds_between(heating_start, heating_end) / 60
                         attrs["last_cycle_duration"] = f"{duration_minutes:.1f} min"
 
             # Last heated time (legacy - when any heating was detected)
@@ -1376,8 +1375,10 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         )
                         attrs["water_amount_status"] = "normal_optimization"
                         if scheduled_starts_in is not None and scheduled_starts_in > 0:
-                            # Calculate the actual start time
-                            start_time = dt_util.now() + timedelta(hours=scheduled_starts_in)
+                            # Calculate the actual start time: real hours ahead, shown local
+                            start_time = dt_util.as_local(
+                                dt_util.utcnow() + timedelta(hours=scheduled_starts_in)
+                            )
                             attrs["water_amount_reasoning"] = (
                                 f"Target: {target} min by {availability_time.strftime('%H:%M') if availability_time else 'N/A'}. "
                                 f"Currently {current:.0f} min. Normal price optimization active. "
