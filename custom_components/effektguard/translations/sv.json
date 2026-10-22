@@ -84,7 +84,6 @@
       "gespot_entity_not_found": "Spotpris-enhet hittades inte"
     },
     "abort": {
-      "nibe_not_found": "Ingen NIBE-integration hittades. Installera och konfigurera MyUplink (moln) eller nibe_heatpump (lokal Modbus/NibeGW) först.",
       "reconfigure_successful": "Omkonfigurering lyckades"
     }
   },
@@ -251,13 +250,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Tvinga förskjutning av värmekurvan",
+      "description": "Åsidosätt värmekurvans förskjutning manuellt under en begränsad tid",
+      "fields": {
+        "offset": {
+          "name": "Förskjutning",
+          "description": "Värmekurvans förskjutning som ska användas (-10 till +10°C)"
+        },
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Hur länge åsidosättningen ska gälla (minuter, 0 = till nästa optimeringscykel)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nollställ effekttoppar",
+      "description": "Nollställ månadens effekttoppar (används när en ny debiteringsperiod börjar)"
+    },
     "boost_heating": {
       "name": "Boosta uppvärmning",
-      "description": "Öka tillfälligt uppvärmningen för snabb komfort"
+      "description": "Maximera uppvärmningen tillfälligt oavsett kostnad (nödläge för komfort)",
+      "fields": {
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Boostens varaktighet (minuter)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Boosta varmvatten",
-      "description": "Starta omedelbar varmvattencykel"
+      "description": "Starta en omedelbar varmvattenboost via NIBEs tillfälliga lyx. Pumpen värmer till sin egen lyxtemperatur; EffektGuard låter boosten pågå under den begärda tiden (prisoptimeringen avbryter den inte - bara säkerhetsstoppet för termisk skuld gör det) och stänger sedan av den.",
+      "fields": {
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Hur länge boosten får pågå innan EffektGuard stänger av den (minuter)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Beräkna optimalt schema",
+      "description": "Förhandsgranska optimeringsschemat för de kommande 24 timmarna utifrån rådande förhållanden"
     }
   },
   "issues": {

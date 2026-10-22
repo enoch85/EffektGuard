@@ -84,7 +84,6 @@
       "gespot_entity_not_found": "Spot price entity not found"
     },
     "abort": {
-      "nibe_not_found": "No NIBE integration found. Install and configure MyUplink (cloud) or nibe_heatpump (local Modbus/NibeGW) first.",
       "reconfigure_successful": "Reconfiguration successful"
     }
   },
@@ -251,13 +250,47 @@
     }
   },
   "services": {
-    "boost_heating": {
-      "name": "Boost Heating",
-      "description": "Temporarily increase heating for quick comfort boost"
+    "force_offset": {
+      "name": "Force heating offset",
+      "description": "Manually override heating curve offset temporarily",
+      "fields": {
+        "offset": {
+          "name": "Offset",
+          "description": "Heating curve offset to apply (-10 to +10°C)"
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long to maintain override (minutes, 0 = until next optimization cycle)"
+        }
+      }
     },
-    "boost_hot_water": {
-      "name": "Boost Hot Water",
-      "description": "Start immediate hot water heating cycle"
+    "reset_peak_tracking": {
+      "name": "Reset peak tracking",
+      "description": "Reset monthly peak tracking (use at start of new billing period)"
+    },
+    "boost_heating": {
+      "name": "Boost heating",
+      "description": "Temporarily maximize heating regardless of cost (emergency comfort mode)",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "Boost duration (minutes)"
+        }
+      }
+    },
+    "boost_dhw": {
+      "name": "Boost DHW",
+      "description": "Start an immediate hot-water boost via NIBE temporary lux. The pump heats to its own lux temperature; EffektGuard keeps the boost running for the requested duration (price optimization will not cancel it - only the thermal-debt safety stop will) and then turns it off.",
+      "fields": {
+        "duration": {
+          "name": "Duration",
+          "description": "How long the boost may run before EffektGuard turns it off (minutes)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Calculate optimal schedule",
+      "description": "Preview optimization schedule for next 24 hours based on current conditions"
     }
   },
   "issues": {

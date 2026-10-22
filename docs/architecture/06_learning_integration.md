@@ -1,333 +1,68 @@
-# Scenario 6: Phase 6 Learning Integration
+# Learning
 
-> ## ⚠️ LEARNED PRE-HEAT PARAMETERS DO NOT DRIVE YOUR HEAT PUMP - TWO LEARNED VALUES DO
->
-> Everything below is wired up and runs. Observations are recorded **hourly**
-> (`LEARNING_OBSERVATION_INTERVAL_MINUTES` = 60) into a rolling 672-observation window - 28 days -
-> and learning may engage after 96 observations (4 days). The prediction layer uses the learned
-> pre-heat parameters only above 70 % confidence (`LEARNING_CONFIDENCE_THRESHOLD`).
->
-> **Measured on a real house's year (2026-10-19):** the learned and fallback predictions erred by
-> 5-34 °C RMSE where "the room stays as it is" erred by about 1 °C, and confidence sat at 0.600 - below
-> the gate. Register: F-132b (strict xfail).
->
-> **Two learned values bypass the gate.** `__init__.py` hands the decision engine the
-> `AdaptiveThermalModel`, and the prediction layer calls its `get_parameters()` every cycle, which -
-> once 96 observations exist - overwrites `thermal_mass` (read by the spot-price layer's look-ahead)
-> and `ufh_type` (the learned pre-heat horizon). That is an open item.
->
-> Before the fix in `d111114`, the consistency term scored a **flatlined sensor** at 1.000 —
-> `std/mean` collapses to 0 when every reading is identical — so a failed indoor sensor earned maximum
-> confidence. A degenerate signal now scores zero. The five-minute cadence this page used to describe
-> (56 hours of memory, confidence 0.47) was replaced by the hourly one.
-
-**Description**: Self-learning thermal prediction and adaptive behavior.
+Three learners record data on every control cycle. Little of what they learn steers the pump, and
+what does is listed here. The learned pre-heat is on the open-findings register
+([docs/agent/PROJECT_NOTES.md](../agent/PROJECT_NOTES.md)); check it before trusting or tuning it.
 
 ```mermaid
-flowchart TD
-    subgraph "Observation Recording"
-        A[Every hour<br/>LEARNING_OBSERVATION_INTERVAL_MINUTES]
-        B[Record Indoor Temp]
-        C[Record Outdoor Temp]
-        D[Record Heating Offset]
-        E[Record Flow Temp]
-        F[Record Degree Minutes]
-        G[Store in State History]
-    end
-
-    subgraph "Adaptive Learning"
-        H[AdaptiveThermalModel]
-        I[Learn Thermal Mass<br/>From response patterns]
-        J[Learn UFH Type<br/>Concrete/Timber/Radiator]
-        K[Update Parameters<br/>every cycle once 96 observations exist]
-    end
-
-    subgraph "Thermal Prediction"
-        L[ThermalStatePredictor]
-        M[672 Observations<br/>28 days at the hourly cadence]
-        N[Confidence ≥ 70%<br/>Use learned params]
-        O[Predict Temperature<br/>half the thermal-mass horizon]
-    end
-
-    subgraph "Weather Pattern Learning"
-        P[WeatherPatternLearner]
-        Q[Daily Pattern Recording]
-        R[Weekly Pattern Database]
-        S[Seasonal Adaptation]
-    end
-
-    subgraph "Prediction Layer Decision"
-        T{Predictor Available?}
-        U{Sufficient Data?<br/>≥ 96 observations}
-        V{Weather Forecast OK?}
-        W[should_pre_heat Analysis]
-        X[Learned Pre-heat Target]
-        Y[Prediction Layer<br/>Offset: learned<br/>Weight: 0.65]
-        Z[Skip Prediction<br/>Offset: 0.0°C<br/>Weight: 0.0]
-    end
-
-    subgraph "Storage"
-        AA[HA Storage System]
-        BB[learning_store.async_save]
-        CC[Persist Learned Data<br/>Hourly when changed]
-    end
-
-    %% Flow
-    A --> B
-    A --> C
-    A --> D
-    A --> E
-    A --> F
-    B --> G
-    C --> G
-    D --> G
-    E --> G
-    F --> G
-    
-    G --> H
-    G --> L
-    G --> P
-    
-    H --> I
-    H --> J
-    H --> K
-    
-    L --> M
-    M --> N
-    N --> O
-    
-    P --> Q
-    Q --> R
-    R --> S
-    
-    T -->|Yes| U
-    T -->|No| Z
-    U -->|Yes| V
-    U -->|No| Z
-    V -->|Yes| W
-    V -->|No| Z
-    W --> X
-    X --> Y
-    
-    K --> AA
-    N --> AA
-    S --> AA
-    AA --> BB
-    BB --> CC
-
-    %% Styling
-    style A fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style G fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style O fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style T fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style U fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style V fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style Y fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style Z fill:#ddd,stroke:#000,stroke-width:2px,color:#000
+flowchart LR
+    C["Coordinator cycle<br/>every 5 min"]
+    C --> P["ThermalStatePredictor<br/>24 h of 5-min snapshots"]
+    C -->|hourly| A["AdaptiveThermalModel<br/>28 days of hourly observations"]
+    C -->|daily| W["WeatherPatternLearner<br/>one pattern per day"]
+    P --> T["Indoor and outdoor trend<br/>damping, Peak, Weather Pre-heat, airflow"]
+    P --> L["Learned Pre-heat vote<br/>weight 0.65"]
+    M["thermal mass, response type<br/>price look-ahead<br/>pre-heat horizon"]
+    A -->|no confidence gate| M
+    A -->|confidence 0.7 or more| L
+    W --> U["Unusual weather<br/>Math WC margin and weight"]
 ```
 
-## Self-Learning Architecture
+## The three learners
 
-### Three Learning Modules
+| Learner | Records | Produces | Reaches control |
+|---|---|---|---|
+| `AdaptiveThermalModel` (`adaptive_learning.py`) | indoor, outdoor and offset once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); rolling 672 = 28 days | thermal mass 0.5-2.0, response type, heat-loss index, heating efficiency, decay rate, confidence | thermal mass and response type, ungated; the rest only behind the gate |
+| `ThermalStatePredictor` (`prediction_layer.py`) | indoor, outdoor, offset, flow, DM every cycle; 24 h window | indoor and outdoor trend; the `Learned Pre-heat` layer | trend: trend damping, the `Peak` layer's prediction, `Weather Pre-heat`, airflow. Pre-heat: weight 0.65 once 24 h of history and a forecast exist |
+| `WeatherPatternLearner` (`weather_learning.py`) | one pattern per day from the first 24 forecast hours, keyed by month and week | typical weather for the date (the zone's seasonal defaults until data exists); `detect_unusual_weather` | unusual weather adds 0.5-1.5 °C to the `Math WC` safety margin and 0.15 to its weight ([10](10_adaptive_climate_zones.md)) |
 
-Phase 6 implements **three complementary learning systems**:
+## The confidence gate
 
-#### 1. AdaptiveThermalModel
-- **Purpose**: Learn building-specific thermal characteristics
-- **Input**: Indoor/outdoor temps, heating offsets, response patterns
-- **Output**: Refined thermal mass and UFH type estimates
-- **Update Frequency**: every cycle, once 96 hourly observations exist
+`LEARNING_CONFIDENCE_THRESHOLD` = 0.7. `ThermalStatePredictor.predict_temperature` uses the
+learned heating efficiency and decay rate only when the learned parameters carry that confidence;
+below it, its own responsiveness estimate. Confidence (`_calculate_confidence`) is
+0.4 × observations/672 + 0.4 × consistency of the heating rates + 0.2 × time span/7 days, and the
+consistency term is 0 with ten or fewer heating samples or a mean rate under 0.1 °C/h.
 
-#### 2. ThermalStatePredictor  
-- **Purpose**: Predict temperature evolution based on learned behavior
-- **Input**: up to 672 hourly observations (28 days)
-- **Output**: temperature predictions over half the thermal-mass horizon (3 h radiators, 6 h timber, 24 h slab), with confidence
-- **Threshold**: 70% confidence required for activation
+Learning needs 96 hourly observations (`LEARNING_MIN_OBSERVATIONS`, 4 days) before it produces
+anything, and 192 with offset steps above 1 °C before it classifies the response type.
 
-#### 3. WeatherPatternLearner
-- **Purpose**: Adapt to seasonal weather patterns
-- **Input**: Daily temperature patterns from forecasts
-- **Output**: Seasonal adaptation factors
-- **Database**: Weekly pattern storage with seasonal trends
+## What bypasses the gate
 
-### Observation Recording System
+`__init__.py` hands the engine the `AdaptiveThermalModel` as its thermal model, set to the owner's
+thermal mass and insulation. Every cycle the prediction layer calls
+`thermal_model.get_parameters()`, which is `update_learned_parameters()`: once 96 observations
+exist it overwrites `thermal_mass` and `ufh_type` on the model, whatever the confidence. From
+there:
 
-Once an **hour** (`LEARNING_OBSERVATION_INTERVAL_MINUTES`) the coordinator records:
+- `thermal_mass` sets the `Spot Price` look-ahead (`PRICE_FORECAST_BASE_HORIZON` 5 h × thermal
+  mass) and scales the predictor's fallback temperature model. The DM thermal-mass buffer does not
+  follow it: `heating_type` is fixed from the configured thermal mass when the engine starts.
+- `ufh_type` sets `get_prediction_horizon()`: 48 h slow, 12 h medium or unknown, 6 h fast. The
+  `Learned Pre-heat` layer reads that many forecast hours and looks half of them ahead. The
+  `Weather Pre-heat` horizon is fixed when the engine starts and does not follow it.
 
-```python
-Observation = {
-    timestamp: datetime,
-    indoor_temp: float,      # °C
-    outdoor_temp: float,     # °C  
-    heating_offset: float,   # °C applied
-    flow_temp: float,        # °C supply temp
-    degree_minutes: float    # Current DM value
-}
-```
+The heat-loss index never reaches control: `calculate_preheating_target` uses
+`DEFAULT_HEAT_LOSS_COEFFICIENT`, because the learned value is a relative index, not W/°C.
 
-These observations build the **state history** used for learning.
+## Storage
 
-### Adaptive Thermal Model Learning
+`Store(hass, 1, "effektguard_learned_data")`: saved at most hourly when something changed, the
+predictor every 5 minutes, and on shutdown. Keys: `version`, `last_updated`, `last_offset`,
+`thermal_model` (`thermal_mass`, `ufh_type`, `learned_parameters`, `observation_count`),
+`thermal_predictor`, `weather_patterns`, `weather_summary`, `dhw_state`.
 
-#### Thermal Mass Discovery
-Analyzes **temperature response patterns** to heating changes:
-
-- **Fast Response**: Low thermal mass (timber, poor insulation)
-- **Slow Response**: High thermal mass (concrete, good insulation)
-- **Mixed Response**: Standard construction
-
-#### UFH Type Classification  
-Determines underfloor heating characteristics:
-
-- **Concrete Slab**: 6+ hour thermal lag
-- **Timber UFH**: 2-3 hour lag  
-- **Radiator**: <1 hour response
-
-#### Parameter Updates
-**Daily recalculation** refines:
-```python
-learned_params = {
-    thermal_mass: 0.5-2.0,        # Relative scale
-    ufh_type: "concrete_slab",    # Detected type
-    response_time: hours,         # Time to temperature change
-    efficiency_factor: 0.8-1.2    # Heat pump effectiveness
-}
-```
-
-### Thermal State Prediction
-
-#### Data Requirements
-- **Minimum**: 96 hourly observations (4 days)
-- **Window**: 672 hourly observations (28 days, rolling)
-- **Confidence**: ≥70% required for predictions
-
-#### Prediction Horizon
-**Half the thermal-mass horizon** (`get_prediction_horizon()`: 6 h radiators, 12 h timber, 48 h slab) balances:
-- **Accuracy**: Shorter predictions more reliable
-- **Usefulness**: Sufficient time for pre-heating decisions
-- **Computational Cost**: Manageable calculation complexity
-
-#### Should Pre-heat Analysis
-The predictor evaluates:
-
-1. **Target Achievement**: Can we reach target temp naturally?
-2. **Thermal Decay**: Will we lose too much heat during forecast period?
-3. **Pre-heat Benefit**: Will pre-heating improve outcomes?
-4. **Energy Efficiency**: Is the energy cost justified?
-
-### Weather Pattern Learning
-
-#### Daily Pattern Capture
-Records **24-hour temperature profiles** from weather forecasts:
-```python
-daily_pattern = [
-    temp_00, temp_01, ..., temp_23  # Hourly temperatures
-]
-```
-
-#### Weekly Database
-Builds **pattern database** with:
-- Daily temperature profiles
-- Seasonal trends
-- Weather type classification (clear, cloudy, precipitation)
-- Prediction accuracy tracking
-
-#### Seasonal Adaptation
-Adjusts thresholds based on **learned seasonal patterns**:
-- Winter: More aggressive pre-heating
-- Summer: Gentler optimization  
-- Shoulder seasons: Balanced approach
-
-### Prediction Layer Decision Logic
-
-```python
-def prediction_layer_decision():
-    if not predictor_available:
-        return skip_prediction()
-    
-    if observations < 96:
-        return insufficient_data()
-    
-    if not weather_forecast:
-        return no_forecast()
-    
-    preheat_decision = predictor.should_pre_heat(
-        target_temp=21.0,
-        hours_ahead=6,
-        outdoor_forecast=forecast_temps
-    )
-    
-    if preheat_decision.should_preheat:
-        return LayerDecision(
-            offset=preheat_decision.recommended_offset,
-            weight=0.65,  # Prediction layer base weight
-            reason=preheat_decision.reason
-        )
-    
-    return no_preheat_needed()
-```
-
-### Storage and Persistence
-
-#### Home Assistant Storage API
-Uses **HA's built-in storage system**:
-```python
-learning_store = Store(hass, version=1, key="effektguard_learned_data")
-```
-
-#### Persistence Strategy
-- **Save Frequency**: Hourly when data changes
-- **Storage Format**: JSON with versioning
-- **Data Included**: All learned parameters, observation counts, confidence levels
-
-#### Data Structure
-```json
-{
-    "version": 1,
-    "last_updated": "2024-01-15T10:30:00Z",
-    "thermal_model": {
-        "thermal_mass": 1.2,
-        "ufh_type": "concrete_slab",
-        "learned_parameters": {...},
-        "observation_count": 1440
-    },
-    "thermal_predictor": {
-        "responsiveness": 0.85,
-        "state_count": 672,
-        "confidence": 0.78
-    },
-    "weather_patterns": {
-        "database_summary": {...},
-        "seasonal_factors": {...}
-    }
-}
-```
-
-### Integration with Decision Engine
-
-The **Prediction Layer** (weight 0.65) fits between:
-- **Weather Layer** (0.85): Higher priority for immediate weather threats
-- **Price Layer** (0.8): Cost optimization balanced with predictions
-
-This ensures **learned pre-heating** takes precedence over simple price optimization while still yielding to immediate weather-based needs.
-
-### Learning Confidence System
-
-#### Confidence Thresholds
-- **<70%**: Skip learned predictions, use generic thermal model
-- **70-85%**: Use learned predictions with caution
-- **>85%**: High confidence, rely on learned behavior
-
-#### Confidence Factors
-```python
-confidence = min(
-    observation_count / 672,        # Data quantity
-    prediction_accuracy,            # Historical accuracy
-    parameter_stability,            # Consistency over time
-    seasonal_adaptation_factor      # Seasonal appropriateness
-)
-```
-
-This graduated confidence system ensures the learning system **improves optimization gradually** without making dangerous assumptions from insufficient data.
+A restart restores `ufh_type`, the predictor's snapshots and the weather patterns; the thermal mass
+starts again from the owner's setting.
+The hourly observations themselves are not saved: the window starts empty, and the model does not
+re-learn until it has run another 4 days.

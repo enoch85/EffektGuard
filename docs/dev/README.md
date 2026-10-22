@@ -1,218 +1,48 @@
-# Developer Documentation
+# Developer documentation
 
-Complete development documentation for EffektGuard contributors.
+The rules live in [CLAUDE.md](../../CLAUDE.md) and `docs/agent/`:
+[IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) (workflow, verification, what earns a test, the
+safety rules) and [PROJECT_NOTES.md](../agent/PROJECT_NOTES.md) (conventions, the open-findings
+register, the traps). Read those first. This folder holds the mechanics.
 
-## Quick Links
+| Doc | What |
+|---|---|
+| [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md) | Python, the venv, the dev container |
+| [TESTING.md](TESTING.md) | Running the tests and the other gates |
+| [CODE_STANDARDS.md](CODE_STANDARDS.md) | Formatting, imports, type hints, docstrings, async |
+| [CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md) | Branch, change, check, commit, pull request |
 
-- **[ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)** - Set up your development environment
-- **[TESTING.md](TESTING.md)** - Running and writing tests
-- **[CODE_STANDARDS.md](CODE_STANDARDS.md)** - Code style and best practices
-- **[CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md)** - How to contribute
-
-## Getting Started
-
-New to EffektGuard development? Follow these steps:
-
-1. **Environment Setup** → [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)
-   - Clone repository
-   - Create the Python 3.15 virtual environment (`bash scripts/setup_dev.sh` → `.venv`)
-   - Verify installation with tests
-
-2. **Understand Architecture** → `../architecture/`
-   - Read `00_overview.md` for system overview
-   - Review layer priority system
-   - Understand climate-aware safety
-
-3. **Learn Code Standards** → [CODE_STANDARDS.md](CODE_STANDARDS.md)
-   - Black formatting (line length 100)
-   - Type hints and docstrings
-   - NIBE-specific knowledge
-   - Configuration constants
-
-4. **Write Tests** → [TESTING.md](TESTING.md)
-   - Unit tests for pure logic
-   - Integration tests for HA components
-   - Safety-critical code requires 100% coverage
-
-5. **Contribute** → [CONTRIBUTION_GUIDE.md](CONTRIBUTION_GUIDE.md)
-   - Create feature branch
-   - Follow commit guidelines
-   - Submit pull request
-
-## Core Principles
-
-This is **production code for real homes**. We prioritize:
-
-1. **Safety First** - Heat pump health over cost savings
-2. **Configuration-Driven** - No hardcoded values
-3. **Read Before Editing** - Understand full context
-4. **Test Everything** - Especially safety-critical code
-5. **Document Decisions** - Reference research for NIBE behavior
-
-## Project Structure
+## Code layout
 
 ```
 custom_components/effektguard/
-├── __init__.py              # Integration setup
-├── manifest.json            # HA integration metadata
-├── const.py                 # All constants and thresholds
-├── coordinator.py           # Data update coordination
-├── climate.py               # Main climate entity
-├── config_flow.py           # User configuration flow
-│
-├── optimization/            # Pure Python optimization logic
-│   ├── decision_engine.py   # Layer aggregation, the safety layer
-│   ├── thermal_layer.py     # EmergencyLayer (T1-T3, anti-windup), ProactiveLayer (Z1-Z5)
-│   ├── effect_layer.py      # Peak power tracking (EffectManager)
-│   ├── price_layer.py       # Price classification (PriceAnalyzer)
-│   ├── weather_layer.py     # Weather compensation and pre-heat
-│   ├── comfort_layer.py     # Comfort / overshoot
-│   ├── prediction_layer.py  # Learned pre-heat
-│   ├── dhw_optimizer.py     # Hot water scheduling
-│   └── climate_zones.py     # Climate-aware thresholds
-│
-├── adapters/                # External data interfaces
-│   ├── nibe_adapter.py      # NIBE entity reader (MyUplink / nibe_heatpump / Modbus)
-│   ├── gespot_adapter.py    # Spot Price price reader
-│   └── weather_adapter.py   # Weather forecast reader
-│
-└── utils/                   # Cross-cutting utilities
-    ├── offset.py            # The integer the offset register receives
-    ├── volatile_helpers.py  # The offset volatility gate
-    ├── emitter.py           # The EN 442 emitter law
-    └── degree_minutes.py    # Degree-minute helpers
+├── __init__.py          entry setup and the services
+├── config_flow.py       the config flow (options.py: the options flow)
+├── coordinator.py       the control loop; the only place that writes to the pump
+├── climate.py, sensor.py, switch.py, diagnostics.py
+├── const.py             every numeric value, with its source
+├── adapters/            nibe_adapter (MyUplink, nibe_heatpump or Modbus entities),
+│                        gespot_adapter (prices), weather_adapter
+├── models/              heat pump profiles (nibe/f730, f750, f1155, f2040, s1155), registry
+├── optimization/        decision_engine, the *_layer.py modules, climate_zones,
+│                        dhw_optimizer, airflow_optimizer, adaptive_learning, savings_calculator
+└── utils/               offset (the register integer), volatile_helpers (the volatility
+                         gate), emitter (EN 442), degree_minutes, compressor_monitor, power,
+                         price_math
 ```
 
-## Key Concepts
+How the layers combine: [docs/architecture/](../architecture/), starting with `00_overview.md`.
+The evidence behind the numbers in `const.py`: [docs/research/](../research/).
 
-### Climate-Aware Safety
+## Debug logging
 
-EffektGuard adapts safety thresholds based on climate zone and outdoor temperature:
+In Home Assistant's `configuration.yaml`:
 
-```python
-from .optimization.climate_zones import ClimateZoneDetector
-
-climate_detector = ClimateZoneDetector(latitude=59.33)
-dm_range = climate_detector.get_expected_dm_range(outdoor_temp=-10.0)
-
-# Ask the detector rather than quoting numbers here - a second copy drifts.
-# This block once said warning=-700 (Stockholm) and -1200 (Kiruna); both were stale.
-# Verified 2026-10-03: Stockholm @ -10 C -> warning=-740, Kiruna @ -30 C -> warning=-1400,
-# critical=-1500 in every zone.
+```yaml
+logger:
+  logs:
+    custom_components.effektguard: debug
 ```
 
-### NIBE Degree Minutes (DM)
-
-Critical safety metric tracking thermal balance:
-- **Standard start**: DM -60
-- **Extended runs**: DM -240 (acceptable)
-- **Climate-aware warning**: Varies by zone (e.g., -740 for Stockholm at -10°C)
-- **Absolute critical**: DM -1500 (never exceed)
-
-### Multi-Layer Decision Engine
-
-Optimization uses weighted voting across nine layers - Safety, Emergency (T1-T3, EMERGENCY, anti-windup),
-Proactive (Z1-Z5), Effect, Learned pre-heat, Math WC, Weather pre-heat, Spot price and Comfort; see
-`../architecture/08_layer_priority_system.md`.
-
-## Common Tasks
-
-### Running Tests
-
-```bash
-# All tests
-pytest tests/ -v
-
-# With coverage
-pytest tests/ --cov=custom_components/effektguard --cov-report=html
-
-# One category
-pytest tests/unit/dhw/ -q
-```
-
-### Formatting Code
-
-```bash
-# Format all code
-black custom_components/effektguard/ --line-length 100
-
-# Check formatting
-black custom_components/effektguard/ --check --line-length 100
-```
-
-### Debugging
-
-```bash
-# Check logs for decision reasoning
-grep "Decision:" logs/effektguard.log
-
-# Verify entity readings
-grep "NIBE state:" logs/effektguard.log
-
-# Enable debug logging
-# In configuration.yaml:
-# logger:
-#   logs:
-#     custom_components.effektguard: debug
-```
-
-### Adding Constants
-
-1. Add to `custom_components/effektguard/const.py` with research reference
-2. Update relevant logic to use constant
-3. Add tests for new threshold/value
-4. Document in docstrings
-
-## Research Documentation
-
-NIBE-specific behavior is based on research:
-- NIBE research references live in code docstrings and const.py comments
-  (F2040 forum cases, Swedish F750 findings)
-- `docs/CLIMATE_ZONES.md` - Climate-aware safety system
-
-**Never guess NIBE behavior** - always reference research!
-
-## Testing Requirements
-
-- **Unit tests**: Pure logic, fast execution
-- **Integration tests**: HA components, mock entities
-- **Safety tests**: 100% coverage for safety-critical code
-- **All tests must pass** before merge
-
-## Code Review Checklist
-
-Before submitting PR:
-- [ ] Black formatted (`black . --check --line-length 100`)
-- [ ] All tests pass (`pytest tests/ -v`)
-- [ ] No hardcoded values (use `const.py`)
-- [ ] Type hints on all functions
-- [ ] Docstrings with research references
-- [ ] Safety implications documented
-- [ ] Test coverage for new code
-
-## Getting Help
-
-- Read relevant architecture documents
-- Check existing research documentation
-- Open GitHub issue with specific questions
-- Reference NIBE manuals/forums when applicable
-
-## Additional Resources
-
-### User Documentation
-- `../../README.md` - User installation and setup
-- `../CLIMATE_ZONES.md` - Climate zone system
-- `../DHW_OPTIMIZATION.md` - DHW scheduling
-
-### Architecture Documentation
-- `../architecture/00_overview.md` - System overview
-- `../architecture/08_layer_priority_system.md` - Decision engine
-- `../architecture/10_adaptive_climate_zones.md` - Climate adaptation
-
-### Research Documentation
-- NIBE research references are inline in code docstrings and const.py comments
-  (the historical IMPLEMENTATION_PLAN/ folder is not part of this repository)
-
----
-
-**Remember**: This code controls heating in real homes. Quality, safety, and correctness over speed!
+The engine logs its verdict at `info` as `Decision: offset ...`. Home Assistant writes to
+`home-assistant.log` in its config directory, so from there: `grep "Decision:" home-assistant.log`.
