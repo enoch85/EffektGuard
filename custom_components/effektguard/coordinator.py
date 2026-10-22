@@ -1970,8 +1970,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if not temp_lux_state:
             _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
             return
+        if temp_lux_state.state not in (STATE_ON, STATE_OFF):
+            # Unavailable or unknown says nothing about the boost: it keeps its owner, and nothing
+            # is started or stopped on it. The next reading decides.
+            _LOGGER.debug(
+                "Temporary lux is %s - no hot-water control this cycle", temp_lux_state.state
+            )
+            return
 
-        is_lux_on = temp_lux_state.state == "on"
+        is_lux_on = temp_lux_state.state == STATE_ON
 
         # The optimiser stops only a boost EffektGuard started, as the unload cleanup does. A lux the
         # household switched on - on the pump's panel, in MyUplink, by its own automation - used to

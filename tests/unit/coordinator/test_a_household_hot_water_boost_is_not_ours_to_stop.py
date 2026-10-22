@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
@@ -80,3 +80,19 @@ async def test_a_household_boost_after_ours_ended_is_still_the_households():
     await coordinator._apply_dhw_control(WAIT, 48.0, NOW + timedelta(minutes=5))
 
     assert lux["calls"] == [], "the household's boost was taken for the one EffektGuard had started"
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_reading_does_not_hand_our_boost_away():
+    """A myUplink poll that fails reads the switch unavailable for a minute; the boost is ours."""
+    lux = {"s": STATE_UNAVAILABLE, "calls": []}
+    coordinator = _coordinator(lux, ours=True)
+
+    await coordinator._apply_dhw_control(WAIT, 48.0, NOW)
+    lux["s"] = STATE_ON
+    await coordinator._apply_dhw_control(WAIT, 48.0, NOW + timedelta(minutes=5))
+
+    assert lux["calls"] == ["turn_off"], (
+        f"after one unavailable reading EffektGuard's own boost was left running against a "
+        f"decision to stop it: {lux['calls']}"
+    )
