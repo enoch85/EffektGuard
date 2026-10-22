@@ -1,210 +1,73 @@
-# EffektGuard Release Process
+# Release mechanics
 
-This document describes the release process for EffektGuard.
+What `scripts/release.sh` and `.github/workflows/release.yml` do. The judgement around them -
+notes format, pre-release flips, re-cutting, the gates before cutting - is in
+[docs/agent/RELEASING.md](agent/RELEASING.md).
 
-## Release Types
+## Tags
 
-### 1. Beta Releases (Developer Testing)
+`vMAJOR.MINOR.PATCH`, optionally with a suffix: `v0.7.2`, `v0.7.2-beta.1`, `v0.7.2-rc.1`. The
+script accepts `^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$`. A suffix containing `-alpha`,
+`-beta` or `-rc` is a **pre-release** to both the script and the workflow.
 
-Beta releases are for internal testing by EffektGuard developers.
-
-**Create a beta release:**
-```bash
-bash scripts/release.sh v1.3.4-beta.1
-```
-
-This will:
-- Update manifest.json with the beta version
-- Create and push a git tag
-- Trigger GitHub Actions to create a pre-release
-- Mark the release as "Pre-release" on GitHub
-
-**Subsequent beta releases:**
-```bash
-bash scripts/release.sh v1.3.4-beta.2
-bash scripts/release.sh v1.3.4-beta.3
-# ... and so on
-```
-
-### 2. Production Releases (Public)
-
-Production releases are for public consumption via HACS.
-
-**Create a production release:**
-```bash
-bash scripts/release.sh v1.3.4 --prod
-```
-
-The `--prod` flag triggers the **automated production workflow**:
-
-1. ✅ **Switch to main branch** - Ensures release from stable branch
-2. ✅ **Pull latest changes** - Gets all merged updates
-3. ✅ **Run test suite** - Validates code quality (must pass)
-4. ✅ **Remove beta tags** - Cleans up all `v1.3.4-beta.*` tags (local + remote)
-5. ✅ **Remove beta releases** - Deletes all `v1.3.4-beta.*` GitHub releases
-6. ✅ **Create production release** - Creates final `v1.3.4` release
-
-## Requirements
-
-### For Beta Releases
-- Git configured with push access
-- On any branch (allowed for pre-releases)
-
-### For Production Releases
-- [GitHub CLI (gh)](https://cli.github.com/) installed and authenticated
-- On `main` branch (enforced by script)
-- All tests must pass
-- No uncommitted changes (or confirmation to proceed)
-
-## Example Workflow
-
-### Scenario: Releasing v1.3.4
+## `scripts/release.sh`
 
 ```bash
-# Development cycle - multiple beta releases
-bash scripts/release.sh v1.3.4-beta.1
-# Test with developers...
-
-bash scripts/release.sh v1.3.4-beta.2
-# More testing...
-
-bash scripts/release.sh v1.3.4-beta.3
-# Final testing...
-
-# Ready for production!
-bash scripts/release.sh v1.3.4 --prod
+bash scripts/release.sh v0.7.2-beta.1      # pre-release, from any branch
+bash scripts/release.sh v0.7.2 --prod      # production, from main
 ```
 
-The production command will:
-```
-INFO: Starting PRODUCTION release process for EffektGuard v1.3.4...
-INFO: Switching to main branch...
-INFO: Pulling latest changes...
-INFO: Running pytest test suite...
-✓ All tests passed!
-INFO: Searching for beta tags for version v1.3.4...
-Found beta tags:
-v1.3.4-beta.1
-v1.3.4-beta.2
-v1.3.4-beta.3
-INFO: Deleting local beta tags...
-INFO: Deleting remote beta tags...
-SUCCESS: Beta tags removed
-INFO: Searching for beta releases for version v1.3.4...
-Found beta releases:
-v1.3.4-beta.1
-v1.3.4-beta.2
-v1.3.4-beta.3
-INFO: Deleting beta releases...
-SUCCESS: Beta releases removed
-INFO: Creating production release...
-SUCCESS: Production release v1.3.4 completed successfully!
-```
+Needs git push access, `jq` and GNU grep; `--prod` also needs an authenticated `gh`.
+`--pr-only` is accepted and does nothing.
 
-## GitHub Actions Integration
+In order, the script:
 
-All releases (beta and production) trigger automated GitHub Actions:
+1. Validates the tag format.
+2. Requires branch `main` or `initial-implementation`, unless the tag is a pre-release.
+3. Prompts on uncommitted changes (`y` continues).
+4. Aborts if the tag already exists locally.
+5. `git pull --rebase`.
+6. Sets `"version"` in `custom_components/effektguard/manifest.json` to the tag, `v` included
+   (`"v0.7.1"`), and the README badge to `version-0.7.1-blue`.
+7. If either file changed: commits `Release vX.Y.Z of EffektGuard` and pushes the current branch.
+   A re-run with both already set pushes no commit.
+8. Creates the annotated tag (message `Release vX.Y.Z`, plus `(Pre-release)` for a pre-release)
+   and pushes it. The workflow does the rest.
 
-### Validate Workflow (`.github/workflows/validate.yml`)
-Runs on every PR and push to `main`:
-- Black formatting check and the hardcoded-value ratchet (`scripts/check_hardcoded_values.py --check`)
-- `pip check`, `compileall` and the pytest suite
-- The simulator: `--selftest`, `--dst` and `--all-scenarios`
-- A HACS distribution build, HACS validation and Hassfest validation
-- Workflow lint and a development-container build
+`--prod` refuses a pre-release suffix and, before step 1: `git checkout main`, `git pull --rebase`,
+`bash scripts/run_pytest.sh` (`pytest tests/ -v --tb=short`, must pass), then deletes every
+`vX.Y.Z-beta*` tag locally and on `origin` and every matching GitHub release. Alpha and rc tags are
+left alone. `bash scripts/list_beta_releases.sh vX.Y.Z` shows what would be deleted.
 
-### Release Workflow (`.github/workflows/release.yml`)
-Triggers when a version tag is pushed:
-- Creates release ZIP file
-- Generates release notes from git history
-- Creates GitHub release
-- Marks `-alpha`, `-beta` and `-rc` tags as "Pre-release"
-- Marks a plain `vX.Y.Z` tag as "Latest release" (to ship a final number as a pre-release, flip it
-  afterwards - see `docs/agent/RELEASING.md`)
+Error messages and what they mean:
 
-## Manual Testing
+| Message | Cause |
+|---|---|
+| `Invalid version tag format!` | Tag does not match the pattern above |
+| `You are not on the main or initial-implementation branch!` | Final tag from a feature branch |
+| `Tag vX.Y.Z already exists!` | Local tag exists; the script never re-tags |
+| `Manifest file is not valid JSON` | Also printed when `jq` is not installed |
+| `Tests failed!` | `--prod` test run failed |
+| `GitHub CLI (gh) is not installed!` | `--prod` without `gh` |
+| `Production releases cannot have pre-release suffixes` | `--prod` with `-beta`, `-alpha` or `-rc` |
 
-Before production release, test manually:
+## `.github/workflows/release.yml`
 
-```bash
-# Run tests locally
-bash scripts/run_pytest.sh
+Runs on a pushed tag matching `v*`:
 
-# Check formatting
-black custom_components/effektguard/ --check --line-length 100
+1. Zips `custom_components/effektguard/`, `README.md`, `LICENSE` and `hacs.json` into
+   `effektguard.zip`.
+2. `gh release create <tag>` titled `EffektGuard <tag>`, with the zip attached and GitHub's
+   generated notes (`--generate-notes`). A tag containing `-alpha`, `-beta` or `-rc` gets
+   `--prerelease`; any other tag gets `--latest`.
 
-# Validate HACS compatibility (requires hacs/action Docker image)
-# Usually done automatically in CI
-```
+Rewrite the generated notes in the format in [RELEASING.md](agent/RELEASING.md). To ship a plain
+`vX.Y.Z` as a pre-release, flip it after the workflow has created it (same file).
 
-## Version Numbering
+## Before a tag: `validate.yml`
 
-Follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR** version (X.0.0): Incompatible API changes
-- **MINOR** version (0.X.0): New functionality (backward compatible)
-- **PATCH** version (0.0.X): Bug fixes (backward compatible)
-
-Examples:
-- `v0.0.1` - Initial alpha release
-- `v0.1.0` - First feature-complete version
-- `v1.0.0` - First stable release
-- `v1.1.0` - Added new features
-- `v1.1.1` - Bug fixes
-
-Pre-release suffixes:
-- `v1.3.4-alpha.1` - Alpha testing
-- `v1.3.4-beta.1` - Beta testing (developers)
-- `v1.3.4-rc.1` - Release candidate
-
-## Troubleshooting
-
-### Tests fail during production release
-
-```bash
-ERROR: Tests failed! Please fix failing tests before releasing.
-```
-
-**Solution:** Fix failing tests, commit changes, and try again.
-
-### GitHub CLI not authenticated
-
-```bash
-ERROR: GitHub CLI (gh) is not installed!
-```
-
-**Solution:** Install and authenticate GitHub CLI:
-```bash
-# Install gh (if not installed)
-# See: https://cli.github.com/
-
-# Authenticate
-gh auth login
-```
-
-### Tag already exists
-
-```bash
-ERROR: Tag v1.3.4 already exists!
-```
-
-**Solution:** 
-- If incorrect: Delete tag with `git tag -d v1.3.4 && git push origin :refs/tags/v1.3.4`
-- If correct: Use next version number
-
-### Uncommitted changes
-
-```bash
-INFO: You have uncommitted changes.
-Do you want to continue anyway? (y/n):
-```
-
-**Solution:** 
-- Recommended: Commit or stash changes first
-- Or: Type `y` to continue (not recommended for production)
-
-## See Also
-
-- [GitHub Actions Workflows](../.github/workflows/)
-- [Releasing: judgement and notes format](agent/RELEASING.md)
-- [Testing Documentation](../tests/)
+`.github/workflows/validate.yml` runs on pull requests, merge groups and pushes to `main` (and
+`initial-implementation`), not on tags: Black and the hardcoded-value ratchet; `pip check`,
+`compileall`, pytest, the simulator (`--selftest`, `--dst`, `--all-scenarios`); a HACS
+distribution build, HACS and hassfest validation; workflow lint and the development-container
+build.

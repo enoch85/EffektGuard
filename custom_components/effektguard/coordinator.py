@@ -385,9 +385,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
-        # A meter that has answered before and is not answering now - unavailable, or a state nobody
-        # has written for longer than POWER_METER_MAX_AGE_MINUTES. Reported once when the silence
-        # begins and once when it ends, not on every cycle it lasts.
+        # A meter that has answered before and is not answering now (unavailable, unknown or
+        # unreadable). Reported once when the outage begins and once when it ends, not every cycle.
         self._power_meter_silent = False
         # The last-resort estimate is reported once, until a real measurement is seen again
         self._power_fallback_reported = False
@@ -697,6 +696,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
         except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
             _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
+            return False
+
+        if on and self._shutdown_requested:
+            # The entry unloaded while the call was in flight, and its cleanup found no boost of
+            # ours to cancel - the record below is made only now. Stop it here, or it runs to
+            # NIBE's lux timeout with nothing left to stop it.
+            _LOGGER.info(
+                "The entry unloaded while a hot-water boost was starting on %s - switching it off",
+                self.temp_lux_entity,
+            )
+            await self._set_temporary_lux(False)
             return False
 
         # Ours if we switched it on; not ours once it is off, whoever asked for that.
@@ -2208,21 +2218,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     return  # Exit early, event listener will trigger refresh when ready
                 else:
-                    # It has answered before and is not answering now: unavailable, unreadable, or
-                    # a numeric state nobody has written for longer than POWER_METER_MAX_AGE_MINUTES,
-                    # which power_kw_from_state refuses alike. Everything below still runs - the
-                    # decision layers need SOME power figure - but the source stays unbillable, so
-                    # nothing invented here reaches the tariff record, and a silence longer than
+                    # It has answered before and is not answering now. Everything below still runs -
+                    # the decision layers need SOME power figure - but the source stays unbillable,
+                    # so nothing invented here reaches the tariff record, and an outage longer than
                     # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole period rather than
-                    # billing a stale reading stretched across it. Reported when the silence begins
+                    # billing a stale reading stretched across it. Reported when the outage begins
                     # and when it ends, not on every cycle it lasts.
                     (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
-                        "External power meter %s is not reporting (state %s, last written %s). "
-                        "This cycle is not billable, and a silence longer than %d minutes refuses "
-                        "the whole billing period rather than billing a stale reading.",
+                        "External power meter %s is not reporting (state %s). This cycle is not "
+                        "billable, and an outage longer than %d minutes refuses the whole billing "
+                        "period rather than billing a stale reading.",
                         power_entity_id,
                         power_state.state if power_state else "None",
-                        getattr(power_state, "last_reported", None),
                         MAX_BILLING_OBSERVATION_GAP_MINUTES,
                     )
                     self._power_meter_silent = True
@@ -2273,7 +2280,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
                 power_source = POWER_SOURCE_ESTIMATE
                 # Reported once: on an install with no meter it is every cycle the compressor stands
-                # still, and a silent meter has already been reported above. A real measurement
+                # still, and a meter outage has already been reported above. A real measurement
                 # (the meter, or the pump's phase currents) re-arms it.
                 quiet = self._power_meter_silent or self._power_fallback_reported
                 (_LOGGER.debug if quiet else _LOGGER.warning)(

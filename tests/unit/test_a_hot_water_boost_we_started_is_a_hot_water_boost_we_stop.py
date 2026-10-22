@@ -12,12 +12,13 @@ through `_set_temporary_lux`, the only place that records who started the boost.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON
 
-from custom_components.effektguard import _async_register_services
+from custom_components.effektguard import _async_register_services, _service_last_called
 from custom_components.effektguard.const import CONF_NIBE_TEMP_LUX_ENTITY, DOMAIN
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.effect_layer import EffectManager
@@ -131,6 +132,52 @@ async def test_a_shut_down_coordinator_cannot_start_a_boost():
     assert hass.services.async_call.await_count == 0, (
         "a shut-down coordinator started a hot-water boost. The entry is unloaded, and nothing is "
         "left that would ever switch it off again."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_boost_still_starting_when_the_entry_unloads_is_stopped():
+    """The race between the two tests above: the switch call is in flight when the entry unloads.
+
+    The boost is recorded as ours only once the call returns, so the unload cleanup finds none to
+    cancel. The start must see the shutdown when it lands and switch the boost off again - or it
+    runs to NIBE's lux timeout with nothing left to stop it, and the service opens its window on a
+    coordinator that is gone.
+    """
+    hass, coordinator, registered = _hass_and_coordinator()
+    await _async_register_services(hass)
+    lux = hass.states.get(LUX)
+    lux.state = STATE_OFF
+    switch_reached, release = asyncio.Event(), asyncio.Event()
+
+    async def switch(domain, service, data, **kwargs):
+        if service == "turn_on":
+            switch_reached.set()
+            await release.wait()
+        lux.state = STATE_ON if service == "turn_on" else STATE_OFF
+
+    hass.services.async_call.side_effect = switch
+    call = MagicMock()
+    call.data = {}
+    with (
+        patch.dict(_service_last_called, clear=True),  # no cooldown left over from another test
+        patch.object(coordinator, "async_request_refresh", AsyncMock()),
+    ):
+        boost = asyncio.create_task(registered["boost_dhw"](call))
+        await switch_reached.wait()
+        await coordinator.async_shutdown()  # reload / reconfigure / removal, mid-call
+        release.set()
+        await asyncio.gather(boost, return_exceptions=True)
+
+    assert (lux.state, coordinator._lux_boost_is_ours, coordinator._service_boost_until) == (
+        STATE_OFF,
+        False,
+        None,
+    ), (
+        f"a hot-water boost started while the entry unloaded was left {lux.state} "
+        f"(ours: {coordinator._lux_boost_is_ours}, service window: "
+        f"{coordinator._service_boost_until}). The unload had already run its cleanup, so nothing "
+        f"is left that will ever switch it off before NIBE's own lux timeout."
     )
 
 
