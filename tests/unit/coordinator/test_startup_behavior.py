@@ -124,6 +124,7 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
 
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
 
     entry = MagicMock(
         data={

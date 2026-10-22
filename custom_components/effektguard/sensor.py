@@ -18,7 +18,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import UNDEFINED, UndefinedType
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -474,9 +474,11 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
         # compressor_frequency is restored to avoid "unavailable" state on restart
         # indoor_temperature is restored to avoid wrong readings during startup
         # when MQTT sensors aren't ready yet (uses NIBE BT50 only otherwise)
+        # peak_this_month is not: the month's peaks are the EffectManager's stored record, which
+        # knows their dates. A last state does not, and after a restart in a new month it was last
+        # month's peak.
         should_restore = self.entity_description.key in {
             "peak_today",
-            "peak_this_month",
             "savings_estimate",
             "compressor_frequency",
             "indoor_temperature",
@@ -486,6 +488,16 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             last_state = await self.async_get_last_state()
             if last_state and last_state.state not in ("unknown", "unavailable"):
                 try:
+                    peak_time = None
+                    if self.entity_description.key == "peak_today":
+                        peak_time = self._todays_peak_time(last_state)
+                        if peak_time is None:
+                            _LOGGER.debug(
+                                "Not restoring peak_today %s kW: it is not today's peak",
+                                last_state.state,
+                            )
+                            return
+
                     self._restored_value = float(last_state.state)
                     _LOGGER.debug(
                         "Restored %s: %.2f", self.entity_description.key, self._restored_value
@@ -495,16 +507,19 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                     # from overwriting restored value with lower values
                     if self.entity_description.key == "peak_today":
                         if self._restored_value > self.coordinator.peak_today:
+                            # The whole record, so the attributes describe the peak that is shown
+                            # and the next restart can still date it.
+                            attributes = last_state.attributes
                             self.coordinator.peak_today = self._restored_value
+                            self.coordinator.peak_today_time = peak_time
+                            self.coordinator.peak_today_source = attributes.get(
+                                "measurement_source", self.coordinator.peak_today_source
+                            )
+                            self.coordinator.peak_today_period = attributes.get(
+                                "peak_billing_period"
+                            )
                             _LOGGER.info(
                                 "Restored peak_today to coordinator: %.2f kW",
-                                self._restored_value,
-                            )
-                    elif self.entity_description.key == "peak_this_month":
-                        if self._restored_value > self.coordinator.peak_this_month:
-                            self.coordinator.peak_this_month = self._restored_value
-                            _LOGGER.info(
-                                "Restored peak_this_month to coordinator: %.2f kW",
                                 self._restored_value,
                             )
                 except (ValueError, TypeError):
@@ -512,6 +527,20 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         "Could not restore %s, will use coordinator value",
                         self.entity_description.key,
                     )
+
+    @staticmethod
+    def _todays_peak_time(last_state: State) -> datetime | None:
+        """When a restored daily peak happened, or None when that was not today.
+
+        The coordinator holds the day's peak in memory and resets it on the first cycle of a new
+        day, so a restart hands back the sensor's last state - yesterday's peak, when Home Assistant
+        was down across midnight. Its peak_time attribute dates it.
+        """
+        peak_time = last_state.attributes.get("peak_time")
+        parsed = dt_util.parse_datetime(peak_time) if isinstance(peak_time, str) else None
+        if parsed is None or dt_util.as_local(parsed).date() != dt_util.now().date():
+            return None
+        return parsed
 
     @property
     def native_value(self) -> float | str | datetime | None:

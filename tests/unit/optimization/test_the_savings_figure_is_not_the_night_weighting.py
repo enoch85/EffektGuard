@@ -54,7 +54,6 @@ def coordinator():
         hass, nibe, MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
     )
     coord.peak_today = 0.0
-    coord.peak_this_month = 0.0
     coord.effect._store = MagicMock()
     coord.effect._store.async_save = AsyncMock()
     coord.effect._monthly_peaks = []
@@ -160,7 +159,6 @@ async def test_the_hour_of_the_day_is_not_a_saving(coordinator, monkeypatch):
     """An unchanged 6 kW peak reports nothing, whether it happened at 02:00 or at 10:00."""
     for hour in (NIGHT_HOUR, DAY_HOUR):
         coordinator.effect._monthly_peaks = []
-        coordinator.peak_this_month = 0.0
         coordinator.savings_calculator._baseline_monthly_peak = None
         coordinator._quarter_power_start = None
 
@@ -236,7 +234,6 @@ async def test_the_heat_pumps_own_current_sensors_are_not_a_billing_baseline(mon
         hass, nibe, MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
     )
     coord.peak_today = 0.0
-    coord.peak_this_month = 0.0
     coord.effect._store = MagicMock()
     coord.effect._store.async_save = AsyncMock()
     coord.effect._monthly_peaks = []

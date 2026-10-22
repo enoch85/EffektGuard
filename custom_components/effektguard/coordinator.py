@@ -306,7 +306,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # until the midnight reset. NEVER pass this to the decision engine as
         # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
-        self.peak_this_month: float = 0.0
         # Instantaneous whole-house power (kW), refreshed every cycle by
         # _update_peak_tracking. None until the first successful measurement, in which
         # case peak protection stays disabled rather than acting on a guess.
@@ -583,27 +582,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
-
-    async def async_restore_peaks(self) -> None:
-        """Restore peak tracking values from effect manager's loaded data.
-
-        Called after effect manager has loaded its persistent state to sync
-        coordinator's peak values with stored data.
-        """
-        try:
-            peak_summary = self.effect.get_monthly_peak_summary()
-            if peak_summary and peak_summary.get("count", 0) > 0:
-                self.peak_this_month = peak_summary["highest"]
-                _LOGGER.info(
-                    "Restored monthly peak: %.2f kW (%d peaks loaded)",
-                    self.peak_this_month,
-                    peak_summary["count"],
-                )
-            else:
-                _LOGGER.info("No monthly peaks to restore - starting fresh")
-        except (AttributeError, KeyError, ValueError) as err:
-            _LOGGER.warning("Failed to restore peaks: %s", err)
-            self.peak_this_month = 0.0
 
     def setup_power_sensor_listener(self) -> None:
         """Set up event listener to detect when external power sensor becomes available.
@@ -1184,7 +1162,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             if month_changed:
                 self.effect.prune_peaks_for_current_month()
-                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info(
                     "Month change detected: pruned previous month's peaks, "
                     "monthly peak reset to %.2f kW",
@@ -2375,11 +2352,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
-                # The HIGHEST of the tracked peaks, never peak_event.effective_power:
-                # record_period_measurement returns an event for ANY new entry while the top-3
-                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW hour would drop the
-                # monthly peak to 2.0 and weaken the threshold for the rest of the month.
-                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
@@ -2704,6 +2676,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # No need for immediate refresh - that causes UI flicker and sensor unavailability
 
         _LOGGER.info("Configuration updated without reload - changes apply on next cycle")
+
+    @property
+    def peak_this_month(self) -> float:
+        """The month's highest peak, as the EffectManager holds it - the record, not a copy.
+
+        The HIGHEST of the tracked peaks: `record_period_measurement` returns an event for any new
+        entry while the top three fill, so a 6.0 kW peak followed by a 2.0 kW period is still 6.0.
+        A copy kept here drifted from the record: `reset_peak_tracking` cleared the store and left
+        the old peak shown and defended, and the sensor restored last month's peak into it after a
+        restart in a new month.
+        """
+        return self.effect.get_monthly_peak_summary()["highest"]
 
     @property
     def current_peak(self) -> float:
