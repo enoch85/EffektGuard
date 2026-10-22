@@ -2391,6 +2391,19 @@ class IntelligentDHWScheduler:
                 f"{indoor_deficit:.1f}°C below target. Prioritize space heating."
             )
 
+            # A decision, not None: the coordinator applies control only on a decision, so with
+            # none a running boost was neither abort-checked nor stopped for as long as the room
+            # cooled - which a hot-water run in the cold helps cause. The block that refuses a start
+            # here now stops a running boost too.
+            next_opportunity = self._find_next_dhw_opportunity(
+                current_time=current_time,
+                current_dhw_temp=current_dhw_temp,
+                thermal_debt_dm=thermal_debt,
+                outdoor_temp=outdoor_temp,
+                price_periods=price_periods,
+                blocking_reason="INDOOR_COOLING_RAPIDLY",
+                dm_block_threshold=self.get_dm_block_and_abort_thresholds(outdoor_temp)[0],
+            )
             return DHWRecommendation(
                 recommendation=recommendation,
                 summary=planning_summary,
@@ -2402,8 +2415,16 @@ class IntelligentDHWScheduler:
                     "indoor_temp": indoor_temp,
                     "indoor_trend": thermal_trend_rate,
                     "indoor_deficit": indoor_deficit,
+                    "recommended_start_time": next_opportunity,
                 },
-                decision=None,
+                decision=DHWScheduleDecision(
+                    should_heat=False,
+                    priority_reason="INDOOR_COOLING_RAPIDLY",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=0,
+                    abort_conditions=[],
+                    recommended_start_time=next_opportunity,
+                ),
             )
 
         # Get decision from should_start_dhw
