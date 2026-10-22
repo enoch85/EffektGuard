@@ -1,194 +1,150 @@
 # EffektGuard
 
-**Intelligent heat pump optimizer for dynamic electricity markets**
+<img src="icons/logo.png" alt="EffektGuard logo" width="160"/>
 
-<img src="icons/logo.png" alt="EffektGuard Logo" width="200"/>
-
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.7.1-blue)
-![HA](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
-[![Sponsor on GitHub](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github&style=for-the-badge)](https://github.com/sponsors/enoch85)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
+[![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
----
+[![Open EffektGuard in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
-## ⚠️ Important Disclaimer
+NIBE heat pump control for Home Assistant. Every five minutes it nudges the pump's heating curve up
+or down: more heat when electricity is cheap or a cold day is coming, less when it is expensive or a
+new monthly power peak is near - with your comfort and the pump's health ahead of the savings. The
+pump keeps all its own control; EffektGuard only moves the curve.
 
-**USE AT YOUR OWN RISK.** This integration controls your heat pump's heating curve offset. While extensively tested and designed with safety-first principles, we are **not responsible** for:
-- Heat pump damage or malfunction
-- Uncomfortable indoor temperatures
-- Increased energy costs
-- Any other issues arising from use of this integration
-
-This is experimental software controlling real heating systems. Monitor your system closely, especially during the first weeks. If anything seems wrong, disable the integration immediately.
-
----
-
-## What It Does
-
-Automatically optimizes your heat pump to minimize electricity costs (spot prices + effect tariff) while maintaining comfort and heat pump health. Continuously adjusts heating curve offset based on prices, peak risk, weather forecasts, and learned building characteristics.
-
-**Lower bills without sacrificing comfort or longevity.**
-
-Currently supports NIBE heat pumps via MyUplink integration, with plans to add support for additional brands in the future.
-
-Dependency updates and PR checks run automatically; releases remain manual.
-
-## Key Features
-
-### 🎯 Multi-Layer Optimization Engine
-9-layer decision system that balances competing priorities:
-- **Safety** (temperature limits) - always enforced
-- **Emergency** (thermal debt prevention) - climate-aware DM thresholds
-- **Proactive debt prevention** - trend-based future DM prediction
-- **Effect tariff** (peak avoidance) - predictive 15-min protection
-- **Prediction/Learning** (self-tuning) - learned thermal model for pre-heating
-- **Weather compensation** (mathematical flow temp) - the **EN 442 emitter law**
-- **Weather prediction** (pre-heating) - time-aware cold snap protection
-- **Spot price** (cost reduction) - forward-looking optimization with adaptive horizon
-- **Comfort** (tolerance) - reactive temperature correction
-
-### 🌍 Global Climate Adaptation
-Automatic latitude-based zone detection (Arctic to Mediterranean). The ranges below are each zone's
-**base** range — what is normal **at that zone's own winter average**. They shift with the outdoor
-temperature, by 20 DM per degree:
-
-| Zone | Latitude | Winter avg | Base normal DM |
-|---|---|---|---|
-| **Extreme Cold** | 66.5°N+ | −20 °C | −800 to −1200 |
-| **Very Cold** | 60.5–66.5°N | −12 °C | −600 to −1000 |
-| **Cold** | 56–60.5°N | −8 °C | −450 to −700 |
-| **Moderate Cold** | 54.5–56°N | −1 °C | −300 to −500 |
-| **Standard** | <54.5°N | 0 °C | −200 to −350 |
-
-So Stockholm's normal range is −450 to −700 **at −8 °C**, and −490 to −740 at −10 °C. Quoting the
-base range as if it applied at every temperature is how four of this project's own documents came
-to be wrong; see `docs/CLIMATE_ZONES.md` for the full tables.
-
-**No configuration needed** — uses Home Assistant's latitude.
-
-**Past DM −1500 nothing cuts heat**, and nothing raises into the flat-out compressor either: a raise
-there only buys immersion heat. ⚠️ The pump's own "start addition" (menu 4.9.3) is set per model and
-installation (factory −700; about −1450 on the owner's F750). See `docs/research/01_degree_minutes.md`.
-
-### 🧠 Self-Learning Capability (observing only — not yet driving your pump)
-EffektGuard continuously observes your building and estimates:
-- **UFH type detection** - concrete slab (6h lag) vs timber (2-3h lag) vs radiators (<1h lag)
-- **Thermal mass** - building heat storage capacity (kWh/°C)
-- **Heat loss coefficient** - envelope performance (W/°C)
-- **Heating efficiency** - system response to offset changes (°C/°C)
-- **Weather patterns** - seasonal adaptation with unusual weather detection
-
-**Learned pre-heat parameters are used only above 70 % confidence**
-(`LEARNING_CONFIDENCE_THRESHOLD`). Learning observes hourly, into a 28-day window. Two learned
-values are applied without that gate once 96 hourly observations exist (four days of uptime): the
-thermal mass, which sets the spot-price layer's look-ahead, and the floor's response type, which sets
-the learned pre-heat horizon. That is a known open item.
-
-Control today is physics-based and deterministic — the heating curve, the EN 442 emitter law,
-weather compensation and the degree-minute safety net — none of which depends on learning.
-
-### ⚡ Effect Tariff Optimization
-Native 15-minute (quarterly) integration:
-- **Top-3 monthly peak tracking** - prevents creating new peaks
-- **Predictive peak avoidance** - acts before spikes using temp trends
-- **Day/night weighting** - full effect daytime, reduced nighttime
-- **Savings calculation** - estimates monthly savings (effect + spot)
-
-Prices come from [GE-Spot](https://github.com/enoch85/ge-spot) (15-minute intervals).
-
-### 💰 Smart Price Forecasting
-Multi-factor forward-looking optimization combining:
-- **Price + thermal state** - considers current indoor temp overshoot for strategic thermal storage
-- **Price + building characteristics** - adaptive horizon scales with thermal mass (2.5-10 hours: 5 h × 0.5-2.0)  
-- **Price + compressor dynamics** - filters brief spikes < 45 min using ramp-up/cool-down constraints
-
-### 🌡️ Weather Compensation (Mathematical)
-Physics-based flow temperature optimization:
-- **EN 442 emitter law** (EN 442-1 §3.31, EN 12831, EN 1264) - pinned to OpenEnergyMonitor's
-  published weather-compensation tool (`tests/validation/test_emitter_law_matches_openenergymonitor.py`);
-  NIBE's own curve 9 is a straight line and cannot validate it (see `docs/research/02_emitter_law.md`)
-- **One law for every emitter** - the EN 442 exponent 1.3 for radiators, the EN 1264 exponent 1.1 for
-  underfloor heating, with a 50 °C or 35 °C design flow
-- **Climate-aware margins** - automatic safety headroom by zone
-
-Uses proper heat transfer mathematics to optimize flow temperature beyond standard outdoor temp curves.
-
-### 🔒 Safety-First Design
-Production-ready safety mechanisms:
-- **Climate-aware thermal debt** - DM thresholds adapt to outdoor temp + zone
-- **Trend-aware damping** - prevents overshoot/undershoot (±0.3°C/h detection)
-- **Configuration validation** - warns about potentially problematic setups
-- **DHW coordination** - prevents thermal debt from hot water cycles
-- **Manual override** - services for diagnostic control
+**Use at your own risk.** This software writes to a real heat pump. You are responsible for your
+heating, your bill and your pump. Watch it closely the first weeks and turn it off if anything
+looks wrong.
 
 ## Requirements
 
-- **Home Assistant** 2025.11+ (`SensorDeviceClass.TEMPERATURE_DELTA`, used by the curve-offset sensor, was added in 2025.11)
-- **Compatible NIBE heat pump** connected through ONE of these data sources:
-  - [MyUplink integration](https://www.home-assistant.io/integrations/myuplink/) (cloud;
-    writes may require a valid myUplink subscription)
-  - [nibe_heatpump integration](https://www.home-assistant.io/integrations/nibe_heatpump/)
-    (local: NibeGW/MODBUS40 for F-series, built-in Modbus TCP for S-series; no
-    subscription needed — recommended for local Modbus users)
-  - Generic [Modbus](https://www.home-assistant.io/integrations/modbus/) YAML sensors plus
-    [template numbers](https://www.home-assistant.io/integrations/template/) for writable
-    registers (see [Local Modbus setups](#local-modbus-setups))
-  - Models: F750, F730, F1155, F2040, S1155 (profiles); similar NIBE models work with the
-    nearest profile. Additional brands: planned for future releases
-- **Price integration**: [GE-Spot](https://github.com/enoch85/ge-spot) (15-minute data)
-- **Weather integration** (Met.no or equivalent)
+- Home Assistant 2025.11 or newer.
+- A NIBE heat pump exposed as Home Assistant entities by one of:
+  - [MyUplink](https://www.home-assistant.io/integrations/myuplink/) (cloud)
+  - [nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) (local, NibeGW or
+    Modbus TCP; most of its entities are disabled by default, enable the ones you need)
+  - [Modbus](https://www.home-assistant.io/integrations/modbus/) sensors plus a template number
+    for the offset register, see [Local Modbus](#local-modbus)
+- A model profile: F730, F750, F1155, F2040 or S1155. Pick the nearest for another NIBE model.
+- [GE-Spot](https://github.com/enoch85/ge-spot) for 15-minute spot prices. Without it there is no
+  price optimization.
+- Optional: a weather entity with an hourly forecast (Met.no works) for pre-heating before cold
+  days, and a whole-house power meter for peak tracking (without one the pump's own phase currents
+  are used when it exposes them).
 
-## Installation
+## Install
 
-### HACS (Recommended)
+Use the two buttons above: the first opens EffektGuard in the Marketplace (Home Assistant 2026.11
+and newer; download it), the second starts the setup. If EffektGuard is not in the catalog yet, the
+first button offers to add it as a custom repository. On Home Assistant 2026.10 and older use
+[HACS](https://hacs.xyz/): find EffektGuard under *Integrations* (or first add
+`https://github.com/enoch85/EffektGuard` as an integration under *Custom repositories*), download it
+and restart. Manual: copy `custom_components/effektguard/` into your config directory and restart.
+Then *Settings, Devices & services, Add integration, EffektGuard*.
 
-1. Open HACS → Integrations
-2. Click ⋮ → Custom repositories
-3. Add `https://github.com/enoch85/EffektGuard` as Integration
-4. Search for "EffektGuard" and install
-5. Restart Home Assistant
-6. Add integration via Settings → Devices & Services → Add Integration
+## Setup
 
-### Manual
+The config flow asks, in this order:
 
-1. Download latest release
-2. Extract to `custom_components/effektguard/`
-3. Restart Home Assistant
-4. Add integration via Settings → Devices & Services
+1. **Offset entity**: the number entity for the heating-curve offset (register 47011 on the
+   F-series, for example `number.heat_offset_s1_47011`).
+2. **Price sensor**: a GE-Spot `current_price` sensor, and whether price optimization is on.
+3. **Heat pump model**: default F750.
+4. **Weather entity**, and whether peak protection is on.
+5. **Sensors**: degree minutes, power meter, the temporary-lux switch (needed for hot-water
+   control), extra room sensors, and override fields for setups discovery cannot name (generic
+   Modbus, renamed entities).
 
-## Configuration
+Everything else is found by entity-name pattern. *Reconfigure* changes the entities later.
+*Configure* holds the options: mode and tolerance ([Your settings](#your-settings)), thermal mass
+and insulation (0.5-2.0), the hot-water target, amount and schedule, and airflow rates on the
+F750/F730.
 
-Guided setup flow with validation:
-1. **Select heat pump entity** - heating curve offset (e.g., number.xxx_offset_s1_47011 for NIBE)
-2. **Select price entity** - a GE-Spot price sensor (can be added or changed later via **Reconfigure**)
-3. **Select weather entity** - forecast integration
-4. **Configure targets** - indoor temperature, tolerance, optimization mode
-5. **Optional features** - DHW optimization, power meter, extra sensors
+## What you get
 
-System auto-detects:
-- Climate zone (from latitude)
-- UFH type (from thermal lag)
-- Heat pump model (from entity patterns)
-- Pump configuration (validates against system type)
+- **Why it did what it did**: `sensor.effektguard_optimization_reasoning` - the state is a
+  summary, the attributes hold each layer's offset, weight and reason
+  ([SENSOR_STATE_LIMITS.md](docs/SENSOR_STATE_LIMITS.md)).
+- `climate.effektguard`: HEAT or OFF (OFF holds the offset at 0 and runs no layer), the target
+  temperature and the presets ([Your settings](#your-settings)).
+- Sensors (`sensor.effektguard_current_offset`, `sensor.effektguard_degree_minutes`, ...): current
+  offset, degree minutes, supply, outdoor and indoor temperature, current electricity price, peak
+  today, peak this month, NIBE power, compressor frequency and health, optimization reasoning,
+  quarter of day, price period classification, indoor and outdoor temperature trend, estimated
+  monthly savings, heat pump model, DHW status, recommendation and scheduled start. The F750/F730
+  also get airflow enhancement and thermal gain.
+- Switches (`switch.effektguard_enable_optimization`, ...): enable optimization, price
+  optimization, peak protection and weather prediction (on by default); hot water optimization and
+  airflow optimization (off by default, the latter F750/F730 only).
+- Services: `effektguard.force_offset` (offset -10 to +10 for 0-480 min, 0 = one cycle),
+  `effektguard.boost_heating` (+10 for 30-360 min), `effektguard.boost_dhw` (temporary lux for
+  30-180 min), `effektguard.reset_peak_tracking`, `effektguard.calculate_optimal_schedule`
+  (returns a 24-hour price preview).
 
-Sensors are found automatically by entity-name patterns (MyUplink, nibe_heatpump,
-and common Modbus namings). If discovery misses a sensor — typical for generic
-Modbus YAML setups — set it manually via the **override fields** in the Sensors
-step, or later via **Reconfigure** on the integration.
+## How it decides
 
-### Local Modbus setups
+Every five minutes, ten seconds past the mark, EffektGuard reads the pump, the prices and the
+forecast, and nine layers each vote for an offset with a weight:
 
-The recommended local path is the official
-[nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) integration:
-it exposes read-only registers as sensors (e.g. `sensor.bt1_outdoor_temperature_40004`)
-and writable registers as **numbers** (e.g. `number.heat_offset_s1_47011`,
-`number.degree_minutes_16_bit_43005`). All its entities are **disabled by default** —
-enable at least BT1, BT50, BT2/BT25, BT3, BT7, BT6, degree minutes, compressor state,
-and Heat Offset S1 in Settings → Devices & Services → NIBE → entities.
+```mermaid
+flowchart LR
+    A["Pump readings"] --> L["Nine layers vote"]
+    B["Spot prices"] --> L
+    C["Weather forecast"] --> L
+    L --> D["One whole-degree offset"]
+    D --> E["NIBE heating curve"]
+```
 
-With the generic `modbus` integration, define sensors for the registers above
-(F-series values are raw ×10 — use `scale: 0.1`) and wrap the offset register in a
-template number so EffektGuard can write it:
+| Layer | What it does | When it acts |
+|---|---|---|
+| **Safety** | Raises the curve to +10 | The room is below 18 °C |
+| **Thermal debt** | Raises the curve so the pump catches up; past -1500 degree minutes it forbids any cut instead | Degree minutes (NIBE's heat-deficit counter) run deep |
+| **Proactive** | Small raises before the debt gets deep | Degree minutes start to fall |
+| **Peak** | Lowers the curve so the house does not set a new monthly power peak | Close to this month's peak; needs a power meter or the pump's phase currents |
+| **Learned pre-heat** | Raises ahead of a predicted drop in room temperature | After 24 h of history, when it predicts a drop |
+| **Weather compensation** | Nudges the curve toward the flow temperature your radiators or floor need at today's outdoor temperature | Always, with a small weight; pauses during hot water |
+| **Weather pre-heat** | Raises +2 before a colder day | The forecast drops 4 °C or more within the look-ahead (longer for a concrete slab) |
+| **Spot price** | Raises in cheap quarters, lowers in expensive ones, lets the house coast through price peaks | Whenever GE-Spot has prices; each quarter is ranked against its own day |
+| **Comfort** | Pulls the room back toward the target | The room drifts out of its band |
+
+**How the votes combine.** A vote at full weight wins: safety, a price-peak quarter, the monthly
+peak, or a room far too warm. Otherwise the result is the weighted average. Price and peak may
+soften a thermal-debt recovery but never reverse it, and may coast the house within its comfort band
+but not out of it. The result reaches the pump as a whole degree, at most every five minutes; a
+reversal of 2 °C or more within 45 minutes is held back.
+
+The degree-minute thresholds come from Home Assistant's latitude and the outdoor temperature: the
+same reading is normal in Kiruna at -30 °C and a warning in Malmö at 0 °C. Details:
+[docs/architecture/](docs/architecture/00_overview.md).
+
+## Your settings
+
+- **Target temperature**: on the climate entity, 18.5-25 °C.
+- **Tolerance** (0.5-3.0): how far the room may drift before the comfort layer acts, ±0.4 x the
+  setting (1.2 lets it drift ±0.48 °C).
+- **Mode**: *Comfort* (comfort counts 1.3x, price 0.7x), *Balanced* (both 1x) or *Savings* (comfort
+  0.7x, price 1.3x, and a price-peak quarter always cuts fully). The climate presets map to them:
+  none = Balanced, comfort = Comfort, eco = Savings, away = Savings with the target 3 °C lower.
+
+## Safety
+
+- Indoor below 18 °C: the safety layer asks +10 at full weight (+7.5 while the room is already
+  warming fast).
+- Degree minutes past -1500: no layer may cut below 0 unless the room is above its band, and
+  nothing raises into the flat-out compressor.
+- At most one write every 5 minutes, whole degrees only, clamped to -10..+10 and to the number
+  entity's own range.
+- A cycle that cannot read the pump writes nothing and the entities go unavailable.
+- `force_offset` cannot hold the pump below these floors.
+
+## Local Modbus
+
+With the generic `modbus` integration, define sensors for the registers you need (temperatures and
+degree minutes are raw x10, use `scale: 0.1`; the offset register is not scaled) and wrap the
+offset register in a template number so EffektGuard can write it:
 
 ```yaml
 template:
@@ -209,155 +165,19 @@ template:
               value: "{{ (value | int) % 65536 }}"
 ```
 
-`min`/`max`/`step` are required as shown — a template number defaults to
-0–100 and would reject negative offsets. `unique_id` registers the entity so
-it is UI-editable and preferred by discovery; the `availability` guard stops
-the number from erroring while the Modbus hub is down. Writes take effect
-immediately; the displayed value catches up on the sensor's next poll
-(`scan_interval`, 15 s default).
-
-Select that number as the offset entity in the first setup step.
-
-## Architecture
-
-### Clean Separation of Concerns
-```
-Integration Layer (HA-specific)
-└── coordinator.py (DataUpdateCoordinator pattern)
-    ├── climate.py (main UI entity)
-    ├── sensor.py (monitoring entities)
-    ├── switch.py (DHW control switch)
-    ├── config_flow.py (setup wizard)
-    ├── options.py (runtime settings)
-    └── services.yaml (manual control)
-
-Optimization Engine (pure Python)
-└── decision_engine.py (9-layer aggregation)
-    ├── thermal_layer.py (thermal debt + emergency)
-    ├── effect_layer.py (peak protection)
-    ├── prediction_layer.py (learned pre-heating)
-    ├── price_layer.py (spot price optimization)
-    ├── weather_layer.py (mathematical WC + cold snap)
-    ├── comfort_layer.py (temperature correction)
-    ├── dhw_optimizer.py (rule-ordered hot-water scheduling)
-    ├── adaptive_learning.py (self-tuning)
-    ├── savings_calculator.py (cost estimation)
-    ├── airflow_optimizer.py (S-series supply air)
-    └── climate_zones.py (latitude detection)
-
-Data Adapters (external interfaces)
-├── nibe_adapter.py (MyUplink, nibe_heatpump or Modbus entities)
-├── gespot_adapter.py (price data)
-└── weather_adapter.py (forecast)
-
-Models (heat pump abstractions)
-└── models/
-    ├── base.py (abstract interface)
-    ├── registry.py (model discovery)
-    └── nibe/ (NIBE-specific implementations)
-
-Utilities
-└── utils/
-    └── compressor_monitor.py (runtime tracking)
-```
-
-### Data Flow
-```
-Heat Pump/Price/Weather Entities → Adapters → Coordinator →
-Decision Engine → Optimization → Climate Entity → Curve Offset
-```
-
-5-minute update cycle with instant responses to entity state changes (power sensor availability listener).
-
-## Technical Details
-
-### Decision Aggregation
-In this order (`DecisionEngine._aggregate_layers`):
-- **Safety** - indoor below 18 °C wins outright
-- **Thermal debt** - past the aux limit (EMERGENCY) the other layers decide and the result is floored
-  at 0: no cuts, and no raise of its own; in T1-T3 the tier holds a minimum recovery offset, and against
-  a critical cost layer takes a peak-aware compromise
-- **Critical layers** (weight ≥ 1.0, e.g. the effect or spot-price layer at its critical state) -
-  the heating vote wins a tie
-- **Advisory layers** (weight < 1.0) - weighted average
-
-### Thermal Debt (Degree Minutes)
-Heat deficit tracking used by many heat pumps (NIBE Menu 4.9.3, others may vary):
-```
-DM = ∫(BT25 - S1) dt
-```
-- **BT25**: Actual flow temperature
-- **S1**: Target flow temperature  
-- **Negative DM**: Heat deficit (compressor catching up)
-
-Climate-aware thresholds prevent heat pump damage. Past DM -1500 nothing cuts heat.
-
-### Price Integration
-Native quarterly (15-min) price periods:
-- **96 periods/day** - matches effect tariff measurement
-- **4-tier classification** - cheap/normal/expensive/peak (percentile-based)
-- **Day/night weighting** - full optimization daytime, reduced nighttime
-- **Auto-discovery** - finds price entity automatically
-
-### Weather Compensation Math
-
-The flow temperature follows the **EN 442 emitter law** (`utils/emitter.py`) — the emitter's own
-characteristic curve, not a linear offset from outdoor temperature:
-
-```python
-# Demand reaches zero at the BALANCE POINT, not at room temperature:
-# bodies, appliances and the sun cover the losses until several degrees below the setpoint.
-balance = T_room - INTERNAL_GAINS_W / heat_loss_coefficient
-
-phi     = (balance - T_out) / (balance - T_out_design)   # dimensionless relative load
-T_flow  = T_room + dT_design * phi**(1/n) + spread/2     # n = 1.3 radiators, 1.1 UFH
-```
-
-The spread is held **constant** — a heat pump modulates its circulator, it does not run a
-fixed-speed pump. Combined with climate-aware safety margins (0.0–2.5 °C by zone).
-
-### Self-Learning Status
-
-Observations are recorded hourly (`LEARNING_OBSERVATION_INTERVAL_MINUTES`) into a rolling
-672-entry window - 28 days. Confidence is scored from observation count, data consistency and time
-span, and learned parameters are used for pre-heating only above 70 %.
-
-Measured on a real house's year (2026-10-19), the learned predictions do not beat "the room stays as
-it is", and confidence there stays below the gate (0.600), so learned parameters stay out of the
-pre-heat decision. Two learned values do reach control without
-the confidence gate once 96 hourly observations exist: the thermal mass (the spot-price layer's
-look-ahead) and the floor's response type (the learned pre-heat horizon). That is a known open item.
+`min`, `max` and `step` are required: a template number defaults to 0-100, and EffektGuard clamps
+to the entity's range, so a negative offset would never reach the pump. The displayed value catches
+up on the sensor's next poll (`scan_interval`, 15 s default). Select this number in the first setup
+step.
 
 ## Documentation
 
-- **[Climate Zones](docs/CLIMATE_ZONES.md)** - Global climate adaptation system
-- **[Architecture Overview](docs/architecture/00_overview.md)** - System design with flow diagrams
-- **[DHW Optimization](docs/DHW_OPTIMIZATION.md)** - Hot water scheduling
-- **[Release Process](docs/RELEASE_PROCESS.md)** - Version management
-- **[Development Guide](docs/dev/README.md)** - Contributing and testing guidelines
-
-## Development Status
-
-**Status:** Production-ready but still not perfect
-**Active users:** Running in Swedish homes with real NIBE systems
-
-## Contributing
-
-Production code affecting real homes. Contributions welcome, quality standards apply:
-- Read entire files before editing
-- Use const.py for all thresholds
-- Safety-first approach
-- Black formatting (line length 100)
-- Test safety-critical code
-
-See [CLAUDE.md](CLAUDE.md) for the index, and `docs/agent/` for the rules.
+- [Architecture](docs/architecture/00_overview.md): the cycle, the layers, the aggregation
+- [Climate zones](docs/CLIMATE_ZONES.md): the degree-minute tables per zone
+- [Hot water](docs/DHW_OPTIMIZATION.md)
+- [Development](docs/dev/README.md): setup, tests, code standards
+- [Contributor rulebook](CLAUDE.md)
 
 ## License
 
-MIT License - See LICENSE file
-
-## Credits
-
-**Author:** [@enoch85](https://github.com/enoch85)
-
-**Built for the Swedish community, works globally.**
+MIT, see [LICENSE](LICENSE). Author: [@enoch85](https://github.com/enoch85).

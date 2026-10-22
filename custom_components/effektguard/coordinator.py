@@ -697,6 +697,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
             return False
 
+        if on and self._shutdown_requested:
+            # The entry unloaded while the call was in flight, and its cleanup found no boost of
+            # ours to cancel - the record below is made only now. Stop it here, or it runs to
+            # NIBE's lux timeout with nothing left to stop it.
+            _LOGGER.info(
+                "The entry unloaded while a hot-water boost was starting on %s - switching it off",
+                self.temp_lux_entity,
+            )
+            await self._set_temporary_lux(False)
+            return False
+
         # Ours if we switched it on; not ours once it is off, whoever asked for that.
         self._lux_boost_is_ours = on
         return True
