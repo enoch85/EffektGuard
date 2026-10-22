@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_point_in_time
@@ -679,6 +679,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             return False
 
+        # Home Assistant skips a missing or unavailable entity with a log line and returns, so the
+        # call below would report a switch it never reached as switched.
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is None or state.state == STATE_UNAVAILABLE:
+            _LOGGER.warning(
+                "Temporary lux %s is %s - not switching it %s",
+                self.temp_lux_entity,
+                "missing" if state is None else "unavailable",
+                "on" if on else "off",
+            )
+            return False
+
         try:
             # The generic service, not switch.*: a nibe_heatpump/Modbus user has no lux
             # switch - their bridge is an input_boolean helper - and homeassistant.turn_on
@@ -964,6 +976,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
+                if explicit_command:
+                    # The grace is the control loop's. A command answered with the startup data
+                    # reported success while nothing was read or written, and its override stayed
+                    # armed for the first ordinary cycle to apply.
+                    raise HomeAssistantError(
+                        f"The heat pump has not answered yet, so nothing was written: {err}"
+                    ) from err
+
                 self._startup_grace_attempts += 1
 
                 if self._startup_grace_attempts > STARTUP_MAX_GRACE_ATTEMPTS:
