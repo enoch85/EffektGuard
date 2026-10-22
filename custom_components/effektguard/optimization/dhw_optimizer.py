@@ -460,7 +460,11 @@ class IntelligentDHWScheduler:
         # BT7-history recovery that follows.
         if "last_legionella_boost" in state:
             try:
-                self.last_legionella_boost = datetime.fromisoformat(state["last_legionella_boost"])
+                restored = datetime.fromisoformat(state["last_legionella_boost"])
+                if restored.tzinfo is None:
+                    # Saved with its offset by every release; one without cannot be placed in time.
+                    raise ValueError("no UTC offset")
+                self.last_legionella_boost = restored
                 _LOGGER.info(
                     "Restored last Legionella boost: %s",
                     self.last_legionella_boost,

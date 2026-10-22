@@ -940,7 +940,7 @@ class TestHeatingRateLearning:
     def test_persistence_roundtrip(self):
         """Heating rate survives save/restore cycle."""
         scheduler = create_dhw_scheduler()
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Build up learned data
         scheduler.last_legionella_boost = now - timedelta(days=5)
