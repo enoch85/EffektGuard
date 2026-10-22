@@ -1519,21 +1519,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._bt7_history_read = True
                 await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
 
-            # Track previous Legionella boost time before update
-            previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
+            # A high-temperature cycle seen, or a hygiene fallback run counted, is saved at once: a
+            # restart before the hourly save would otherwise forget it and run the fallback again.
+            hygiene_before = (
+                self.dhw_optimizer.last_legionella_boost,
+                self.dhw_optimizer.last_hygiene_fallback,
+            )
 
             # Update DHW optimizer with temperature history
             self.dhw_optimizer.update_bt7_temperature(
                 current_dhw_temp, now_time, getattr(nibe_data, "is_hot_water", None)
             )
 
-            # If Legionella boost was newly detected, save state immediately
-            if (
-                self.dhw_optimizer.last_legionella_boost != previous_legionella_boost
-                and self.dhw_optimizer.last_legionella_boost is not None
+            if hygiene_before != (
+                self.dhw_optimizer.last_legionella_boost,
+                self.dhw_optimizer.last_hygiene_fallback,
             ):
                 _LOGGER.info(
-                    "Legionella boost detected - saving DHW state to persist across reboots"
+                    "Hot-water hygiene recorded - saving DHW state to persist across reboots"
                 )
                 await self._save_dhw_state_immediate()
 
@@ -2880,7 +2883,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             existing_data = await self.learning_store.async_load() or {}
 
             # Update DHW state
-            if self.dhw_optimizer and self.dhw_optimizer.last_legionella_boost:
+            if self.dhw_optimizer and (
+                self.dhw_optimizer.last_legionella_boost or self.dhw_optimizer.last_hygiene_fallback
+            ):
                 existing_data["dhw_state"] = self.dhw_optimizer.get_dhw_state_for_persistence()
                 existing_data["last_updated"] = dt_util.utcnow().isoformat()
                 existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
@@ -2888,8 +2893,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self.learning_store.async_save(existing_data)
 
                 _LOGGER.debug(
-                    "Saved DHW state: last Legionella boost at %s",
+                    "Saved DHW state: last high-temperature cycle at %s, hygiene fallback at %s",
                     self.dhw_optimizer.last_legionella_boost,
+                    self.dhw_optimizer.last_hygiene_fallback,
                 )
             else:
                 _LOGGER.debug("No DHW state to save")

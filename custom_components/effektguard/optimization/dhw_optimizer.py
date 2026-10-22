@@ -78,6 +78,9 @@ from ..utils.volatile_helpers import get_volatile_info
 
 _LOGGER = logging.getLogger(__name__)
 
+# The scheduler's datetimes that survive a restart, saved and restored alike.
+_PERSISTED_TIMESTAMPS = ("last_legionella_boost", "last_hygiene_fallback")
+
 
 class DemandPeriodInfoDict(TypedDict):
     """Information about an upcoming demand period (KISS version)."""
@@ -269,6 +272,11 @@ class IntelligentDHWScheduler:
         # Whether the missing high-temperature cycle has been reported: once per stretch without one,
         # which ends when a cycle is seen (logged there), not on every cycle it lasts.
         self._reported_hygiene_overdue: bool = False
+        # The hygiene fallback (RULE 2.3): when its last run ran its course (persisted), whether this
+        # cycle decided to run it, and whether the charge in progress was started by it.
+        self.last_hygiene_fallback: datetime | None = None
+        self._hygiene_run: bool = False
+        self._hygiene_charge: bool = False
         self.bt7_history: deque = deque(maxlen=48)  # 4 hours at the 5-minute cycle
 
         # Learned DHW heating rate (persisted across restarts)
@@ -328,13 +336,30 @@ class IntelligentDHWScheduler:
             not self.bt7_history or self.bt7_history[-1][1] < DHW_LEGIONELLA_DETECT
         )
         self.bt7_history.append((timestamp, temp))
+        charge_was_on = self._charge_start is not None
         self._learn_from_the_charge(temp, timestamp, charging)
+        self._follow_the_hygiene_run(temp, timestamp, charging, charge_was_on)
         if reached:
             self.last_legionella_boost = timestamp
             self._reported_hygiene_overdue = False
             _LOGGER.info(
                 "Hot water reached %.1f°C at %s: high-temperature cycle seen", temp, timestamp
             )
+
+    def _follow_the_hygiene_run(
+        self, temp: float, timestamp: datetime, charging: bool | None, charge_was_on: bool
+    ) -> None:
+        """A hygiene fallback run counts once it has run its course: the charge it started ended
+        with the fallback still asking for heat. Also below DHW_LEGIONELLA_DETECT - that is as hot
+        as temporary lux takes the tank, and a run that never counts is run again every cheap
+        period."""
+        if charging and not charge_was_on:
+            self._hygiene_charge = self._hygiene_run
+        elif charge_was_on and not charging:
+            if charging is False and self._hygiene_charge and self._hygiene_run:
+                self.last_hygiene_fallback = timestamp
+                _LOGGER.info("Hot-water hygiene fallback ran its course at %.1f°C", temp)
+            self._hygiene_charge = False
 
     def calculate_heating_rate(self) -> float:
         """The DHW heating rate in °C/hour: the learned rate, or the default until there is one.
@@ -425,8 +450,9 @@ class IntelligentDHWScheduler:
             Dict with state that should be persisted across restarts.
         """
         state = {}
-        if self.last_legionella_boost:
-            state["last_legionella_boost"] = self.last_legionella_boost.isoformat()
+        for key in _PERSISTED_TIMESTAMPS:
+            if getattr(self, key):
+                state[key] = getattr(self, key).isoformat()
         if self.learned_heating_rate is not None:
             state["learned_heating_rate"] = self.learned_heating_rate
             state["heating_rate_observations"] = self.heating_rate_observations
@@ -442,23 +468,18 @@ class IntelligentDHWScheduler:
         # file, must degrade to defaults - not crash setup, and not poison the scheduler. An
         # unguarded ValueError here aborts all of async_initialize_learning, including the
         # BT7-history recovery that follows.
-        if "last_legionella_boost" in state:
+        for key in _PERSISTED_TIMESTAMPS:
+            if key not in state:
+                continue
             try:
-                restored = datetime.fromisoformat(state["last_legionella_boost"])
+                restored = datetime.fromisoformat(state[key])
                 if restored.tzinfo is None:
                     # Saved with its offset by every release; one without cannot be placed in time.
                     raise ValueError("no UTC offset")
-                self.last_legionella_boost = restored
-                _LOGGER.info(
-                    "Restored last Legionella boost: %s",
-                    self.last_legionella_boost,
-                )
+                setattr(self, key, restored)
+                _LOGGER.info("Restored %s: %s", key, restored)
             except (ValueError, TypeError) as err:
-                _LOGGER.warning(
-                    "Ignoring unreadable stored Legionella timestamp %r: %s",
-                    state.get("last_legionella_boost"),
-                    err,
-                )
+                _LOGGER.warning("Ignoring unreadable stored %s %r: %s", key, state.get(key), err)
 
         if "learned_heating_rate" in state:
             restored = self._validated_heating_rate(state["learned_heating_rate"])
@@ -686,6 +707,8 @@ class IntelligentDHWScheduler:
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
+        self._hygiene_run = False  # set by RULE 2.3 when this cycle's decision is its run
+
         # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 5 and 7 spelled their
         # own lists and left it out - RULE 5 waited through a very cheap night for a dearer cheap
         # quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
@@ -1280,46 +1303,62 @@ class IntelligentDHWScheduler:
                 recommended_start_time=next_non_peak,
             )
 
-        # === RULE 2.3: OPPORTUNISTIC HIGH-TEMPERATURE DHW CYCLE ===
+        # === RULE 2.3: HYGIENE FALLBACK ===
         #
-        # THIS RULE DOES NOT, AND CANNOT, PERFORM A LEGIONELLA CYCLE. It is an OPPORTUNISTIC top-up
-        # into a cheap window (cost optimisation), with no forced deadline on purpose - forcing a
-        # boost that can never reach the detection threshold would re-trigger the immersion heater
-        # indefinitely.
+        # Hygiene is NIBE's own periodic increase (menu 2.9.1 F-series / 2.4 S-series; factory every
+        # 14 days to 55 C with compressor and immersion heater) - on the owner's F750 every 14-17
+        # days to 56.2-56.3 C on BT7, April-October 2026. EffektGuard cannot see or block it
+        # (myuplink excludes 47050/47051); it sees the cycle when BT7 reaches DHW_LEGIONELLA_DETECT.
         #
-        # Hygiene is NIBE's own "periodic increase" (menu 2.9.1 F-series / 2.4 S-series; factory
-        # ACTIVATED every 14 days to 55 C, using compressor + immersion heater). EffektGuard cannot
-        # block it - our only DHW actuator is the temporary-lux switch, which does not touch NIBE's
-        # schedule. (Source: NIBE F750/F730/F1155 installer manuals, menus 2.9.1 and 5.1.1; register
-        # map 47046/47050/47051.)
-        #
-        # Our boost cannot reach 55 C: temporary lux drives the tank to the LUXURY STOP temperature
-        # (factory F750 54 / F730 53 / F1155 52 C, measured on BT6, all below DHW_LEGIONELLA_DETECT
-        # 55 C; installer-adjustable, so unknown at runtime). The BT7 >= 55 C detector is also
-        # unsound: BT7 is the DISPLAY sensor (setpoints act on BT6, CONTROL) and is optional on
-        # F1155/S1155, so a BT7 >= 55 C reading is most likely NIBE's own cycle, not ours.
-        #
-        # myuplink excludes params 47050/47051 (PARAMETER_ID_TO_EXCLUDE_F730), so we cannot observe
-        # NIBE's cycle; if none is seen far past its interval, warn (below) - do not substitute.
+        # The fallback runs only when that cycle is overdue - DHW_LEGIONELLA_OVERDUE_DAYS without
+        # one or a fallback run - so it never doubles the pump's own: one temporary-lux run in a
+        # stable cheap period. Lux heats to the pump's luxury stop temperature, not to
+        # DHW_LEGIONELLA_PREVENT_TEMP: on the owner's F750 54.3-55.3 C on BT7 (54.3-54.9 on BT6, the
+        # control sensor), with the immersion heater. A run that has run its course counts, also
+        # below DHW_LEGIONELLA_DETECT (_follow_the_hygiene_run): due after 14 days and never seen to
+        # finish, it ran in ~120 cheap periods April-October 2026, ~90 kWh of electric heat.
         days_since_legionella = None
         if self.last_legionella_boost:
             days_since_legionella = (
                 seconds_between(self.last_legionella_boost, current_time) / 86400.0
             )
-
-        legionella_needed = (
-            days_since_legionella is None or days_since_legionella >= DHW_LEGIONELLA_MAX_DAYS
+        last_hygiene = max(
+            (t for t in (self.last_legionella_boost, self.last_hygiene_fallback) if t), default=None
+        )
+        fallback_due = last_hygiene is None or (
+            seconds_between(last_hygiene, current_time) / 86400.0 >= DHW_LEGIONELLA_OVERDUE_DAYS
         )
 
-        if legionella_needed:
+        if (
+            days_since_legionella is not None
+            and days_since_legionella >= DHW_LEGIONELLA_OVERDUE_DAYS
+        ):
+            (_LOGGER.debug if self._reported_hygiene_overdue else _LOGGER.warning)(
+                "No hot-water temperature above %.0f C observed for %.0f days. NIBE's periodic "
+                "increase (menu 2.9.1 on F-series, 2.4 on S-series) normally runs every %.0f days "
+                "and is enabled from the factory - check that it is still activated on the pump. "
+                "Until it runs, EffektGuard heats the tank with temporary lux in a stable cheap "
+                "period every %.0f days, to the pump's luxury stop temperature.",
+                DHW_LEGIONELLA_DETECT,
+                days_since_legionella,
+                DHW_LEGIONELLA_MAX_DAYS,
+                DHW_LEGIONELLA_OVERDUE_DAYS,
+            )
+            self._reported_hygiene_overdue = True
+
+        if fallback_due:
             if is_stable_cheap:
-                # Stable cheap period - execute Legionella boost now
                 _LOGGER.info(
-                    "DHW hygiene boost: %.1f days since last cycle (limit %.0f), stable cheap period - heating to %.0f°C",
-                    days_since_legionella if days_since_legionella else 0,
-                    DHW_LEGIONELLA_MAX_DAYS,
-                    DHW_LEGIONELLA_PREVENT_TEMP,
+                    "DHW hygiene fallback: no high-temperature cycle for %s days (overdue at %.0f), "
+                    "stable cheap period - temporary lux to the pump's luxury stop",
+                    (
+                        f"{days_since_legionella:.1f}"
+                        if days_since_legionella is not None
+                        else "unknown"
+                    ),
+                    DHW_LEGIONELLA_OVERDUE_DAYS,
                 )
+                self._hygiene_run = True
                 return DHWScheduleDecision(
                     should_heat=True,
                     priority_reason="DHW_HYGIENE_BOOST",
@@ -1328,43 +1367,12 @@ class IntelligentDHWScheduler:
                     abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                     recommended_start_time=None,  # Heating now - no future time needed
                 )
-            elif is_cheap_price and is_volatile:
-                # Cheap but volatile - wait for stable window
-                _LOGGER.debug(
-                    "DHW hygiene boost pending: %.1f days, cheap but volatile - waiting for stable cheap period",
-                    days_since_legionella if days_since_legionella else 0,
-                )
-            else:
-                # Not cheap - log at DEBUG level (avoid log spam), will run when stable cheap
-                _LOGGER.debug(
-                    "DHW hygiene boost pending: %.1f days since last cycle, waiting for stable cheap period (current: %s, volatile: %s)",
-                    days_since_legionella if days_since_legionella else 0,
-                    price_classification,
-                    is_volatile,
-                )
-
-            # Diagnostic: NIBE's own periodic increase (menu 2.9.1) runs every
-            # DHW_LEGIONELLA_MAX_DAYS from the factory and targets >= 55 C. If we have not
-            # observed ANY high-temperature cycle well past that, the function has most
-            # likely been switched off on the pump - and EffektGuard cannot substitute for
-            # it (temporary lux stops at 53-54 C). Tell the user; do not act.
-            if (
-                days_since_legionella is not None
-                and days_since_legionella >= DHW_LEGIONELLA_OVERDUE_DAYS
-            ):
-                (_LOGGER.debug if self._reported_hygiene_overdue else _LOGGER.warning)(
-                    "No hot-water temperature above %.0f C observed for %.0f days. NIBE's "
-                    "periodic increase (menu 2.9.1 on F-series, 2.4 on S-series) normally "
-                    "runs every %.0f days and is enabled from the factory - check that it is "
-                    "still activated on the pump. EffektGuard cannot perform this cycle "
-                    "itself: the temporary-lux boost only reaches the pump's luxury stop "
-                    "temperature (53-54 C on factory settings), below the %.0f C threshold.",
-                    DHW_LEGIONELLA_DETECT,
-                    days_since_legionella,
-                    DHW_LEGIONELLA_MAX_DAYS,
-                    DHW_LEGIONELLA_DETECT,
-                )
-                self._reported_hygiene_overdue = True
+            _LOGGER.debug(
+                "DHW hygiene fallback pending: waiting for a stable cheap period (current: %s, "
+                "volatile: %s)",
+                price_classification,
+                is_volatile,
+            )
 
         # === RULE 2.5: COMPLETE EMERGENCY HEATING TO COMFORT LEVEL ===
         # After emergency heating reached DHW_SAFETY_MIN (30°C), complete to comfort level

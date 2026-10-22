@@ -1260,24 +1260,25 @@ DHW_READY_THRESHOLD: Final = (
 DHW_LEGIONELLA_DETECT: Final = 55.0
 """°C on BT7 taken as evidence that a high-temperature cycle occurred.
 
-Unsound as proof that OUR boost completed; kept only as a best-effort observation of NIBE's
-own periodic increase:
+A best-effort observation of NIBE's own periodic increase:
   - BT7 is "hot water, DISPLAY"; BT6 is "hot water, CONTROL". Every setpoint acts on BT6.
   - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
-  - Temporary lux stops at 53-54 C on BT6, so it will not reach this threshold.
+  - On the owner's F750 the periodic increase reaches 56.2-56.3 C on BT7, and a temporary-lux run
+    54.3-55.3 C (54.3-54.9 on BT6) - so a lux run is seen as a cycle only sometimes; the hygiene
+    fallback counts its own run without it (dhw_optimizer RULE 2.3).
 """
 
 DHW_LEGIONELLA_PREVENT_TEMP: Final = 56.0
-"""°C - target requested for the opportunistic high-temperature top-up.
+"""°C - target the hygiene fallback (RULE 2.3) reports.
 
 NEVER ACTUALLY WRITTEN TO NIBE: the only DHW actuator is the temporary-lux switch, and the
 pump heats to ITS OWN configured lux stop temperature, not to this value.
 """
 
-# Days without any observed high-temperature cycle after which EffektGuard warns the user.
-# NIBE's periodic increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory, so
-# going well beyond that suggests it has been switched off on the pump. DIAGNOSTIC ONLY -
-# we warn, we do not attempt to substitute for the function (we cannot: see above).
+# Days without any observed high-temperature cycle after which EffektGuard warns the user and runs
+# its hygiene fallback (one temporary-lux run, then again after as many days). NIBE's periodic
+# increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory - every 14-17 days on the
+# owner's F750 - so going well beyond that suggests it has been switched off on the pump.
 DHW_LEGIONELLA_OVERDUE_DAYS: Final = 21.0
 DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
