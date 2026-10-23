@@ -20,6 +20,8 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 
 <img src="docs/images/price-and-offset.png" alt="One day on a real house: EffektGuard's offset goes up when the price is low and down when it is high" width="760"/>
 
+<sub><i>One day on a real house: more heat in the cheap hours, less in the expensive evening.</i></sub>
+
 > [!WARNING]
 > Use at your own risk. EffektGuard controls a real heat pump. Watch it closely the first weeks.
 
@@ -34,6 +36,8 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 | Ventilation | Turns it up when the extra heat pays off (NIBE F750, F730) |
 
 <img src="docs/images/hot-water.png" alt="Hot water heated in the cheap midday hours, and the tank coasting through the expensive evening" width="760"/>
+
+<sub><i>Hot water heated at cheap midday prices, and not in the expensive evening.</i></sub>
 
 ## What you need
 
@@ -58,6 +62,8 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 ## Daily use
 
 <img src="docs/images/thermostat-and-switches.png" alt="The EffektGuard thermostat and its switches" width="520"/>
+
+<sub><i>The EffektGuard thermostat and its switches.</i></sub>
 
 | Thermostat | What happens |
 |---|---|
