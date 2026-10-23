@@ -15,8 +15,25 @@ flowchart LR
     DE --> GATE["volatility gate<br/>integer offset"]
     GATE --> REG["NIBE offset number<br/>register 47011"]
     CO --> DHW["DHW optimizer<br/>temporary-lux switch"]
+    CO --> AIR["airflow optimizer<br/>ventilation switch"]
     CO --> ENT["climate, sensors, switches"]
 ```
+
+## The nine layers
+
+Each returns an offset, a weight and a reason. The engine runs them in this order:
+
+| Layer | Code | What it does |
+|---|---|---|
+| Safety | `DecisionEngine._safety_layer` | Room below 18 °C: +10 at full weight. Needs a room reading |
+| Thermal debt | `EmergencyLayer` | T1-T3: raises while the room is below target or power is cheap. Past DM -1500 (EMERGENCY): floors the offset at 0 unless the room is above its band, and raises nothing itself. Anti-windup |
+| Proactive | `ProactiveLayer` | Z1-Z5: smaller, earlier raises as degree minutes start to fall |
+| Peak | `EffectManager` | Lowers the offset near a new monthly power peak |
+| Learned pre-heat | `ThermalStatePredictor` | Pre-heats from the learned house response, after 24 hours of history, at weight 0.65 |
+| Weather compensation | `WeatherCompensationLayer` | Supply temperature from the outdoor temperature (EN 442 emitter law) |
+| Weather pre-heat | `WeatherPredictionLayer` | Heats ahead of a colder day, earlier for a heavy house |
+| Price | `PriceAnalyzer` | Classifies the 15-minute prices: up when cheap, down when expensive, extra before a jump |
+| Comfort | `ComfortLayer` | Pulls the room back to its band; a room far too warm wins at full weight |
 
 ## Modules
 
@@ -47,6 +64,8 @@ All paths under `custom_components/effektguard/`.
   the thermal-mass and insulation options, and the `DecisionEngine`, which creates its own layers.
 - The coordinator creates the learning objects (`ThermalStatePredictor`, `AdaptiveThermalModel`,
   `WeatherPatternLearner`); after that the engine's `thermal` is the `AdaptiveThermalModel`.
+  From 96 hourly observations (4 days), the learned pre-heat layer's `get_parameters()` call
+  overwrites that model's `thermal_mass` and `ufh_type` with learned values.
 - The DHW scheduler receives the engine's `emergency_layer` and `price`, so hot water is blocked
   by the same degree-minute thresholds (`should_block_dhw`: T2 or worse, or past -1500).
 - Options are hot-reloaded (`async_update_config`); changing an entity goes through
@@ -58,8 +77,9 @@ All paths under `custom_components/effektguard/`.
   Assistant's latitude and the current outdoor temperature, and `thermal_layer.py` tightens it for
   slow emitters (concrete x1.3, timber x1.15, radiators x1.0). Tables in
   [docs/CLIMATE_ZONES.md](../CLIMATE_ZONES.md).
-- The ladder is Z1 to Z5, then T1 to T3, then EMERGENCY at DM -1500, where nothing cuts and
-  nothing raises. There is no WARNING or CAUTION tier.
+- The ladder is Z1 to Z5, then T1 to T3, then EMERGENCY past DM -1500, which floors the offset at
+  0 unless the room is above its band, and raises nothing itself. There is no WARNING or CAUTION
+  tier.
 - A layer at weight 1.0 wins outright; otherwise the weighted average, with the thermal-debt
   special cases in [08](08_layer_priority_system.md).
 - Learning observes hourly into a 28-day window; the learned pre-heat layer votes (weight 0.65)
