@@ -8,178 +8,183 @@
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
 [![Open EffektGuard in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Open EffektGuard in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
 [![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
-NIBE heat pump control for Home Assistant. Every five minutes it nudges the pump's heating curve up
-or down: more heat when electricity is cheap or a cold day is coming, less when it is expensive or a
-new monthly power peak is near - with your comfort and the pump's health ahead of the savings. The
-pump keeps all its own control; EffektGuard only moves the curve.
+EffektGuard runs your heat pump on the electricity price. Your house is a heat battery: EffektGuard
+charges it - raises the heat - when power is cheap, and lets it coast when power is expensive or a
+new monthly power peak is near (the effect tariff). The house never gets cold. EffektGuard changes
+one setting on the pump: the heating-curve offset.
 
-**Use at your own risk.** This software writes to a real heat pump. You are responsible for your
-heating, your bill and your pump. Watch it closely the first weeks and turn it off if anything
-looks wrong.
+It supports NIBE heat pumps today. Other brands can follow - want to add yours? See
+[contributing](docs/dev/CONTRIBUTION_GUIDE.md).
 
-## Requirements
+> **Use at your own risk.** EffektGuard writes to a real heat pump. You are responsible for your
+> heating, your bill and your pump. Watch it closely the first weeks, and turn it off if anything
+> looks wrong.
 
-- Home Assistant 2025.11 or newer.
-- A NIBE heat pump exposed as Home Assistant entities by one of:
-  - [MyUplink](https://www.home-assistant.io/integrations/myuplink/) (cloud)
-  - [nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) (local, NibeGW or
-    Modbus TCP; most of its entities are disabled by default, enable the ones you need)
-  - [Modbus](https://www.home-assistant.io/integrations/modbus/) sensors plus a template number
-    for the offset register, see [Local Modbus](#local-modbus)
-- A model profile: F730, F750, F1155, F2040 or S1155. Pick the nearest for another NIBE model.
-- [GE-Spot](https://github.com/enoch85/ge-spot) for 15-minute spot prices. Without it there is no
-  price optimization.
-- Optional: a weather entity with an hourly forecast (Met.no works) for pre-heating before cold
-  days, and a whole-house power meter for peak tracking (without one the pump's own phase currents
-  are used when it exposes them). The meter's value counts until Home Assistant shows it
-  unavailable, so a meter that can freeze should declare that (MQTT `expire_after`, a template's
-  `availability`).
+<img src="docs/images/price-and-offset.png" alt="The spot price and the offset EffektGuard wrote, over one day" width="760"/>
+
+*22 October 2026 on a real house (SE4 prices, EffektGuard v0.7.1): the offset mirrors the price - up
+in the cheap night and midday hours to charge the house, down to -4 through the evening peak.*
+
+## What it controls
+
+| | What EffektGuard does | Default |
+|---|---|---|
+| Heating | Moves the heating-curve offset, -10 to +10 °C | On |
+| Hot water | Switches the pump's hot-water boost (NIBE: temporary lux) at cheap times and before your hot-water times | Off |
+| Ventilation | Boosts the ventilation when the extra exhaust-air heat is worth it (NIBE F750, F730) | Off |
+
+Nothing else on the pump changes.
+
+## Before you start
+
+| You need | Without it |
+|---|---|
+| Home Assistant 2025.11 or newer | Not supported |
+| Your heat pump in Home Assistant: today a NIBE, through [MyUplink](https://www.home-assistant.io/integrations/myuplink/), [nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) (enable its entities) or [Modbus](https://www.home-assistant.io/integrations/modbus/) ([how](docs/LOCAL_MODBUS.md)) | Nothing works |
+| A model profile: NIBE F730, F750, F1155, F2040 or S1155 | Pick the nearest and [ask for yours](https://github.com/enoch85/EffektGuard/issues/new?labels=enhancement) |
+| [GE-Spot](https://github.com/enoch85/ge-spot), the price source EffektGuard reads (it fetches from Nord Pool, ENTSO-E and others) | No price optimization |
+| Optional: a weather entity with an hourly forecast | No pre-heating before a colder day |
+| Optional: a whole-house power meter | Peak protection uses the pump's phase currents, if it has them |
+
+**Turn off the pump's own price control first**, or the two fight each other. On a NIBE: *Smart
+Control* in myUplink (`switch.<pump>_smart_control`).
 
 ## Install
 
-Use the two buttons above: the first opens EffektGuard in the Marketplace (Home Assistant 2026.11
-and newer; download it), the second starts the setup. If EffektGuard is not in the catalog yet, the
-first button offers to add it as a custom repository. On Home Assistant 2026.10 and older use
-[HACS](https://hacs.xyz/): find EffektGuard under *Integrations* (or first add
-`https://github.com/enoch85/EffektGuard` as an integration under *Custom repositories*), download it
-and restart. Manual: copy `custom_components/effektguard/` into your config directory and restart.
-Then *Settings, Devices & services, Add integration, EffektGuard*.
+1. **Marketplace** (Home Assistant 2026.11 and newer): the first button above. Download, restart.
+2. **HACS** (2026.10 and older): the second button. If [HACS](https://hacs.xyz/) asks to add the
+   repository, confirm. Download, restart.
+3. **By hand**: copy `custom_components/effektguard/` into your configuration's `custom_components/`
+   and restart.
 
-## Setup
+Then add it: the third button, or *Settings → Devices & services → Add integration → EffektGuard*.
 
-The config flow asks, in this order:
+## Set up
 
-1. **Offset entity**: the number entity for the heating-curve offset (register 47011 on the
-   F-series, for example `number.heat_offset_s1_47011`).
-2. **Price sensor**: a GE-Spot `current_price` sensor, and whether price optimization is on.
-3. **Heat pump model**: default F750.
-4. **Weather entity**, and whether peak protection is on.
-5. **Sensors**: degree minutes, power meter, the temporary-lux switch (needed for hot-water
-   control), extra room sensors, and override fields for setups discovery cannot name (generic
-   Modbus, renamed entities).
+The setup asks five things and finds the rest by entity name:
 
-Everything else is found by entity-name pattern. *Reconfigure* changes the entities later.
-*Configure* holds the options: mode and tolerance ([Your settings](#your-settings)), thermal mass
-and insulation (0.5-2.0), the hot-water target, amount and schedule, and airflow rates on the
-F750/F730.
+1. **Offset entity** - the heating-curve offset (NIBE F-series: register 47011, e.g.
+   `number.heat_offset_s1_47011`).
+2. **Price sensor** - GE-Spot's current price; price optimization on or off.
+3. **Model** - F750 by default.
+4. **Weather entity** (optional); peak protection on or off.
+5. **Sensors** - degree minutes, the power meter, the hot-water boost switch (on nibe_heatpump an
+   `input_boolean` helper for its select), extra room sensors and how to combine them, overrides.
 
-## What you get
+*Reconfigure* changes these later; *Configure* holds the [settings](#settings).
 
-- **Why it did what it did**: `sensor.effektguard_optimization_reasoning` - the state is a
-  summary, the attributes hold each layer's offset, weight and reason
-  ([SENSOR_STATE_LIMITS.md](docs/SENSOR_STATE_LIMITS.md)).
-- `climate.effektguard`: HEAT or OFF (OFF holds the offset at 0 and runs no layer), the target
-  temperature and the presets ([Your settings](#your-settings)).
-- Sensors (`sensor.effektguard_current_offset`, `sensor.effektguard_degree_minutes`, ...): current
-  offset, degree minutes, supply, outdoor and indoor temperature, current electricity price, peak
-  today, peak this month, NIBE power, compressor frequency and health, optimization reasoning,
-  quarter of day, price period classification, indoor and outdoor temperature trend, estimated
-  monthly savings, heat pump model, DHW status, recommendation and scheduled start. The F750/F730
-  also get airflow enhancement and thermal gain.
-- Switches (`switch.effektguard_enable_optimization`, ...): enable optimization, price
-  optimization, peak protection and weather prediction (on by default); hot water optimization and
-  airflow optimization (off by default, the latter F750/F730 only).
-- Services: `effektguard.force_offset` (offset -10 to +10 for 0-480 min, 0 = one cycle),
-  `effektguard.boost_heating` (+10 for 30-360 min), `effektguard.boost_dhw` (temporary lux for
-  30-180 min), `effektguard.reset_peak_tracking`, `effektguard.calculate_optimal_schedule`
-  (returns a 24-hour price preview).
+## Daily use
+
+<img src="docs/images/thermostat-and-switches.png" alt="The EffektGuard thermostat and switches" width="520"/>
+
+The thermostat, `climate.effektguard`, is the day-to-day control:
+
+| Choose | What happens |
+|---|---|
+| Target | The room temperature, 18.5-25 °C |
+| HEAT, OFF | On, or paused: OFF holds the offset at 0 and EffektGuard decides nothing, safety included |
+| Preset none, comfort, eco | Balanced, Comfort or Savings [mode](#settings) |
+| Preset away | Savings, 3 °C below the target (never below 18.5 °C); the thermostat keeps showing your target, hot water is not changed. Choose your usual preset again when you are back |
+
+Why it did what it did: `sensor.effektguard_optimization_reasoning`. After a start it watches a
+cycle or two before it writes.
+
+The charts in this README, live on your dashboard:
+[dashboard-charts.yaml](docs/dashboard-charts.yaml) (needs
+[apexcharts-card](https://github.com/RomRider/apexcharts-card)).
+
+## Settings
+
+Under *Configure*:
+
+| Setting | Range (default) | Effect |
+|---|---|---|
+| Mode | Comfort, Balanced, Savings (Balanced) | Comfort reacts to a 0.1 °C drift and lets prices push less; Savings waits for 0.3 °C, lets prices push more and cuts fully at a price peak |
+| Tolerance | 0.5-3.0 (0.5) | Comfort traded for price: a comfort band of ±0.4 × the setting, and price moves from 20 % (0.5) to 100 % (3.0) of full size |
+| Thermal mass, insulation | 0.5-2.0 (1.0) | Your house: thermal mass 1.5 or more is a concrete slab, 1.2 or more timber floor heating |
+| Hot water | Target 45-60 °C (50), amount 1-30 min (5), ready at 07:00 and 18:00 | See [Hot water](#hot-water) |
+| Airflow | Standard 100-300, boosted 150-400 m³/h (150, 252) | NIBE F750 and F730 only |
+
+Of the switches, Enable Optimization, Price Optimization, Peak Protection and Weather Prediction are
+on by default; Hot Water Optimization and Airflow Optimization are off.
 
 ## How it decides
 
-Every five minutes, ten seconds past the mark, EffektGuard reads the pump, the prices and the
-forecast, and nine layers each vote for an offset with a weight:
+Every 5 minutes nine layers vote for an offset, and the votes become one whole-degree offset:
 
-```mermaid
-flowchart LR
-    A["Pump readings"] --> L["Nine layers vote"]
-    B["Spot prices"] --> L
-    C["Weather forecast"] --> L
-    L --> D["One whole-degree offset"]
-    D --> E["NIBE heating curve"]
-```
+- **Price** - cheap quarters raise the curve to charge the house, more when an expensive spell is
+  coming; expensive quarters lower it, more when a cheaper spell is coming; a price-peak quarter
+  lowers it a lot.
+- **Colder weather** - a colder day in the forecast raises the curve, earlier for a heavy house. The
+  price vote decides where it lands: most in cheap quarters, none in a price-peak quarter.
+- **Monthly peak** - near this month's power peak it lowers the curve. Needs peak protection, and a
+  power meter or the pump's phase currents.
+- **Thermal debt** - when the pump falls behind (degree minutes), it raises the curve while the room
+  is below target or power is cheap. The limits adapt to your latitude, the outdoor temperature and
+  your house.
+- **Comfort** - it pulls the room back toward the target.
 
-| Layer | What it does | When it acts |
-|---|---|---|
-| **Safety** | Raises the curve to +10 | The room is below 18 °C |
-| **Thermal debt** | Raises the curve so the pump catches up; past -1500 degree minutes it forbids any cut instead | Degree minutes (NIBE's heat-deficit counter) run deep |
-| **Proactive** | Small raises before the debt gets deep | Degree minutes start to fall |
-| **Peak** | Lowers the curve so the house does not set a new monthly power peak | Close to this month's peak; needs a power meter or the pump's phase currents |
-| **Learned pre-heat** | Raises ahead of a predicted drop in room temperature | After 24 h of history, when it predicts a drop |
-| **Weather compensation** | Nudges the curve toward the flow temperature your radiators or floor need at today's outdoor temperature | Always, with a small weight; pauses during hot water |
-| **Weather pre-heat** | Raises +2 before a colder day | The forecast drops 4 °C or more within the look-ahead (longer for a concrete slab) |
-| **Spot price** | Raises in cheap quarters, lowers in expensive ones, lets the house coast through price peaks | Whenever GE-Spot has prices; each quarter is ranked against its own day |
-| **Comfort** | Pulls the room back toward the target | The room drifts out of its band |
+A full-weight vote wins: safety, a price-peak quarter, a new monthly peak about to be set, a room far
+too warm. The rest are averaged. Price and peak cuts give way as the room drops below its comfort
+band, and a reversal of 2 °C or more within 45 minutes is held back. [Safety](#safety) overrides it
+all. Details: [architecture](docs/architecture/00_overview.md).
 
-**How the votes combine.** A vote at full weight wins: safety, a price-peak quarter, the monthly
-peak, or a room far too warm. Otherwise the result is the weighted average. Price and peak may
-soften a thermal-debt recovery but never reverse it, and may coast the house within its comfort band
-but not out of it. The result reaches the pump as a whole degree, at most every five minutes; a
-reversal of 2 °C or more within 45 minutes is held back.
+## Hot water
 
-The degree-minute thresholds come from Home Assistant's latitude and the outdoor temperature: the
-same reading is normal in Kiruna at -30 °C and a warning in Malmö at 0 °C. Details:
-[docs/architecture/](docs/architecture/00_overview.md).
+<img src="docs/images/hot-water.png" alt="The spot price, the tank temperature and the hot-water boosts, from 03:00 to midnight" width="760"/>
 
-## Your settings
+*The same day from 03:00, hot water: two boosts in the cheap midday hours (69-83 öre/kWh) heated
+the tank from 38 to 50 °C; it coasted through the evening peak (up to 294 öre/kWh) and still held
+46 °C at the end of the day.*
 
-- **Target temperature**: on the climate entity, 18.5-25 °C.
-- **Tolerance** (0.5-3.0): how far the room may drift before the comfort layer acts, ±0.4 x the
-  setting (1.2 lets it drift ±0.48 °C).
-- **Mode**: *Comfort* (comfort counts 1.3x, price 0.7x), *Balanced* (both 1x) or *Savings* (comfort
-  0.7x, price 1.3x, and a price-peak quarter always cuts fully). The climate presets map to them:
-  none = Balanced, comfort = Comfort, eco = Savings, away = Savings with the target 3 °C lower.
+Off until you turn on `switch.effektguard_hot_water_optimization` and choose the boost switch in
+setup. Then EffektGuard heats the tank at cheap times and has it ready for your hot-water times, each
+boost running at least 15 minutes. The pump still heats a low tank on its own, and a boost you start
+yourself is left alone. [More](docs/DHW_OPTIMIZATION.md).
 
 ## Safety
 
-- Indoor below 18 °C: the safety layer asks +10 at full weight (+7.5 while the room is already
-  warming fast).
-- Degree minutes past -1500: no layer may cut below 0 unless the room is above its band, and
-  nothing raises into the flat-out compressor.
-- At most one write every 5 minutes, whole degrees only, clamped to -10..+10 and to the number
-  entity's own range.
-- A cycle that cannot read the pump writes nothing and the entities go unavailable.
-- `force_offset` cannot hold the pump below these floors.
+- Below 18 °C indoors: full heat (+10), and hot water stops. This needs a room reading.
+- Past -1500 degree minutes: no cut below 0 unless the room is above its band, and hot water stops.
+  The thermal-debt layer adds no raise there; raises from other layers pass, trimmed when the
+  compressor is already at its maximum.
+- Writes are whole degrees, -10 to +10 and within the offset entity's range; the automatic loop
+  writes at most once every 5 minutes.
+- A cycle that cannot read the pump writes nothing. `force_offset` cannot override these limits.
 
-## Local Modbus
+## Troubleshooting
 
-With the generic `modbus` integration, define sensors for the registers you need (temperatures and
-degree minutes are raw x10, use `scale: 0.1`; the offset register is not scaled) and wrap the
-offset register in a template number so EffektGuard can write it:
+| You see | Do |
+|---|---|
+| Heating changes you did not expect | Check that the pump's own price control is off ([Before you start](#before-you-start)) |
+| Repair issue "No electricity price source" | Install GE-Spot and choose its sensor under *Reconfigure* |
+| Repair issue "No hot-water control entity" | Choose the boost switch under *Reconfigure*. nibe_heatpump needs an `input_boolean` helper, and has none for the S-series |
+| Entities unavailable | The pump could not be read (with MyUplink, its cloud may be slow or down). Nothing is written until it can be |
+| The offset does not move | Check that the thermostat is on HEAT and read the reasoning sensor. A change under a whole degree is not written |
+| Peaks look wrong | The power meter must go unavailable when it stops updating (MQTT `expire_after`, a template's `availability`) |
+| Anything else | Download the diagnostics (*Settings → Devices & services → EffektGuard → ⋮*) and open an [issue](https://github.com/enoch85/EffektGuard/issues) |
 
-```yaml
-template:
-  - number:
-      - name: "Heat Offset S1 47011"
-        unique_id: nibe_heat_offset_s1_47011
-        state: "{{ states('sensor.heat_offset_s1_47011') | float(0) }}"
-        availability: "{{ has_value('sensor.heat_offset_s1_47011') }}"
-        min: -10
-        max: 10
-        step: 1
-        set_value:
-          - action: modbus.write_register
-            data:
-              hub: nibe
-              slave: 1
-              address: 47011
-              value: "{{ (value | int) % 65536 }}"
-```
+## Reference
 
-`min`, `max` and `step` are required: a template number defaults to 0-100, and EffektGuard clamps
-to the entity's range, so a negative offset would never reach the pump. The displayed value catches
-up on the sensor's next poll (`scan_interval`, 15 s default). Select this number in the first setup
-step.
+| Service | Does | Limits |
+|---|---|---|
+| `effektguard.force_offset` | Holds an offset | -10 to +10 °C for 0-480 min (0 = one cycle); once per 5 min |
+| `effektguard.boost_heating` | Offset +10 | 30-360 min; once per 45 min |
+| `effektguard.boost_dhw` | Hot-water boost | 30-180 min; once per 60 min; not under the [safety limits](#safety) |
+| `effektguard.reset_peak_tracking` | Resets the monthly peaks, e.g. at a new billing period | |
+| `effektguard.calculate_optimal_schedule` | Returns a 24-hour price preview | |
 
-## Documentation
+The first three need EffektGuard on, and act at once.
 
-- [Architecture](docs/architecture/00_overview.md): the cycle, the layers, the aggregation
-- [Climate zones](docs/CLIMATE_ZONES.md): the degree-minute tables per zone
-- [Hot water](docs/DHW_OPTIMIZATION.md)
-- [Development](docs/dev/README.md): setup, tests, code standards
-- [Contributor rulebook](CLAUDE.md)
+More: [architecture](docs/architecture/00_overview.md), [climate zones](docs/CLIMATE_ZONES.md),
+[hot water](docs/DHW_OPTIMIZATION.md) and its [setup](docs/DHW_SETUP.md),
+[local Modbus](docs/LOCAL_MODBUS.md), [development](docs/dev/README.md),
+[contributor rulebook](CLAUDE.md).
 
-## License
+## Support and license
 
-MIT, see [LICENSE](LICENSE). Author: [@enoch85](https://github.com/enoch85).
+[GitHub issues](https://github.com/enoch85/EffektGuard/issues) · MIT, see [LICENSE](LICENSE) ·
+[@enoch85](https://github.com/enoch85)

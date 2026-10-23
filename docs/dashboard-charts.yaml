@@ -1,0 +1,199 @@
+# The README's two charts as one dashboard card: today's spot price (past and coming quarters) with
+# EffektGuard's offset, and with the hot-water tank and boosts.
+#
+# Needs apexcharts-card (https://github.com/RomRider/apexcharts-card, in HACS). Add it with
+# Edit dashboard -> Add card -> Manual, and paste this file.
+#
+# Replace:
+#   sensor.gespot_current_price_se4  your GE-Spot price sensor (se4 is the price area)
+#   sensor.<pump>_hot_water_top_bt7  your pump's tank-top temperature (NIBE BT7)
+#   switch.<pump>_temporary_lux      the hot-water boost switch chosen in EffektGuard's setup
+#
+# Colours are for a dark theme. For a light theme, as in the README: price #2e7d32, #f9a825,
+# #c62828 at opacity 0.55; offset #1565c0; boost #1e88e5 at 0.28; tank #ad1457; grid borderColor
+# "#e8e8e8"; and remove tooltip theme.
+
+type: vertical-stack
+cards:
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    span:
+      start: day
+    now:
+      show: true
+      label: Now
+      color: "#bdbdbd"
+    header:
+      show: true
+      title: Spot price and EffektGuard's offset
+      show_states: false
+    experimental:
+      color_threshold: true
+    apex_config:
+      chart:
+        height: 330
+      legend:
+        show: true
+        position: top
+        horizontalAlign: right
+      grid:
+        borderColor: "rgba(255, 255, 255, 0.10)"
+      tooltip:
+        theme: dark
+        x:
+          format: HH:mm
+      xaxis:
+        labels:
+          format: HH:mm
+    yaxis:
+      - id: price
+        min: 0
+        max: "~300"
+        decimals: 0
+        apex_config:
+          tickAmount: 6
+          title:
+            text: öre/kWh
+      - id: offset
+        opposite: true
+        min: "~-5"
+        max: "~5"
+        decimals: 0
+        apex_config:
+          tickAmount: 10
+          title:
+            text: offset °C
+    series:
+      - entity: sensor.gespot_current_price_se4
+        name: Spot price
+        yaxis_id: price
+        type: area
+        curve: stepline
+        stroke_width: 1
+        opacity: 0.75
+        extend_to: false
+        show:
+          legend_value: false
+        color_threshold:
+          - value: 0
+            color: "#66bb6a"
+          - value: 120
+            color: "#ffca28"
+          - value: 220
+            color: "#ef5350"
+        # GE-Spot's quarters for today and, once published, tomorrow
+        data_generator: |
+          const q = [...(entity.attributes.today_interval_prices || []),
+                     ...(entity.attributes.tomorrow_interval_prices || [])];
+          const d = q.map((p) => [new Date(p.time).getTime(), p.value]);
+          if (d.length) d.push([d[d.length - 1][0] + 15 * 60 * 1000, d[d.length - 1][1]]);
+          return d;
+      - entity: sensor.effektguard_current_offset
+        name: Offset
+        yaxis_id: offset
+        type: line
+        curve: stepline
+        stroke_width: 3
+        color: "#4fc3f7"
+        extend_to: now
+        show:
+          legend_value: false
+
+  - type: custom:apexcharts-card
+    graph_span: 24h
+    span:
+      start: day
+    now:
+      show: true
+      label: Now
+      color: "#bdbdbd"
+    header:
+      show: true
+      title: Spot price and hot water
+      show_states: false
+    experimental:
+      color_threshold: true
+    apex_config:
+      chart:
+        height: 330
+      legend:
+        show: true
+        position: top
+        horizontalAlign: right
+      grid:
+        borderColor: "rgba(255, 255, 255, 0.10)"
+      tooltip:
+        theme: dark
+        x:
+          format: HH:mm
+      xaxis:
+        labels:
+          format: HH:mm
+    yaxis:
+      - id: price
+        min: 0
+        max: "~300"
+        decimals: 0
+        apex_config:
+          tickAmount: 6
+          title:
+            text: öre/kWh
+      - id: tank
+        opposite: true
+        min: "~30"
+        max: "~55"
+        decimals: 0
+        apex_config:
+          tickAmount: 5
+          title:
+            text: tank °C
+      - id: boost
+        show: false
+        min: 0
+        max: 1
+    series:
+      - entity: sensor.gespot_current_price_se4
+        name: Spot price
+        yaxis_id: price
+        type: area
+        curve: stepline
+        stroke_width: 1
+        opacity: 0.75
+        extend_to: false
+        show:
+          legend_value: false
+        color_threshold:
+          - value: 0
+            color: "#66bb6a"
+          - value: 120
+            color: "#ffca28"
+          - value: 220
+            color: "#ef5350"
+        data_generator: |
+          const q = [...(entity.attributes.today_interval_prices || []),
+                     ...(entity.attributes.tomorrow_interval_prices || [])];
+          const d = q.map((p) => [new Date(p.time).getTime(), p.value]);
+          if (d.length) d.push([d[d.length - 1][0] + 15 * 60 * 1000, d[d.length - 1][1]]);
+          return d;
+      - entity: switch.<pump>_temporary_lux
+        name: Hot-water boost
+        yaxis_id: boost
+        type: area
+        curve: stepline
+        stroke_width: 0
+        color: "#29b6f6"
+        opacity: 0.3
+        extend_to: now
+        transform: "return x === 'on' ? 1 : 0;"
+        show:
+          legend_value: false
+      - entity: sensor.<pump>_hot_water_top_bt7
+        name: Tank (BT7)
+        yaxis_id: tank
+        type: line
+        curve: smooth
+        stroke_width: 3
+        color: "#ce93d8"
+        extend_to: now
+        show:
+          legend_value: false
