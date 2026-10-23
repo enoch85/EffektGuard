@@ -20,9 +20,8 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 
 <img src="docs/images/price-and-offset.png" alt="One day on a real house: EffektGuard's offset goes up when the price is low and down when it is high" width="760"/>
 
-## ⚠️ Use at your own risk
-
-EffektGuard controls a real heat pump. Watch it closely the first weeks.
+> [!WARNING]
+> Use at your own risk. EffektGuard controls a real heat pump. Watch it closely the first weeks.
 
 ## What it does
 
