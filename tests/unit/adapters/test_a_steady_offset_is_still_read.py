@@ -1,6 +1,6 @@
 """A steady offset register is still the offset register, however long since it last reported.
 
-The register changes only when it is written. The README's local Modbus recipe exposes it as a
+The register changes only when it is written. The recipe in docs/LOCAL_MODBUS.md exposes it as a
 template number, and a template entity reports only when its value changes: on the bench the
 offset last reported at startup while its Modbus source reported every 5 s (2026-10-22). The
 30-minute staleness guard (F-015) then read it as 0.0 while the register held its value - the

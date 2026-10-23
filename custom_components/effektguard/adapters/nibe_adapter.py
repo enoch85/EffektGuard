@@ -336,7 +336,7 @@ class NibeAdapter:
         )
 
         # Read current offset. The register changes only when it is written, and a template number
-        # (the README's local Modbus recipe) reports only when its value changes, so half an hour of
+        # (docs/LOCAL_MODBUS.md's recipe) reports only when its value changes, so half an hour of
         # silence is a steady offset, not a dead sensor. Aged out, it read as 0.0 while the register
         # held its value: the anti-windup could not see a held raise, and the offset sensor showed
         # 0. The readings that prove the pump is alive - BT1, BT25/BT63, degree minutes - keep it.

@@ -29,12 +29,14 @@ entities other integrations publish.
 | [docs/dev/CODE_STANDARDS.md](docs/dev/CODE_STANDARDS.md) | Imports, type hints, async, docstrings |
 | [docs/dev/TESTING.md](docs/dev/TESTING.md) | Test layout and categories |
 | [docs/dev/ENVIRONMENT_SETUP.md](docs/dev/ENVIRONMENT_SETUP.md) | First-time setup |
+| [docs/LOCAL_MODBUS.md](docs/LOCAL_MODBUS.md) | The offset entity on a generic Modbus setup |
+| [docs/dashboard-charts.yaml](docs/dashboard-charts.yaml) | The README's charts as an apexcharts-card dashboard card |
 
 **Add any new doc to this table.** It is the single index.
 
 ---
 
-## Four rules that get broken most often
+## Five rules that get broken most often
 
 1. **No AI attribution in any committed artifact.** No `Co-Authored-By:` naming an AI, no
    "Generated with", no robot emoji, no "claude" in a branch name - in commits, branches, PRs,
@@ -49,6 +51,9 @@ entities other integrations publish.
    comment, doc or release note comes from a run you did, and says what it counts and over which
    period. If it cannot be measured, say so instead of giving a number. A number from a subagent
    or an earlier session is re-run before it is repeated.
+5. **The README and the docs match the code.** A change that makes either one false updates it in
+   the same PR, and every claim in them is checked against the code before it is written. End
+   users read the README: a wrong line there is a bug.
 
 ---
 
