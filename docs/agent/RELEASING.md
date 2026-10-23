@@ -13,8 +13,11 @@ them: one short line per item, glanceable in seconds.
 ```markdown
 ## Summary
 
-Three to six short lines, one sentence each: the highlights, the largest changes, and what to
-expect after updating.
+A first short sentence: the release's main theme.
+
+One short paragraph per highlight or large change, one sentence each.
+
+A last one: what to expect after updating.
 
 ## Breaking
 • **Area**: what the user must do
@@ -44,7 +47,8 @@ expect after updating.
   over or move, anything to do). Big picture only; the bullets carry the details.
 - Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
 - Bullets are `•`. Backticks for symbols. Omit empty sections.
-- **No line breaks inside a sentence or bullet**: GitHub shows each one in a release.
+- **The summary is three to six one-sentence paragraphs, with a blank line between them.** No line
+  breaks inside a sentence or bullet: GitHub shows each one in a release.
 - **One short line per item: what the user notices.** No cause, no mechanism, no semicolons, no
   second clause. Label by area (Hot water, Peaks), not by PR.
 - **About fifteen bullets at most.** Fold the small ones into one "Smaller fixes" line.
