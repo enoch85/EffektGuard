@@ -11,8 +11,8 @@
 [![Open EffektGuard in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
 [![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
-EffektGuard runs your heat pump on the electricity price: your house stores heat when power is cheap,
-and you pay less.
+EffektGuard runs your heat pump on the electricity price: your house stores heat when power is
+cheap, and you pay less.
 
 It works with NIBE heat pumps today. Other brands are welcome, see
 [contributing](docs/dev/CONTRIBUTION_GUIDE.md).
