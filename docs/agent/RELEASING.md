@@ -7,32 +7,48 @@ Task-specific: read this when cutting or editing a release. The mechanics live i
 
 ## Release notes format
 
-**Read an existing release before writing one** (`gh release view v0.5.0 --json body -q .body`).
-Copy that format. Do not invent a structure, and do not guess at a length.
+**Read v0.8.0's notes before writing one** (`gh release view v0.8.0 --json body -q .body`) and copy
+them: one short line per item, glanceable in seconds.
 
 ```markdown
-## Key Changes
+## Summary
 
-### Breaking
-• **Short bold label**: one line
+One or two plain sentences on one line: what this release offers, as a whole.
 
-### Bug Fixes
-• **Short bold label**: one line, symptom first, cause as a clause
+## Breaking
+• **Area**: what the user must do
 
-### Enhancements
-• **Short bold label**: one line
+## Bug fixes
+• **Area**: what the user notices, in about ten words
 
-### Removed
+## Enhancements
+• **Area**: what the user gets, in about ten words
+
+## Removed
 • `CONSTANT_NAME` - reason
 
-**PRs**: #n, #n
+<details>
+<summary>PRs included in this release</summary>
+
+* PR title by @author in #n
+
+</details>
 
 **Full Changelog**: https://github.com/enoch85/EffektGuard/compare/vX.Y.Z...vX.Y.W
 ```
 
-- Bullets are `•`. Backticks for symbols. Omit empty sections. `### Breaking` goes first.
-- **One line per item.** No second sentence, no callout blocks, no known-issues essay, no
-  explanation of the release process. GitHub already shows the Pre-release badge.
+- **Summary first**: what the release offers, said once in plain words. Don't repeat the bullets.
+- Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
+- Bullets are `•`. Backticks for symbols. Omit empty sections.
+- **No line breaks inside a paragraph or bullet**: GitHub shows each one in a release.
+- **One short line per item: what the user notices.** No cause, no mechanism, no semicolons, no
+  second clause. Label by area (Hot water, Peaks), not by PR.
+- **About fifteen bullets at most.** Fold the small ones into one "Smaller fixes" line.
+- **The PR list is GitHub's generated one, collapsed** as above. Get its lines with
+  `gh api repos/enoch85/EffektGuard/releases/generate-notes -f tag_name=vX.Y.W -f previous_tag_name=vX.Y.Z --jq .body`,
+  keep the "What's Changed" lines only, and shorten each link to `#n`.
+- No callout blocks, no known-issues essay, no explanation of the release process. GitHub already
+  shows the Pre-release badge.
 - The reasoning, the measurements and the finding IDs belong in the PRs and commit messages,
   which stay fully detailed. The release note is for someone glancing at it.
 - **Source of truth is the diff between tags**, not a PR body:
