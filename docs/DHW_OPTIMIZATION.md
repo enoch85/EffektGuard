@@ -87,12 +87,19 @@ Every "wait" or "block" carries a `recommended_start_time`, shown by
 `_apply_dhw_control()` runs after the decision, only when optimisation and the hot-water switch are
 on, a lux entity is configured, and not during the start-up grace period.
 
+- **Minimum run**: a boost EffektGuard starts runs at least 15 min (`DHW_MIN_RUN_MINUTES`), each
+  start running the compressor near full speed. Before that only safety ends it: rule 0's
+  `DHW_SCHEDULED_BLOCKED_BY_SAFETY`, rules 1 and 2, `INDOOR_COOLING_RAPIDLY`, a thermal-debt or
+  indoor abort, or no BT7 reading. The scheduled window outranks rules 1 and 2 at both ends: what
+  lets it start a boost does not cut the boost short. A boost the heating-time estimate says the
+  tank finishes sooner is not started, unless the tank is below 30 °C (rule 3).
 - **Abort**: while the switch is on, the decision's abort conditions are checked every cycle:
-  `thermal_debt <` the abort threshold; rule 4.7 also aborts at `dhw_temp >=` target; a scheduled
+  `thermal_debt <` the abort threshold; rule 4.7 also aborts at `dhw_temp >=` target, after the
+  minimum run; a scheduled
   cycle aborts only on indoor below 18 °C or DM below −1500. The room itself is rule 2's: the same
   test refuses a start and, decided again each cycle, stops a run.
 - **Decision flips to "do not heat"**: the switch is turned off, unless a `boost_dhw` service window
-  is open.
+  is open or the boost is inside its minimum run.
 - **A `boost_dhw` boost** ends at its duration or at the safety gate (indoor below 18 °C, DM at or
   below −1500) on every control cycle, whether hot-water optimisation is on or not; the same gate
   refuses to start it. Price and the ordinary thermal-debt block do not end it.
@@ -100,7 +107,8 @@ on, a lux entity is configured, and not during the start-up grace period.
   after the last start or stop. Stops are never delayed.
 - Only a boost EffektGuard started is stopped: one the household switched on (pump panel, MyUplink)
   is left alone, by the control loop and on unload or a Home Assistant stop.
-- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped.
+- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped, inside its
+  minimum run too.
 - NIBE's own lux timeout still ends the boost underneath; the decision's `max_runtime_minutes` is
   for display only.
 

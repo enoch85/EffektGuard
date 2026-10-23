@@ -128,6 +128,12 @@ class DHWScheduleDecision:
     max_runtime_minutes: int  # Reference for logging - not enforced auto-off timer
     abort_conditions: list[str]  # Monitor these to decide early abort
     recommended_start_time: datetime | None = None
+    # Safety's decision. A refusal for the house - thermal debt, a cold or fast-cooling room, the
+    # safety gate - ends a running boost at once; any other waits out its DHW_MIN_RUN_MINUTES. So does
+    # every refusal of the scheduled window but the safety gate's: the window outranks thermal debt
+    # and the room to start a boost, and they do not cut its minimum run short either. A heat for a
+    # tank below DHW_SAFETY_MIN starts even if it would finish sooner than the minimum run.
+    for_safety: bool = False
 
     def __post_init__(self):
         """Validate decision consistency.
@@ -849,6 +855,7 @@ class IntelligentDHWScheduler:
                         target_temp=self.user_target_temp,
                         max_runtime_minutes=0,
                         abort_conditions=[],
+                        for_safety=True,
                         # Best estimate of when the house is safe again; RULE 0.5 heats the moment it
                         # actually happens, whichever comes first.
                         recommended_start_time=self._find_next_dhw_opportunity(
@@ -1147,6 +1154,7 @@ class IntelligentDHWScheduler:
                 max_runtime_minutes=0,
                 abort_conditions=[],
                 recommended_start_time=next_opportunity,
+                for_safety=True,
             )
 
         # === RULE 2: SPACE HEATING EMERGENCY - HOUSE TOO COLD ===
@@ -1179,6 +1187,7 @@ class IntelligentDHWScheduler:
                 max_runtime_minutes=0,
                 abort_conditions=[],
                 recommended_start_time=next_opportunity,
+                for_safety=True,
             )
 
         # === RULE 3: DHW SAFETY MINIMUM - MUST HEAT (Limited) ===
@@ -1220,6 +1229,7 @@ class IntelligentDHWScheduler:
                             max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                             abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                             recommended_start_time=optimal_window.start_time,
+                            for_safety=True,
                         )
                     elif optimal_window:
                         # Wait for upcoming cheap window
@@ -1281,6 +1291,7 @@ class IntelligentDHWScheduler:
                 max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
                 abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
                 recommended_start_time=None,  # Heating now - no future time needed
+                for_safety=True,
             )
 
         # === RULE 2.6: NEVER HEAT AT PEAK PRICES ===
@@ -2181,6 +2192,7 @@ class IntelligentDHWScheduler:
         indoor_temp: float,
         target_indoor: float,
         current_dhw_temp: float | None = None,
+        safety_only: bool = False,
     ) -> tuple[bool, str | None]:
         """Check if any DHW abort conditions are triggered.
 
@@ -2206,6 +2218,8 @@ class IntelligentDHWScheduler:
             current_dhw_temp: Current DHW temperature (BT7/BT6). None means the sensor is
                 unavailable, in which case a dhw_temp condition cannot be evaluated and is
                 reported as unevaluable rather than treated as not-triggered.
+            safety_only: Only the thermal-debt and indoor conditions - a boost inside its
+                DHW_MIN_RUN_MINUTES, which the tank reaching its target does not end.
 
         Returns:
             Tuple of (should_abort, reason_str)
@@ -2239,6 +2253,8 @@ class IntelligentDHWScheduler:
             # Parse and evaluate "dhw_temp >= TARGET": the tank reached what we asked for,
             # so stop rather than let the pump carry on past it on our open lux window.
             elif "dhw_temp >=" in condition:
+                if safety_only:
+                    continue
                 try:
                     threshold = float(condition.split(">=")[1].strip())
                 except (ValueError, IndexError) as err:
@@ -2383,6 +2399,7 @@ class IntelligentDHWScheduler:
                     max_runtime_minutes=0,
                     abort_conditions=[],
                     recommended_start_time=next_opportunity,
+                    for_safety=True,
                 ),
             )
 

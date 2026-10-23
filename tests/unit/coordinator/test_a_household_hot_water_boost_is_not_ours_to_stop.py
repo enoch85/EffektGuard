@@ -48,6 +48,7 @@ def _coordinator(lux: dict, *, ours: bool) -> EffektGuardCoordinator:
     coordinator._shutdown_requested = False
     coordinator._lux_boost_is_ours = ours
     coordinator._service_boost_until = None
+    coordinator._lux_boost_started_at = None
     coordinator._last_dhw_control_time = NOW - timedelta(hours=2)
     coordinator._raise_dhw_control_issue = MagicMock()
     coordinator._clear_dhw_control_issue = MagicMock()

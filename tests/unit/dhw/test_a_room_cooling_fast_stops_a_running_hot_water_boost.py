@@ -67,6 +67,9 @@ def _coordinator_with_our_boost_running():
     coordinator._shutdown_requested = False
     coordinator._service_boost_until = None
     coordinator._lux_boost_is_ours = True
+    # Started at the last control action, five minutes ago: inside its minimum run, which only
+    # safety cuts short - and a room cooling fast is safety.
+    coordinator._lux_boost_started_at = coordinator._last_dhw_control_time
     coordinator._set_temporary_lux = lambda on: EffektGuardCoordinator._set_temporary_lux(
         coordinator, on
     )
