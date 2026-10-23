@@ -11,9 +11,8 @@
 [![Open EffektGuard in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
 [![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
-EffektGuard runs your heat pump on the electricity price. It heats more when power is cheap and less
-when it is expensive, so your house stores heat and you pay less. It also helps you avoid a new
-monthly power peak.
+EffektGuard runs your heat pump on the electricity price: your house stores heat when power is cheap,
+and you pay less.
 
 It works with NIBE heat pumps today. Other brands are welcome, see
 [contributing](docs/dev/CONTRIBUTION_GUIDE.md).
@@ -24,19 +23,25 @@ EffektGuard controls a real heat pump: use it at your own risk, and watch it the
 
 ## What it does
 
-- Heating: runs the pump warmer or cooler than its normal curve. On by default.
-- Hot water: heats the tank when power is cheap and before your hot-water times. Off by default.
-- Ventilation: turns up the ventilation when the extra heat pays off, on a NIBE F750 or F730. Off
-  by default.
+| Feature | What it does |
+|---|---|
+| Heating | More heat when power is cheap, less when it is expensive |
+| Hot water | Heats the tank when power is cheap, and has it ready when you need it |
+| Weather | Heats ahead of a colder day |
+| Power peaks | Holds back to avoid a new monthly peak |
+| Ventilation | Turns it up when the extra heat pays off (NIBE F750, F730) |
+
+<img src="docs/images/hot-water.png" alt="Hot water heated in the cheap midday hours, and the tank coasting through the expensive evening" width="760"/>
 
 ## What you need
 
-- Home Assistant 2025.11 or newer
-- A NIBE F730, F750, F1155, F2040 or S1155 in Home Assistant, through MyUplink, nibe_heatpump or
-  [Modbus](docs/LOCAL_MODBUS.md). Another model? Pick the closest and
-  [ask for yours](https://github.com/enoch85/EffektGuard/issues/new?labels=enhancement).
-- [GE-Spot](https://github.com/enoch85/ge-spot) for the electricity price
-- Optional: a weather forecast and a whole-house power meter
+| You need | Details |
+|---|---|
+| Home Assistant | 2025.11 or newer |
+| Heat pump | NIBE F730, F750, F1155, F2040 or S1155, through MyUplink, nibe_heatpump or [Modbus](docs/LOCAL_MODBUS.md). Another model? [Ask for it](https://github.com/enoch85/EffektGuard/issues/new?labels=enhancement) |
+| Electricity price | [GE-Spot](https://github.com/enoch85/ge-spot) |
+| Weather forecast | Optional, to heat ahead of a colder day |
+| Power meter | Optional, for peak protection (otherwise the pump's own current readings) |
 
 Turn off the pump's own price control first, or the two will fight. On a NIBE it is Smart Control
 in myUplink.
@@ -49,11 +54,13 @@ in myUplink.
 
 Then use the EffektGuard thermostat to set your temperature and mode.
 
+<img src="docs/images/thermostat-and-switches.png" alt="The EffektGuard thermostat and its switches" width="520"/>
+
 ## Documentation
 
 - [User guide](docs/USER_GUIDE.md): setup, settings, how it decides, safety, troubleshooting
 - [Hot water](docs/DHW_OPTIMIZATION.md)
-- [Dashboard charts](docs/dashboard-charts.yaml) like the one above
+- [Dashboard charts](docs/dashboard-charts.yaml) like the ones above
 - [Architecture](docs/architecture/00_overview.md) and [development](docs/dev/README.md)
 
 ## Support and license
