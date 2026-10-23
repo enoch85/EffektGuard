@@ -51,7 +51,15 @@ def _scheduler() -> IntelligentDHWScheduler:
     return scheduler
 
 
-def _decide(scheduler, *, tank: float, price: str, indoor: float, outdoor: float = MILD):
+def _decide(
+    scheduler,
+    *,
+    tank: float,
+    price: str,
+    indoor: float,
+    outdoor: float = MILD,
+    volatile: bool = False,
+):
     return scheduler.should_start_dhw(
         current_dhw_temp=tank,
         space_heating_demand_kw=1.0,
@@ -62,24 +70,26 @@ def _decide(scheduler, *, tank: float, price: str, indoor: float, outdoor: float
         price_classification=price,
         current_time=NOW,
         price_periods=None,
+        is_volatile=volatile,
     )
 
 
 @pytest.mark.parametrize(
-    "tank,price,rule",
+    "tank,price,volatile,rule",
     [
-        (15.0, "normal", "DHW_SAFETY_MINIMUM"),
-        (40.0, "cheap", "DHW_COMPLETE_EMERGENCY_HEATING"),
-        (40.0, "normal", "DHW_COMFORT_LOW_NORMAL"),
+        (15.0, "normal", False, "DHW_SAFETY_MINIMUM"),
+        (40.0, "cheap", False, "DHW_COMPLETE_EMERGENCY_HEATING"),
+        # A brief cheap run: RULE 2.5 waits for a stable one, the comfort top-up does not
+        (40.0, "cheap", True, "DHW_COMFORT_LOW_CHEAP"),
     ],
     ids=["tank_below_20C", "completing_to_target", "comfort_low"],
 )
 def test_a_boost_started_in_mild_weather_is_not_stopped_by_the_room_it_started_in(
-    tank, price, rule
+    tank, price, volatile, rule
 ):
     """Room 20.4 C of 21 at +3 C outside: RULE 2 lets the boost start, so nothing may stop it."""
     scheduler = _scheduler()
-    started = _decide(scheduler, tank=tank, price=price, indoor=20.4)
+    started = _decide(scheduler, tank=tank, price=price, indoor=20.4, volatile=volatile)
     assert started.should_heat and started.priority_reason == rule, "precondition"
 
     aborts, why = scheduler.check_abort_conditions(started.abort_conditions, DM, 20.4, TARGET, tank)
@@ -89,7 +99,7 @@ def test_a_boost_started_in_mild_weather_is_not_stopped_by_the_room_it_started_i
         f"rate-limited for an hour and starts again."
     )
     assert _decide(
-        scheduler, tank=tank, price=price, indoor=20.4
+        scheduler, tank=tank, price=price, indoor=20.4, volatile=volatile
     ).should_heat, (
         "the next cycle's decision in the same state stopped the boost it had just started"
     )

@@ -4,7 +4,8 @@ The optimiser's boost runs while the optimiser decides to heat, and the coordina
 control only inside the block that has a tank reading. With BT7 unavailable, stale or unreadable
 the optimiser decided nothing and a boost it had started was neither abort-checked nor stopped:
 it ran unsupervised until BT7 came back or NIBE's own lux timeout (review DHW F12). Without a
-decision the boost is now stopped, and nothing new is started.
+decision the boost is now stopped, and nothing new is started - inside its minimum run as well:
+nothing then tells whether the house needs the compressor.
 """
 
 from __future__ import annotations
@@ -103,7 +104,8 @@ def _coordinator(pump: dict, switch_calls: list) -> EffektGuardCoordinator:
 
 @pytest.mark.asyncio
 async def test_our_boost_is_stopped_when_the_tank_can_no_longer_be_read():
-    pump = {"bt7": 40.0, "lux": STATE_OFF}
+    # Below the safety minimum: the optimiser heats it at any price, and there are no prices here.
+    pump = {"bt7": 15.0, "lux": STATE_OFF}
     switch_calls: list[str] = []
     with freeze_time(NOW) as clock:
         coordinator = _coordinator(pump, switch_calls)
@@ -111,11 +113,10 @@ async def test_our_boost_is_stopped_when_the_tank_can_no_longer_be_read():
         assert switch_calls == ["turn_on"], "precondition: the optimiser started its boost"
 
         pump["bt7"] = None  # BT7 unavailable, stale or unreadable from here on
-        for _ in range(3):
-            clock.tick(timedelta(minutes=5))
-            coordinator.data = await coordinator._drive_the_pump()
+        clock.tick(timedelta(minutes=5))
+        coordinator.data = await coordinator._drive_the_pump()
 
     assert switch_calls == ["turn_on", "turn_off"], (
-        f"the tank stopped reporting fifteen minutes ago and the boost EffektGuard started is still "
+        f"the tank stopped reporting five minutes ago and the boost EffektGuard started is still "
         f"on (switch calls {switch_calls}): nothing decides on it any more"
     )

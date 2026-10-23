@@ -45,6 +45,7 @@ from .const import (
     DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DHW_MIN_AMOUNT_DEFAULT,
+    DHW_MIN_RUN_MINUTES,
     DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
     DHW_WEATHER_COOLDOWN_MINUTES,
@@ -355,6 +356,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._service_boost_until: datetime | None = None
         # Unsubscribes the lux switch's off watch - see setup_lux_listener
         self._lux_listener = None
+        # When EffektGuard's own running boost started - it runs DHW_MIN_RUN_MINUTES at least
+        self._lux_boost_started_at: datetime | None = None
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -709,7 +712,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return False
 
         # Ours if we switched it on; not ours once it is off, whoever asked for that.
-        self._lux_boost_is_ours = on
+        if on:
+            self._lux_boost_is_ours = True
+        else:
+            self._lux_turned_off()
         return True
 
     @callback
@@ -721,6 +727,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         self._lux_boost_is_ours = False
         self._service_boost_until = None
+        self._lux_boost_started_at = None
 
     def setup_lux_listener(self) -> None:
         """Watch the lux switch for off between control cycles.
@@ -1995,7 +2002,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Our boost runs while the optimiser decides to heat. Without a decision - BT7 unavailable,
         # stale or unreadable, or the optimiser failed - nothing supervises it: it used to run on
-        # unchecked until BT7 returned or NIBE's own lux timeout. Stop it; start nothing.
+        # unchecked until BT7 returned or NIBE's own lux timeout. Stop it, inside its minimum run
+        # too - nothing tells whether the house needs the compressor - and start nothing.
         if decision is None:
             if is_lux_on:
                 _LOGGER.warning(
@@ -2021,6 +2029,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         target_indoor = self.held_target
 
+        # EffektGuard's own boost runs DHW_MIN_RUN_MINUTES at least: each start runs the compressor
+        # near full speed, and short runs wear it. Inside that only safety ends it - a refusal for
+        # the house (decision.for_safety), or a thermal-debt or indoor abort condition. To the
+        # minute: the cycles that check it are five minutes apart, give or take the seconds each
+        # takes to reach this point, and the third after the start ends it.
+        in_minimum_run = (
+            is_lux_on
+            and self._lux_boost_started_at is not None
+            and round(seconds_between(self._lux_boost_started_at, now_time) / 60)
+            < DHW_MIN_RUN_MINUTES
+        )
+
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
         # thermal_debt and indoor_temp from coordinator data (same as used in decision calculation)
@@ -2031,6 +2051,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 indoor_temp,
                 target_indoor,
                 current_dhw_temp,
+                safety_only=in_minimum_run,
             )
 
             if should_abort:
@@ -2053,6 +2074,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if decision.should_heat and not is_lux_on:
             if self._is_dhw_start_rate_limited(now_time):
                 return
+            # Not a boost the tank would finish inside its minimum run, which would then heat on
+            # past the target for the rest of it. A tank below the safety minimum is heated anyway.
+            needed = (
+                self.dhw_optimizer.estimate_heating_time(current_dhw_temp, decision.target_temp)
+                * 60
+            )
+            if needed < DHW_MIN_RUN_MINUTES and not decision.for_safety:
+                _LOGGER.debug(
+                    "DHW control: %s needs %.0f min of heating, under the %d-min minimum run - "
+                    "not starting",
+                    decision.priority_reason,
+                    needed,
+                    DHW_MIN_RUN_MINUTES,
+                )
+                return
 
             # Turn ON temporary lux to boost DHW
             _LOGGER.info(
@@ -2065,7 +2101,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # what lets the unload cleanup find it again. See _set_temporary_lux.
             if await self._set_temporary_lux(True):
                 self._last_dhw_control_time = now_time
+                self._lux_boost_started_at = now_time
 
+        elif not decision.should_heat and is_lux_on and in_minimum_run and not decision.for_safety:
+            _LOGGER.debug(
+                "DHW control: %s - keeping the boost to its %d-min minimum run",
+                decision.priority_reason,
+                DHW_MIN_RUN_MINUTES,
+            )
         elif not decision.should_heat and is_lux_on:
             # Turn OFF temporary lux to block/stop DHW
             _LOGGER.info(

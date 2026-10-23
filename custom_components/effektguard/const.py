@@ -190,6 +190,11 @@ DHW_BOOST_DEFAULT_DURATION_MINUTES: Final = 90
 DHW_BOOST_MIN_DURATION_MINUTES: Final = 30
 DHW_BOOST_MAX_DURATION_MINUTES: Final = 180
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
+# The shortest hot-water boost EffektGuard runs: it does not start one the tank would finish sooner,
+# and only safety ends one sooner. Each boost runs the compressor near full speed, and short runs
+# wear the pump; 19 of the 52 temporary-lux runs on the owner's F750, 8-21 October 2026, lasted
+# under 11 minutes (production history). The owner's choice, 2026-10-23.
+DHW_MIN_RUN_MINUTES: Final = 15
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 
 # DHW/Weather layer cooldown (Dec 19, 2025)

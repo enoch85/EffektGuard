@@ -34,7 +34,9 @@ control runs only while `switch.effektguard_hot_water_optimization` is on (off b
 
 Every 5-minute cycle the rules below run in this order; the first one that applies decides. Price
 classes are the price layer's `very_cheap`, `cheap`, `normal`, `expensive`, `peak`; "stable cheap"
-means cheap or very cheap and not volatile. Before any rule: if the house is more than 0.3 °C below
+means cheap or very cheap and not volatile; "cheap for the run" means every quarter of the next 15
+minutes (`DHW_MIN_RUN_MINUTES`) is cheap or very cheap - without price data, the current one. Before
+any rule: if the house is more than 0.3 °C below
 target and cooling faster than 0.3 °C/h, hot water is held back (`INDOOR_COOLING_RAPIDLY`), and a
 running boost is stopped as a new one would be refused.
 
@@ -56,15 +58,14 @@ default 14 °C/h) plus a 0.5 h buffer. Only the closest availability hour within
 | 3 | `DHW_SAFETY_MINIMUM` | Tank below 30 °C | Heat to 30 °C now |
 | 3 | `DHW_SAFETY_WINDOW_Q*` / `DHW_SAFETY_WAITING_WINDOW_IN_*` / `DHW_SAFETY_DEFERRED_PEAK_PRICE` | Tank 20-30 °C at expensive or peak price with DM more than 20 above the block | Heat in the cheapest window instead; wait for it; or just defer |
 | 2.6 | `DHW_PEAK_AVOIDED` | Peak price, tank at least 20 °C | Wait for the next non-peak quarter |
-| 2.3 | `DHW_HYGIENE_BOOST` | No high-temperature cycle or fallback run for 21 days (or never), stable cheap | Heat (see Hygiene) |
-| 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap | Heat to target |
+| 2.3 | `DHW_HYGIENE_BOOST` | No high-temperature cycle or fallback run for 21 days (or never), stable cheap and cheap for the run | Heat (see Hygiene) |
+| 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap and cheap for the run | Heat to target |
 | 4 | `HIGH_SPACE_HEATING_DEMAND` | Heating demand above 6 kW and DM below −60 | Block |
-| 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Price very cheap, cheap or normal; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
+| 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Cheap for the run; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
 | 5 | `DHW_ADEQUATE_WAITING_CHEAP_*` | Tank at least 45 °C and the price is neither `cheap` nor `very_cheap` | Wait for the next cheap window |
 | 5 | `OPTIMAL_WINDOW_Q*` / `WAITING_OPTIMAL_WINDOW_IN_*` | Tank below target + 5 °C; the cheapest window in the look-ahead starts within 15 min, or later while the tank is at least 45 °C | Heat to target + 5 °C (at most 60 °C); or wait |
-| 5 | `CHEAP_NO_WINDOW_DATA` / `CHEAP_ELECTRICITY_OPPORTUNITY` | No price window data; stable cheap; tank below 50 °C | Heat |
-| 7 | `DHW_COMFORT_OPTIMAL_*` / `DHW_COMFORT_WAITING_OPTIMAL_*` | Tank 30-45 °C at normal price; a window at least 15 % cheaper within 6 h | Heat when it starts; wait until then |
-| 7 | `DHW_COMFORT_LOW_*` | Tank below 45 °C at cheap or normal price | Heat now |
+| 5 | `CHEAP_NO_WINDOW_DATA` / `CHEAP_ELECTRICITY_OPPORTUNITY` | No price window data; stable cheap and cheap for the run; tank below 50 °C | Heat |
+| 7 | `DHW_COMFORT_LOW_*` / `DHW_COMFORT_WAITING_CHEAP` | Tank below 45 °C | Heat now if cheap for the run; otherwise wait for a cheap price |
 | 8 | `DHW_ADEQUATE` | Nothing above applied | Do not heat |
 
 Every "wait" or "block" carries a `recommended_start_time`, shown by
@@ -87,12 +88,19 @@ Every "wait" or "block" carries a `recommended_start_time`, shown by
 `_apply_dhw_control()` runs after the decision, only when optimisation and the hot-water switch are
 on, a lux entity is configured, and not during the start-up grace period.
 
+- **Minimum run**: a boost EffektGuard starts runs at least 15 min (`DHW_MIN_RUN_MINUTES`), each
+  start running the compressor near full speed. Before that only safety ends it: rule 0's
+  `DHW_SCHEDULED_BLOCKED_BY_SAFETY`, rules 1 and 2, `INDOOR_COOLING_RAPIDLY`, a thermal-debt or
+  indoor abort, or no BT7 reading. The scheduled window outranks rules 1 and 2 at both ends: what
+  lets it start a boost does not cut the boost short. A boost the heating-time estimate says the
+  tank finishes sooner is not started, unless the tank is below 30 °C (rule 3).
 - **Abort**: while the switch is on, the decision's abort conditions are checked every cycle:
-  `thermal_debt <` the abort threshold; rule 4.7 also aborts at `dhw_temp >=` target; a scheduled
+  `thermal_debt <` the abort threshold; rule 4.7 also aborts at `dhw_temp >=` target, after the
+  minimum run; a scheduled
   cycle aborts only on indoor below 18 °C or DM below −1500. The room itself is rule 2's: the same
   test refuses a start and, decided again each cycle, stops a run.
 - **Decision flips to "do not heat"**: the switch is turned off, unless a `boost_dhw` service window
-  is open.
+  is open or the boost is inside its minimum run.
 - **A `boost_dhw` boost** ends at its duration or at the safety gate (indoor below 18 °C, DM at or
   below −1500) on every control cycle, whether hot-water optimisation is on or not; the same gate
   refuses to start it. Price and the ordinary thermal-debt block do not end it.
@@ -100,7 +108,8 @@ on, a lux entity is configured, and not during the start-up grace period.
   after the last start or stop. Stops are never delayed.
 - Only a boost EffektGuard started is stopped: one the household switched on (pump panel, MyUplink)
   is left alone, by the control loop and on unload or a Home Assistant stop.
-- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped.
+- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped, inside its
+  minimum run too.
 - NIBE's own lux timeout still ends the boost underneath; the decision's `max_runtime_minutes` is
   for display only.
 
