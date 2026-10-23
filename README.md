@@ -46,8 +46,9 @@ EffektGuard controls a real heat pump. Watch it closely the first weeks.
 | Weather forecast | Optional, to heat ahead of a colder day |
 | Power meter | Optional, for peak protection (otherwise the pump's own current readings) |
 
-Turn off the pump's own price control first, or the two will fight. On a NIBE it is Smart Control
-in myUplink.
+> [!IMPORTANT]
+> Turn off the pump's own price control first, or the two will fight. On a NIBE it is Smart
+> Control in myUplink.
 
 ## Install
 
