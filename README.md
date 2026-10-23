@@ -7,10 +7,6 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
-[![Open EffektGuard in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
-[![Open EffektGuard in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
-[![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
-
 EffektGuard runs your heat pump on the electricity price: your house stores heat when power is
 cheap, and you pay less.
 
@@ -48,13 +44,28 @@ in myUplink.
 
 ## Install
 
-1. Click the Marketplace button (Home Assistant 2026.11 and newer) or the HACS button (older).
-   Download and restart.
-2. Click the third button to add EffektGuard, and answer the setup questions.
+[![Open EffektGuard in the Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Open EffektGuard in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=enoch85&repository=EffektGuard&category=integration)
+[![Add EffektGuard to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=effektguard)
 
-Then use the EffektGuard thermostat to set your temperature and mode.
+## Daily use
 
 <img src="docs/images/thermostat-and-switches.png" alt="The EffektGuard thermostat and its switches" width="520"/>
+
+| Thermostat | What happens |
+|---|---|
+| Target | Your room temperature, 18.5-25 °C |
+| Heat or Off | On, or paused with the pump on its normal curve |
+| Preset | Comfort, Balanced (none) or Savings (eco) |
+| Away | Savings, 3 °C below your target, never below 18.5 °C |
+
+To see why it did something, look at `sensor.effektguard_optimization_reasoning`.
+
+## Safety
+
+- Room below 18 °C: it calls for full heat.
+- Pump far behind on heat: it never runs cooler than normal, unless the room is too warm.
+- If it can't read the pump, it changes nothing.
 
 ## Documentation
 
