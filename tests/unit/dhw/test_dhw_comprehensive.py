@@ -296,9 +296,9 @@ class TestSafetyRules:
             current_time=current_time,
         )
 
-        # Should NOT heat during expensive period (temp is safe at 22°C)
+        # Should NOT heat during expensive period (temp is safe at 22°C) - and not call it adequate
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert decision.priority_reason == "DHW_COMFORT_WAITING_CHEAP"
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
         """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""

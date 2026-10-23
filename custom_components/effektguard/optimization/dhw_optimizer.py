@@ -38,6 +38,7 @@ from ..const import (
     DHW_LEGIONELLA_PREVENT_TEMP,
     DHW_MAX_TEMP,
     DHW_MAX_TEMP_VALIDATION,
+    DHW_MIN_RUN_MINUTES,
     DHW_NORMAL_RUNTIME_MINUTES,
     DHW_OPTIMAL_WINDOW_MIN_SAVINGS,
     DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER,
@@ -80,6 +81,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # The scheduler's datetimes that survive a restart, saved and restored alike.
 _PERSISTED_TIMESTAMPS = ("last_legionella_boost", "last_hygiene_fallback")
+_CHEAP_CLASSES = (QuarterClassification.CHEAP, QuarterClassification.VERY_CHEAP)
 
 
 class DemandPeriodInfoDict(TypedDict):
@@ -521,6 +523,30 @@ class IntelligentDHWScheduler:
             return rate
         return None
 
+    def _cheap_for_the_minimum_run(
+        self, current_time: datetime, price_periods: list | None, is_cheap_price: bool
+    ) -> bool:
+        """Whether every quarter of the next DHW_MIN_RUN_MINUTES is cheap or very cheap.
+
+        A boost started now runs at least that long, so a cheap quarter that ends in five minutes
+        is not a good price for it. Without price periods only the current classification is known.
+        """
+        if not is_cheap_price:
+            return False
+        if not (price_periods and self.price_analyzer):
+            return True
+        first = index_containing(price_periods, current_time)
+        last = index_containing(
+            price_periods,
+            after(current_time, timedelta(minutes=DHW_MIN_RUN_MINUTES) - timedelta(seconds=1)),
+        )
+        if first is None or last is None:
+            return False
+        return all(
+            self.price_analyzer.get_classification_for_period(period) in _CHEAP_CLASSES
+            for period in price_periods[first : last + 1]
+        )
+
     def estimate_heating_time(
         self, current_temp: float, target_temp: float, heating_rate: float | None = None
     ) -> float:
@@ -717,10 +743,12 @@ class IntelligentDHWScheduler:
 
         # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 5 and 7 spelled their
         # own lists and left it out - RULE 5 waited through a very cheap night for a dearer cheap
-        # quarter, RULE 7 refused a low tank that it heats at cheap and at normal price.
+        # quarter, RULE 7 refused a low tank at very cheap that it heated at cheap.
         is_cheap_price = price_classification in ["cheap", "very_cheap"]
         is_stable_cheap = is_cheap_price and not is_volatile
-        is_acceptable_price = is_cheap_price or price_classification == "normal"
+        cheap_for_a_boost = self._cheap_for_the_minimum_run(
+            current_time, price_periods, is_cheap_price
+        )
         indoor_deficit = target_indoor_temp - indoor_temp
 
         # Determine DM blocking using shared EmergencyLayer or fallback to local logic
@@ -1358,7 +1386,7 @@ class IntelligentDHWScheduler:
             self._reported_hygiene_overdue = True
 
         if fallback_due:
-            if is_stable_cheap:
+            if is_stable_cheap and cheap_for_a_boost:
                 _LOGGER.info(
                     "DHW hygiene fallback: no high-temperature cycle for %s days (overdue at %.0f), "
                     "stable cheap period - temporary lux to the pump's luxury stop",
@@ -1391,6 +1419,7 @@ class IntelligentDHWScheduler:
         if (
             DHW_SAFETY_MIN <= current_dhw_temp < MIN_DHW_TARGET_TEMP  # In 30-45°C range
             and is_stable_cheap  # Wait for stable cheap prices (not volatile)
+            and cheap_for_a_boost  # ... that last the minimum run: stable counts the run behind too
         ):
             _LOGGER.info(
                 "DHW completing emergency heating: %.1f°C → %.1f°C during stable cheap period",
@@ -1435,9 +1464,9 @@ class IntelligentDHWScheduler:
             )
 
         # === RULE 4.7: PREDICTIVE PRE-HEATING TO AVOID PEAK ===
-        # If we're in cheap/normal pricing AND an upcoming PEAK period would force us
+        # If the price is cheap for the whole minimum run AND an upcoming PEAK period would force us
         # to heat during peak (due to predicted thermal debt + DHW cooling), pre-heat NOW
-        if is_acceptable_price:
+        if cheap_for_a_boost:
             should_preheat, preheat_reason = self._should_preheat_to_avoid_peak(
                 current_time=current_time,
                 current_dhw_temp=current_dhw_temp,
@@ -1518,7 +1547,11 @@ class IntelligentDHWScheduler:
 
                 if optimal_window is None:
                     # No price data - only heat during stable cheap periods if needed
-                    if is_stable_cheap and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP:
+                    if (
+                        is_stable_cheap
+                        and cheap_for_a_boost
+                        and current_dhw_temp < DEFAULT_DHW_TARGET_TEMP
+                    ):
                         return DHWScheduleDecision(
                             should_heat=True,
                             priority_reason="CHEAP_NO_WINDOW_DATA",
@@ -1592,91 +1625,29 @@ class IntelligentDHWScheduler:
                 )
 
         # === RULE 7: COMFORT HEATING (DHW GETTING LOW) ===
-        # Heat below minimum user target if price is not expensive/peak
-        # This prevents stopping mid-heating-cycle just because price isn't "cheap"
-        # User comfort requires minimum temperature - only expensive prices should defer
-        #
-        # PRICE LOOKAHEAD: Before heating at normal price, check if cheaper window coming
-        # that would save significant money without risking comfort.
-        if current_dhw_temp < MIN_DHW_TARGET_TEMP and is_acceptable_price:
-            # Check for cheaper window in the coming hours (use scheduled window hours)
-            comfort_lookahead_hours = DHW_SCHEDULED_WINDOW_HOURS
-            optimal_window = None
-            can_wait_for_optimal = False
-
-            if price_periods and self.price_analyzer and price_classification == "normal":
-                # Only look for cheaper windows when at "normal" price (not already cheap)
-                optimal_window = self.price_analyzer.find_cheapest_window(
-                    current_time=current_time,
-                    price_periods=price_periods,
-                    duration_minutes=DHW_NORMAL_RUNTIME_MINUTES,
-                    lookahead_hours=comfort_lookahead_hours,
+        # A tank below the minimum target is topped up only at a good price: cheap or very cheap for
+        # the whole minimum run (owner, 2026-10-23: "we don't want to heat when the price isn't
+        # good"). Otherwise it waits - the scheduled windows (RULE 0) still heat before the owner's
+        # hot-water times at any price, RULE 3 a tank below DHW_SAFETY_MIN, and the pump's own
+        # control a tank below its start temperature. Waiting, it says so: the tank is not adequate.
+        if current_dhw_temp < MIN_DHW_TARGET_TEMP:
+            if not cheap_for_a_boost:
+                return DHWScheduleDecision(
+                    should_heat=False,
+                    priority_reason="DHW_COMFORT_WAITING_CHEAP",
+                    target_temp=self.user_target_temp,
+                    max_runtime_minutes=0,
+                    abort_conditions=[],
+                    recommended_start_time=self._find_next_dhw_opportunity(
+                        current_time=current_time,
+                        current_dhw_temp=current_dhw_temp,
+                        thermal_debt_dm=thermal_debt_dm,
+                        outdoor_temp=outdoor_temp,
+                        price_periods=price_periods,
+                        blocking_reason="DHW_COMFORT_WAITING_CHEAP",
+                        dm_block_threshold=dm_block_threshold,
+                    ),
                 )
-
-                if optimal_window:
-                    # Get current price for comparison
-                    index = index_containing(price_periods, current_time)
-                    current_quarter_price = (
-                        price_periods[index].price if index is not None else None
-                    )
-
-                    # `price_savings_fraction`, not the arithmetic inline: the naive
-                    # `(current - optimal) / current` is falsy on a price of exactly 0.00 and inverts
-                    # on negative prices, heating hot water NOW instead of waiting to be PAID for it.
-                    price_savings_pct = price_savings_fraction(
-                        current_quarter_price, optimal_window.avg_price
-                    )
-
-                    if price_savings_pct is not None:
-                        # Can wait if:
-                        # 1. Savings significant (≥15%)
-                        # 2. Optimal window is not too far away (within lookahead)
-                        # 3. Temperature won't drop too low (still above safety minimum)
-                        if (
-                            price_savings_pct >= DHW_OPTIMAL_WINDOW_MIN_SAVINGS
-                            and optimal_window.hours_until <= comfort_lookahead_hours
-                            and current_dhw_temp >= DHW_SAFETY_MIN  # Don't wait if already critical
-                        ):
-                            can_wait_for_optimal = True
-                            _LOGGER.info(
-                                "DHW comfort: temp low (%.1f°C) but waiting for cheaper window - "
-                                "%.1f%% savings (%.1före→%.1före), window in %.1fh at %s",
-                                current_dhw_temp,
-                                price_savings_pct * 100,
-                                current_quarter_price,
-                                optimal_window.avg_price,
-                                optimal_window.hours_until,
-                                optimal_window.start_time.strftime("%H:%M"),
-                            )
-
-            if can_wait_for_optimal and optimal_window:
-                # Check if optimal window is NOW (within 15 min)
-                if optimal_window.hours_until <= DHW_OPTIMAL_WINDOW_MIN_TIME_BUFFER:
-                    # We're in the optimal window - heat NOW
-                    _LOGGER.info(
-                        "DHW comfort: IN optimal window now (%.1före) - heating",
-                        optimal_window.avg_price,
-                    )
-                    return DHWScheduleDecision(
-                        should_heat=True,
-                        priority_reason=f"DHW_COMFORT_OPTIMAL_@{optimal_window.avg_price:.1f}öre",
-                        target_temp=self.user_target_temp,
-                        max_runtime_minutes=DHW_SAFETY_RUNTIME_MINUTES,
-                        abort_conditions=[f"thermal_debt < {dm_abort_threshold:.0f}"],
-                        recommended_start_time=None,  # Heating now - no future time needed
-                    )
-                else:
-                    # Wait for upcoming optimal window
-                    return DHWScheduleDecision(
-                        should_heat=False,
-                        priority_reason=f"DHW_COMFORT_WAITING_OPTIMAL_{optimal_window.hours_until:.1f}H_@{optimal_window.avg_price:.1f}",
-                        target_temp=self.user_target_temp,
-                        max_runtime_minutes=0,
-                        abort_conditions=[],
-                        recommended_start_time=optimal_window.start_time,
-                    )
-
-            # No optimal window worth waiting for - heat now
             _LOGGER.info(
                 "DHW comfort heating: %.1f°C < %.1f°C, price %s - heating to MIN_DHW_TARGET_TEMP",
                 current_dhw_temp,
@@ -2491,6 +2462,10 @@ class IntelligentDHWScheduler:
                 recommendation = f"Delay DHW - High heating demand ({space_heating_demand:.1f} kW)"
             elif decision.priority_reason == "DHW_ADEQUATE":
                 recommendation = f"DHW OK - Temperature adequate ({current_dhw_temp:.1f}°C)"
+            elif decision.priority_reason == "DHW_COMFORT_WAITING_CHEAP":
+                recommendation = (
+                    f"Wait - Tank {current_dhw_temp:.1f}°C, heating at the next cheap price"
+                )
             else:
                 recommendation = "Wait - Conditions not optimal"
         else:

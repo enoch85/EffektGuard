@@ -34,7 +34,9 @@ control runs only while `switch.effektguard_hot_water_optimization` is on (off b
 
 Every 5-minute cycle the rules below run in this order; the first one that applies decides. Price
 classes are the price layer's `very_cheap`, `cheap`, `normal`, `expensive`, `peak`; "stable cheap"
-means cheap or very cheap and not volatile. Before any rule: if the house is more than 0.3 °C below
+means cheap or very cheap and not volatile; "cheap for the run" means every quarter of the next 15
+minutes (`DHW_MIN_RUN_MINUTES`) is cheap or very cheap - without price data, the current one. Before
+any rule: if the house is more than 0.3 °C below
 target and cooling faster than 0.3 °C/h, hot water is held back (`INDOOR_COOLING_RAPIDLY`), and a
 running boost is stopped as a new one would be refused.
 
@@ -56,15 +58,14 @@ default 14 °C/h) plus a 0.5 h buffer. Only the closest availability hour within
 | 3 | `DHW_SAFETY_MINIMUM` | Tank below 30 °C | Heat to 30 °C now |
 | 3 | `DHW_SAFETY_WINDOW_Q*` / `DHW_SAFETY_WAITING_WINDOW_IN_*` / `DHW_SAFETY_DEFERRED_PEAK_PRICE` | Tank 20-30 °C at expensive or peak price with DM more than 20 above the block | Heat in the cheapest window instead; wait for it; or just defer |
 | 2.6 | `DHW_PEAK_AVOIDED` | Peak price, tank at least 20 °C | Wait for the next non-peak quarter |
-| 2.3 | `DHW_HYGIENE_BOOST` | No high-temperature cycle or fallback run for 21 days (or never), stable cheap | Heat (see Hygiene) |
-| 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap | Heat to target |
+| 2.3 | `DHW_HYGIENE_BOOST` | No high-temperature cycle or fallback run for 21 days (or never), stable cheap and cheap for the run | Heat (see Hygiene) |
+| 2.5 | `DHW_COMPLETE_EMERGENCY_HEATING` | Tank 30-45 °C, stable cheap and cheap for the run | Heat to target |
 | 4 | `HIGH_SPACE_HEATING_DEMAND` | Heating demand above 6 kW and DM below −60 | Block |
-| 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Price very cheap, cheap or normal; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
+| 4.7 | `PEAK_AVOIDANCE_PREHEAT_*H` | Cheap for the run; a peak within 24 h with DM predicted below the block 2 h before it and the tank predicted below 30 °C | Heat now |
 | 5 | `DHW_ADEQUATE_WAITING_CHEAP_*` | Tank at least 45 °C and the price is neither `cheap` nor `very_cheap` | Wait for the next cheap window |
 | 5 | `OPTIMAL_WINDOW_Q*` / `WAITING_OPTIMAL_WINDOW_IN_*` | Tank below target + 5 °C; the cheapest window in the look-ahead starts within 15 min, or later while the tank is at least 45 °C | Heat to target + 5 °C (at most 60 °C); or wait |
-| 5 | `CHEAP_NO_WINDOW_DATA` / `CHEAP_ELECTRICITY_OPPORTUNITY` | No price window data; stable cheap; tank below 50 °C | Heat |
-| 7 | `DHW_COMFORT_OPTIMAL_*` / `DHW_COMFORT_WAITING_OPTIMAL_*` | Tank 30-45 °C at normal price; a window at least 15 % cheaper within 6 h | Heat when it starts; wait until then |
-| 7 | `DHW_COMFORT_LOW_*` | Tank below 45 °C at cheap or normal price | Heat now |
+| 5 | `CHEAP_NO_WINDOW_DATA` / `CHEAP_ELECTRICITY_OPPORTUNITY` | No price window data; stable cheap and cheap for the run; tank below 50 °C | Heat |
+| 7 | `DHW_COMFORT_LOW_*` / `DHW_COMFORT_WAITING_CHEAP` | Tank below 45 °C | Heat now if cheap for the run; otherwise wait for a cheap price |
 | 8 | `DHW_ADEQUATE` | Nothing above applied | Do not heat |
 
 Every "wait" or "block" carries a `recommended_start_time`, shown by
