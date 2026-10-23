@@ -8,7 +8,19 @@ Task-specific: read this when cutting or editing a release. The mechanics live i
 ## Release notes format
 
 **Read v0.8.0's notes before writing one** (`gh release view v0.8.0 --json body -q .body`) and copy
-them: one short line per item, glanceable in seconds.
+them: one short line per item, glanceable in seconds. Write them in this order:
+
+1. **Generate the PR list first.** It works before the tag exists:
+
+   ```bash
+   gh api repos/enoch85/EffektGuard/releases/generate-notes -f tag_name=vX.Y.W \
+     -f previous_tag_name=vX.Y.Z -f target_commitish=main --jq .body
+   ```
+
+   Keep the "What's Changed" lines, and shorten each link to `#n`.
+2. **Read every PR in that list** and its commits (`git log --oneline --no-merges vX.Y.Z..main`),
+   then write the Summary and the bullets from them.
+3. **Put the list in the "PRs included in this release" dropdown**, as in the template.
 
 ```markdown
 ## Summary
@@ -39,9 +51,7 @@ A second paragraph only if updating changes something or needs an action.
 **Full Changelog**: https://github.com/enoch85/EffektGuard/compare/vX.Y.Z...vX.Y.W
 ```
 
-- **Summary first. Read every commit** since the previous release
-  (`git log --oneline --no-merges vX.Y.Z..vX.Y.W`), then write one or two short paragraphs:
-  the highlights and the largest changes. Mention the update itself only when it changes a setting
+- **Summary**: one or two short paragraphs on the highlights and the largest changes. Mention the update itself only when it changes a setting
   or needs an action; never state the obvious ("your settings carry over"). Big picture only; the
   bullets carry the details.
 - **Write for someone with no technical knowledge.** Everyday words, what it means for the house:
@@ -55,9 +65,6 @@ A second paragraph only if updating changes something or needs an action.
 - **One short line per item: what the user notices.** No cause, no mechanism, no semicolons, no
   second clause. Label by area (Hot water, Peaks), not by PR.
 - **About fifteen bullets at most.** Fold the small ones into one "Smaller fixes" line.
-- **The PR list is GitHub's generated one, collapsed** as above. Get its lines with
-  `gh api repos/enoch85/EffektGuard/releases/generate-notes -f tag_name=vX.Y.W -f previous_tag_name=vX.Y.Z --jq .body`,
-  keep the "What's Changed" lines only, and shorten each link to `#n`.
 - No callout blocks, no known-issues essay, no explanation of the release process. GitHub already
   shows the Pre-release badge.
 - The reasoning, the measurements and the finding IDs belong in the PRs and commit messages,
