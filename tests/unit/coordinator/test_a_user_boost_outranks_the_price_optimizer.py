@@ -104,7 +104,9 @@ class _House:
         hass.services.async_call = AsyncMock(side_effect=switch)
         hass.states.get = MagicMock(
             side_effect=lambda entity_id: (
-                SimpleNamespace(state=self.lux, last_changed=NOW) if entity_id == LUX else None
+                SimpleNamespace(state=self.lux, last_changed=NOW)
+                if entity_id == LUX and self.lux is not None
+                else None
             )
         )
         nibe = MagicMock()
@@ -239,14 +241,16 @@ async def test_a_safety_stop_that_failed_is_tried_again():
     )
 
 
+@pytest.mark.parametrize("reading", ["unavailable", None], ids=["unavailable", "missing"])
 @pytest.mark.asyncio
-async def test_an_unavailable_reading_does_not_end_a_user_boost():
-    """A myUplink poll that fails reads the switch unavailable for a minute; the boost runs on."""
+async def test_an_unavailable_reading_does_not_end_a_user_boost(reading):
+    """A myUplink poll that fails reads the switch unavailable for a minute, and a reload of its
+    integration leaves no state at all for a moment; neither says the boost has ended."""
     with freeze_time(NOW) as clock:
         house = _House(hot_water_optimisation=False, tank=45.0)
         await house.boost()
 
-        house.lux = "unavailable"
+        house.lux = reading
         clock.tick(CYCLE)
         await house.cycle()
 
@@ -255,7 +259,7 @@ async def test_an_unavailable_reading_does_not_end_a_user_boost():
         await house.cycle()
 
     assert house.switch_calls == ["turn_on", "turn_off"], (
-        f"after one unavailable reading the boost at DM {house.dm:.0f} was left running: "
+        f"after one {reading or 'missing'} reading the boost at DM {house.dm:.0f} was left running: "
         f"{house.switch_calls}"
     )
 

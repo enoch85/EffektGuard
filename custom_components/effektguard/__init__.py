@@ -173,6 +173,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # This ensures coordinator is fully initialized before setting up event listeners
     # Event listener provides instant detection when external power sensor becomes available
     coordinator.setup_power_sensor_listener()
+    coordinator.setup_lux_listener()
 
     # Home Assistant stops without unloading its config entries, so on a restart the coordinator's
     # shutdown never ran - and with it the cleanup of a hot-water boost EffektGuard started, which
