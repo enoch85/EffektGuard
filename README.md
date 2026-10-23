@@ -42,7 +42,7 @@ EffektGuard controls a real heat pump. Watch it closely the first weeks.
 |---|---|
 | Home Assistant | 2025.11 or newer |
 | Heat pump | NIBE F730, F750, F1155, F2040 or S1155, through MyUplink, nibe_heatpump or [Modbus](docs/LOCAL_MODBUS.md). Another model? [Ask for it](https://github.com/enoch85/EffektGuard/issues/new?labels=enhancement) |
-| Electricity price | [GE-Spot](https://github.com/enoch85/ge-spot) |
+| Electricity price | [GE-Spot](https://github.com/enoch85/ge-spot), with prices from Nord Pool, ENTSO-E, Energy-Charts, Energi Data Service, Strømligning, OMIE, AEMO, ComEd or Amber |
 | Weather forecast | Optional, to heat ahead of a colder day |
 | Power meter | Optional, for peak protection (otherwise the pump's own current readings) |
 
