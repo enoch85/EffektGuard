@@ -13,11 +13,9 @@ them: one short line per item, glanceable in seconds.
 ```markdown
 ## Summary
 
-A first short sentence: the release's main theme.
+A short paragraph in normal prose: the release's theme and its largest changes.
 
-One short paragraph per highlight or large change, one sentence each.
-
-A last one: what to expect after updating.
+A second paragraph if needed: what to expect after updating.
 
 ## Breaking
 • **Area**: what the user must do
@@ -42,13 +40,14 @@ A last one: what to expect after updating.
 ```
 
 - **Summary first. Read every commit** since the previous release
-  (`git log --oneline --no-merges vX.Y.Z..vX.Y.W`), then write three to six short lines: the
-  highlights, the largest changes, and what a user can expect after updating (settings that carry
-  over or move, anything to do). Big picture only; the bullets carry the details.
+  (`git log --oneline --no-merges vX.Y.Z..vX.Y.W`), then write one or two short paragraphs:
+  the highlights, the largest changes, and what a user can expect after updating (settings that
+  carry over or move, anything to do). Big picture only; the bullets carry the details.
 - Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
 - Bullets are `•`. Backticks for symbols. Omit empty sections.
-- **The summary is three to six one-sentence paragraphs, with a blank line between them.** No line
-  breaks inside a sentence or bullet: GitHub shows each one in a release.
+- **Write the summary as normal paragraphs**: related sentences run on in one paragraph, and a
+  blank line separates paragraphs. Never break a line inside a paragraph or a bullet: GitHub shows
+  every line break in a release.
 - **One short line per item: what the user notices.** No cause, no mechanism, no semicolons, no
   second clause. Label by area (Hot water, Peaks), not by PR.
 - **About fifteen bullets at most.** Fold the small ones into one "Smaller fixes" line.
