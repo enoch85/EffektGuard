@@ -34,7 +34,7 @@ entities other integrations publish.
 
 ---
 
-## Three rules that get broken most often
+## Four rules that get broken most often
 
 1. **No AI attribution in any committed artifact.** No `Co-Authored-By:` naming an AI, no
    "Generated with", no robot emoji, no "claude" in a branch name - in commits, branches, PRs,
@@ -45,6 +45,10 @@ entities other integrations publish.
 3. **Verify by running it.** This repo's history is full of review notes that were wrong until
    someone executed them. A claim about behaviour is not established until the code produced the
    number.
+4. **Every number is measured. No estimates, no guesses.** A figure in a reply, PR, commit, code
+   comment, doc or release note comes from a run you did, and says what it counts and over which
+   period. If it cannot be measured, say so instead of giving a number. A number from a subagent
+   or an earlier session is re-run before it is repeated.
 
 ---
 
