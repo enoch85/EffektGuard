@@ -44,6 +44,9 @@ A second paragraph only if updating changes something or needs an action.
   the highlights and the largest changes. Mention the update itself only when it changes a setting
   or needs an action; never state the obvious ("your settings carry over"). Big picture only; the
   bullets carry the details.
+- **Write for someone with no technical knowledge.** Everyday words, what it means for the house:
+  "a very cold room is no longer ignored", not "an implausible indoor reading". No internal terms
+  (entity, offset, degree minutes, boost, layer, register), no file or function names.
 - Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
 - Bullets are `•`. Backticks for symbols. Omit empty sections.
 - **Write the summary as normal paragraphs**: related sentences run on in one paragraph, and a
