@@ -66,7 +66,8 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 | Preset | Comfort, Balanced (none) or Savings (eco) |
 | Away | Savings, 3 °C below your target, never below 18.5 °C |
 
-To see why it did something, look at `sensor.effektguard_optimization_reasoning`.
+> [!NOTE]
+> Wondering why the heat changed? `sensor.effektguard_optimization_reasoning` shows the reason.
 
 ## Safety
 
