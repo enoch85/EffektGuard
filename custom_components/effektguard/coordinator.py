@@ -13,7 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.event import async_track_point_in_time, async_track_state_change_event
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -353,6 +353,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # While set, a boost_dhw SERVICE call owns the lux switch: ordinary price optimization
         # may not cancel it before this instant. Safety still may - see _apply_dhw_control.
         self._service_boost_until: datetime | None = None
+        # Unsubscribes the lux switch's off watch - see setup_lux_listener
+        self._lux_listener = None
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -710,6 +712,36 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._lux_boost_is_ours = on
         return True
 
+    @callback
+    def _lux_turned_off(self) -> None:
+        """An off reading ends every claim on the boost: EffektGuard's own and a boost_dhw window.
+
+        The one place a claim ends. Unavailable, unknown or a missing state says nothing - the boost
+        may well be running - so only an off reading comes here.
+        """
+        self._lux_boost_is_ours = False
+        self._service_boost_until = None
+
+    def setup_lux_listener(self) -> None:
+        """Watch the lux switch for off between control cycles.
+
+        Read only at each cycle, an off and on again in between left the old claim standing, and
+        the household's new boost was then switched off as EffektGuard's own - at the old window's
+        end, or on the next reload.
+        """
+        if not self.temp_lux_entity:
+            return
+
+        @callback
+        def _lux_changed(event) -> None:
+            new_state = event.data["new_state"]
+            if new_state is not None and new_state.state == STATE_OFF:
+                self._lux_turned_off()
+
+        self._lux_listener = async_track_state_change_event(
+            self.hass, [self.temp_lux_entity], _lux_changed
+        )
+
     async def _cancel_our_dhw_boost(self) -> None:
         """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
 
@@ -749,12 +781,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             return
 
         state = self.hass.states.get(self.temp_lux_entity) if self.temp_lux_entity else None
-        if state is None or state.state == STATE_OFF:
+        if state is not None and state.state == STATE_OFF:
             # NIBE's own lux timeout, or the household, ended it first.
-            self._service_boost_until = None
+            self._lux_turned_off()
             return
-        if state.state != STATE_ON:
-            # Unavailable or unknown is not an end: the boost may well be running. Next reading.
+        if state is None or state.state != STATE_ON:
+            # Missing, unavailable or unknown is not an end: the boost may well be running.
             return
 
         unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
@@ -812,6 +844,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._power_sensor_listener()
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
+            unsub_lux = getattr(self, "_lux_listener", None)
+            if unsub_lux is not None:
+                unsub_lux()
+                self._lux_listener = None
 
             # Cancel OUR OWN DHW boost on unload. Nothing else does: a reload or restart mid-boost
             # otherwise leaves the temporary-lux switch ON until NIBE's timeout, running a
@@ -1952,7 +1988,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # be turned off at the next cycle by any decision not to heat. Off, by anyone, ends ours: a
         # household boost started after it is not mistaken for it.
         if not is_lux_on:
-            self._lux_boost_is_ours = False
+            self._lux_turned_off()
         elif not self._lux_boost_is_ours:
             _LOGGER.debug("Temporary lux is on and EffektGuard did not start it - leaving it alone")
             return
