@@ -74,8 +74,11 @@ The setup asks five things and finds the rest by entity name:
 5. **Sensors** - degree minutes, the power meter, the hot-water boost switch (on nibe_heatpump an
    `input_boolean` helper for its select), extra room sensors and how to combine them, overrides.
 
-*Reconfigure* changes these later, but price optimization and peak protection are switches from
-then on; *Configure* holds the [settings](#settings).
+To change them later:
+
+- *Reconfigure*: the entities and the model
+- Switches: price optimization and peak protection on or off
+- *Configure*: the [settings](#settings)
 
 ## Daily use
 
