@@ -13,8 +13,8 @@
 
 EffektGuard runs your heat pump on the electricity price. Your house is a heat battery: EffektGuard
 charges it - raises the heat - when power is cheap, and lets it coast when power is expensive or a
-new monthly power peak is near (the effect tariff). The house never gets cold. EffektGuard changes
-one setting on the pump: the heating-curve offset.
+new monthly power peak is near (the effect tariff). It moves the pump's heating-curve offset and, if
+you turn them on, switches its hot-water and ventilation boosts.
 
 It supports NIBE heat pumps today. Other brands can follow - want to add yours? See
 [contributing](docs/dev/CONTRIBUTION_GUIDE.md).
@@ -74,7 +74,8 @@ The setup asks five things and finds the rest by entity name:
 5. **Sensors** - degree minutes, the power meter, the hot-water boost switch (on nibe_heatpump an
    `input_boolean` helper for its select), extra room sensors and how to combine them, overrides.
 
-*Reconfigure* changes these later; *Configure* holds the [settings](#settings).
+*Reconfigure* changes these later, but price optimization and peak protection are switches from
+then on; *Configure* holds the [settings](#settings).
 
 ## Daily use
 
@@ -103,7 +104,7 @@ Under *Configure*:
 | Setting | Range (default) | Effect |
 |---|---|---|
 | Mode | Comfort, Balanced, Savings (Balanced) | Comfort reacts to a 0.1 °C drift and lets prices push less; Savings waits for 0.3 °C, lets prices push more and cuts fully at a price peak |
-| Tolerance | 0.5-3.0 (0.5) | Comfort traded for price: a comfort band of ±0.4 × the setting, and price moves from 20 % (0.5) to 100 % (3.0) of full size |
+| Tolerance | 0.5-3.0 (0.5) | Comfort traded for price: a comfort band of ±0.4 × the setting, and the price class's step scales from 20 % (0.5) to 100 % (3.0); the extra step before an expensive or cheaper spell does not scale |
 | Thermal mass, insulation | 0.5-2.0 (1.0) | Your house: thermal mass 1.5 or more is a concrete slab, 1.2 or more timber floor heating |
 | Hot water | Target 45-60 °C (50), amount 1-30 min (5), ready at 07:00 and 18:00 | See [Hot water](#hot-water) |
 | Airflow | Standard 100-300, boosted 150-400 m³/h (150, 252) | NIBE F750 and F730 only |
@@ -122,15 +123,16 @@ Every 5 minutes nine layers vote for an offset, and the votes become one whole-d
   price vote decides where it lands: most in cheap quarters, none in a price-peak quarter.
 - **Monthly peak** - near this month's power peak it lowers the curve. Needs peak protection, and a
   power meter or the pump's phase currents.
-- **Thermal debt** - when the pump falls behind (degree minutes), it raises the curve while the room
-  is below target or power is cheap. The limits adapt to your latitude, the outdoor temperature and
-  your house.
+- **Thermal debt** - when the pump falls behind (degree minutes), it raises the curve: a little from
+  the first signs, more for a deeper debt while the room is below target or power is cheap. The
+  limits adapt to your latitude, the outdoor temperature and your house.
 - **Comfort** - it pulls the room back toward the target.
 
 A full-weight vote wins: safety, a price-peak quarter, a new monthly peak about to be set, a room far
-too warm. The rest are averaged. Price and peak cuts give way as the room drops below its comfort
-band, and a reversal of 2 °C or more within 45 minutes is held back. [Safety](#safety) overrides it
-all. Details: [architecture](docs/architecture/00_overview.md).
+too warm. The rest are averaged. While the pump recovers a deeper thermal debt, a price or monthly
+peak only holds the raise to +0.5 to +1 °C. Price and peak cuts give way as the room drops below its
+comfort band, and a reversal of 2 °C or more within 45 minutes is held back. [Safety](#safety)
+overrides it all. Details: [architecture](docs/architecture/00_overview.md).
 
 ## Hot water
 
@@ -142,15 +144,18 @@ the tank from 38 to 50 °C; it coasted through the evening peak (up to 294 öre/
 
 Off until you turn on `switch.effektguard_hot_water_optimization` and choose the boost switch in
 setup. Then EffektGuard heats the tank at cheap times and has it ready for your hot-water times, each
-boost running at least 15 minutes. The pump still heats a low tank on its own, and a boost you start
-yourself is left alone. [More](docs/DHW_OPTIMIZATION.md).
+boost running at least 15 minutes unless the house needs the compressor or the tank can no longer be
+read. The pump still heats a low tank on its own, and a boost you start yourself is left alone.
+[More](docs/DHW_OPTIMIZATION.md).
 
 ## Safety
 
-- Below 18 °C indoors: full heat (+10), and hot water stops. This needs a room reading.
-- Past -1500 degree minutes: no cut below 0 unless the room is above its band, and hot water stops.
-  The thermal-debt layer adds no raise there; raises from other layers pass, trimmed when the
-  compressor is already at its maximum.
+- Below 18 °C indoors: full heat (+10; a quarter less while the room is already warming faster than
+  0.3 °C/h). This needs a room reading.
+- Past -1500 degree minutes: no cut below 0 unless the room is above its band. The thermal-debt
+  layer adds no raise there; raises from other layers pass, trimmed when the compressor is already
+  at its maximum.
+- At either limit EffektGuard stops the hot-water boosts it started and starts none.
 - Writes are whole degrees, -10 to +10 and within the offset entity's range; the automatic loop
   writes at most once every 5 minutes.
 - A cycle that cannot read the pump writes nothing. `force_offset` cannot override these limits.
