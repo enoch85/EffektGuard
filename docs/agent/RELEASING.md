@@ -51,9 +51,9 @@ A second paragraph only if updating changes something or needs an action.
 **Full Changelog**: https://github.com/enoch85/EffektGuard/compare/vX.Y.Z...vX.Y.W
 ```
 
-- **Summary**: one or two short paragraphs on the highlights and the largest changes. Mention the update itself only when it changes a setting
-  or needs an action; never state the obvious ("your settings carry over"). Big picture only; the
-  bullets carry the details.
+- **Summary**: one or two short paragraphs on the highlights and the largest changes. Mention the
+  update itself only when it changes a setting or needs an action; never state the obvious ("your
+  settings carry over"). Big picture only; the bullets carry the details.
 - **Write for someone with no technical knowledge.** Everyday words, what it means for the house:
   "a very cold room is no longer ignored", not "an implausible indoor reading". No internal terms
   (entity, offset, degree minutes, boost, layer, register), no file or function names.
