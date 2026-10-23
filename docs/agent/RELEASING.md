@@ -15,7 +15,7 @@ them: one short line per item, glanceable in seconds.
 
 A short paragraph in normal prose: the release's theme and its largest changes.
 
-A second paragraph if needed: what to expect after updating.
+A second paragraph only if updating changes something or needs an action.
 
 ## Breaking
 • **Area**: what the user must do
@@ -41,8 +41,9 @@ A second paragraph if needed: what to expect after updating.
 
 - **Summary first. Read every commit** since the previous release
   (`git log --oneline --no-merges vX.Y.Z..vX.Y.W`), then write one or two short paragraphs:
-  the highlights, the largest changes, and what a user can expect after updating (settings that
-  carry over or move, anything to do). Big picture only; the bullets carry the details.
+  the highlights and the largest changes. Mention the update itself only when it changes a setting
+  or needs an action; never state the obvious ("your settings carry over"). Big picture only; the
+  bullets carry the details.
 - Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
 - Bullets are `•`. Backticks for symbols. Omit empty sections.
 - **Write the summary as normal paragraphs**: related sentences run on in one paragraph, and a
