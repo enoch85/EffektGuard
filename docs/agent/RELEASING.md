@@ -13,7 +13,8 @@ them: one short line per item, glanceable in seconds.
 ```markdown
 ## Summary
 
-One or two plain sentences on one line: what this release offers, as a whole.
+Three to six short lines, one sentence each: the highlights, the largest changes, and what to
+expect after updating.
 
 ## Breaking
 • **Area**: what the user must do
@@ -37,10 +38,13 @@ One or two plain sentences on one line: what this release offers, as a whole.
 **Full Changelog**: https://github.com/enoch85/EffektGuard/compare/vX.Y.Z...vX.Y.W
 ```
 
-- **Summary first**: what the release offers, said once in plain words. Don't repeat the bullets.
+- **Summary first. Read every commit** since the previous release
+  (`git log --oneline --no-merges vX.Y.Z..vX.Y.W`), then write three to six short lines: the
+  highlights, the largest changes, and what a user can expect after updating (settings that carry
+  over or move, anything to do). Big picture only; the bullets carry the details.
 - Sections are Summary, Bug fixes, Enhancements; Breaking and Removed only when they apply.
 - Bullets are `•`. Backticks for symbols. Omit empty sections.
-- **No line breaks inside a paragraph or bullet**: GitHub shows each one in a release.
+- **No line breaks inside a sentence or bullet**: GitHub shows each one in a release.
 - **One short line per item: what the user notices.** No cause, no mechanism, no semicolons, no
   second clause. Label by area (Hot water, Peaks), not by PR.
 - **About fifteen bullets at most.** Fold the small ones into one "Smaller fixes" line.
