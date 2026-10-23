@@ -29,6 +29,7 @@ entities other integrations publish.
 | [docs/dev/CODE_STANDARDS.md](docs/dev/CODE_STANDARDS.md) | Imports, type hints, async, docstrings |
 | [docs/dev/TESTING.md](docs/dev/TESTING.md) | Test layout and categories |
 | [docs/dev/ENVIRONMENT_SETUP.md](docs/dev/ENVIRONMENT_SETUP.md) | First-time setup |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Setup, thermostat, settings, services, troubleshooting (the README is the overview) |
 | [docs/LOCAL_MODBUS.md](docs/LOCAL_MODBUS.md) | The offset entity on a generic Modbus setup |
 | [docs/dashboard-charts.yaml](docs/dashboard-charts.yaml) | The README's charts as an apexcharts-card dashboard card |
 
