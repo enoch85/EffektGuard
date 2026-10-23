@@ -7,8 +7,13 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
-EffektGuard runs your heat pump on the electricity price: your house stores heat when power is
-cheap, and you pay less.
+Heat your house when electricity is cheap, and save when it is expensive.
+
+EffektGuard turns your house into a heat battery. It stores heat in the cheap hours, lets the house
+coast through the expensive ones, and helps you avoid a new monthly power peak. Comfort and the
+pump's health come first.
+
+Set it up once in Home Assistant, and it runs on its own.
 
 It works with NIBE heat pumps today. Other brands are welcome, see
 [contributing](docs/dev/CONTRIBUTION_GUIDE.md).
@@ -25,7 +30,7 @@ EffektGuard controls a real heat pump. Watch it closely the first weeks.
 |---|---|
 | Heating | More heat when power is cheap, less when it is expensive |
 | Hot water | Heats the tank when power is cheap, and has it ready when you need it |
-| Weather | Heats ahead of a colder day |
+| Weather | Heats ahead of a colder day, mostly while power is cheap |
 | Power peaks | Holds back to avoid a new monthly peak |
 | Ventilation | Turns it up when the extra heat pays off (NIBE F750, F730) |
 
