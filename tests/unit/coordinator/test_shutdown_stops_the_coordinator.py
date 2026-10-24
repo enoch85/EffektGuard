@@ -87,6 +87,23 @@ class TestShutdownActuallyStopsIt:
         )
 
     @pytest.mark.asyncio
+    async def test_a_dead_coordinator_has_no_second_try_pending(self, monkeypatch):
+        """The second try of a failed read drives the pump too, so it dies with the coordinator."""
+        coordinator = make_coordinator()
+        pending = MagicMock()
+        coordinator._unsub_read_retry = pending
+
+        await shutdown(coordinator, [], monkeypatch)
+        # A cycle in flight at the unload now fails its read and asks for a second try.
+        coordinator._schedule_read_retry()
+
+        pending.assert_called_once()
+        assert coordinator._unsub_read_retry is None, (
+            "A shut-down coordinator still has a second try armed. It would run a control cycle "
+            "beside the reloaded entry's coordinator."
+        )
+
+    @pytest.mark.asyncio
     async def test_shutdown_is_idempotent(self, monkeypatch):
         """It runs twice per unload: once via async_on_unload, once from async_unload_entry."""
         coordinator = make_coordinator()

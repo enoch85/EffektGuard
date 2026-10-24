@@ -1085,6 +1085,12 @@ PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a s
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
+# A control cycle that cannot read the heat pump runs once more this much later before the failure
+# is shown. Home Assistant's myuplink integration polls every 60 s with a 10 s timeout
+# (homeassistant/components/myuplink/coordinator.py, 2026.10), so its next poll has ended by then.
+# Owner's production 2026-10-14 to 10-24: 11 cycles could not read the pump, and in 6 of them the
+# readings were back 70 s later.
+HEAT_PUMP_READ_RETRY_SECONDS: Final = 70
 # The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that. It is a DIFFERENT
 # concern from the effect tariff's measurement window (BILLING_PERIOD_MINUTES) even though the
 # owner's tariff measures over the same 15-minute quarter: one is what electricity costs, the other
