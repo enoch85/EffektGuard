@@ -37,7 +37,7 @@ entities other integrations publish.
 
 ---
 
-## Five rules that get broken most often
+## Six rules that get broken most often
 
 1. **No AI attribution in any committed artifact.** No `Co-Authored-By:` naming an AI, no
    "Generated with", no robot emoji, no "claude" in a branch name - in commits, branches, PRs,
@@ -55,6 +55,10 @@ entities other integrations publish.
 5. **The README and the docs match the code.** A change that makes either one false updates it in
    the same PR, and every claim in them is checked against the code before it is written. End
    users read the README: a wrong line there is a bug.
+6. **Write less, for someone with no technical knowledge.** The README is a short overview; details
+   go in `docs/`. PR descriptions and release notes are a few short bullets saying what changed, not
+   how. If a line needs a second read, cut it. Every release opens with a short description and uses
+   the format in [RELEASING.md](docs/agent/RELEASING.md); v0.8.0 is the model.
 
 ---
 
