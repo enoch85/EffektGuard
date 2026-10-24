@@ -13,7 +13,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_point_in_time, async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_point_in_time,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -51,6 +55,7 @@ from .const import (
     DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
+    HEAT_PUMP_READ_RETRY_SECONDS,
     MAX_BILLING_OBSERVATION_GAP_MINUTES,
     PEAK_CONTROL_POWER_SOURCES,
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
@@ -101,6 +106,10 @@ def held_target_of(config: Mapping[str, Any]) -> float:
     """The indoor temperature to hold: the configured target, AWAY_SETBACK lower while AWAY."""
     target = float(config.get(CONF_TARGET_INDOOR_TEMP, DEFAULT_INDOOR_TEMP))
     return target - AWAY_SETBACK if config.get(CONF_AWAY) else target
+
+
+class HeatPumpUnreadable(UpdateFailed):
+    """The heat pump's required readings could not be read, after it has answered once."""
 
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
@@ -375,6 +384,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
         self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
+        self._unsub_read_retry = None  # The second try of a cycle that could not read the pump
         # Startup grace: timeout after which observation cycles begin. A deadline in UTC - on the
         # local clock a restart at 02:59 CEST on the night the clocks go back stayed locked out
         # until 03:01 CET, 62 real minutes.
@@ -470,10 +480,32 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         else:
             _LOGGER.debug("Next update at %s", dt_util.as_local(next_time).strftime("%H:%M:%S"))
 
-    async def _do_aligned_refresh(self) -> None:
+    def _schedule_read_retry(self) -> None:
+        """Run the control cycle once more, HEAT_PUMP_READ_RETRY_SECONDS from now.
+
+        A timer of its own: every successful read re-arms the aligned one, a read-only refresh
+        included, and sharing it would let that read cancel the retry.
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator shut down - not arming a read retry")
+            return
+
+        if self._unsub_read_retry:
+            self._unsub_read_retry()
+
+        @callback
+        def _on_retry(_now: datetime) -> None:
+            self._unsub_read_retry = None
+            self.hass.async_create_task(self._do_aligned_refresh(retry=True))
+
+        self._unsub_read_retry = async_call_later(
+            self.hass, HEAT_PUMP_READ_RETRY_SECONDS, _on_retry
+        )
+
+    async def _do_aligned_refresh(self, *, retry: bool = False) -> None:
         """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        Sole owner of the retry timer: the base scheduler is disabled (update_interval=None), so
+        Sole owner of the aligned timer: the base scheduler is disabled (update_interval=None), so
         nothing else re-arms it. That is why the broad `except Exception` is correct - anything the
         update path raises would otherwise kill the task silently and permanently
         (`last_update_success` stays True while the pump holds its last offset until HA restarts).
@@ -482,13 +514,31 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         A failure is published as Home Assistant's own refresh publishes one: logged and handed to
         the entities on the transition, so they go unavailable instead of showing the last good
         cycle, and the recovery is logged.
+
+        A cycle that cannot read the heat pump runs once more, HEAT_PUMP_READ_RETRY_SECONDS later,
+        before that failure is shown: the pump's source is often back by then, and the cycle's work
+        is done late rather than not at all. Until then the entities show the last cycle, as they
+        do between any two cycles.
+
+        Args:
+            retry: This run is that second try, so a failed read is shown.
         """
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
             # lock, so a service commanding the pump at the same moment waits its turn.
             data = await self._drive_the_pump()
+        except HeatPumpUnreadable as err:
+            if retry:
+                self.async_set_update_error(err)
+            else:
+                _LOGGER.info(
+                    "Could not read the heat pump, trying again in %d s: %s",
+                    HEAT_PUMP_READ_RETRY_SECONDS,
+                    err,
+                )
+                self._schedule_read_retry()
         except UpdateFailed as err:
-            # Expected degradation (e.g. required NIBE sensors unreadable).
+            # Expected degradation: the heat pump never answered after start-up.
             self.async_set_update_error(err)
         except Exception as err:  # noqa: BLE001 - supervisory loop; see docstring
             _LOGGER.exception(
@@ -845,6 +895,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if unsub is not None:
                 unsub()
                 self._unsub_aligned_refresh = None
+            unsub_retry = getattr(self, "_unsub_read_retry", None)
+            if unsub_retry is not None:
+                unsub_retry()
+                self._unsub_read_retry = None
 
             # Unsubscribe power sensor listener if still active
             if self._power_sensor_listener:
@@ -1115,7 +1169,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "startup_pending": True,  # Flag for entities to show proper status
                 }
             # After first success, NIBE failures are real errors. Each caller reports them.
-            raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
+            raise HeatPumpUnreadable(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
         # Spot price data (native 15-minute intervals)

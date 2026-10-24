@@ -17,8 +17,9 @@ flowchart LR
 
 - **NIBE** (`NibeAdapter.get_current_state`): required. At start-up the coordinator waits up to 12
   cycles (`STARTUP_MAX_GRACE_ATTEMPTS`) for the entities to appear. After the first success a
-  failed read raises `UpdateFailed`: the entities go unavailable, nothing is written, and the next
-  cycle tries again.
+  failed read runs the cycle once more 70 s later (`HEAT_PUMP_READ_RETRY_SECONDS`), after
+  MyUplink's next poll. If that read fails too, the entities go unavailable, nothing is written,
+  and the next cycle tries again.
 - **Prices** (`GESpotAdapter.get_prices`): GE-Spot's `today_interval_prices` and
   `tomorrow_interval_prices`. Missing prices mean the price layer abstains and a repair issue is
   raised; nothing is invented.
