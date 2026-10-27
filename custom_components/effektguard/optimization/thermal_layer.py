@@ -291,22 +291,30 @@ class ThermalModel:
         self.insulation_quality = insulation_quality
 
     def get_prediction_horizon(self) -> float:
-        """How far ahead this house must look to act in time - heavier fabric, longer lag.
+        """How far ahead this house must look to act in time. See prediction_horizon_for."""
+        return prediction_horizon_for(self.thermal_mass)
 
-        A concrete slab's slow time constant (~70 h) makes six hours its LAG, not its horizon: a
-        flat 12 h window cannot see the slow, deep outdoor slide that actually drains it (only a
-        sudden plunge, which the pump's own curve already catches), so the pre-heat never fires.
-        Horizon is UFH-type-specific; see docs/research/03_concrete_slab_response.md and the
-        UFH_*_PREDICTION_HORIZON constants.
 
-        Returns:
-            Prediction horizon in hours.
-        """
-        if self.thermal_mass >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
-            return UFH_CONCRETE_PREDICTION_HORIZON
-        if self.thermal_mass >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
-            return UFH_TIMBER_PREDICTION_HORIZON
-        return UFH_RADIATOR_PREDICTION_HORIZON
+def prediction_horizon_for(thermal_mass: float) -> float:
+    """How far ahead a house of this thermal mass must look to act in time - heavier fabric, longer lag.
+
+    A concrete slab's slow time constant (~70 h) makes six hours its LAG, not its horizon: a
+    flat 12 h window cannot see the slow, deep outdoor slide that actually drains it (only a
+    sudden plunge, which the pump's own curve already catches), so the pre-heat never fires.
+    Horizon is UFH-type-specific; see docs/research/03_concrete_slab_response.md and the
+    UFH_*_PREDICTION_HORIZON constants.
+
+    Shared by ThermalModel and AdaptiveThermalModel, so the weather pre-heat and the learned
+    pre-heat read the same horizon from the same setting: the owner's thermal mass.
+
+    Returns:
+        Prediction horizon in hours.
+    """
+    if thermal_mass >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+        return UFH_CONCRETE_PREDICTION_HORIZON
+    if thermal_mass >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+        return UFH_TIMBER_PREDICTION_HORIZON
+    return UFH_RADIATOR_PREDICTION_HORIZON
 
 
 def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:

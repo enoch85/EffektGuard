@@ -63,9 +63,8 @@ All paths under `custom_components/effektguard/`.
 - `__init__.py` builds the adapters, a `PriceAnalyzer`, an `EffectManager`, a `ThermalModel` from
   the thermal-mass and insulation options, and the `DecisionEngine`, which creates its own layers.
 - The coordinator creates the learning objects (`ThermalStatePredictor`, `AdaptiveThermalModel`,
-  `WeatherPatternLearner`); after that the engine's `thermal` is the `AdaptiveThermalModel`.
-  From 96 hourly observations (4 days), the learned pre-heat layer's `get_parameters()` call
-  overwrites that model's `thermal_mass` and `ufh_type` with learned values.
+  `WeatherPatternLearner`); after that the engine's `thermal` is the `AdaptiveThermalModel`, set
+  to the owner's thermal mass and insulation. What it learns does not change them.
 - The DHW scheduler receives the engine's `emergency_layer` and `price`, so hot water is blocked
   by the same degree-minute thresholds (`should_block_dhw`: T2 or worse, or past -1500).
 - Options are hot-reloaded (`async_update_config`); changing an entity goes through
