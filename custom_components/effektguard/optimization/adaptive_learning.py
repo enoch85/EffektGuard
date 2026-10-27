@@ -26,12 +26,10 @@ from ..const import (
     LEARNING_MIN_HEATING_SAMPLES,
     LEARNING_MIN_OBSERVATIONS,
     LEARNING_OBSERVATION_WINDOW,
-    UFH_CONCRETE_PREDICTION_HORIZON,
-    UFH_RADIATOR_PREDICTION_HORIZON,
-    UFH_TIMBER_PREDICTION_HORIZON,
     UFHType,
 )
 from .learning_types import AdaptiveThermalObservation, LearnedThermalParameters
+from .thermal_layer import prediction_horizon_for
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +86,12 @@ class AdaptiveThermalModel:
     - Calculates thermal mass from heat retention
     - Measures insulation quality from heat loss rate
     - Builds confidence over time
+
+    WHAT IT LEARNS NEVER REPLACES THE OWNER'S SETTINGS. `thermal_mass` is the owner's setting: the
+    price layer's look-ahead (5 h x thermal mass) and the pre-heat horizon read it every cycle.
+    Learning wrote its own estimate over it, and its detected response type over the horizon, as
+    soon as it had enough hourly observations, whatever its confidence. The estimates stay
+    available from update_learned_parameters().
 
     Swedish climate awareness:
     - Handles -30°C to +5°C range
@@ -229,8 +233,9 @@ class AdaptiveThermalModel:
                 observation_count=len(self.observations),
             )
 
+            # The detected type is kept for display. The thermal mass is the owner's setting and is
+            # not touched; see the class docstring.
             self.ufh_type = ufh_type
-            self.thermal_mass = thermal_mass
             self._last_update = dt_util.now()
 
             _LOGGER.info(
@@ -515,20 +520,18 @@ class AdaptiveThermalModel:
         return confidence
 
     def get_prediction_horizon(self) -> float:
-        """Get appropriate prediction horizon based on detected UFH type.
+        """How far ahead the learned pre-heat looks: from the owner's thermal mass setting.
+
+        It read the detected response type: 12 hours for every house, whatever the setting, until
+        192 hourly observations existed, and then whatever the detector said. In the closed loop of
+        the owner's slab (Jan-Feb 2026, 59 days, setting 2.0 = 48 h) that switched between 12 and
+        48 hours 12 times and sat at 12 hours in 60 % of the cycles. ThermalModel, which gives the
+        weather pre-heat its horizon, has always read the setting; both now share one mapping.
 
         Returns:
             Prediction horizon in hours
         """
-        if self.ufh_type == UFHType.SLOW_RESPONSE:
-            return UFH_CONCRETE_PREDICTION_HORIZON  # 48 hours
-        elif self.ufh_type == UFHType.MEDIUM_RESPONSE:
-            return UFH_TIMBER_PREDICTION_HORIZON  # 12 hours
-        elif self.ufh_type == UFHType.FAST_RESPONSE:
-            return UFH_RADIATOR_PREDICTION_HORIZON  # 6 hours
-        else:
-            # Unknown - use moderate horizon
-            return UFH_TIMBER_PREDICTION_HORIZON
+        return prediction_horizon_for(self.thermal_mass)
 
     def should_use_learned_parameters(self) -> bool:
         """Check if learned parameters are reliable enough to use.

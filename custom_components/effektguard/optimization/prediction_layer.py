@@ -490,8 +490,7 @@ class ThermalStatePredictor:
             )
 
         try:
-            # Use UFH-type-specific forecast horizon for learned predictions
-            # Concrete slab: 24h, Timber: 12h, Radiators: 6h
+            # The horizon of the owner's thermal mass setting (prediction_horizon_for)
             prediction_horizon = int(thermal_model.get_prediction_horizon())
             forecast_temps = [
                 hour.temperature for hour in weather_data.forecast_hours[:prediction_horizon]

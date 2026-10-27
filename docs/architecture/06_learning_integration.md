@@ -12,8 +12,6 @@ flowchart LR
     C -->|daily| W["WeatherPatternLearner<br/>one pattern per day"]
     P --> T["Indoor and outdoor trend<br/>damping, Peak, Weather Pre-heat, airflow"]
     P --> L["Learned Pre-heat vote<br/>weight 0.65"]
-    M["thermal mass, response type<br/>price look-ahead<br/>pre-heat horizon"]
-    A -->|no confidence gate| M
     A -->|confidence 0.7 or more| L
     W --> U["Unusual weather<br/>Math WC margin and weight"]
 ```
@@ -22,7 +20,7 @@ flowchart LR
 
 | Learner | Records | Produces | Reaches control |
 |---|---|---|---|
-| `AdaptiveThermalModel` (`adaptive_learning.py`) | indoor, outdoor and offset once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); rolling 672 = 28 days | thermal mass 0.5-2.0, response type, heat-loss index, heating efficiency, decay rate, confidence | thermal mass and response type, ungated; the rest only behind the gate |
+| `AdaptiveThermalModel` (`adaptive_learning.py`) | indoor, outdoor and offset once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); rolling 672 = 28 days | thermal mass 0.5-2.0, response type, heat-loss index, heating efficiency, decay rate, confidence | heating efficiency and decay rate, only behind the gate |
 | `ThermalStatePredictor` (`prediction_layer.py`) | indoor, outdoor, offset, flow, DM every cycle; 24 h window | indoor and outdoor trend; the `Learned Pre-heat` layer | trend: trend damping, the `Peak` layer's prediction, `Weather Pre-heat`, airflow. Pre-heat: weight 0.65 once 24 h of history and a forecast exist |
 | `WeatherPatternLearner` (`weather_learning.py`) | one pattern per day from the first 24 forecast hours, keyed by month and week | typical weather for the date (the zone's seasonal defaults until data exists); `detect_unusual_weather` | unusual weather adds 0.5-1.5 °C to the `Math WC` safety margin and 0.15 to its weight ([10](10_adaptive_climate_zones.md)) |
 
@@ -37,20 +35,19 @@ consistency term is 0 with ten or fewer heating samples or a mean rate under 0.1
 Learning needs 96 hourly observations (`LEARNING_MIN_OBSERVATIONS`, 4 days) before it produces
 anything, and 192 with offset steps above 1 °C before it classifies the response type.
 
-## What bypasses the gate
+## The look-ahead follows the owner's settings
 
 `__init__.py` hands the engine the `AdaptiveThermalModel` as its thermal model, set to the owner's
-thermal mass and insulation. Every cycle the prediction layer calls
-`thermal_model.get_parameters()`, which is `update_learned_parameters()`: once 96 observations
-exist it overwrites `thermal_mass` and `ufh_type` on the model, whatever the confidence. From
-there:
+thermal mass and insulation. Learning does not change them; its own estimates, the response type
+included, steer nothing outside the gate.
 
 - `thermal_mass` sets the `Spot Price` look-ahead (`PRICE_FORECAST_BASE_HORIZON` 5 h × thermal
-  mass) and scales the predictor's fallback temperature model. The DM thermal-mass buffer does not
-  follow it: `heating_type` is fixed from the configured thermal mass when the engine starts.
-- `ufh_type` sets `get_prediction_horizon()`: 48 h slow, 12 h medium or unknown, 6 h fast. The
-  `Learned Pre-heat` layer reads that many forecast hours and looks half of them ahead. The
-  `Weather Pre-heat` horizon is fixed when the engine starts and does not follow it.
+  mass) and scales the predictor's fallback temperature model. The DM thermal-mass buffer reads
+  `heating_type`, fixed from the configured thermal mass when the engine starts.
+- `get_prediction_horizon()` comes from the same setting (`prediction_horizon_for`, shared with
+  `ThermalModel`): 48 h from 1.5, 12 h from 1.2, 6 h below. The `Learned Pre-heat` layer reads that
+  many forecast hours and looks half of them ahead. The `Weather Pre-heat` horizon uses the same
+  mapping, fixed when the engine starts.
 
 The heat-loss index never reaches control: `calculate_preheating_target` uses
 `DEFAULT_HEAT_LOSS_COEFFICIENT`, because the learned value is a relative index, not W/°C.
