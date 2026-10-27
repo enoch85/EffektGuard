@@ -17,7 +17,7 @@ offset in °C, a weight and a reason; the name is the attribute the reasoning se
 | `Learned Pre-heat` | `prediction_layer.py` | 0.65 when it votes (`LAYER_WEIGHT_PREDICTION`), see [06](06_learning_integration.md) |
 | `Math WC` | `weather_layer.py` `WeatherCompensationLayer` | 0.50-0.95 by outdoor temperature × 0.49, reduced under thermal debt ([10](10_adaptive_climate_zones.md)) |
 | `Weather Pre-heat` | `weather_layer.py` `WeatherPredictionLayer` | 0.85 × thermal mass, capped at 0.99 |
-| `Spot Price` | `price_layer.py` `PriceAnalyzer` | 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 in a PEAK quarter or PEAK cluster; × 0.3 while prices are volatile |
+| `Spot Price` | `price_layer.py` `PriceAnalyzer` | 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 in a PEAK quarter or PEAK cluster; × 0.3 while prices are volatile, unless it is pre-heating for the hours ahead |
 | `Comfort` | `comfort_layer.py` | 0.2 × the mode multiplier inside the band; ramps to 1.0 at 1.5 °C above target; 0.5 below the band |
 
 `Spot Price` and `Peak` are flagged `is_cost_layer`; the cascade treats them differently.
