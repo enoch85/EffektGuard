@@ -42,8 +42,9 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 ## Weight
 
 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 at PEAK or in a PEAK cluster, which makes it a critical cost layer
-([08](08_layer_priority_system.md)); x0.3 when volatile (`VOLATILE_WEIGHT_REDUCTION`). No price
-data, or the Price Optimization switch off: no vote. Missing prices also raise a repair issue.
+([08](08_layer_priority_system.md)); x0.3 when volatile (`VOLATILE_WEIGHT_REDUCTION`), unless the
+look-ahead adds heat for the hours ahead. No price data, or the Price Optimization switch off: no
+vote. Missing prices also raise a repair issue.
 
 ## Example
 

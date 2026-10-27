@@ -1094,7 +1094,11 @@ class PriceAnalyzer:
         # Apply weight based on classification and volatility
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority
-        elif is_volatile:
+        elif is_volatile and forecast_adjustment <= 0:
+            # Volatility is the CURRENT quarter's class running short. A vote that adds heat for the
+            # hours ahead (a pre-heat, or the debt gate's +0.3) comes from the look-ahead, which
+            # does not read that class, so it keeps its weight. On 15-minute prices the cut took
+            # the night's pre-heat down to 30 % in 116 of 529 pre-heat quarters (SE4, 14-27 Oct 2026).
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
         else:
             price_weight = LAYER_WEIGHT_PRICE
