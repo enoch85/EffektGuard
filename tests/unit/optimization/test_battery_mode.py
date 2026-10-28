@@ -19,7 +19,9 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
+from custom_components.effektguard.models.nibe import NibeF750Profile
 from custom_components.effektguard.const import (
+    BATTERY_MODE_AUX_START_FRACTION,
     BATTERY_MODE_CHARGE,
     BATTERY_MODE_COAST,
     CONF_ENABLE_BATTERY_MODE,
@@ -39,6 +41,8 @@ TARGET = 21.0
 BAND = 0.48  # tolerance 1.2 x 0.4
 ALLOWED = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED].preheat_overshoot_allowed
 COAST_TEST = 2.0
+AUX_START = NibeF750Profile().aux_start_dm
+FULL = TARGET + BAND + ALLOWED  # the band's top + the mode's allowed pre-heat overshoot
 
 
 @pytest.fixture
@@ -63,20 +67,36 @@ def _prices(hourly=HOURLY, day=DAY) -> PriceData:
     return PriceData(today=quarters, tomorrow=[], has_tomorrow=False)
 
 
-def _move(
-    hour, room=TARGET + 0.2, prices=None, tier="OK", zone="NONE", saturated=False, valid=True
+def _adjust(
+    now,
+    prices,
+    room=TARGET + 0.2,
+    tier="OK",
+    zone="NONE",
+    saturated=False,
+    valid=True,
+    dm=-100.0,
+    aux_start=AUX_START,
+    peak=False,
 ):
     return battery_adjustment(
-        now=DAY + timedelta(hours=hour, minutes=5),
-        price_data=_prices() if prices is None else prices,
-        nibe_state=SimpleNamespace(indoor_temp=room, indoor_temp_valid=valid),
+        now=now,
+        price_data=prices,
+        nibe_state=SimpleNamespace(indoor_temp=room, degree_minutes=dm, indoor_temp_valid=valid),
         target_temp=TARGET,
         tolerance_range=BAND,
         overshoot_allowed=ALLOWED,
         emergency_tier=tier,
         proactive_zone=zone,
         compressor_saturated=saturated,
-    )[0]
+        aux_start_dm=aux_start,
+        peak_protection_active=peak,
+    )
+
+
+def _move(hour, prices=None, **state):
+    now = DAY + timedelta(hours=hour, minutes=5)
+    return _adjust(now, _prices() if prices is None else prices, **state)[0]
 
 
 @pytest.mark.parametrize(
@@ -97,7 +117,10 @@ def test_the_day_is_charged_cheap_and_coasted_dear(coasting, hour, expected):
 @pytest.mark.parametrize(
     ("hour", "kwargs"),
     [
-        (2, {"room": TARGET + ALLOWED}),  # full: at the allowed pre-heat overshoot
+        (2, {"room": FULL}),  # full: the band's top + the allowed pre-heat overshoot
+        (2, {"dm": AUX_START * BATTERY_MODE_AUX_START_FRACTION}),  # half way to the immersion start
+        (2, {"aux_start": None}),  # the pump's immersion start unknown: missing input abstains
+        (2, {"peak": True}),  # peak protection acting: a charge would outvote it
         (7, {"room": TARGET - BAND}),  # empty: at the band's lower edge
         (2, {"valid": False}),
         (7, {"valid": False}),
@@ -112,6 +135,9 @@ def test_the_day_is_charged_cheap_and_coasted_dear(coasting, hour, expected):
     ],
     ids=[
         "charged full",
+        "half way to the immersion heater",
+        "immersion start unknown",
+        "peak protection acting",
         "coasted empty",
         "no room reading, cheap",
         "no room reading, dear",
@@ -138,17 +164,12 @@ def test_the_first_prevention_rungs_leave_the_battery_on(coasting, zone):
 
 
 def test_the_shipped_default_leaves_coasting_to_the_price_layer():
-    assert battery_adjustment(
-        now=DAY + timedelta(hours=7, minutes=5),
-        price_data=_prices(),
-        nibe_state=SimpleNamespace(indoor_temp=TARGET + 0.2, indoor_temp_valid=True),
-        target_temp=TARGET,
-        tolerance_range=BAND,
-        overshoot_allowed=ALLOWED,
-        emergency_tier="OK",
-        proactive_zone="NONE",
-        compressor_saturated=False,
-    ) == (0.0, "")
+    assert _adjust(DAY + timedelta(hours=7, minutes=5), _prices()) == (0.0, "")
+
+
+def test_peak_protection_leaves_a_coast_alone(coasting):
+    """Only a charge adds power: a coast during peak protection works with it."""
+    assert _move(7, peak=True) == pytest.approx(-COAST_TEST)
 
 
 def test_a_flat_day_is_left_alone():
@@ -165,18 +186,7 @@ def test_a_step_day_charges_only_the_hours_below_its_median():
 
 @pytest.mark.parametrize("prices", [None, PriceData(today=[], tomorrow=[], has_tomorrow=False)])
 def test_no_prices_no_battery(prices):
-    out = battery_adjustment(
-        now=DAY + timedelta(hours=2),
-        price_data=prices,
-        nibe_state=SimpleNamespace(indoor_temp=TARGET, indoor_temp_valid=True),
-        target_temp=TARGET,
-        tolerance_range=BAND,
-        overshoot_allowed=ALLOWED,
-        emergency_tier="OK",
-        proactive_zone="NONE",
-        compressor_saturated=False,
-    )
-    assert out == (0.0, "")
+    assert _adjust(DAY + timedelta(hours=2), prices) == (0.0, "")
 
 
 def test_yesterdays_prices_are_not_todays():
@@ -199,21 +209,11 @@ def test_a_clock_change_day_still_ranks_by_local_hour(day, hours):
         for i in range(hours * 4)
     ]
     prices = PriceData(today=quarters, tomorrow=[], has_tomorrow=False)
-    move = battery_adjustment(
-        now=day + timedelta(hours=1, minutes=5),
-        price_data=prices,
-        nibe_state=SimpleNamespace(indoor_temp=TARGET, indoor_temp_valid=True),
-        target_temp=TARGET,
-        tolerance_range=BAND,
-        overshoot_allowed=ALLOWED,
-        emergency_tier="OK",
-        proactive_zone="NONE",
-        compressor_saturated=False,
-    )[0]
+    move = _adjust(day + timedelta(hours=1, minutes=5), prices)[0]
     assert move == pytest.approx(BATTERY_MODE_CHARGE)
 
 
-def _engine(battery: bool | None) -> DecisionEngine:
+def _engine(battery: bool | None, profile=NibeF750Profile()) -> DecisionEngine:
     config = {"target_indoor_temp": TARGET, "tolerance": 1.2, "latitude": 55.6}
     if battery is not None:
         config[CONF_ENABLE_BATTERY_MODE] = battery
@@ -224,6 +224,7 @@ def _engine(battery: bool | None) -> DecisionEngine:
         effect_manager=EffectManager(MagicMock()),
         thermal_model=ThermalModel(thermal_mass=2.0, insulation_quality=1.0),
         config=config,
+        heat_pump_model=profile,
     )
 
 
@@ -274,27 +275,35 @@ def test_battery_mode_is_off_unless_switched_on(freezer):
     assert decide(_engine(False)).offset == decide(_engine(None)).offset
 
 
-@pytest.mark.parametrize(
-    ("reference", "expected"),
-    [(None, 0.0), (TARGET + 0.8, BATTERY_MODE_CHARGE), (TARGET - 0.5, 0.0)],
-    ids=[
-        "no full day read: the target",
-        "a house held warm charges from where it is",
-        "a cool day does not lower the ceiling below the target",
-    ],
-)
-def test_full_is_measured_from_the_house_s_own_day(reference, expected):
-    """The layers hold the owner's house 0.8-0.9 C above target: from the target, it was always full."""
-    move = battery_adjustment(
-        now=DAY + timedelta(hours=2, minutes=5),
+def test_an_engine_without_a_pump_profile_does_not_charge(freezer):
+    """The immersion start comes from the pump's profile; without one the charge abstains."""
+    freezer.move_to(DAY + timedelta(hours=2, minutes=5))
+    decide = lambda engine: engine.calculate_decision(  # noqa: E731
+        nibe_state=_house(2),
         price_data=_prices(),
-        nibe_state=SimpleNamespace(indoor_temp=TARGET + 0.8, indoor_temp_valid=True),
-        target_temp=TARGET,
-        tolerance_range=BAND,
-        overshoot_allowed=ALLOWED,
-        emergency_tier="OK",
-        proactive_zone="NONE",
-        compressor_saturated=False,
-        room_reference=reference,
-    )[0]
-    assert move == pytest.approx(expected)
+        weather_data=None,
+        current_peak=0.0,
+        current_power=2.0,
+    )
+    assert decide(_engine(True, profile=None)).offset == decide(_engine(None, profile=None)).offset
+
+
+@pytest.mark.parametrize(
+    ("room", "expected"),
+    [(FULL - 0.05, BATTERY_MODE_CHARGE), (FULL, 0.0)],
+    ids=["below the band's top + overshoot", "at it"],
+)
+def test_full_is_the_band_s_top_plus_the_allowed_overshoot(room, expected):
+    """A fixed line: measured from the room's past-day mean, each day's charge raised the next
+    day's ceiling (nominal January, concrete F1155: 0.70 C warmer than without battery mode)."""
+    assert _move(2, room=room) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("share", "expected"),
+    [(0.9, BATTERY_MODE_CHARGE), (1.0, 0.0), (1.5, 0.0)],
+    ids=["short of the line", "at it", "past it"],
+)
+def test_the_charge_stops_short_of_the_pump_s_immersion_start(share, expected):
+    dm = AUX_START * BATTERY_MODE_AUX_START_FRACTION * share
+    assert _move(2, dm=dm) == pytest.approx(expected)

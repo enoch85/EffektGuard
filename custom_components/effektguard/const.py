@@ -1449,6 +1449,11 @@ CONF_ENABLE_BATTERY_MODE: Final = "enable_battery_mode"
 BATTERY_MODE_HOURS: Final = 6  # hours a day of charging, and of coasting
 BATTERY_MODE_CHARGE: Final = 2.0  # °C added in a cheap hour
 BATTERY_MODE_COAST: Final = 0.0  # °C taken off in a dear hour; 0 leaves coasting to the price layer
+# No charge past this share of the pump's immersion start (aux_start_dm, menu 4.9.3). DERIVED, not
+# measured: DM integrates (supply - S1) each minute, and +2 steps raise S1 2.1-2.7 C on the owner's F750
+# (fitted curve gain 1.03-1.35 C per step), so a charge the compressor cannot follow takes DM down
+# 124-162 an hour; half the F750's -700 leaves 2.2-2.8 h of that before the immersion heater.
+BATTERY_MODE_AUX_START_FRACTION: Final = 0.5
 CONF_AIRFLOW_STANDARD_RATE: Final = "airflow_standard_rate"  # m³/h
 CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
 

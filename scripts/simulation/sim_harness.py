@@ -1404,7 +1404,7 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
     return failures
 
 
-def run_all_scenarios(mode: str) -> int:
+def run_all_scenarios(mode: str, battery_mode: bool = False) -> int:
     """Run every real-weather scenario, each in its OWN PROCESS, and summarise.
 
     Separate processes on purpose, not tidiness: the harness monkeypatches dt_util's clock
@@ -1421,7 +1421,8 @@ def run_all_scenarios(mode: str) -> int:
         for red in scenario.known_open:
             print(f"  KNOWN RED ({', '.join(red.houses)}): {red.why}")
         completed = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--scenario", slug, "--mode", mode],
+            [sys.executable, str(Path(__file__).resolve()), "--scenario", slug, "--mode", mode]
+            + (["--battery-mode"] if battery_mode else []),
             cwd=str(Path(__file__).parent),
         )
         results[slug] = completed.returncode
@@ -2599,7 +2600,7 @@ def main() -> int:
     # same days. `--all-scenarios` is the full sweep and is what CI should run.
     scenario: Scenario | None = None
     if "--all-scenarios" in sys.argv:
-        return run_all_scenarios(mode)
+        return run_all_scenarios(mode, battery_mode)
     if "--scenario" in sys.argv:
         slug = sys.argv[sys.argv.index("--scenario") + 1]
         if slug not in SCENARIOS:

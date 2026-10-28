@@ -12,10 +12,15 @@ classes does not move it. Guards:
   past half their normal range), or while the emergency layer is in any tier: a battery stores
   only what the compressor can spare. Without these guards the closed loop showed the
   immersion heater paying for both the charge and the refill after a coast (F-124);
-- charge only while the room is below its own past-day mean (the target when that is higher, or
-  when no full day was read) + the mode's allowed pre-heat overshoot: the battery is full there.
-  Measured from the target alone, a house the layers hold 0.8-0.9 C above it never charged
-  (closed loop, owner's F750 + slab: 0.1 charging hours in 74 autumn days);
+- no charge once degree minutes pass BATTERY_MODE_AUX_START_FRACTION of the pump's own immersion
+  start (menu 4.9.3), nor while peak protection acts: the climate-zone bands can call DM normal
+  past an air-source pump's immersion start, and a charge added after the vote outvotes the peak
+  layer. Without them the repository's nominal January ran the F2040's immersion heater 7.5 kWh
+  (0.0 without battery mode) and raised its effect-tariff peak 2.68 -> 3.77 kW;
+- charge only while the room is below the band's top + the mode's allowed pre-heat overshoot: the
+  battery is full there. Measured from the room's own past-day mean instead, each day's charge
+  raised the next day's ceiling: the nominal January's concrete F1155 ended 0.70 C warmer than
+  without battery mode;
 - coast only while the room is above the band's lower edge;
 - nothing without a room reading, without today's prices, or on a flat day;
 - a charge hour must be cheaper than the day's median hour, a coast hour dearer: on a day of a few
@@ -31,6 +36,7 @@ import numpy as np
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BATTERY_MODE_AUX_START_FRACTION,
     BATTERY_MODE_CHARGE,
     BATTERY_MODE_COAST,
     BATTERY_MODE_HOURS,
@@ -57,7 +63,8 @@ def battery_adjustment(
     emergency_tier: str,
     proactive_zone: str,
     compressor_saturated: bool,
-    room_reference: float | None = None,
+    aux_start_dm: float | None,
+    peak_protection_active: bool,
 ) -> tuple[float, str]:
     """The battery's move for this cycle (°C) and a reason ('' when it does nothing)."""
     if compressor_saturated or emergency_tier not in BATTERY_IDLE_TIERS:
@@ -96,7 +103,11 @@ def battery_adjustment(
     room = nibe_state.indoor_temp
 
     if hour in ranked[:BATTERY_MODE_HOURS] and mean[hour] < middle:
-        if room < max(target_temp, room_reference or target_temp) + overshoot_allowed:
+        if aux_start_dm is None or peak_protection_active:
+            return 0.0, ""
+        if nibe_state.degree_minutes <= aux_start_dm * BATTERY_MODE_AUX_START_FRACTION:
+            return 0.0, ""
+        if room < target_temp + tolerance_range + overshoot_allowed:
             return (
                 BATTERY_MODE_CHARGE,
                 f"Battery: charging (+{BATTERY_MODE_CHARGE:.0f}°C, cheap hour)",

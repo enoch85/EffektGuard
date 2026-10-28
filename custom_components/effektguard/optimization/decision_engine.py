@@ -455,14 +455,6 @@ class DecisionEngine:
         days old or have hours missing, and its mean is then not the past day's. It counts only
         while no forecast period of the day went unread; until then the forecast stands in.
         """
-        return self._mean_past_day(now, "outdoor_temp")
-
-    def _room_mean_past_day(self, now: datetime) -> float | None:
-        """The measured room mean over the 24 h before `now`, on the same coverage rule."""
-        return self._mean_past_day(now, "indoor_temp")
-
-    def _mean_past_day(self, now: datetime, field_name: str) -> float | None:
-        """Mean of one predictor reading over the past day, None while a period went unread."""
         history = list(self.predictor.state_history) if self.predictor else []
         if not history:
             return None
@@ -472,7 +464,7 @@ class DecisionEngine:
         unread = max(later - earlier for earlier, later in zip(times, times[1:]))
         if unread > timedelta(hours=WEATHER_FORECAST_PERIOD_HOURS):
             return None
-        return sum(getattr(s, field_name) for s in readings) / len(readings)
+        return sum(s.outdoor_temp for s in readings) / len(readings)
 
     def _get_outdoor_trend(self) -> OutdoorTrendDict:
         """Get outdoor temperature trend (BT1 real-time).
@@ -781,9 +773,8 @@ class DecisionEngine:
         # dearest. Everything below - damping, the wear cap, the coordinator's gate - acts on the result.
         battery_note = ""
         if self.config.get(CONF_ENABLE_BATTERY_MODE, False):
-            now = dt_util.now()
             battery, battery_note = battery_adjustment(
-                now=now,
+                now=dt_util.now(),
                 price_data=price_data,
                 nibe_state=nibe_state,
                 target_temp=self.target_temp,
@@ -792,7 +783,8 @@ class DecisionEngine:
                 emergency_tier=getattr(emergency_decision, "tier", ""),
                 proactive_zone=getattr(proactive_decision, "zone", ""),
                 compressor_saturated=compressor_saturated,
-                room_reference=self._room_mean_past_day(now),
+                aux_start_dm=getattr(self.heat_pump_model, "aux_start_dm", None),
+                peak_protection_active=effect_decision.weight > 0.0,
             )
             raw_offset = self._clamp_offset(raw_offset + battery)
 

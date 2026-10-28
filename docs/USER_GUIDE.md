@@ -80,8 +80,9 @@ Switches on by default: Enable Optimization, Price Optimization, Peak Protection
 Prediction. Off by default: Hot Water Optimization, Airflow Optimization, Battery Mode.
 
 Battery Mode is an experiment. It treats the house as a heat battery: up to 2 °C more heat in the
-day's six cheapest hours, up to 2 °C less in its six dearest. It holds back when the room is already
-warm or cool enough, and when the pump has no power to spare.
+day's six cheapest hours, so the house can coast through the dear ones (the price control already
+turns the heat down there). It holds back when the room is already warm, and when the pump is
+working flat out or falling behind.
 
 ## How it decides
 
