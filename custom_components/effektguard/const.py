@@ -1439,6 +1439,12 @@ AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.10  # °C/h - cooling despite enhanc
 
 # Configuration keys
 CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"
+# Battery mode (EXPERIMENTAL, off by default; optimization/battery.py): the house as a heat battery on
+# top of the layers' decision - charge in the day's cheapest hours, coast through its dearest.
+CONF_ENABLE_BATTERY_MODE: Final = "enable_battery_mode"
+BATTERY_MODE_HOURS: Final = 6  # hours a day of charging, and of coasting
+BATTERY_MODE_CHARGE: Final = 2.0  # °C added in a cheap hour
+BATTERY_MODE_COAST: Final = 2.0  # °C taken off in a dear hour
 CONF_AIRFLOW_STANDARD_RATE: Final = "airflow_standard_rate"  # m³/h
 CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
 

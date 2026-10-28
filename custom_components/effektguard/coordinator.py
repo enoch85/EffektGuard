@@ -2664,6 +2664,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "enable_price_optimization",
             "enable_weather_prediction",
             "enable_hot_water_optimization",
+            "enable_battery_mode",
         }
         for key in switch_keys:
             if key in options:

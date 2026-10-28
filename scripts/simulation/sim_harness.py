@@ -1645,6 +1645,7 @@ def build_engine(
     enable_weather: bool = True,
     tuned_curve: bool = False,
     latitude: float = STOCKHOLM_LATITUDE,
+    battery_mode: bool = False,
 ):
     """Build the real DecisionEngine for this house.
 
@@ -1670,6 +1671,7 @@ def build_engine(
         "heat_loss_coefficient": house.hlc_w_per_k,
         "thermal_mass": house.thermal_mass,
         "insulation_quality": house.insulation_quality,
+        "enable_battery_mode": battery_mode,
     }
     engine = DecisionEngine(
         price_analyzer=PriceAnalyzer(),
@@ -1696,8 +1698,11 @@ def simulate(
     tuned_curve: bool = False,
     forecast_available: bool = True,
     latitude: float = STOCKHOLM_LATITUDE,
+    battery_mode: bool = False,
 ):
-    engine, effect = build_engine(house, mode, enable_price, enable_weather, latitude=latitude)
+    engine, effect = build_engine(
+        house, mode, enable_price, enable_weather, latitude=latitude, battery_mode=battery_mode
+    )
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
@@ -2576,6 +2581,8 @@ def main() -> int:
     coldsnap = "--coldsnap" in sys.argv
     baseline = "--baseline" in sys.argv
     battery = "--battery" in sys.argv
+    # The real engine with its experimental Battery Mode switch on (--battery is the yardstick above).
+    battery_mode = "--battery-mode" in sys.argv
     live_se4 = "--live-se4" in sys.argv
     no_price = "--no-price" in sys.argv
     no_weather = "--no-weather" in sys.argv
@@ -2622,7 +2629,7 @@ def main() -> int:
         and mode == "balanced"
         and not any(
             (baseline, battery, coldsnap, undersized, no_price, no_weather, no_forecast)
-            + (tuned_curve, live_se4, dst, arctic, selftest)
+            + (tuned_curve, live_se4, dst, arctic, selftest, battery_mode)
         )
     )
     excused: set[tuple[str, str]] = set()
@@ -2650,6 +2657,7 @@ def main() -> int:
             mode,
             baseline,
             battery=battery,
+            battery_mode=battery_mode,
             enable_price=not no_price,
             enable_weather=not no_weather,
             tuned_curve=tuned_curve,
@@ -2672,6 +2680,8 @@ def main() -> int:
             tag += "-live-se4"
         if battery:
             tag += "-battery"
+        if battery_mode:
+            tag += "-batterymode"
         if baseline:
             tag += "-baseline"
         if no_price:

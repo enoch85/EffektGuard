@@ -32,6 +32,7 @@ from ..const import (
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DM_CRITICAL_PEAK_AWARE_OFFSETS,
+    CONF_ENABLE_BATTERY_MODE,
     DM_RECOVERY_TIERS,
     DM_THRESHOLD_AUX_LIMIT,
     DM_TIER_EMERGENCY,
@@ -55,6 +56,7 @@ from ..const import (
     OPTIMIZATION_MODE_BALANCED,
 )
 from ..utils.volatile_helpers import get_volatile_info
+from .battery import battery_adjustment
 from .climate_zones import ClimateZoneDetector
 from .comfort_layer import ComfortLayer
 from .thermal_layer import (
@@ -767,6 +769,23 @@ class DecisionEngine:
         # Aggregate layers with priority weighting
         raw_offset = self._aggregate_layers(layers, starvation=starvation)
 
+        # Battery mode (experimental): move the aggregate up in the day's cheapest hours, down in its
+        # dearest. Everything below - damping, the wear cap, the coordinator's gate - acts on the result.
+        battery_note = ""
+        if self.config.get(CONF_ENABLE_BATTERY_MODE, False):
+            battery, battery_note = battery_adjustment(
+                now=dt_util.now(),
+                price_data=price_data,
+                nibe_state=nibe_state,
+                target_temp=self.target_temp,
+                tolerance_range=self.tolerance_range,
+                overshoot_allowed=self.mode_config.preheat_overshoot_allowed,
+                emergency_tier=getattr(emergency_decision, "tier", ""),
+                proactive_zone=getattr(proactive_decision, "zone", ""),
+                compressor_saturated=compressor_saturated,
+            )
+            raw_offset = self._clamp_offset(raw_offset + battery)
+
         # NEW: Trend-aware damping to prevent overshoot/undershoot
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
@@ -812,6 +831,8 @@ class DecisionEngine:
 
         # Generate human-readable reasoning
         reasoning = self._generate_reasoning(layers) + reason_suffix + wear_note
+        if battery_note:
+            reasoning += f" | {battery_note}"
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
 

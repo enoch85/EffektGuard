@@ -172,6 +172,9 @@
       },
       "airflow_optimization": {
         "name": "Luftstrømsoptimering"
+      },
+      "battery_mode": {
+        "name": "Batteritilstand (eksperimentel)"
       }
     },
     "sensor": {

@@ -172,6 +172,9 @@
       },
       "airflow_optimization": {
         "name": "Ilmavirran optimointi"
+      },
+      "battery_mode": {
+        "name": "Akkutila (kokeellinen)"
       }
     },
     "sensor": {

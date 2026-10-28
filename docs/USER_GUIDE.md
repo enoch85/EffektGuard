@@ -77,7 +77,11 @@ Under the gear icon:
 | Ventilation | Normal 100-300, boosted 150-400 m³/h (150, 252) | NIBE F750 and F730 only |
 
 Switches on by default: Enable Optimization, Price Optimization, Peak Protection, Weather
-Prediction. Off by default: Hot Water Optimization, Airflow Optimization.
+Prediction. Off by default: Hot Water Optimization, Airflow Optimization, Battery Mode.
+
+Battery Mode is an experiment. It treats the house as a heat battery: up to 2 °C more heat in the
+day's six cheapest hours, up to 2 °C less in its six dearest. It holds back when the room is already
+warm or cool enough, and when the pump has no power to spare.
 
 ## How it decides
 

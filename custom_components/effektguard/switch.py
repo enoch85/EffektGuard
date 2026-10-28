@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    CONF_ENABLE_BATTERY_MODE,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     CONF_ENABLE_OPTIMIZATION,
     CONF_ENABLE_PEAK_PROTECTION,
@@ -102,6 +103,13 @@ SWITCHES: tuple[EffektGuardSwitchEntityDescription, ...] = (
         icon="mdi:fan",
         config_key=CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     ),
+    EffektGuardSwitchEntityDescription(
+        key="battery_mode",
+        name="Battery Mode (experimental)",
+        translation_key="battery_mode",
+        icon="mdi:home-battery",
+        config_key=CONF_ENABLE_BATTERY_MODE,
+    ),
 )
 
 
@@ -176,6 +184,7 @@ class EffektGuardSwitch(CoordinatorEntity, SwitchEntity):
             CONF_ENABLE_WEATHER_PREDICTION: True,
             CONF_ENABLE_HOT_WATER_OPTIMIZATION: False,  # Experimental, off by default
             CONF_ENABLE_AIRFLOW_OPTIMIZATION: False,  # Experimental, off by default
+            CONF_ENABLE_BATTERY_MODE: False,  # Experimental, off by default
         }
 
         return self._entry.data.get(config_key, defaults.get(config_key, False))

@@ -75,6 +75,12 @@ flowchart TD
 
 Still inside `calculate_decision`, in this order:
 
+- Battery mode (experimental, switch off by default; `optimization/battery.py`): the cascade's
+  result moves +`BATTERY_MODE_CHARGE` in the day's `BATTERY_MODE_HOURS` cheapest hours and
+  -`BATTERY_MODE_COAST` in its dearest, ranked by hourly mean price. Only on a non-flat day, a
+  charge hour below the day's median hour and a coast hour above it, a room reading present, the
+  compressor not saturated, no proactive zone and no emergency tier; no charge from
+  target + the mode's pre-heat overshoot up, no coast from the band's lower edge down.
 - Trend damping: a raise is × 0.75 while the room warms at 0.3 °C/h or more, and × 1.15 while it
   cools at 0.3 °C/h or more (only below +3 °C); a cut is × 0.75 while the room cools fast.
 - Compressor wear guard (`_limit_for_compressor_wear`): when the compressor is at its maximum
