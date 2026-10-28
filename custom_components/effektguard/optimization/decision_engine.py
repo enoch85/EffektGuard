@@ -779,7 +779,7 @@ class DecisionEngine:
                 nibe_state=nibe_state,
                 target_temp=self.target_temp,
                 tolerance_range=self.tolerance_range,
-                overshoot_allowed=self.mode_config.preheat_overshoot_allowed,
+                full_at=self.target_temp + self.comfort_layer.overshoot_edge(),
                 emergency_tier=getattr(emergency_decision, "tier", ""),
                 proactive_zone=getattr(proactive_decision, "zone", ""),
                 compressor_saturated=compressor_saturated,

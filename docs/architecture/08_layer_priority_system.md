@@ -81,9 +81,11 @@ Still inside `calculate_decision`, in this order:
   default: the price layer already cuts there, and a deeper cut cost more in the closed loop
   (`const.py`). Only on a non-flat day, a charge hour below the day's median hour (a coast hour
   above it), a room reading present, the compressor not saturated, the proactive layer at Z2 or
-  below and no emergency tier. No charge from the band's top + the mode's pre-heat overshoot up,
-  past `BATTERY_MODE_AUX_START_FRACTION` of the pump profile's immersion start (none without a
-  profile), or while the peak layer votes; no coast from the band's lower edge down.
+  below and no emergency tier. No charge from where the comfort layer's overshoot ramp starts
+  (`ComfortLayer.overshoot_edge`: the band, or a wider dead zone) up, past
+  `BATTERY_MODE_AUX_START_FRACTION` of the pump profile's immersion start (none without a profile),
+  without a published maximum compressor frequency, or while the peak layer votes; no coast from
+  the band's lower edge down.
 - Trend damping: a raise is × 0.75 while the room warms at 0.3 °C/h or more, and × 1.15 while it
   cools at 0.3 °C/h or more (only below +3 °C); a cut is × 0.75 while the room cools fast.
 - Compressor wear guard (`_limit_for_compressor_wear`): when the compressor is at its maximum

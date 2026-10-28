@@ -17,10 +17,16 @@ classes does not move it. Guards:
   past an air-source pump's immersion start, and a charge added after the vote outvotes the peak
   layer. Without them the repository's nominal January ran the F2040's immersion heater 7.5 kWh
   (0.0 without battery mode) and raised its effect-tariff peak 2.68 -> 3.77 kW;
-- charge only while the room is below the band's top + the mode's allowed pre-heat overshoot: the
-  battery is full there. Measured from the room's own past-day mean instead, each day's charge
-  raised the next day's ceiling: the nominal January's concrete F1155 ended 0.70 C warmer than
-  without battery mode;
+- no charge without the pump's published maximum frequency: without it the saturation verdict
+  rests on a ceiling it has to learn, and a charge saturates the compressor before that verdict
+  comes. The repository's F2040 (no published maximum) ran 3.25 kWh of immersion heat in the
+  nominal January with this guard missing, and its DM drifted 539 below the run without battery
+  mode by the 29th;
+- charge only while the room is below where the comfort layer starts its overshoot ramp
+  (`full_at`): the battery is full there, and a charge past it is a fight the comfort layer wins
+  with a deep cut. Charging to the band's top + the mode's pre-heat overshoot instead, the
+  repository's concrete F1155 in savings mode spent 465 minutes below its band (budget 240);
+  measured from the room's own past-day mean, each day's charge raised the next day's ceiling;
 - coast only while the room is above the band's lower edge;
 - nothing without a room reading, without today's prices, or on a flat day;
 - a charge hour must be cheaper than the day's median hour, a coast hour dearer: on a day of a few
@@ -59,7 +65,7 @@ def battery_adjustment(
     nibe_state,
     target_temp: float,
     tolerance_range: float,
-    overshoot_allowed: float,
+    full_at: float,
     emergency_tier: str,
     proactive_zone: str,
     compressor_saturated: bool,
@@ -105,9 +111,11 @@ def battery_adjustment(
     if hour in ranked[:BATTERY_MODE_HOURS] and mean[hour] < middle:
         if aux_start_dm is None or peak_protection_active:
             return 0.0, ""
+        if getattr(nibe_state, "compressor_hz_max", None) is None:
+            return 0.0, ""
         if nibe_state.degree_minutes <= aux_start_dm * BATTERY_MODE_AUX_START_FRACTION:
             return 0.0, ""
-        if room < target_temp + tolerance_range + overshoot_allowed:
+        if room < full_at:
             return (
                 BATTERY_MODE_CHARGE,
                 f"Battery: charging (+{BATTERY_MODE_CHARGE:.0f}°C, cheap hour)",

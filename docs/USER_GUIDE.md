@@ -82,7 +82,8 @@ Prediction. Off by default: Hot Water Optimization, Airflow Optimization, Batter
 Battery Mode is an experiment. It treats the house as a heat battery: up to 2 °C more heat in the
 day's six cheapest hours, so the house can coast through the dear ones (the price control already
 turns the heat down there). It holds back when the room is already warm, and when the pump is
-working flat out or falling behind.
+working flat out or falling behind. It needs a heat pump that reports its maximum compressor speed
+(F730, F750, F1155, S1155); on an F2040 it does nothing.
 
 ## How it decides
 

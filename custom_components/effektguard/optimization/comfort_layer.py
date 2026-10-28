@@ -66,6 +66,10 @@ class ComfortLayer:
         self.tolerance_range = tolerance_range
         self.target_temp = target_temp
 
+    def overshoot_edge(self) -> float:
+        """How far above target the overshoot ramp starts (°C): the band, or a wider dead zone."""
+        return max(self.tolerance_range, self.mode_config.dead_zone)
+
     def evaluate_layer(self, nibe_state) -> ComfortLayerDecision:
         """Evaluate comfort layer decision.
 
@@ -133,7 +137,7 @@ class ComfortLayer:
         elif temp_deviation > 0:
             # Overshoot: ramp from the in-band correction at the band edge to a full coast. A dead
             # zone wider than the band (savings mode, small slider) moves the start out with it.
-            edge = max(tolerance, dead_zone)
+            edge = self.overshoot_edge()
             edge_offset = -edge * COMFORT_CORRECTION_MULT
             fraction = (
                 1.0

@@ -25,11 +25,10 @@ from custom_components.effektguard.const import (
     BATTERY_MODE_CHARGE,
     BATTERY_MODE_COAST,
     CONF_ENABLE_BATTERY_MODE,
-    MODE_CONFIGS,
-    OPTIMIZATION_MODE_BALANCED,
 )
 from custom_components.effektguard.optimization import battery as battery_module
 from custom_components.effektguard.optimization.battery import battery_adjustment
+from custom_components.effektguard.optimization.comfort_layer import ComfortLayer
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
@@ -39,10 +38,12 @@ DAY = datetime(2026, 1, 14, tzinfo=TZ)
 HOURLY = [10.0] * 6 + [100.0] * 4 + [50.0] * 8 + [90.0] * 2 + [40.0] * 4
 TARGET = 21.0
 BAND = 0.48  # tolerance 1.2 x 0.4
-ALLOWED = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED].preheat_overshoot_allowed
 COAST_TEST = 2.0
 AUX_START = NibeF750Profile().aux_start_dm
-FULL = TARGET + BAND + ALLOWED  # the band's top + the mode's allowed pre-heat overshoot
+HZ_MAX = 90  # a pump that publishes its maximum frequency (43123 on an F750)
+FULL = (
+    TARGET + BAND
+)  # where the comfort layer's overshoot ramp starts (the band beats balanced's dead zone)
 
 
 @pytest.fixture
@@ -78,14 +79,17 @@ def _adjust(
     dm=-100.0,
     aux_start=AUX_START,
     peak=False,
+    hz_max=HZ_MAX,
 ):
     return battery_adjustment(
         now=now,
         price_data=prices,
-        nibe_state=SimpleNamespace(indoor_temp=room, degree_minutes=dm, indoor_temp_valid=valid),
+        nibe_state=SimpleNamespace(
+            indoor_temp=room, degree_minutes=dm, indoor_temp_valid=valid, compressor_hz_max=hz_max
+        ),
         target_temp=TARGET,
         tolerance_range=BAND,
-        overshoot_allowed=ALLOWED,
+        full_at=FULL,
         emergency_tier=tier,
         proactive_zone=zone,
         compressor_saturated=saturated,
@@ -117,7 +121,8 @@ def test_the_day_is_charged_cheap_and_coasted_dear(coasting, hour, expected):
 @pytest.mark.parametrize(
     ("hour", "kwargs"),
     [
-        (2, {"room": FULL}),  # full: the band's top + the allowed pre-heat overshoot
+        (2, {"room": FULL}),  # full: where the comfort layer starts pulling the room down
+        (2, {"hz_max": None}),  # no published maximum: headroom unknown (an F2040)
         (2, {"dm": AUX_START * BATTERY_MODE_AUX_START_FRACTION}),  # half way to the immersion start
         (2, {"aux_start": None}),  # the pump's immersion start unknown: missing input abstains
         (2, {"peak": True}),  # peak protection acting: a charge would outvote it
@@ -135,6 +140,7 @@ def test_the_day_is_charged_cheap_and_coasted_dear(coasting, hour, expected):
     ],
     ids=[
         "charged full",
+        "no published maximum frequency",
         "half way to the immersion heater",
         "immersion start unknown",
         "peak protection acting",
@@ -167,9 +173,10 @@ def test_the_shipped_default_leaves_coasting_to_the_price_layer():
     assert _adjust(DAY + timedelta(hours=7, minutes=5), _prices()) == (0.0, "")
 
 
-def test_peak_protection_leaves_a_coast_alone(coasting):
-    """Only a charge adds power: a coast during peak protection works with it."""
-    assert _move(7, peak=True) == pytest.approx(-COAST_TEST)
+@pytest.mark.parametrize("kwargs", [{"peak": True}, {"hz_max": None}], ids=["peak", "no maximum"])
+def test_a_charge_guard_leaves_a_coast_alone(coasting, kwargs):
+    """Only a charge adds power and asks for headroom: a coast passes these guards."""
+    assert _move(7, **kwargs) == pytest.approx(-COAST_TEST)
 
 
 def test_a_flat_day_is_left_alone():
@@ -228,10 +235,10 @@ def _engine(battery: bool | None, profile=NibeF750Profile()) -> DecisionEngine:
     )
 
 
-def _house(hour: int) -> NibeState:
+def _house(hour: int, room: float = TARGET + 0.2) -> NibeState:
     return NibeState(
         outdoor_temp=2.0,
-        indoor_temp=TARGET + 0.2,
+        indoor_temp=room,
         supply_temp=30.0,
         return_temp=26.0,
         degree_minutes=50.0,
@@ -239,6 +246,8 @@ def _house(hour: int) -> NibeState:
         is_heating=True,
         is_hot_water=False,
         timestamp=DAY + timedelta(hours=hour),
+        compressor_hz=40,
+        compressor_hz_max=HZ_MAX,
         indoor_temp_valid=True,
     )
 
@@ -289,14 +298,51 @@ def test_an_engine_without_a_pump_profile_does_not_charge(freezer):
 
 
 @pytest.mark.parametrize(
-    ("room", "expected"),
-    [(FULL - 0.05, BATTERY_MODE_CHARGE), (FULL, 0.0)],
-    ids=["below the band's top + overshoot", "at it"],
+    ("tolerance", "mode", "edge"),
+    [(1.2, "balanced", 0.48), (0.5, "savings", 0.3)],
+    ids=["the band", "savings' wider dead zone"],
 )
-def test_full_is_the_band_s_top_plus_the_allowed_overshoot(room, expected):
-    """A fixed line: measured from the room's past-day mean, each day's charge raised the next
-    day's ceiling (nominal January, concrete F1155: 0.70 C warmer than without battery mode)."""
-    assert _move(2, room=room) == pytest.approx(expected)
+@pytest.mark.parametrize("below", [True, False], ids=["just below", "at the edge"])
+def test_full_is_where_the_comfort_layer_starts_pulling_down(freezer, tolerance, mode, edge, below):
+    """A charge past the comfort layer's overshoot edge is a fight it wins with a deep cut (concrete
+    F1155, savings: 465 minutes below its band, budget 240). Measured from the room's own past-day
+    mean instead, each day's charge raised the next day's ceiling."""
+    freezer.move_to(DAY + timedelta(hours=2, minutes=5))
+    room = TARGET + edge - (0.05 if below else 0.0)
+
+    def decide(battery):
+        config = {"target_indoor_temp": TARGET, "tolerance": tolerance, "latitude": 55.6}
+        config["optimization_mode"] = mode
+        if battery:
+            config[CONF_ENABLE_BATTERY_MODE] = True
+        engine = DecisionEngine(
+            price_analyzer=__import__(
+                "custom_components.effektguard.optimization.price_layer", fromlist=["PriceAnalyzer"]
+            ).PriceAnalyzer(),
+            effect_manager=EffectManager(MagicMock()),
+            thermal_model=ThermalModel(thermal_mass=2.0, insulation_quality=1.0),
+            config=config,
+            heat_pump_model=NibeF750Profile(),
+        )
+        assert engine.comfort_layer.overshoot_edge() == pytest.approx(edge)
+        return engine.calculate_decision(
+            nibe_state=_house(2, room),
+            price_data=_prices(),
+            weather_data=None,
+            current_peak=0.0,
+            current_power=2.0,
+        ).offset
+
+    assert decide(True) - decide(False) == pytest.approx(BATTERY_MODE_CHARGE if below else 0.0)
+
+
+@pytest.mark.parametrize(
+    ("band", "dead_zone"), [(0.48, 0.2), (0.2, 0.3)], ids=["band wider", "dead zone wider"]
+)
+def test_the_comfort_layer_s_edge_is_the_wider_of_band_and_dead_zone(band, dead_zone):
+    layer = ComfortLayer(tolerance_range=band)
+    layer.mode_config = SimpleNamespace(dead_zone=dead_zone)
+    assert layer.overshoot_edge() == pytest.approx(max(band, dead_zone))
 
 
 @pytest.mark.parametrize(
