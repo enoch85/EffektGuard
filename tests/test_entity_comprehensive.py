@@ -31,6 +31,7 @@ from custom_components.effektguard.const import (
     CONF_ENABLE_WEATHER_PREDICTION,
     CONF_ENABLE_HOT_WATER_OPTIMIZATION,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+    CONF_ENABLE_BATTERY_MODE,
     AWAY_SETBACK,
     CONF_AWAY,
     CONF_OPTIMIZATION_MODE,
@@ -618,7 +619,7 @@ class TestSwitchEntities:
     def test_switch_count_matches_expected(self):
         """Verify we have all expected switches."""
         # EffektGuard has 6 feature toggle switches (including airflow optimization)
-        assert len(SWITCHES) == 6, f"Expected 6 switches, found {len(SWITCHES)}"
+        assert len(SWITCHES) == 7, f"Expected 7 switches, found {len(SWITCHES)}"
 
     def test_all_switch_keys_are_unique(self):
         """Verify no duplicate switch keys."""
@@ -634,6 +635,7 @@ class TestSwitchEntities:
             CONF_ENABLE_WEATHER_PREDICTION,
             CONF_ENABLE_HOT_WATER_OPTIMIZATION,
             CONF_ENABLE_AIRFLOW_OPTIMIZATION,
+            CONF_ENABLE_BATTERY_MODE,
         }
 
         actual_config_keys = {switch.config_key for switch in SWITCHES}
@@ -700,8 +702,8 @@ class TestEntityIntegration:
             assert switch.unique_id not in unique_ids, f"Duplicate unique_id: {switch.unique_id}"
             unique_ids.add(switch.unique_id)
 
-        # Total entities: 24 sensors + 1 climate + 6 switches = 31 entities
-        assert len(unique_ids) == 31
+        # Total entities: 24 sensors + 1 climate + 7 switches = 32 entities
+        assert len(unique_ids) == 32
 
 
 class TestConfigReloadIntegration:
