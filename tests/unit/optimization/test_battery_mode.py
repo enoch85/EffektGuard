@@ -240,3 +240,29 @@ def test_battery_mode_is_off_unless_switched_on(freezer):
         current_power=2.0,
     )
     assert decide(_engine(False)).offset == decide(_engine(None)).offset
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [(None, 0.0), (TARGET + 0.8, BATTERY_MODE_CHARGE), (TARGET - 0.5, 0.0)],
+    ids=[
+        "no full day read: the target",
+        "a house held warm charges from where it is",
+        "a cool day does not lower the ceiling below the target",
+    ],
+)
+def test_full_is_measured_from_the_house_s_own_day(reference, expected):
+    """The layers hold the owner's house 0.8-0.9 C above target: from the target, it was always full."""
+    move = battery_adjustment(
+        now=DAY + timedelta(hours=2, minutes=5),
+        price_data=_prices(),
+        nibe_state=SimpleNamespace(indoor_temp=TARGET + 0.8, indoor_temp_valid=True),
+        target_temp=TARGET,
+        tolerance_range=BAND,
+        overshoot_allowed=ALLOWED,
+        emergency_tier="OK",
+        proactive_zone="NONE",
+        compressor_saturated=False,
+        room_reference=reference,
+    )[0]
+    assert move == pytest.approx(expected)

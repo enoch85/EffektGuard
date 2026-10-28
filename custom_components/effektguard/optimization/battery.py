@@ -12,8 +12,10 @@ classes does not move it. Guards:
   degree minutes sliding toward debt), or while the emergency layer is in any tier: a battery
   stores only what the compressor can spare. Without these guards the closed loop showed the
   immersion heater paying for both the charge and the refill after a coast (F-124);
-- charge only while the room is below target + the mode's allowed pre-heat overshoot: the battery
-  is full there;
+- charge only while the room is below its own past-day mean (the target when that is higher, or
+  when no full day was read) + the mode's allowed pre-heat overshoot: the battery is full there.
+  Measured from the target alone, a house the layers hold 0.8-0.9 C above it never charged
+  (closed loop, owner's F750 + slab: 0.1 charging hours in 74 autumn days);
 - coast only while the room is above the band's lower edge;
 - nothing without a room reading, without today's prices, or on a flat day;
 - a charge hour must be cheaper than the day's median hour, a coast hour dearer: on a day of a few
@@ -52,6 +54,7 @@ def battery_adjustment(
     emergency_tier: str,
     proactive_zone: str,
     compressor_saturated: bool,
+    room_reference: float | None = None,
 ) -> tuple[float, str]:
     """The battery's move for this cycle (°C) and a reason ('' when it does nothing)."""
     if compressor_saturated or emergency_tier not in BATTERY_IDLE_TIERS:
@@ -90,7 +93,7 @@ def battery_adjustment(
     room = nibe_state.indoor_temp
 
     if hour in ranked[:BATTERY_MODE_HOURS] and mean[hour] < middle:
-        if room < target_temp + overshoot_allowed:
+        if room < max(target_temp, room_reference or target_temp) + overshoot_allowed:
             return (
                 BATTERY_MODE_CHARGE,
                 f"Battery: charging (+{BATTERY_MODE_CHARGE:.0f}°C, cheap hour)",
