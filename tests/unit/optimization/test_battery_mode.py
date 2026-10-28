@@ -2,6 +2,9 @@
 
 Drives the real battery_adjustment and the real DecisionEngine. The day used: hours 0-5 at 10, 6-9 at
 100, 10-17 at 50, 18-19 at 90, 20-23 at 40 (one price unit, any unit: the rules are relative).
+
+The shipped default leaves coasting to the price layer (BATTERY_MODE_COAST 0); the coast path is tested
+at COAST_TEST through the `coasting` fixture, so it stays correct for anyone who turns it on.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from custom_components.effektguard.const import (
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
 )
+from custom_components.effektguard.optimization import battery as battery_module
 from custom_components.effektguard.optimization.battery import battery_adjustment
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
@@ -34,6 +38,12 @@ HOURLY = [10.0] * 6 + [100.0] * 4 + [50.0] * 8 + [90.0] * 2 + [40.0] * 4
 TARGET = 21.0
 BAND = 0.48  # tolerance 1.2 x 0.4
 ALLOWED = MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED].preheat_overshoot_allowed
+COAST_TEST = 2.0
+
+
+@pytest.fixture
+def coasting(monkeypatch):
+    monkeypatch.setattr(battery_module, "BATTERY_MODE_COAST", COAST_TEST)
 
 
 @pytest.fixture(autouse=True)
@@ -73,14 +83,14 @@ def _move(
     ("hour", "expected"),
     [
         (2, BATTERY_MODE_CHARGE),
-        (7, -BATTERY_MODE_COAST),
-        (19, -BATTERY_MODE_COAST),
+        (7, -COAST_TEST),
+        (19, -COAST_TEST),
         (12, 0.0),
         (21, 0.0),
     ],
     ids=["cheap night", "dear morning", "dear evening", "middling day", "middling evening"],
 )
-def test_the_day_is_charged_cheap_and_coasted_dear(hour, expected):
+def test_the_day_is_charged_cheap_and_coasted_dear(coasting, hour, expected):
     assert _move(hour) == pytest.approx(expected)
 
 
@@ -93,8 +103,8 @@ def test_the_day_is_charged_cheap_and_coasted_dear(hour, expected):
         (7, {"valid": False}),
         (2, {"saturated": True}),  # no frequency left: a charge only buys immersion heat
         (7, {"saturated": True}),  # nothing to refill a coast with later
-        (2, {"zone": "Z1"}),  # degree minutes sliding toward debt
-        (7, {"zone": "Z3"}),
+        (2, {"zone": "Z3"}),  # degree minutes past half their normal range
+        (7, {"zone": "Z5"}),
         (2, {"tier": "T1"}),  # repaying debt
         (7, {"tier": "T2"}),
         (2, {"tier": "EMERGENCY"}),  # past the aux limit (F-124)
@@ -107,16 +117,38 @@ def test_the_day_is_charged_cheap_and_coasted_dear(hour, expected):
         "no room reading, dear",
         "saturated, cheap",
         "saturated, dear",
-        "Z1",
         "Z3",
+        "Z5",
         "T1",
         "T2",
         "EMERGENCY",
         "anti-windup",
     ],
 )
-def test_a_guard_stops_the_battery(hour, kwargs):
+def test_a_guard_stops_the_battery(coasting, hour, kwargs):
     assert _move(hour, **kwargs) == 0.0
+
+
+@pytest.mark.parametrize("zone", ["Z1", "Z2"])
+def test_the_first_prevention_rungs_leave_the_battery_on(coasting, zone):
+    """Z1 starts at 2 % of the normal degree-minute range: guarding on it, the battery never ran."""
+    assert (_move(2, zone=zone), _move(7, zone=zone)) == pytest.approx(
+        (BATTERY_MODE_CHARGE, -COAST_TEST)
+    )
+
+
+def test_the_shipped_default_leaves_coasting_to_the_price_layer():
+    assert battery_adjustment(
+        now=DAY + timedelta(hours=7, minutes=5),
+        price_data=_prices(),
+        nibe_state=SimpleNamespace(indoor_temp=TARGET + 0.2, indoor_temp_valid=True),
+        target_temp=TARGET,
+        tolerance_range=BAND,
+        overshoot_allowed=ALLOWED,
+        emergency_tier="OK",
+        proactive_zone="NONE",
+        compressor_saturated=False,
+    ) == (0.0, "")
 
 
 def test_a_flat_day_is_left_alone():

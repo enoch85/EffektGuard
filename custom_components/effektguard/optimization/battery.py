@@ -8,9 +8,9 @@ the coordinator's volatility gate act on the result exactly as on any other deci
 The day is ranked by hour, from the mean of its quarters, so a quarter flickering between price
 classes does not move it. Guards:
 
-- nothing while the compressor is saturated, while the proactive layer is in a zone (Z1-Z5:
-  degree minutes sliding toward debt), or while the emergency layer is in any tier: a battery
-  stores only what the compressor can spare. Without these guards the closed loop showed the
+- nothing while the compressor is saturated, while the proactive layer is in Z3-Z5 (degree minutes
+  past half their normal range), or while the emergency layer is in any tier: a battery stores
+  only what the compressor can spare. Without these guards the closed loop showed the
   immersion heater paying for both the charge and the refill after a coast (F-124);
 - charge only while the room is below its own past-day mean (the target when that is higher, or
   when no full day was read) + the mode's allowed pre-heat overshoot: the battery is full there.
@@ -41,7 +41,10 @@ from ..const import (
 )
 
 BATTERY_IDLE_TIERS: frozenset[str] = frozenset({"", "OK"})
-BATTERY_IDLE_ZONES: frozenset[str] = frozenset({"", "NONE"})
+# Z1 starts at 2 % of the zone's normal degree-minute range: nearly always while the compressor
+# runs. Guarding on it, the battery never acted in the repository's scenarios. From Z3 (half the
+# range) on, the pump is falling behind.
+BATTERY_IDLE_ZONES: frozenset[str] = frozenset({"", "NONE", "Z1", "Z2"})
 
 
 def battery_adjustment(
@@ -100,7 +103,7 @@ def battery_adjustment(
             )
         return 0.0, ""
 
-    if hour in ranked[-BATTERY_MODE_HOURS:] and mean[hour] > middle:
+    if BATTERY_MODE_COAST > 0.0 and hour in ranked[-BATTERY_MODE_HOURS:] and mean[hour] > middle:
         if room > target_temp - tolerance_range:
             return (
                 -BATTERY_MODE_COAST,

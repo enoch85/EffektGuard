@@ -1441,10 +1441,14 @@ AIRFLOW_TREND_COOLING_THRESHOLD: Final = -0.10  # °C/h - cooling despite enhanc
 CONF_ENABLE_AIRFLOW_OPTIMIZATION: Final = "enable_airflow_optimization"
 # Battery mode (EXPERIMENTAL, off by default; optimization/battery.py): the house as a heat battery on
 # top of the layers' decision - charge in the day's cheapest hours, coast through its dearest.
+# Closed loop of the owner's F750 + slab, 6 plant fits x Oct-Dec 2025 and Jan-Feb 2026 on real 15-minute
+# SE4 prices, 2026-10-28, cost against NIBE alone at the same mean room (per run): main +73 SEK, charge 2 /
+# coast 0 +74, charge 1 / coast 1 +89, charge 2 / coast 1 +92, charge 2 / coast 2 +114. Coasting on top
+# of the price layer's own cuts paid only in autumn; in winter the refill came from immersion heat.
 CONF_ENABLE_BATTERY_MODE: Final = "enable_battery_mode"
 BATTERY_MODE_HOURS: Final = 6  # hours a day of charging, and of coasting
 BATTERY_MODE_CHARGE: Final = 2.0  # °C added in a cheap hour
-BATTERY_MODE_COAST: Final = 2.0  # °C taken off in a dear hour
+BATTERY_MODE_COAST: Final = 0.0  # °C taken off in a dear hour; 0 leaves coasting to the price layer
 CONF_AIRFLOW_STANDARD_RATE: Final = "airflow_standard_rate"  # m³/h
 CONF_AIRFLOW_ENHANCED_RATE: Final = "airflow_enhanced_rate"  # m³/h
 
