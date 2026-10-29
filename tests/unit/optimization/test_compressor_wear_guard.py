@@ -28,6 +28,7 @@ from custom_components.effektguard.optimization.prediction_layer import ThermalS
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.utils.compressor_monitor import CompressorSaturation
+from custom_components.effektguard.utils.offset import integer_offset_for
 
 START = datetime(2026, 1, 15, 2, 0, tzinfo=timezone.utc)
 CYCLE = timedelta(minutes=5)
@@ -47,7 +48,7 @@ def _reading(at: datetime, hz, dm: float, **state) -> NibeState:
         degree_minutes=dm,
         current_offset=state.get("current_offset", 0.0),
         is_heating=True,
-        is_hot_water=False,
+        is_hot_water=state.get("is_hot_water", False),
         timestamp=at,
         compressor_hz=hz,
         compressor_hz_max=state.get("compressor_hz_max"),
@@ -515,3 +516,89 @@ class TestTheCap:
 
         assert 0.0 < damped < SAFETY_EMERGENCY_OFFSET, "precondition: a damped safety offset"
         assert _offset(True, **cold) == damped
+
+
+def _share_of_the_raise(share: float, **state) -> dict:
+    """A room placed so that the guard lets `share` of the raise through (no cooling trend)."""
+    return {"indoor_temp": TARGET + BAND - share * 2 * BAND, **state}
+
+
+def _asked(state: dict) -> float:
+    """The engine's raise before the guard: not saturated, and no maximum to be at."""
+    return _offset(False, **{**state, "compressor_hz_max": None})
+
+
+class TestTheRegister:
+    """The register holds whole degrees and moves only once the ask is a whole degree away from it:
+    the cap has to land on it, or it stays on the pump as degree-minute debt (F-124)."""
+
+    def test_saturated_a_withdrawal_under_one_degree_reaches_the_register(self):
+        """The guard allows +0.3 and the register holds +1: without this rule it kept +1."""
+        room = _share_of_the_raise(0.1, current_offset=1.0, compressor_hz_max=CEILING_HZ)
+        allowed = _asked(room) * 0.1
+
+        assert 0.0 < allowed < 0.5, "precondition: a share under half a degree"
+        assert integer_offset_for(allowed, 1) == 1, "precondition: the register would keep +1"
+        assert _offset(True, **room) == 0.0
+        assert integer_offset_for(_offset(True, **room), 1) == 0
+
+    def test_saturated_the_nearest_whole_degree_keeps_the_rooms_share(self):
+        room = _share_of_the_raise(0.3, current_offset=1.0, compressor_hz_max=CEILING_HZ)
+        allowed = _asked(room) * 0.3
+
+        assert 0.5 <= allowed < 1.0, "precondition: nearest to the +1 the register holds"
+        assert _offset(True, **room) == pytest.approx(allowed)
+
+    def test_saturated_a_register_already_lower_is_left_alone(self):
+        room = _share_of_the_raise(0.1, current_offset=0.0, compressor_hz_max=CEILING_HZ)
+
+        assert _offset(True, **room) == pytest.approx(_asked(room) * 0.1)
+
+    def test_without_a_published_maximum_the_register_keeps_its_whole_degree(self):
+        """A learned ceiling moves with our own cut (an F2040 behind its SMO): the old rule stands."""
+        room = _share_of_the_raise(0.1, current_offset=1.0)
+
+        assert _offset(True, **room) == pytest.approx(_offset(False, **room) * 0.1)
+
+    @pytest.mark.parametrize("below_max", [0, 3], ids=["at-it", "within-the-band"])
+    def test_at_its_published_maximum_a_raise_gets_only_the_rooms_share(self, below_max):
+        """DM still holds, so the verdict says not saturated - yet there is no frequency left."""
+        top = {
+            "indoor_temp": TARGET + BAND,
+            "current_offset": 1.0,
+            "compressor_hz_max": CEILING_HZ + below_max,
+        }
+
+        assert _offset(False, **{**top, "compressor_hz_max": None}) > 1.5, "precondition: a raise"
+        decision = _decision(False, **top)
+        assert decision.offset == 1.0
+        assert "at its published maximum" in decision.reasoning
+
+    def test_at_its_published_maximum_nothing_on_the_register_is_withdrawn(self):
+        top = {"indoor_temp": TARGET + BAND, "current_offset": 5.0, "compressor_hz_max": CEILING_HZ}
+        asked = _offset(False, **{**top, "compressor_hz_max": None})
+
+        assert asked < 5.0, "precondition: the engine asks below the register"
+        assert _offset(False, **top) == pytest.approx(asked)
+
+    def test_at_its_published_maximum_a_room_low_in_its_band_gets_the_raise(self):
+        low = {"indoor_temp": TARGET - BAND, "current_offset": 0.0, "compressor_hz_max": CEILING_HZ}
+
+        assert _offset(False, **low) == pytest.approx(
+            _offset(False, **{**low, "compressor_hz_max": None})
+        )
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            pytest.param({"compressor_hz_max": CEILING_HZ + 10}, id="frequency-left"),
+            pytest.param({"compressor_hz_max": None}, id="no-published-maximum"),
+            pytest.param({"compressor_hz_max": CEILING_HZ, "is_hot_water": True}, id="hot-water"),
+        ],
+    )
+    def test_otherwise_the_raise_passes(self, state):
+        top = {"indoor_temp": TARGET + BAND, "current_offset": 1.0}
+
+        assert _offset(False, **top, **state) == pytest.approx(
+            _offset(False, **top, compressor_hz_max=None)
+        )

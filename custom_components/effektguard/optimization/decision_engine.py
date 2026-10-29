@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPRESSOR_SATURATION_BAND_HZ,
     WEATHER_DAILY_MEAN_HOURS,
     WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_FORECAST_HORIZON,
@@ -913,9 +914,31 @@ class DecisionEngine:
         0.1 °C has a two-hour slope that flips between -0.05 and +0.05 °C/h, and a sign test moved
         a saturated compressor's whole raise on and off the register with it. A cut stands, and the absolute safety floor bounds the cap: below
         MIN_TEMP_LIMIT the house gets everything.
+
+        The register holds whole degrees and moves only once the ask is a whole degree away from
+        it, so two more rules make the cap reach the pump (closed loop, owner's F750 + slab, six
+        plant fits, Oct-Dec 2025 and Jan-Feb 2026: immersion 3410 -> 3200 kWh over the 12 runs,
+        cost against NIBE alone at the same mean room +73 -> +55 SEK per run, comfort unchanged):
+
+        - Saturated at the maximum frequency its pump publishes, the register lands on the whole
+          degree nearest to what the guard allows. A withdrawal of less than one degree used to
+          stay on the pump - the guard capped at +0.4 and the register kept +1 - and every minute
+          of it was degree-minute debt. A pump that publishes no maximum keeps the old rule: its
+          verdict rests on a learned ceiling that our own cut moves, and landing the withdrawal
+          there added reversals and cold minutes (repository simulator, F2040).
+        - At the maximum frequency its pump publishes the compressor has none left, even while DM
+          still holds and the saturation verdict waits for it to fall: a raise above what the
+          register holds gets only the room's share. Nothing already on the register is withdrawn
+          here; that is the saturated verdict's job.
         """
         cap = max(0.0, self._absolute_safety_floor(nibe_state) or 0.0)
-        if not saturated or offset <= cap:
+        at_max = not saturated and self._at_published_maximum(nibe_state)
+        if not (saturated or at_max):
+            return offset, ""
+        register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
+        if at_max:
+            cap = max(cap, register)
+        if offset <= cap:
             return offset, ""
 
         cooling = (trend_rate - WEAR_GUARD_STEADY_ROOM_RATE) / (
@@ -926,16 +949,38 @@ class DecisionEngine:
             short = self.target_temp + self.tolerance_range - nibe_state.indoor_temp
             need = max(short / (2 * self.tolerance_range), need)
         held = cap + (offset - cap) * need
+        if saturated and self._publishes_maximum(nibe_state):
+            nearest = float(math.floor(held + 0.5))
+            if nearest < register:
+                held = nearest
         if held >= offset or math.isclose(held, offset):
             return offset, ""
 
+        state = "at its published maximum" if at_max else "saturated"
         _LOGGER.info(
-            "Compressor saturated: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
+            "Compressor %s: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
             "from a compressor with no frequency left - only a deeper DM deficit and immersion heat.",
+            state,
             offset,
             held,
         )
-        return held, f" | Compressor saturated: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+        return held, f" | Compressor {state}: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    @staticmethod
+    def _publishes_maximum(nibe_state) -> bool:
+        """The pump reports the maximum frequency it allows itself right now (43123, 31043)."""
+        return isinstance(getattr(nibe_state, "compressor_hz_max", None), (int, float))
+
+    @classmethod
+    def _at_published_maximum(cls, nibe_state) -> bool:
+        """Heating, within COMPRESSOR_SATURATION_BAND_HZ of the maximum frequency the pump publishes."""
+        hz = getattr(nibe_state, "compressor_hz", None)
+        return (
+            getattr(nibe_state, "is_hot_water", None) is False
+            and cls._publishes_maximum(nibe_state)
+            and isinstance(hz, (int, float))
+            and hz >= nibe_state.compressor_hz_max - COMPRESSOR_SATURATION_BAND_HZ
+        )
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:
