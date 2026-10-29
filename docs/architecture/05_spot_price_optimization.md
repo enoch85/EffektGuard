@@ -29,8 +29,7 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
    `VOLATILE_MIN_DURATION_QUARTERS`), or a cheap run ending within 3 quarters, drops a positive
    offset to 0 (`should_skip_volatile_boost`).
 4. **Tolerance**: the 0.5-3.0 slider maps to a factor of 0.2-1.0 (`PRICE_TOLERANCE_FACTOR_*`),
-   times the mode multiplier (comfort 0.7, balanced 1.0, savings 1.3). In savings mode PEAK skips
-   the factor.
+   times the mode multiplier (comfort 0.7, balanced 1.0, savings 1.3).
 5. **Forecast**, not on PEAK: the look-ahead is 5 h times the thermal mass
    (`PRICE_FORECAST_BASE_HORIZON`, 2.5-10 h, running into tomorrow when published). A run at least
    3 quarters long and 3 quarters away under 50 % of the current price adds -1.5
@@ -38,6 +37,9 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
    With DM below -400 a negative adjustment becomes +0.3 (`PRICE_FORECAST_DM_DEBT_OFFSET`).
 6. **Stored heat**: pre-heating into a room already above target by more than the mode allows
    (0.3 / 0.5 / 1.0 °C) is trimmed by the excess.
+7. **No deeper than -2.0** (`PRICE_OFFSET_DEEPEST_CUT`), whatever the class, the slider and the
+   mode. A deeper cut stops the compressor instead of slowing it: the slab drains, and the heat
+   comes back from the immersion heater or not at all.
 
 ## Weight
 

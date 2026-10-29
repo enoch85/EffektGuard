@@ -114,14 +114,12 @@ class OptimizationModeConfig:
     - dead_zone: Temperature band around target where no action is taken
     - comfort_weight_multiplier: Scales comfort layer influence (higher = comfort wins more)
     - price_tolerance_multiplier: Scales price layer effect (higher = more aggressive)
-    - peak_bypass_tolerance: If True, PEAK ignores tolerance scaling (always full reduction)
     - preheat_overshoot_allowed: How much overshoot to accept during pre-heating (°C)
     """
 
     dead_zone: float  # °C - no action within this range
     comfort_weight_multiplier: float  # Scales comfort layer weight
     price_tolerance_multiplier: float  # Scales price layer tolerance factor
-    peak_bypass_tolerance: bool  # PEAK always uses full offset
     preheat_overshoot_allowed: float  # °C - acceptable overshoot during cheap pre-heat
 
 
@@ -134,21 +132,18 @@ MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
         dead_zone=0.1,  # Tighter: react faster to any deviation
         comfort_weight_multiplier=1.3,  # Comfort layer wins more often
         price_tolerance_multiplier=0.7,  # Reduce price layer effect
-        peak_bypass_tolerance=False,  # Respect tolerance even during PEAK
         preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
     ),
     OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
         dead_zone=0.2,  # Standard dead zone
         comfort_weight_multiplier=1.0,  # Normal comfort influence
         price_tolerance_multiplier=1.0,  # Normal price effect
-        peak_bypass_tolerance=False,  # Respect tolerance setting
         preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
     ),
     OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
         dead_zone=0.3,  # Wider: ignore small deviations
         comfort_weight_multiplier=0.7,  # Price wins more often
         price_tolerance_multiplier=1.3,  # Amplify price effect
-        peak_bypass_tolerance=True,  # PEAK always full reduction
         preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
     ),
 }
@@ -918,6 +913,15 @@ PRICE_OFFSET_NORMAL: Final = 0.0  # °C - maintain current heating
 PRICE_OFFSET_EXPENSIVE: Final = -1.0  # °C - conserve, reduce heating
 PRICE_OFFSET_PEAK: Final = MIN_OFFSET  # Maximum reduction (coast through expensive period)
 PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE during daytime (06:00-22:00)
+# The deepest cut the price layer votes, whatever the class, the slider and the mode. A deeper cut
+# stops the compressor instead of slowing it, the slab drains, and the heat comes back later from
+# the immersion heater or not at all. Closed loop on the owner's F750 + slab (slider 1.2, target
+# 21 C), four plant fits, Oct 18 2025 - Apr 30 2026, per season against no limit: heating cost
+# comfort 4778 -> 4766 SEK, balanced 4812 -> 4769, savings 5012 -> 4772; immersion heat 304 -> 274,
+# 374 -> 276, 637 -> 278 kWh; hours below 20.5 C 30 -> 21, 54 -> 20, 107 -> 17. In PEAK quarters
+# (balanced) the compressor stood still 44 % of the time before, 33 % after. Balanced at -1 cost
+# 4802 SEK, at -3 4779.
+PRICE_OFFSET_DEEPEST_CUT: Final = -2.0
 
 # Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
 # Start reducing heating 1 quarter BEFORE peak to allow pump slowdown

@@ -26,6 +26,7 @@ from ..const import (
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
     PRICE_OFFSET_CHEAP,
+    PRICE_OFFSET_DEEPEST_CUT,
     PRICE_OFFSET_EXPENSIVE,
     PRICE_OFFSET_NORMAL,
     PRICE_OFFSET_PEAK,
@@ -276,9 +277,8 @@ class PriceAnalyzer:
             PEAK: -10.0 (maximum reduction, coast through expensive period)
 
         Note: These are BASE offsets before tolerance factor is applied.
-        Final offset depends on user tolerance setting and optimization mode:
-        - Savings mode: PEAK bypasses tolerance (always full -10.0°C)
-        - Balanced/Comfort modes: Tolerance factor applied (e.g., -3.0°C)
+        Final offset depends on user tolerance setting and optimization mode, and no cut goes
+        deeper than PRICE_OFFSET_DEEPEST_CUT (evaluate_layer).
 
         Effect tariff weighting:
             - Daytime (06:00-22:00): Full weight, EXPENSIVE gets 1.5x multiplier
@@ -1060,16 +1060,11 @@ class PriceAnalyzer:
 
         # Apply mode multiplier (comfort=0.7, balanced=1.0, savings=1.3)
         tolerance_factor *= mode_config.price_tolerance_multiplier
+        adjusted_offset = base_offset * tolerance_factor
 
-        # Savings mode: PEAK bypasses tolerance (always full reduction)
-        if classification == QuarterClassification.PEAK and mode_config.peak_bypass_tolerance:
-            adjusted_offset = base_offset
-        else:
-            adjusted_offset = base_offset * tolerance_factor
-
-        # Apply forecast adjustment (additive to base classification)
+        # Apply forecast adjustment (additive to base classification); PEAK takes none
         if classification == QuarterClassification.PEAK:
-            final_offset = adjusted_offset  # Already -10 from base_offset
+            final_offset = adjusted_offset
         else:
             final_offset = adjusted_offset + forecast_adjustment
 
@@ -1090,6 +1085,13 @@ class PriceAnalyzer:
             elif final_offset > 0:
                 final_offset = max(final_offset - (overshoot - max_overshoot), 0)
                 strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
+
+        # No deeper than PRICE_OFFSET_DEEPEST_CUT. Savings mode used to take PEAK's full -10, and
+        # the owner's ±1.2 slider -4.2 in balanced: either stops the compressor, the slab drains,
+        # and the heat the cut saved comes back from the immersion heater or not at all.
+        if final_offset < PRICE_OFFSET_DEEPEST_CUT:
+            strategic_context += f" | Cut held at {PRICE_OFFSET_DEEPEST_CUT:.1f}°C"
+            final_offset = PRICE_OFFSET_DEEPEST_CUT
 
         # Apply weight based on classification and volatility
         if classification == QuarterClassification.PEAK or in_peak_cluster:
