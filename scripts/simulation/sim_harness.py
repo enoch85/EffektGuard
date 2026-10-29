@@ -1009,11 +1009,13 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 191.34},
+                    houses={"concrete_f1155": 179.67},
                     why=(
-                        "F-124 on the undersized F1155: 191.3 kWh of immersion against 129.3 forced, "
+                        "F-124 on the undersized F1155: 179.7 kWh of immersion against 126.7 forced, "
                         "where NIBE alone burns 146.4. The wear guard judges it against the maximum "
-                        "the pump publishes. 203.0 against 133.9 before the bench ran the "
+                        "the pump publishes. 188.4 before the register landed on the whole degree "
+                        "nearest to the guard's cap (191.3 recorded before that). 203.0 against "
+                        "133.9 before the bench ran the "
                         "coordinator's gate policy: the wear guard's withdrawals and anti-windup "
                         "going past the tracker take it to 179.7 alone, the projected period-mean "
                         "power alone to 201.8, both to 191.3. 191.9 before #54: the slab's longer "
