@@ -116,6 +116,16 @@
               "insulation_quality": "Overall heat retention quality.\nHigher = better insulation.\n\nModern (1.5-2.0),\nStandard 1990s (0.8-1.2),\nOlder (0.5-0.8)."
             }
           },
+          "heat_pump": {
+            "name": "Heat pump",
+            "description": "Settings from your heat pump's own menus",
+            "data": {
+              "heater_start_dm": "Electric heater start (degree minutes)"
+            },
+            "data_description": {
+              "heater_start_dm": "Where your pump starts its electric heater. NIBE menu 4.9.3 \"start addition\", or \"start compressor\" minus \"start diff additional heat\" (for example -250 - 1200 = -1450). Keep the factory value if nobody has changed it, and check it if you change the heat pump model."
+            }
+          },
           "domestic_hot_water": {
             "name": "Domestic Hot Water (DHW)",
             "description": "Schedule when hot water should be ready and how much you need",

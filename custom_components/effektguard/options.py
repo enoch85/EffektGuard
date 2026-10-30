@@ -16,6 +16,7 @@ from .const import (
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_DHW_MIN_AMOUNT,
     CONF_HEAT_PUMP_MODEL,
+    CONF_HEATER_START_DM,
     CONF_INSULATION_QUALITY,
     CONF_OPTIMIZATION_MODE,
     CONF_THERMAL_MASS,
@@ -32,6 +33,8 @@ from .const import (
     DHW_MIN_AMOUNT_DEFAULT,
     DHW_MIN_AMOUNT_MAX,
     DHW_MIN_AMOUNT_MIN,
+    HEATER_START_DM_MAX,
+    HEATER_START_DM_MIN,
     MIN_DHW_TARGET_TEMP,
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
@@ -60,6 +63,8 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             validated.update(user_input["optimization_settings"])
         if "building_characteristics" in user_input:
             validated.update(user_input["building_characteristics"])
+        if "heat_pump" in user_input:
+            validated.update(user_input["heat_pump"])
         if "domestic_hot_water" in user_input:
             validated.update(user_input["domestic_hot_water"])
         if "airflow_optimization" in user_input:
@@ -70,6 +75,7 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             if key not in [
                 "optimization_settings",
                 "building_characteristics",
+                "heat_pump",
                 "domestic_hot_water",
                 "airflow_optimization",
             ]:
@@ -104,6 +110,19 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
                 validated[CONF_DHW_MIN_AMOUNT] = dhw_min
             except (TypeError, ValueError) as e:
                 raise vol.Invalid(f"Invalid DHW min amount: {e}")
+
+        # Validate the heater start: NIBE's own setting range (menu 4.9.3)
+        if CONF_HEATER_START_DM in validated:
+            try:
+                heater_start = float(validated[CONF_HEATER_START_DM])
+            except (TypeError, ValueError) as e:
+                raise vol.Invalid(f"Invalid heater start: {e}")
+            if not HEATER_START_DM_MIN <= heater_start <= HEATER_START_DM_MAX:
+                raise vol.Invalid(
+                    f"Heater start must be {HEATER_START_DM_MIN:.0f} to "
+                    f"{HEATER_START_DM_MAX:.0f} degree minutes"
+                )
+            validated[CONF_HEATER_START_DM] = heater_start
 
         # Convert hour values to int (SelectSelector returns string)
         for hour_field in ["dhw_morning_hour", "dhw_evening_hour"]:
@@ -165,6 +184,17 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             default_schedules.append("morning")
         if self.config_entry.options.get("dhw_evening_enabled", True):
             default_schedules.append("evening")
+
+        model_id = self.config_entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
+        try:
+            model_profile = HeatPumpModelRegistry.get_model(model_id)
+        except ValueError:
+            _LOGGER.debug("Unknown heat pump model: %s", model_id)
+            model_profile = None
+        # The model's factory heater start until the owner sets their own
+        heater_start = self.config_entry.options.get(
+            CONF_HEATER_START_DM, getattr(model_profile, "aux_start_dm", None)
+        )
 
         schema_dict = {
             # Optimization Settings Section
@@ -301,14 +331,27 @@ class EffektGuardOptionsFlow(config_entries.OptionsFlow):
             ),
         }
 
+        if heater_start is not None:
+            schema_dict[vol.Required("heat_pump")] = section(
+                vol.Schema(
+                    {
+                        vol.Optional(CONF_HEATER_START_DM, default=heater_start): (
+                            selector.NumberSelector(
+                                selector.NumberSelectorConfig(
+                                    min=HEATER_START_DM_MIN,
+                                    max=HEATER_START_DM_MAX,
+                                    step=1,
+                                    mode=selector.NumberSelectorMode.BOX,
+                                )
+                            )
+                        ),
+                    }
+                ),
+                {"collapsed": True},
+            )
+
         # Only show airflow section for exhaust air heat pumps (F750, F730)
-        model_id = self.config_entry.data.get(CONF_HEAT_PUMP_MODEL, DEFAULT_HEAT_PUMP_MODEL)
-        supports_airflow = False
-        try:
-            model_profile = HeatPumpModelRegistry.get_model(model_id)
-            supports_airflow = getattr(model_profile, "supports_exhaust_airflow", False)
-        except ValueError:
-            _LOGGER.debug("Unknown heat pump model: %s", model_id)
+        supports_airflow = getattr(model_profile, "supports_exhaust_airflow", False)
 
         if supports_airflow:
             schema_dict[vol.Required("airflow_optimization")] = section(

@@ -73,6 +73,7 @@ Under the gear icon:
 | Mode | Comfort, Balanced, Savings (Balanced) | Comfort keeps the room at your target or above, and follows the price least. Balanced may let it dip about 0.2 °C below your target to save more. Savings may let it dip about 1 °C below, and follows the price most |
 | Tolerance | 0.5-3.0 (0.5) | How far the room may drift to save money: ±0.4 × this value. Higher also makes the price steps bigger, from 20 % (0.5) to 100 % (3.0), but a price never takes more than 2 °C off |
 | Thermal mass, insulation | 0.5-2.0 (1.0) | Your house. Thermal mass 1.5 or more is a concrete slab, 1.2 or more timber floor heating |
+| Electric heater start | -2000 to -30 (your model's factory value) | Where your pump starts its electric heater, in degree minutes: NIBE menu 4.9.3 "start addition", or "start compressor" minus "start diff additional heat" (for example -250 - 1200 = -1450). Keep the factory value if nobody has changed it |
 | Hot water | Target 45-60 °C (50), amount 1-30 min (5), ready at 07:00 and 18:00 | See [Hot water](#hot-water) |
 | Ventilation | Normal 100-300, boosted 150-400 m³/h (150, 252) | NIBE F750 and F730 only |
 

@@ -116,6 +116,16 @@
               "insulation_quality": "Samlet isoleringsnivå (0,5=dårlig, 1,0=normal, 2,0=utmerket)"
             }
           },
+          "heat_pump": {
+            "name": "Varmepumpe",
+            "description": "Innstillinger fra varmepumpens egne menyer",
+            "data": {
+              "heater_start_dm": "Start for eltilskudd (gradminutter)"
+            },
+            "data_description": {
+              "heater_start_dm": "Der pumpen starter eltilskuddet. NIBE meny 4.9.3 \"start addition\", eller \"start compressor\" minus \"start diff additional heat\" (for eksempel -250 - 1200 = -1450). Behold fabrikkverdien hvis ingen har endret den, og sjekk den hvis du bytter varmepumpemodell."
+            }
+          },
           "domestic_hot_water": {
             "name": "Varmtvann (DHW)",
             "description": "Planlegg når varmtvannet skal være klart og hvor mye du trenger",

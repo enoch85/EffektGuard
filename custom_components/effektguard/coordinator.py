@@ -36,6 +36,7 @@ from .const import (
     CONF_AIRFLOW_STANDARD_RATE,
     CONF_AWAY,
     CONF_DHW_MIN_AMOUNT,
+    CONF_HEATER_START_DM,
     CONF_ENABLE_AIRFLOW_OPTIMIZATION,
     CONF_ENABLE_OPTIMIZATION,
     CONF_HEAT_PUMP_MODEL,
@@ -2678,6 +2679,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if "peak_protection_margin" in options:
             self.engine.config["peak_protection_margin"] = options["peak_protection_margin"]
             _LOGGER.debug("Updated peak protection margin: %.2f", options["peak_protection_margin"])
+
+        # Where the pump starts its electric heater (read by the engine each cycle)
+        if CONF_HEATER_START_DM in options:
+            self.engine.config[CONF_HEATER_START_DM] = float(options[CONF_HEATER_START_DM])
+            _LOGGER.debug("Updated heater start: %.0f DM", options[CONF_HEATER_START_DM])
 
         # Update DHW settings
         dhw_config_changed = False

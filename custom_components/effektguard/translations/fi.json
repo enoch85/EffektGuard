@@ -116,6 +116,16 @@
               "insulation_quality": "Yleinen eristystaso (0,5=huono, 1,0=normaali, 2,0=erinomainen)"
             }
           },
+          "heat_pump": {
+            "name": "Lämpöpumppu",
+            "description": "Asetukset lämpöpumpun omista valikoista",
+            "data": {
+              "heater_start_dm": "Sähkövastuksen käynnistys (asteminuutit)"
+            },
+            "data_description": {
+              "heater_start_dm": "Missä pumppu käynnistää sähkövastuksensa. NIBE-valikko 4.9.3 \"start addition\", tai \"start compressor\" miinus \"start diff additional heat\" (esimerkiksi -250 - 1200 = -1450). Pidä tehdasarvo, jos kukaan ei ole muuttanut sitä, ja tarkista se, jos vaihdat lämpöpumpun mallia."
+            }
+          },
           "domestic_hot_water": {
             "name": "Lämmin käyttövesi (DHW)",
             "description": "Ajoita milloin lämpimän veden tulee olla valmiina ja kuinka paljon sitä tarvitset",

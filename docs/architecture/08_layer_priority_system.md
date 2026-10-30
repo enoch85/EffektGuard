@@ -86,8 +86,9 @@ Still inside `calculate_decision`, in this order:
   publishes, before DM falls enough for the saturated verdict, a raise above the register gets
   only the room's share and nothing is withdrawn.
 - Heater guard (`_limit_for_heater`): while a measured room is at or above its floor, degree
-  minutes may not reach the pump's immersion heater start - the model profile's `aux_start_dm`,
-  its factory setting (F750 -700, S1155 -460, F2040 + VVM -760). From 500 DM above that start DM
+  minutes may not reach the pump's immersion heater start - the owner's setting (options, Heat
+  pump), else the model profile's `aux_start_dm`, its factory setting (F750 -700, S1155 -460,
+  F2040 + VVM -760). From 500 DM above that start DM
   may fall only toward a hold point 200 above it, at (DM - hold point) / 2 h per hour, and must rise
   back from below. The cap is the register plus the whole steps that close the gap between the DM
   rate and that allowance (a step moves 90 DM/h: 60 minutes × the 1.5 °C curve sensitivity), on

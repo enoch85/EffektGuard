@@ -37,6 +37,7 @@ CONF_TOLERANCE: Final = "tolerance"
 CONF_OPTIMIZATION_MODE: Final = "optimization_mode"
 CONF_THERMAL_MASS: Final = "thermal_mass"
 CONF_INSULATION_QUALITY: Final = "insulation_quality"
+CONF_HEATER_START_DM: Final = "heater_start_dm"
 CONF_HEAT_PUMP_MODEL: Final = "heat_pump_model"
 
 # Defaults
@@ -1888,6 +1889,12 @@ HEATER_GUARD_MIN_SPAN_MINUTES: Final = 15
 # Degree minutes per hour that one offset step moves while the supply holds: DM integrates the gap
 # between the supply and S1 every minute, and one step moves S1 by the curve sensitivity.
 DM_PER_HOUR_PER_OFFSET_STEP: Final = DEFAULT_CURVE_SENSITIVITY * 60
+
+# Where the owner's pump starts its electric heater, when the owner sets it (options, Heat pump);
+# without it the model profile's factory aux_start_dm stands. The range is NIBE's own: F750
+# installer manual IHB GB 1301-1, menu 4.9.3 "start addition", -2000 ... -30 (factory -700).
+HEATER_START_DM_MIN: Final = -2000.0
+HEATER_START_DM_MAX: Final = -30.0
 
 # THE CAPACITY SHORTFALL (utils/capacity_shortfall.py). A pump short of capacity at its own curve
 # holds its degree minutes at its heater start; a pump with capacity to spare only reaches it after

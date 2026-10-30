@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     COMPRESSOR_SATURATION_BAND_HZ,
+    CONF_HEATER_START_DM,
     WEATHER_DAILY_MEAN_HOURS,
     WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_FORECAST_HORIZON,
@@ -574,7 +575,7 @@ class DecisionEngine:
 
         # Where this pump runs short of capacity: read every cycle, a manual override included
         # - one below the curve is a cut of ours as much as the layers' is.
-        heater_start = getattr(self.heat_pump_model, "aux_start_dm", None)
+        heater_start = self._heater_start()
         if heater_start is not None:
             self.capacity_shortfall.update(nibe_state, heater_start)
 
@@ -1057,16 +1058,17 @@ class DecisionEngine:
 
         The rate is judged on readings at the register as it is now and outside hot water (DM
         falls while the compressor heats the tank), once they span HEATER_GUARD_MIN_SPAN_MINUTES;
-        until then the register holds. The heater start is the model profile's aux_start_dm, the
-        pump's factory setting. An installer can move it: a pump whose heater starts deeper is held
-        shallower than it has to be (the owner's F750 starts at -1450, the F750 profile says -700).
-        Without a room sensor, or without a model profile, nothing is guarded.
+        until then the register holds. The heater start is the owner's setting, or else the model
+        profile's aux_start_dm, the pump's factory setting (_heater_start). An installer can move
+        it: a pump whose heater starts deeper than set is held shallower than it has to be (the
+        owner's F750 starts at -1450, the F750 profile says -700). Without a room sensor, or with
+        neither a setting nor a model profile, nothing is guarded.
 
         While the pump is short of capacity (CapacityShortfall) the heater is the pump's own answer
         to a cold it cannot cover, and nothing is guarded either: held off, the house only enters
         the cold with less heat in it. The readings are kept all the same.
         """
-        heater_start = getattr(self.heat_pump_model, "aux_start_dm", None)
+        heater_start = self._heater_start()
         if heater_start is None:
             return offset, ""
         register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
@@ -1116,6 +1118,13 @@ class DecisionEngine:
             heater_start,
         )
         return held, f" | Heater guard: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    def _heater_start(self) -> float | None:
+        """Where this pump starts its immersion heater: the owner's setting, else the model's."""
+        configured = self.config.get(CONF_HEATER_START_DM)
+        if configured is not None:
+            return float(configured)
+        return getattr(self.heat_pump_model, "aux_start_dm", None)
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:
