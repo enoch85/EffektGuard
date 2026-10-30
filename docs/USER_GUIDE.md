@@ -70,8 +70,8 @@ Under the gear icon:
 
 | Setting | Range (default) | What it does |
 |---|---|---|
-| Mode | Comfort, Balanced, Savings (Balanced) | Comfort keeps the temperature steadiest and follows the price least. Savings lets it swing more, follows the price most, and cuts the heat fully at the most expensive times |
-| Tolerance | 0.5-3.0 (0.5) | How far the room may drift to save money: ±0.4 × this value. Higher also makes the normal price step bigger, from 20 % (0.5) to 100 % (3.0) |
+| Mode | Comfort, Balanced, Savings (Balanced) | Comfort keeps the temperature steadiest and follows the price least. Savings lets it swing more and follows the price most |
+| Tolerance | 0.5-3.0 (0.5) | How far the room may drift to save money: ±0.4 × this value. Higher also makes the price steps bigger, from 20 % (0.5) to 100 % (3.0), but a price never takes more than 2 °C off |
 | Thermal mass, insulation | 0.5-2.0 (1.0) | Your house. Thermal mass 1.5 or more is a concrete slab, 1.2 or more timber floor heating |
 | Hot water | Target 45-60 °C (50), amount 1-30 min (5), ready at 07:00 and 18:00 | See [Hot water](#hot-water) |
 | Ventilation | Normal 100-300, boosted 150-400 m³/h (150, 252) | NIBE F750 and F730 only |
