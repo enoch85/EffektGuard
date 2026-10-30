@@ -17,7 +17,8 @@ template number so EffektGuard can write it.
 
 These are the F-series registers. An S-series uses other numbers (offset 40031, degree minutes
 40019, and its 40033 is not the room temperature), so pick its entities by hand in the last setup
-step. The heater's power can't be picked by hand: put its register in the entity id (S-series 31028).
+step. The heater's power can't be picked by hand: put its register in the entity id (S-series
+31028).
 
 The offset register, 47011, as a template number:
 
