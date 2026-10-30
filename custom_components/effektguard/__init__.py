@@ -303,16 +303,16 @@ async def _create_coordinator(
     # Create decision engine with all dependencies
     # Add latitude from Home Assistant config for climate zone detection
     # CRITICAL: Merge entry.data (switch states) and entry.options (runtime settings)
-    config_with_latitude = dict(entry.data)  # Start with switch states
-    config_with_latitude.update(entry.options)  # Overlay runtime options
-    config_with_latitude["latitude"] = hass.config.latitude
-    config_with_latitude[CONF_TARGET_INDOOR_TEMP] = held_target_of(config_with_latitude)
+    engine_config = dict(entry.data)  # Start with switch states
+    engine_config.update(entry.options)  # Overlay runtime options
+    engine_config["latitude"] = hass.config.latitude
+    engine_config[CONF_TARGET_INDOOR_TEMP] = held_target_of(engine_config)
 
     decision_engine = DecisionEngine(
         price_analyzer=price_analyzer,
         effect_manager=effect_manager,
         thermal_model=thermal_model,
-        config=config_with_latitude,
+        config=engine_config,
         thermal_predictor=None,  # Will be set after coordinator is created (Phase 6)
         weather_learner=None,  # Will be set after coordinator is created (Phase 6)
     )
