@@ -468,9 +468,8 @@ class AdaptiveClimateSystem:
         self.climate_zone = self.detector.zone_key  # Compatibility property
 
         _LOGGER.info(
-            "AdaptiveClimateSystem initialized: latitude=%.2f° -> %s zone "
+            "AdaptiveClimateSystem initialized: %s zone "
             "(winter avg low: %.1f°C, base safety margin: %.1f°C)",
-            latitude,
             self.detector.zone_info.name,
             self.detector.zone_info.winter_avg_low,
             self.detector.zone_info.safety_margin_base,

@@ -184,12 +184,12 @@ class ClimateZoneDetector:
         self.zone_key = self._detect_zone()
         self.zone_info = self._get_zone_info()
 
+        # The zone, never the latitude it came from: that is the home's location, and logs get
+        # pasted into public issues.
         _LOGGER.info(
-            "Climate zone detected: %s (%s) at latitude %.2f°N - "
-            "Winter avg: %.1f°C, DM normal range: %.0f to %.0f",
+            "Climate zone detected: %s (%s) - Winter avg: %.1f°C, DM normal range: %.0f to %.0f",
             self.zone_info.name,
             self.zone_info.description,
-            latitude,
             self.zone_info.winter_avg_low,
             self.zone_info.dm_normal_min,
             self.zone_info.dm_normal_max,
@@ -215,19 +215,10 @@ class ClimateZoneDetector:
             lat_min, lat_max = zone_data["latitude_range"]
 
             if lat_min <= self.latitude <= lat_max:
-                _LOGGER.debug(
-                    "Latitude %.2f matches zone '%s' (%.1f-%.1f)",
-                    self.latitude,
-                    zone_key,
-                    lat_min,
-                    lat_max,
-                )
                 return zone_key
 
         # Default to standard for edge cases
-        _LOGGER.warning(
-            "Latitude %.2f outside all zone ranges, defaulting to 'standard'", self.latitude
-        )
+        _LOGGER.warning("Home Assistant's latitude is outside every zone, defaulting to 'standard'")
         return "standard"
 
     def _get_zone_info(self) -> ClimateZoneInfo:
