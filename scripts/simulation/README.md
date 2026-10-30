@@ -53,8 +53,9 @@ Per house, `output/summary-<tag>.json` holds the stats, failures and violations,
 - Compare against `--baseline` before concluding anything about savings: part of a lower `cost_sek`
   can be under-heating rather than efficiency.
 - `comfort_minutes_below` counts minutes at least `SCENARIO_COMFORT_BREACH_MIN_DEPTH_C` below
-  target minus the configured tolerance, the band the engine promises to hold; shallower dips are
-  `comfort_minutes_grazing`.
+  the band the mode keeps, `comfort_band_low_c`: the target minus the configured tolerance, or
+  minus the mode's `room_floor_below_target` where that is wider (savings: a degree). Shallower
+  dips are `comfort_minutes_grazing`.
 - `tariff_top3_kw` is the mean of the three highest daily billed peaks: 15-minute mean power
   through the same `BillingPeriodAccumulator` and `effective_tariff_power_kw` production uses
   (night periods count `NIGHT_TARIFF_WEIGHT`); `tariff_cost_sek` multiplies it by the illustrative
