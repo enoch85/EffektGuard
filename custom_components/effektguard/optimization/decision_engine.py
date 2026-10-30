@@ -64,6 +64,7 @@ from ..const import (
     OPTIMIZATION_MODE_BALANCED,
 )
 from ..utils.capacity_shortfall import CapacityShortfall
+from ..utils.heater_start import HeaterStart
 from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
@@ -338,8 +339,10 @@ class DecisionEngine:
         # the register as it is now - see _limit_for_heater.
         self._heater_readings: deque[tuple[datetime, float, float]] = deque()
 
-        # Where this pump runs short of capacity - stored across restarts by the coordinator.
+        # Where this pump runs short of capacity, and where it starts its immersion heater - both
+        # stored across restarts by the coordinator.
         self.capacity_shortfall = CapacityShortfall()
+        self.heater_start = HeaterStart()
 
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
@@ -572,11 +575,15 @@ class DecisionEngine:
         """
         _LOGGER.debug("Calculating optimization decision")
 
-        # Where this pump runs short of capacity: read every cycle, a manual override included
-        # - one below the curve is a cut of ours as much as the layers' is.
-        heater_start = getattr(self.heat_pump_model, "aux_start_dm", None)
-        if heater_start is not None:
-            self.capacity_shortfall.update(nibe_state, heater_start)
+        # Where this pump starts its heater and where it runs short of capacity: read every cycle,
+        # a manual override included - one below the curve is a cut of ours as much as the layers'.
+        # A pump short of capacity is held by its heater, at a start it has switched the heater on at.
+        self.heater_start.update(nibe_state)
+        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        if factory is not None:
+            self.capacity_shortfall.update(
+                nibe_state, self.heater_start.started_degree_minutes(float(factory))
+            )
 
         # Check for manual override first (Phase 5 service support).
         #
@@ -1057,16 +1064,14 @@ class DecisionEngine:
 
         The rate is judged on readings at the register as it is now and outside hot water (DM
         falls while the compressor heats the tank), once they span HEATER_GUARD_MIN_SPAN_MINUTES;
-        until then the register holds. The heater start is the model profile's aux_start_dm, the
-        pump's factory setting. An installer can move it: a pump whose heater starts deeper is held
-        shallower than it has to be (the owner's F750 starts at -1450, the F750 profile says -700).
-        Without a room sensor, or without a model profile, nothing is guarded.
+        until then the register holds. The heater start is as the pump has shown it
+        (heater_start_dm). Without a room sensor, or without a model profile, nothing is guarded.
 
         While the pump is short of capacity (CapacityShortfall) the heater is the pump's own answer
         to a cold it cannot cover, and nothing is guarded either: held off, the house only enters
         the cold with less heat in it. The readings are kept all the same.
         """
-        heater_start = getattr(self.heat_pump_model, "aux_start_dm", None)
+        heater_start = self.heater_start_dm()
         if heater_start is None:
             return offset, ""
         register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
@@ -1116,6 +1121,20 @@ class DecisionEngine:
             heater_start,
         )
         return held, f" | Heater guard: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    def heater_start_dm(self) -> float | None:
+        """Where this pump starts its immersion heater, or None without a model profile.
+
+        The model profile's aux_start_dm is the pump's factory setting, and an installer can move it:
+        the owner's F750 starts at -1450, its profile says -700, so the guard held its degree minutes
+        far short of a heater that was nowhere near. Once the pump has shown that its heater starts
+        deeper - switching it on there, or holding deeper with it off (HeaterStart) - what it has
+        shown is the start.
+        """
+        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        if factory is None:
+            return None
+        return self.heater_start.degree_minutes(float(factory))
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:

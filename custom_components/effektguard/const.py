@@ -135,8 +135,9 @@ class OptimizationModeConfig:
 # set degree" (above is fine), balanced sits "like 0.2 degrees" below it to save more, and savings
 # "is allowed to cut below the set degree within reasonable limits" - the owner asked whether 1-2 C
 # is reasonable. A degree for savings, closed loop on the owner's F750 + slab, four plant fits, Oct
-# 18 - Apr 30, per season: the room 0.62 C above the 21 C target on average, 103 hours below 20.5 C,
-# at its coldest 18.7 C (the heater guard reading the F750 profile's -700, the plant -1450).
+# 18 - Apr 30, per season: the room 0.76 C above the 21 C target on average, 30.5 hours below 20.5 C,
+# at its coldest 19.6 C (the heater guard reading the start the pump has shown, THE HEATER START; on
+# the F750 profile's factory -700, 0.62 C, 103 hours and 18.7 C).
 MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
     OPTIMIZATION_MODE_COMFORT: OptimizationModeConfig(
         dead_zone=0.1,  # Tighter: react faster to any deviation
@@ -1623,6 +1624,10 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "phase2_current": ["current_be2", "_be2", "phase_2_current", "40081"],
     "phase3_current": ["current_be3", "_be3", "phase_3_current", "40079"],
     "dhw_amount": ["hot_water_amount", "hw_amount"],
+    # The immersion heater's power: MyUplink "Power internal add. heat", nibe_heatpump "Int. el.add.
+    # Power" (43084, F-series) and "Power internal additional heat" (31028, S-series). Not "Max int
+    # add. power" (47212) or "Immersion heater power, emergency mode" (43029): settings.
+    "heater_power": ["power_internal_add", "int_el_add_power", "43084", "31028"],
 }
 
 # Entity-id substrings that must never be matched by discovery
@@ -1866,7 +1871,8 @@ COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts a
 
 # THE HEATER GUARD (DecisionEngine._limit_for_heater). While a measured room is at or above its
 # mode's floor it needs no heat, so the offset may not drive degree minutes to where the pump starts
-# its immersion heater: the model profile's aux_start_dm, the pump's factory setting. From
+# its immersion heater: as the pump has shown it (THE HEATER START), until then the model profile's
+# factory aux_start_dm. From
 # HEATER_GUARD_ENGAGE_DM above that start DM may fall only toward the hold point
 # HEATER_GUARD_HOLD_DM above it, at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS per hour, and
 # must rise back from below it. The cap follows the supply both ways in whole offset steps of
@@ -1876,10 +1882,9 @@ COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts a
 # fits, Oct 18 2025 - Apr 30 2026, with the ladder's room floor and the capacity shortfall, per
 # season against PRICE_OFFSET_DEEPEST_CUT alone: heating cost comfort 4766 -> 4705 SEK, balanced
 # 4769 -> 4642, savings 4772 -> 4372, cheaper on every fit; immersion heat 274 -> 244, 276 -> 213,
-# 278 -> 43 kWh; offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143. ASSUMED the hold and
-# engage depths and the approach time. The plant starts its heater at the owner's -1450 and the
-# guard reads the F750 profile's -700: a prototype told -1450 cost balanced 4628, comfort 4706 and
-# savings 4504 SEK, and savings mode's coldest moment was 19.6 C instead of 18.7 C.
+# 278 -> 43 kWh; offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143 - the guard reading the
+# F750 profile's -700 where the plant starts at the owner's -1450. ASSUMED the hold and engage depths
+# and the approach time.
 HEATER_GUARD_HOLD_DM: Final = 200.0  # DM above the heater start
 HEATER_GUARD_ENGAGE_DM: Final = 500.0  # DM above the heater start
 HEATER_GUARD_APPROACH_HOURS: Final = 2.0
@@ -1907,6 +1912,28 @@ SHORTFALL_DWELL_MINUTES: Final = 180
 SHORTFALL_AFTER_CUT_HOURS: Final = 6
 SHORTFALL_MEMORY_DAYS: Final = 30
 SHORTFALL_FORECAST_HOURS: Final = 12
+
+# THE HEATER START (utils/heater_start.py). Where the pump switches its immersion heater on while
+# the compressor heats the house, seen in the heater's power reading (43084 F-series, 31028
+# S-series), and before its first start the deepest DM it held for two readings with the heater
+# off: the heater guard and the capacity shortfall read it in place of the model profile's factory
+# aux_start_dm. The owner's F750 (start compressor -250, start diff additional heat 1200: -1450) in
+# Home Assistant's hourly statistics, 2025-10-28 to 2026-10-28: of the 351 hours in which its
+# heater switched on, the 25 without a hot-water charge (BT6 rising 1 C or more) all reached DM
+# -1441 or deeper, at its first steps (0.5-1.5 kW); the 326 with one began anywhere from DM +100 to
+# -1731. With its outdoor average (40067) above its "stop additional heat" (+1 C) the heater stayed
+# off and DM held between -1442 and -1450 (44 hours). The 25 came 2-7 a month, November to March,
+# so HEATER_START_MEMORY follows a start moved deeper within about a winter month, and one moved
+# shallower at the next start. ASSUMED HEATER_START_MAX_GAP_MINUTES: readings of consecutive
+# cycles, or with one failed read between. Closed loop on the owner's F750 + slab (the plant starts
+# at -1450), four plant fits, Oct 18 2025 - Apr 30 2026, learning from nothing on Oct 18: the start
+# in force ended the autumn at -1096 .. -1458 and every winter and spring at -1442 .. -1478, the depth
+# held off never past -1450. Per season against the factory -700: heating cost comfort 4705 -> 4684
+# SEK, balanced 4642 -> 4626, savings 4372 -> 4501; hours below 20.5 C 16.1 -> 6.3, 17.3 -> 7.2,
+# 102.8 -> 30.5; immersion heat 244 -> 211, 213 -> 169, 43 -> 83 kWh; savings mode's coldest moment
+# 18.7 -> 19.6 C. Told -1450 instead (a setting): 4706, 4628 and 4504 SEK.
+HEATER_START_MEMORY: Final = 5  # starts remembered
+HEATER_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

@@ -12,6 +12,7 @@ Registers served (F-series parameter IDs, int16; every one writable):
   40014 BT6 HW charging         442   (44.2 C)
   40033 BT50 room temp          213   (21.3 C)
   43005 Degree minutes (x10)   -1500  (-150.0 DM)
+  43084 Int. el.add. Power      0     (x100: 0.00 kW, the immersion heater off)
   43086 Prio                    30    (heat; 20 is hot water) -- NOT a phase current!
   43136 Compressor freq (x10)   620   (62.0 Hz)
   43427 Compressor status       60    (runs)
@@ -39,6 +40,7 @@ REGISTERS = {
     40014: 442,
     40033: 213,
     43005: -1500,
+    43084: 0,
     43086: 30,
     43136: 620,
     43427: 60,
@@ -57,6 +59,7 @@ REGISTERS_F750 = {
     40014: 460,  # BT6 HW charging 46.0 C
     40033: 218,  # BT50 room 21.8 C
     43005: -850,  # DM -85.0
+    43084: 0,  # Immersion heater off (kW x100)
     43086: 30,  # Prio: heat
     43136: 450,  # Compressor 45.0 Hz
     43427: 60,  # Running

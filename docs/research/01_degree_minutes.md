@@ -42,9 +42,17 @@ the owner's offset at +10 on 2026-01-23 and 2026-01-31 with DM past −1500, and
 So:
 
 - A pump's own aux start has to be read from that pump. The model profiles' `aux_start_dm` holds
-  the factory default; the simulator's plant and the heater guard read it (the guard keeps a room at
-  or above its floor short of it). A pump whose heater starts deeper, like the owner's, is held
-  shallower than it needs to be.
+  the factory default, and the simulator's plant reads it. The heater guard (which keeps a room at
+  or above its floor short of the heater) and the capacity shortfall read the start as the pump has
+  shown it, in its heater's power (43084, 31028 on the S-series) while the compressor heats the
+  house: where it switches on, the shallowest of the last five such starts, and before the first,
+  the deepest degree minutes it held with the heater off - never shallower than the factory default
+  (`utils/heater_start.py`). In Home Assistant's hourly statistics of the
+  owner's F750, 2025-10-28 to 2026-10-28, the heater switched on in 351 hours: in the 25 without a
+  hot-water charge DM reached -1441 or deeper, in the 326 with one it began anywhere from +100 to
+  -1731. With the pump's average outdoor temperature (40067) above +1 °C, its "stop additional
+  heat" (47376), the heater never switched on for space heating, and DM held between -1442 and
+  -1450 (44 hours): blocked, it does not run past the start.
 - The elpatron is **not the enemy.** NIBE placed it to spare the compressor from grinding at full
   frequency for hours. Fighting it with a bigger curve offset trades cheap kWh for expensive
   compressor life.
@@ -143,9 +151,9 @@ sensor only.
 
 - NIBE F750 Installer Manual **IHB GB 1301-1** (231236), menu 4.9.3 — `start compressor`,
   `start addition` defaults and ranges.
-- The owner's F750 via myUplink, read only: 47206 `start compressor` −250 and 48072 `start diff
-  additional heat` 1200 (2026-10-17); 43084 `Power internal add. heat` in Home Assistant's hourly
-  statistics.
+- The owner's F750 via myUplink, read only: 47206 `start compressor` −250, 48072 `start diff
+  additional heat` 1200 and 47376 `stop additional heat` +1 °C (2026-10-17); 43084 `Power internal
+  add. heat` in Home Assistant's hourly statistics (2025-10-28 to 2026-10-28).
 - NIBE's degree-minute definition is consistent across the F-series and S-series manuals.
 
 ## Not sourced
