@@ -10,7 +10,9 @@ So the pump is short at the outdoor temperature of a stretch in which its degree
 within SHORTFALL_NEAR_HEATER_START_DM of its heater start for SHORTFALL_DWELL_MINUTES, outside hot
 water and at or above its own curve (register >= 0), beginning at least SHORTFALL_AFTER_CUT_HOURS
 after the last cut the layers asked for and after this memory started. The warmest such
-temperature of the last SHORTFALL_MEMORY_DAYS is where the pump runs short.
+temperature of the last SHORTFALL_MEMORY_DAYS is where the pump runs short. The heater start is one
+the pump has switched its heater on at, or the model's factory value - not the depth it held with
+the heater off, which says only that its start is deeper (HeaterStart.started_degree_minutes).
 
 While the coldest of the outdoor temperature now and the next SHORTFALL_FORECAST_HOURS forecast
 hours is at or below it, heat held back cannot come back from the compressor: only from the
@@ -54,14 +56,15 @@ class CapacityShortfall:
         """The warmest outdoor temperature at which the pump ran short, or None."""
         return max((outdoor for _, outdoor in self._seen), default=None)
 
-    def update(self, nibe_state, heater_start: float) -> None:
-        """Record one reading of an automatic cycle."""
+    def update(self, nibe_state, heater_start: float | None) -> None:
+        """Record one reading of an automatic cycle; with no heater start known, nothing is near it."""
         now = nibe_state.timestamp
         if self._started is None:
             self._started = now
         register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
         near = (
-            not nibe_state.is_hot_water
+            heater_start is not None
+            and not nibe_state.is_hot_water
             and register >= 0
             and float(nibe_state.degree_minutes) <= heater_start + SHORTFALL_NEAR_HEATER_START_DM
         )

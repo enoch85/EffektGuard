@@ -630,9 +630,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # Use the new restore method for all DHW state
                     self.dhw_optimizer.restore_from_persistence(dhw_state)
 
-                # Restore where the pump runs short of capacity
+                # Restore where the pump runs short of capacity, and where it starts its heater
                 if "capacity_shortfall" in learned_data:
                     self.engine.capacity_shortfall.restore(learned_data["capacity_shortfall"])
+                if "heater_start" in learned_data:
+                    self.engine.heater_start.restore(learned_data["heater_start"])
 
                 _LOGGER.info("Learning modules initialized successfully")
             else:
@@ -2932,8 +2934,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if dhw_state:
                     learned_data["dhw_state"] = dhw_state
 
-            # Where the pump runs short of capacity: a restart must not forget a cold spell
+            # Where the pump runs short of capacity: a restart must not forget a cold spell, nor
+            # where the pump starts its heater
             learned_data["capacity_shortfall"] = self.engine.capacity_shortfall.to_dict()
+            learned_data["heater_start"] = self.engine.heater_start.to_dict()
 
             await self.learning_store.async_save(learned_data)
             _LOGGER.debug("Saved learned data to storage")

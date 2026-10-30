@@ -696,3 +696,30 @@ async def test_the_compressor_frequency_is_the_one_it_runs_at(monkeypatch, other
     await adapter.discover_entities()
 
     assert adapter.entity_cache["compressor_hz"] == frequency
+
+
+@pytest.mark.parametrize(
+    "heater",
+    [
+        pytest.param("sensor.f750_cu_3x400v_power_internal_add_heat", id="myuplink"),
+        pytest.param("sensor.int_el_add_power_43084", id="nibe_heatpump-f-series"),
+        pytest.param("sensor.power_internal_additional_heat_31028", id="nibe_heatpump-s-series"),
+    ],
+)
+async def test_the_heater_power_is_the_heaters_own_and_not_a_setting(monkeypatch, heater):
+    """A NIBE publishes its immersion heater's power beside two settings in the same words: the most
+    the heater may draw (47212) and what it may draw in emergency mode (43029)."""
+    settings = [
+        "number.max_int_add_power_47212",
+        "sensor.immersion_heater_power_emergency_mode_43029",
+    ]
+    states = (
+        required_core_states()
+        + [make_state(e, "6.5", {}) for e in settings]
+        + [make_state(heater, "0.5", {})]
+    )
+    adapter = NibeAdapter(make_hass(states, [], monkeypatch), {})
+    await adapter.discover_entities()
+
+    assert adapter.entity_cache["heater_power"] == heater
+    assert (await adapter.get_current_state()).heater_power_kw == 0.5

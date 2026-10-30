@@ -2075,6 +2075,8 @@ def simulate(
                     if house.profile.publishes_max_frequency
                     else None
                 ),
+                # The heater's power, as the pump publishes it: where it starts is learned from it.
+                heater_power_kw=round(aux_kw, 2),
                 power_kw=round(power_kw, 2),
             )
 

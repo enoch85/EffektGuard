@@ -86,15 +86,21 @@ Still inside `calculate_decision`, in this order:
   publishes, before DM falls enough for the saturated verdict, a raise above the register gets
   only the room's share and nothing is withdrawn.
 - Heater guard (`_limit_for_heater`): while a measured room is at or above its floor, degree
-  minutes may not reach the pump's immersion heater start - the model profile's `aux_start_dm`,
-  its factory setting (F750 -700, S1155 -460, F2040 + VVM -760). From 500 DM above that start DM
+  minutes may not reach the pump's immersion heater start - as the pump has shown it
+  (`utils/heater_start.py`, read while the compressor heats the house: the heater's power switching
+  on, the shallowest of the last 5 such starts; before the first, the deepest DM held for two
+  readings with the heater off), never shallower than the model profile's `aux_start_dm`, its
+  factory setting (F750 -700, S1155 -460, F2040 + VVM -760), which stands until the pump has shown
+  more. From 500 DM above that start DM
   may fall only toward a hold point 200 above it, at (DM - hold point) / 2 h per hour, and must rise
   back from below. The cap is the register plus the whole steps that close the gap between the DM
   rate and that allowance (a step moves 90 DM/h: 60 minutes × the 1.5 °C curve sensitivity), on
   readings outside hot water at the register as it is now, once they span 15 minutes. It fades out
   over the 0.2 °C above the floor. Below the floor the heat is the room's, and the heater with it.
 - Capacity shortfall (`utils/capacity_shortfall.py`): a pump short of capacity at its own curve
-  holds its degree minutes at its heater start. Three hours within 50 DM of that start, outside hot
+  holds its degree minutes at its heater start - one it has switched its heater on at, else the
+  factory value, and none while it has held deeper than that with the heater off but not yet
+  switched it on. Three hours within 50 DM of that start, outside hot
   water, with the register at 0 or above, beginning 6 hours or more after the layers last asked
   for a cut (and after start-up), record the outdoor temperature; the warmest of the last 30 days
   is where the pump runs short. While the coldest of now and the next 12 forecast hours is at or
