@@ -55,6 +55,7 @@ from custom_components.effektguard.const import (
     CONF_GESPOT_ENTITY,
     DM_THRESHOLD_AUX_LIMIT,
     INTERNAL_GAINS_W,
+    MODE_CONFIGS,
     POWER_SOURCE_EXTERNAL_METER,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
@@ -245,8 +246,8 @@ EXHAUST_AIR_SOURCE_C = 20.0  # F750/F730 draw ~20 C indoor extract air, all year
 BRINE_SOURCE_C = 0.0  # F1155/S1155 draw ~0 C brine, stable year-round
 
 
-# Comfort accounting matches the engine's configured tolerance (not a looser
-# ad-hoc band): minutes below target-tolerance count as under-heating.
+# Comfort accounting matches the band the engine keeps in the mode it runs (not a looser ad-hoc
+# band): minutes below it count as under-heating. See comfort_band_low.
 TARGET_INDOOR = 22.0
 COMFORT_TOLERANCE = 0.5
 # THE DESIGN TEMPERATURE IS THE SIZING CONVENTION, AND IT IS LOAD-BEARING.
@@ -1335,7 +1336,8 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
     if "comfort_held" in scenario.expect:
         if stats["comfort_minutes_below"] > SCENARIO_COMFORT_BREACH_BUDGET_MIN:
             failures.append(
-                f"{stats['comfort_minutes_below']} minutes below the comfort band "
+                f"{stats['comfort_minutes_below']} minutes below the comfort band of "
+                f"{stats['comfort_band_low_c']:.1f} C "
                 f"(budget {SCENARIO_COMFORT_BREACH_BUDGET_MIN}) - the optimiser let the "
                 f"house go cold in real weather it will meet every winter"
             )
@@ -1685,6 +1687,18 @@ def build_engine(
     return engine, effect
 
 
+def comfort_band_low(mode: str) -> float:
+    """The lowest room the mode keeps: the comfort band a run in that mode is judged against.
+
+    The configured tolerance below the target, or the mode's own room floor where that is wider.
+    Savings "is allowed to cut below the set degree within reasonable limits" (the owner,
+    2026-10-29), a degree in MODE_CONFIGS: a savings run living between the tolerance and its floor
+    is doing what it was asked, not starving the house. Comfort's floor (the target) and
+    balanced's (0.2 below) lie inside the tolerance, so theirs is the tolerance band.
+    """
+    return TARGET_INDOOR - max(COMFORT_TOLERANCE, MODE_CONFIGS[mode].room_floor_below_target)
+
+
 def simulate(
     house: HouseConfig,
     times,
@@ -1702,6 +1716,7 @@ def simulate(
     latitude: float = STOCKHOLM_LATITUDE,
 ):
     engine, effect = build_engine(house, mode, enable_price, enable_weather, latitude=latitude)
+    band_low = comfort_band_low(mode)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
@@ -1730,6 +1745,7 @@ def simulate(
         "offset_min": 0,
         "offset_max": 0,
         "exceptions": 0,
+        "comfort_band_low_c": band_low,
         "comfort_minutes_below": 0,
         "comfort_degree_minutes_below": 0.0,
         "comfort_minutes_grazing": 0,
@@ -2307,8 +2323,8 @@ def simulate(
             )
             stats["cost_sek"] += energy * cur_price_ore / 100.0
 
-            if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
-                depth = TARGET_INDOOR - COMFORT_TOLERANCE - indoor
+            if indoor < band_low:
+                depth = band_low - indoor
                 # Grazing the edge is recorded but is not a breach - see
                 # SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. Both numbers are kept so a shallow
                 # excursion is visible rather than silently dropped.
@@ -2436,9 +2452,6 @@ FATAL_VIOLATIONS = frozenset(
     }
 )
 
-# The optimiser is allowed to move heat around, but not to make the house colder
-# than a do-nothing controller would. Baseline mean indoor is the comparison.
-MIN_MEAN_INDOOR_C = TARGET_INDOOR - COMFORT_TOLERANCE
 
 # THE INVARIANTS BELOW USED TO BE UNFALSIFIABLE, AND SO DID THIS WHOLE HARNESS.
 #
@@ -2494,10 +2507,12 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     if stats["indoor_min"] < 18.0:
         failures.append(f"indoor fell to {stats['indoor_min']:.2f} C (floor is 18.0)")
 
-    if stats["indoor_mean"] < MIN_MEAN_INDOOR_C:
+    # The optimiser is allowed to move heat around, but not to keep the house colder on average than
+    # the band its mode keeps.
+    if stats["indoor_mean"] < stats["comfort_band_low_c"]:
         failures.append(
             f"mean indoor {stats['indoor_mean']:.2f} C is below the comfort band "
-            f"({MIN_MEAN_INDOOR_C:.2f} C) - the optimiser under-heated the house"
+            f"({stats['comfort_band_low_c']:.2f} C) - the optimiser under-heated the house"
         )
 
     if stats["exceptions"]:
@@ -2562,8 +2577,9 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
 
     if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:
         failures.append(
-            f"{stats['comfort_minutes_below']} minutes below the comfort band "
-            f"(budget {MAX_COMFORT_MINUTES_BELOW}) - the optimiser starved the house"
+            f"{stats['comfort_minutes_below']} minutes below the comfort band of "
+            f"{stats['comfort_band_low_c']:.1f} C (budget {MAX_COMFORT_MINUTES_BELOW}) - the "
+            f"optimiser starved the house"
         )
 
     if stats["comfort_minutes_above"] > MAX_COMFORT_MINUTES_ABOVE:
