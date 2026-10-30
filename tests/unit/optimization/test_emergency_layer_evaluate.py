@@ -4,12 +4,12 @@ Phase 6 of layer refactoring: Emergency thermal debt layer extraction.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+
+import pytest
 
 from custom_components.effektguard.const import (
     DM_CRITICAL_T2_MARGIN,
     DM_THRESHOLD_AUX_LIMIT,
-    QuarterClassification,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.thermal_layer import (
@@ -42,23 +42,6 @@ class MockWeatherData:
     forecast_hours: list = None
 
 
-@dataclass
-class MockPriceData:
-    """Mock price data for testing."""
-
-    today: list = None
-
-
-class MockPriceAnalyzer:
-    """Mock price analyzer for testing."""
-
-    def __init__(self, classification=QuarterClassification.NORMAL):
-        self._classification = classification
-
-    def get_current_classification(self, quarter: int) -> QuarterClassification:
-        return self._classification
-
-
 class TestEmergencyLayerEvaluate:
     """Test suite for EmergencyLayer.evaluate_layer()."""
 
@@ -66,15 +49,10 @@ class TestEmergencyLayerEvaluate:
         self,
         latitude: float = 59.33,  # Stockholm
         heating_type: str = "radiator",
-        price_classification=QuarterClassification.NORMAL,
     ) -> EmergencyLayer:
         """Create an EmergencyLayer for testing."""
-        climate_detector = ClimateZoneDetector(latitude=latitude)
-        price_analyzer = MockPriceAnalyzer(classification=price_classification)
-
         return EmergencyLayer(
-            climate_detector=climate_detector,
-            price_analyzer=price_analyzer,
+            climate_detector=ClimateZoneDetector(latitude=latitude),
             heating_type=heating_type,
         )
 
@@ -86,9 +64,9 @@ class TestEmergencyLayerEvaluate:
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         assert isinstance(result, EmergencyLayerDecision)
@@ -109,9 +87,9 @@ class TestEmergencyLayerEvaluate:
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         assert result.offset == 0.0
@@ -119,76 +97,33 @@ class TestEmergencyLayerEvaluate:
         assert result.tier == "EMERGENCY"
         assert "EMERGENCY" in result.reason
 
-    def test_too_warm_ignores_thermal_debt(self):
-        """Test that being too warm ignores thermal debt."""
+    @pytest.mark.parametrize(
+        ("indoor", "recovers"),
+        [
+            (22.5, False),  # above its band
+            (21.0, False),  # at its floor: no recovery, in a cheap hour or not
+            (20.9, True),  # below it
+        ],
+    )
+    def test_the_room_decides_whether_the_tiers_recover(self, indoor, recovers):
+        """A room at or above its floor gets no recovery raise, whatever degree minutes say."""
         layer = self._create_layer()
         nibe_state = MockNibeState(
-            degree_minutes=-500,  # Significant debt
+            degree_minutes=-800,  # past the warning threshold for Stockholm at -5 °C
             outdoor_temp=-5.0,
-            indoor_temp=22.5,  # 1.5°C above target
+            indoor_temp=indoor,
         )
 
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
-            target_temp=21.0,
-            tolerance_range=0.5,  # Tolerance is 0.5, so 22.5 is 1.0°C above tolerance
-        )
-
-        assert result.offset == 0.0
-        assert result.weight == 0.0
-        assert "let cool naturally" in result.reason
-
-    def test_at_target_expensive_price_ignores_debt(self):
-        """Test that at target with expensive price ignores thermal debt."""
-        layer = self._create_layer(price_classification=QuarterClassification.EXPENSIVE)
-        nibe_state = MockNibeState(
-            degree_minutes=-300,  # Some debt
-            outdoor_temp=-5.0,
-            indoor_temp=21.5,  # At target
-        )
-        price_data = MockPriceData(today=[1.0] * 96)
-
-        mock_datetime = datetime(2024, 1, 15, 12, 0, 0)
-        result = layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=None,
-            price_data=price_data,
             target_temp=21.0,
             tolerance_range=0.5,
-            get_current_datetime=lambda: mock_datetime,
+            room_floor=21.0,
         )
 
-        assert result.offset == 0.0
-        assert result.weight == 0.0
-        assert "price not cheap" in result.reason
-
-    def test_at_target_cheap_price_recovers_debt(self):
-        """Test that at target with cheap price does recover thermal debt."""
-        layer = self._create_layer(price_classification=QuarterClassification.CHEAP)
-        nibe_state = MockNibeState(
-            degree_minutes=-800,  # Significant debt triggering T1 in Stockholm
-            outdoor_temp=-5.0,
-            indoor_temp=21.0,  # At target
-        )
-        price_data = MockPriceData(today=[0.5] * 96)
-
-        mock_datetime = datetime(2024, 1, 15, 12, 0, 0)
-        result = layer.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=None,
-            price_data=price_data,
-            target_temp=21.0,
-            tolerance_range=0.5,
-            get_current_datetime=lambda: mock_datetime,
-            # Note: is_volatile_cheap not passed, defaults to False
-            # The _is_price_cheap method is used internally for "at target" check
-        )
-
-        # With cheap price and DM -800 (beyond warning for Stockholm at -5°C),
-        # should trigger some recovery
-        assert result.offset > 0.0 or result.tier in ("T1", "T2", "T3", "WARNING", "CAUTION")
+        assert (result.tier in ("T1", "T2", "T3")) == recovers
+        assert (result.offset > 0.0) == recovers
 
 
 class TestEmergencyLayerTiers:
@@ -199,7 +134,6 @@ class TestEmergencyLayerTiers:
         climate_detector = ClimateZoneDetector(latitude=latitude)
         return EmergencyLayer(
             climate_detector=climate_detector,
-            price_analyzer=None,
             heating_type="radiator",
         )
 
@@ -216,9 +150,9 @@ class TestEmergencyLayerTiers:
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         # Should be T3 or T2 depending on thresholds
@@ -238,9 +172,9 @@ class TestEmergencyLayerTiers:
         result = layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         assert result.tier == "OK"
@@ -260,12 +194,10 @@ class TestEmergencyLayerThermalMass:
         """
         layer_radiator = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
-            price_analyzer=None,
             heating_type="radiator",
         )
         layer_concrete = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
-            price_analyzer=None,
             heating_type="concrete_ufh",
         )
 
@@ -281,17 +213,17 @@ class TestEmergencyLayerThermalMass:
         result_radiator = layer_radiator.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         result_concrete = layer_concrete.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         # The slab is already recovering; the radiator system has not needed to start.
@@ -312,7 +244,6 @@ class TestEmergencyLayerShouldBlockDhw:
         """Test that DHW is blocked at absolute limit."""
         layer = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
-            price_analyzer=None,
             heating_type="radiator",
         )
 
@@ -327,7 +258,6 @@ class TestEmergencyLayerShouldBlockDhw:
         """Test that DHW is allowed at normal DM."""
         layer = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
-            price_analyzer=None,
             heating_type="radiator",
         )
 
@@ -342,7 +272,6 @@ class TestEmergencyLayerShouldBlockDhw:
         """Test that DHW is blocked at T2 threshold."""
         layer = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=59.33),
-            price_analyzer=None,
             heating_type="radiator",
         )
 
@@ -366,12 +295,10 @@ class TestEmergencyLayerClimateAdaptation:
         """Test that Arctic climate allows deeper DM before warning."""
         layer_arctic = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=68.0),  # Kiruna
-            price_analyzer=None,
             heating_type="radiator",
         )
         layer_mild = EmergencyLayer(
             climate_detector=ClimateZoneDetector(latitude=48.0),  # Paris
-            price_analyzer=None,
             heating_type="radiator",
         )
 
@@ -385,17 +312,17 @@ class TestEmergencyLayerClimateAdaptation:
         result_arctic = layer_arctic.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         result_mild = layer_mild.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.5,
+            room_floor=21.0,
         )
 
         # Arctic should be less alarmed than mild climate at same DM

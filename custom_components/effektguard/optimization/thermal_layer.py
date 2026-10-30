@@ -10,7 +10,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional
 
 from homeassistant.util import dt as dt_util
 
@@ -64,9 +64,6 @@ from ..const import (
     PROACTIVE_ZONE5_OFFSET,
     PROACTIVE_ZONE5_THRESHOLD_PERCENT,
     PROACTIVE_ZONE5_WEIGHT,
-    PROACTIVE_WARM_HOUSE_THRESHOLD,
-    PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION,
-    QuarterClassification,
     RAPID_COOLING_BOOST_MAX,
     RAPID_COOLING_BOOST_MULTIPLIER,
     RAPID_COOLING_OUTDOOR_THRESHOLD,
@@ -79,12 +76,6 @@ from ..const import (
     THERMAL_RECOVERY_FORECAST_HORIZON,
     THERMAL_RECOVERY_MIN_CONFIDENCE,
     THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD,
-    THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING,
-    THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD,
-    THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING,
-    THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD,
-    THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING,
-    THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD,
     THERMAL_RECOVERY_RAPID_FACTOR,
     THERMAL_RECOVERY_RAPID_THRESHOLD,
     THERMAL_RECOVERY_T1_MIN_OFFSET,
@@ -101,7 +92,6 @@ from ..const import (
 )
 from .climate_zones import ClimateZoneDetector, keep_triggers_clear_of_the_compressor_band
 from ..utils.degree_minutes import dm_rate_per_hour
-from ..utils.time_utils import resolve_period_index
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
@@ -212,14 +202,6 @@ def get_thermal_debt_status(thermal_debt: float, dm_thresholds: dict) -> str:
     else:
         margin = thermal_debt - block_threshold
         return f"OK - {margin:.0f} DM safety margin"
-
-
-class PriceAnalyzerProtocol(Protocol):
-    """Protocol for price analyzer interface."""
-
-    def get_current_classification(self, quarter: int) -> QuarterClassification:
-        """Get price classification for a quarter."""
-        ...
 
 
 @dataclass
@@ -378,6 +360,13 @@ class EmergencyLayer:
     Past DM -1500 the layer stops cuts (a floor at 0) unless the room is above its band; it never
     commands a raise there - a saturated compressor turns a raise into immersion heat (F-124).
 
+    The recovery tiers raise only for a room below its floor (the target less the mode's
+    room_floor_below_target). At or above it the room needs no heat, and degree minutes are no
+    reason to buy any: a raise there deepens DM toward the pump's immersion heater and banks heat
+    the room then overshoots with. The closed loop on the owner's F750 + slab (four plant fits,
+    autumn, winter and spring 2025-26) bought most of its immersion heat with the room at or above
+    its target. Without a room sensor the tiers act on degree minutes alone, as NIBE does.
+
     VOLATILE-PRICE SUPPRESSION (deliberate smoothness/recovery trade-off): when the current
     spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS, should_skip_volatile_boost()
     zeroes the T1/T2/T3 recovery offset and cuts weight to VOLATILE_WEIGHT_REDUCTION, to avoid
@@ -389,7 +378,6 @@ class EmergencyLayer:
     def __init__(
         self,
         climate_detector: ClimateZoneDetector,
-        price_analyzer: Optional[PriceAnalyzerProtocol] = None,
         heating_type: str = "radiator",
         get_thermal_trend: Optional[Callable[[], dict]] = None,
         get_outdoor_trend: Optional[Callable[[], dict]] = None,
@@ -398,13 +386,11 @@ class EmergencyLayer:
 
         Args:
             climate_detector: ClimateZoneDetector for context-aware thresholds
-            price_analyzer: Optional price analyzer for cheap period detection
             heating_type: Heating system type ("radiator", "concrete_ufh", "timber")
             get_thermal_trend: Callable returning thermal trend dict
             get_outdoor_trend: Callable returning outdoor trend dict
         """
         self.climate_detector = climate_detector
-        self.price_analyzer = price_analyzer
         self.heating_type = heating_type
         self._get_thermal_trend = get_thermal_trend or (
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
@@ -643,26 +629,22 @@ class EmergencyLayer:
         self,
         nibe_state,
         weather_data,
-        price_data,
         target_temp: float,
         tolerance_range: float,
-        get_current_datetime: Optional[Callable] = None,
+        room_floor: float,
         is_volatile: bool = False,
     ) -> EmergencyLayerDecision:
         """Emergency layer: Smart context-aware thermal debt response.
 
-        CRITICAL RULE (Nov 27, 2025):
-        Never heat when indoor temperature exceeds target + tolerance.
-        Thermal debt while overheating means "flow temp was correctly reduced".
-        Let natural cooling bring temp down first, THEN recover DM during cheap periods.
+        A measured room at or above its floor gets no recovery raise: it needs no heat, whatever
+        degree minutes say. Below the floor the tiers recover as before.
 
         Args:
             nibe_state: Current NIBE state
             weather_data: Weather forecast data (for damping decisions)
-            price_data: Price data (for cheap period detection)
             target_temp: Target indoor temperature
             tolerance_range: Temperature tolerance range
-            get_current_datetime: Callable returning current datetime (for testing)
+            room_floor: The lowest room temperature the mode accepts before it buys heat
             is_volatile: True if in volatile cheap period (brief duration)
 
         Returns:
@@ -693,9 +675,9 @@ class EmergencyLayer:
 
         temp_deviation = indoor_temp - target_temp
         # Comfort reasoning needs a REAL indoor reading. Without a room sensor the adapter reports
-        # DEFAULT_INDOOR_TEMP (== target), so temp_deviation == 0.0 and Case 2's `>= 0` gate would
-        # permanently disable DM protection on exactly the systems that depend on it most. Skip the
-        # comfort cases and use the degree-minute tiers, as NIBE does sensorless.
+        # DEFAULT_INDOOR_TEMP (== target), so a room test against it would permanently disable DM
+        # protection on exactly the systems that depend on it most. Skip the room cases and use the
+        # degree-minute tiers, as NIBE does sensorless.
         indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
         too_warm = indoor_is_measured and temp_deviation > tolerance_range
 
@@ -806,29 +788,22 @@ class EmergencyLayer:
                     dm_rate=dm_rate,
                 )
 
-        # Case 1: Too warm (above tolerance)
-        if too_warm:
+        # A room at or above its floor needs no heat: no recovery raise, cheap hour or not. It used
+        # to recover at the target in a cheap quarter - at night, onto a compressor that is flat out
+        # by then, so the raise bought immersion heat for a room that did not need it.
+        if indoor_is_measured and indoor_temp >= room_floor:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
                 offset=0.0,
                 weight=0.0,
-                reason=f"DM {degree_minutes:.0f} but {temp_deviation:.1f}°C over target - let cool naturally",
+                reason=(
+                    f"DM {degree_minutes:.0f} but room {indoor_temp:.1f}°C at or above its floor "
+                    f"{room_floor:.1f}°C - no raise"
+                ),
                 tier="OK",
                 degree_minutes=degree_minutes,
+                dm_rate=dm_rate,
             )
-
-        # Case 2: At target + Not cheap (and not at absolute limit)
-        # Use _is_price_cheap to check current price classification
-        if indoor_is_measured and temp_deviation >= 0 and degree_minutes > DM_THRESHOLD_AUX_LIMIT:
-            if not self._is_price_cheap(price_data, get_current_datetime):
-                return EmergencyLayerDecision(
-                    name="Thermal Debt",
-                    offset=0.0,
-                    weight=0.0,
-                    reason=f"At target & price not cheap - ignoring DM {degree_minutes:.0f}",
-                    tier="OK",
-                    degree_minutes=degree_minutes,
-                )
 
         # Calculate context-aware thresholds based on outdoor temperature
         expected_dm_range = self.climate_detector.get_expected_dm_range(outdoor_temp)
@@ -859,8 +834,6 @@ class EmergencyLayer:
                 min_damped_offset=THERMAL_RECOVERY_T3_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
             )
 
             # Apply anti-windup cap (T3 is critical, so we still apply but note it)
@@ -913,8 +886,6 @@ class EmergencyLayer:
                 min_damped_offset=THERMAL_RECOVERY_T2_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
             )
 
             # Apply anti-windup cap to prevent escalation
@@ -967,8 +938,6 @@ class EmergencyLayer:
                 min_damped_offset=THERMAL_RECOVERY_T1_MIN_OFFSET,
                 weather_data=weather_data,
                 current_outdoor_temp=outdoor_temp,
-                indoor_temp=indoor_temp,
-                target_temp=target_temp,
             )
 
             # Apply anti-windup cap to prevent escalation
@@ -1043,29 +1012,6 @@ class EmergencyLayer:
             dm_rate=dm_rate,
         )
 
-    def _is_price_cheap(self, price_data, get_current_datetime: Optional[Callable] = None) -> bool:
-        """Check if current price is classified as CHEAP or VERY_CHEAP."""
-        if not price_data or not price_data.today or not self.price_analyzer:
-            return False
-
-        try:
-            if get_current_datetime:
-                now = get_current_datetime()
-            else:
-                now = None  # resolve_period_index will use dt_util.now()
-
-            current_quarter = resolve_period_index(price_data, now)
-            if current_quarter is not None:
-                classification = self.price_analyzer.get_current_classification(current_quarter)
-                return classification in (
-                    QuarterClassification.CHEAP,
-                    QuarterClassification.VERY_CHEAP,
-                )
-        except (AttributeError, IndexError, TypeError):
-            pass  # Price data unavailable or malformed - return False (default to not cheap)
-
-        return False
-
     def _get_thermal_mass_adjusted_thresholds(self, base_thresholds: dict) -> dict:
         """Thresholds moved to suit this house's thermal lag. See apply_thermal_mass_buffer."""
         adjusted = apply_thermal_mass_buffer(base_thresholds, self.heating_type)
@@ -1086,12 +1032,11 @@ class EmergencyLayer:
         min_damped_offset: float,
         weather_data=None,
         current_outdoor_temp: Optional[float] = None,
-        indoor_temp: Optional[float] = None,
-        target_temp: Optional[float] = None,
     ) -> tuple[float, str]:
-        """Apply thermal recovery damping when house warming naturally or overshooting.
+        """Apply thermal recovery damping when the house is warming naturally.
 
-        Prevents concrete slab thermal overshoot during recovery periods.
+        Prevents concrete slab thermal overshoot during recovery periods. A recovery tier is only
+        reached by a room below its floor, so there is no overshoot left to damp against.
 
         Args:
             base_offset: Original recovery offset
@@ -1099,8 +1044,6 @@ class EmergencyLayer:
             min_damped_offset: Minimum allowed offset after damping
             weather_data: Weather forecast data
             current_outdoor_temp: Current outdoor temperature
-            indoor_temp: Current indoor temperature
-            target_temp: Target indoor temperature
 
         Returns:
             Tuple of (damped_offset, damping_reason_string)
@@ -1108,34 +1051,8 @@ class EmergencyLayer:
         thermal_trend = self._get_thermal_trend() or {}
         outdoor_trend = self._get_outdoor_trend() or {}
 
-        # Calculate overshoot damping factor
-        overshoot_factor = 1.0
-        overshoot_reason = ""
-
-        if indoor_temp is not None and target_temp is not None:
-            overshoot = indoor_temp - target_temp
-            if overshoot >= THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD:
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING
-                overshoot_reason = f"severe overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD:
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING
-                overshoot_reason = f"moderate overshoot +{overshoot:.1f}°C"
-            elif overshoot >= THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD:
-                overshoot_factor = THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING
-                overshoot_reason = f"mild overshoot +{overshoot:.1f}°C"
-
         # Check trend confidence
         if thermal_trend.get("confidence", 0.0) < THERMAL_RECOVERY_MIN_CONFIDENCE:
-            if overshoot_factor < 1.0:
-                damped_offset = max(base_offset * overshoot_factor, min_damped_offset)
-                _LOGGER.info(
-                    "%s overshoot damping: %s, offset %.2f°C → %.2f°C",
-                    tier_name,
-                    overshoot_reason,
-                    base_offset,
-                    damped_offset,
-                )
-                return damped_offset, overshoot_reason
             return base_offset, ""
 
         warming_rate = thermal_trend.get("rate_per_hour", 0.0)
@@ -1166,19 +1083,12 @@ class EmergencyLayer:
         ):
             if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD:
                 warming_factor = THERMAL_RECOVERY_RAPID_FACTOR
-                warming_reason = f"rapid warming {warming_rate:.2f}°C/h"
+                damping_reason = f"rapid warming {warming_rate:.2f}°C/h"
             else:
                 warming_factor = THERMAL_RECOVERY_DAMPING_FACTOR
-                warming_reason = f"warming {warming_rate:.2f}°C/h"
+                damping_reason = f"warming {warming_rate:.2f}°C/h"
 
-            combined_factor = warming_factor * overshoot_factor
-
-            if overshoot_reason:
-                damping_reason = f"{warming_reason} + {overshoot_reason}"
-            else:
-                damping_reason = warming_reason
-
-            damped_offset = max(base_offset * combined_factor, min_damped_offset)
+            damped_offset = max(base_offset * warming_factor, min_damped_offset)
 
             _LOGGER.info(
                 "%s thermal recovery damping: %s, offset %.2f°C → %.2f°C",
@@ -1189,11 +1099,6 @@ class EmergencyLayer:
             )
 
             return damped_offset, damping_reason
-
-        # Apply overshoot damping only if no warming detected
-        if overshoot_factor < 1.0:
-            damped_offset = max(base_offset * overshoot_factor, min_damped_offset)
-            return damped_offset, overshoot_reason
 
         return base_offset, ""
 
@@ -1268,6 +1173,11 @@ class ProactiveLayer:
     - Zone 1 (15%): Early warning, gentle nudge before compressor starts
     - Zone 2 (40%): Moderate action when compressor running
     - Zone 3 (80%): Strong action when approaching warning threshold
+
+    A measured room at or above its floor gets none of it: the zones raise to prevent a shortfall,
+    and a room at its floor has none. Warmer than that, a negative DM is the pump catching up with
+    the curve, and every raise deepens it toward the immersion heater. (A room more than 0.5 °C
+    above the target once only cut the zones' weight to 30 %, Z5 excepted.)
     """
 
     def __init__(
@@ -1291,56 +1201,12 @@ class ProactiveLayer:
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
 
-    def _is_house_warm(self, indoor_temp: float, target_temp: float) -> bool:
-        """Check if house is warm enough to reduce proactive heating.
-
-        Above target + threshold DM recovery is less urgent: the comfort layer is lowering the
-        heat, and a negative DM there is that cut, not a shortfall.
-
-        Args:
-            indoor_temp: Current indoor temperature (°C)
-            target_temp: Target indoor temperature (°C)
-
-        Returns:
-            True if house is warm (above target + threshold)
-        """
-        return indoor_temp > target_temp + PROACTIVE_WARM_HOUSE_THRESHOLD
-
-    def _apply_warm_house_reduction(
-        self, weight: float, indoor_temp: float, target_temp: float, zone: str
-    ) -> tuple[float, str]:
-        """Apply weight reduction when house is warm.
-
-        Z5 is exempt because at warning boundary, DM recovery takes priority.
-
-        Args:
-            weight: Original weight
-            indoor_temp: Current indoor temperature (°C)
-            target_temp: Target indoor temperature (°C)
-            zone: Zone identifier (Z1-Z5, RAPID_COOLING)
-
-        Returns:
-            Tuple of (adjusted_weight, reason_suffix)
-        """
-        # Z5 exempt: at warning boundary, prioritize DM recovery
-        if zone == "Z5":
-            return weight, ""
-
-        if self._is_house_warm(indoor_temp, target_temp):
-            overshoot = indoor_temp - target_temp
-            reduced_weight = weight * PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION
-            return (
-                reduced_weight,
-                f" [warm house: +{overshoot:.1f}°C, weight {weight:.2f}→{reduced_weight:.2f}]",
-            )
-
-        return weight, ""
-
     def evaluate_layer(
         self,
         nibe_state,
         weather_data,
         target_temp: float,
+        room_floor: float,
         is_volatile: bool = False,
     ) -> ProactiveLayerDecision:
         """Proactive debt prevention with climate-aware thresholds and trend prediction.
@@ -1349,6 +1215,7 @@ class ProactiveLayer:
             nibe_state: Current NIBE state
             weather_data: Weather forecast data (for forecast validation)
             target_temp: Target indoor temperature
+            room_floor: The lowest room temperature the mode accepts before it buys heat
             is_volatile: True if in volatile cheap period (brief duration)
 
         Returns:
@@ -1361,6 +1228,19 @@ class ProactiveLayer:
         # Get temperature trend for predictive intervention
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
+
+        # A measured room at or above its floor needs no heat. Without a room sensor the indoor
+        # reading is a placeholder, and the zones act on degree minutes alone.
+        if getattr(nibe_state, "indoor_temp_valid", True) and indoor_temp >= room_floor:
+            return ProactiveLayerDecision(
+                name="Proactive",
+                offset=0.0,
+                weight=0.0,
+                reason=f"Room {indoor_temp:.1f}°C at or above its floor {room_floor:.1f}°C",
+                zone="NONE",
+                degree_minutes=degree_minutes,
+                trend_rate=trend_rate,
+            )
 
         # Calculate current deficit
         deficit = target_temp - indoor_temp
@@ -1402,11 +1282,7 @@ class ProactiveLayer:
                 else:
                     volatile_suffix = ""
 
-                # Apply warm house weight reduction
                 weight = RAPID_COOLING_WEIGHT
-                weight, warm_suffix = self._apply_warm_house_reduction(
-                    weight, indoor_temp, target_temp, "RAPID_COOLING"
-                )
 
                 # Apply weight reduction during volatile cheap periods
                 if is_volatile:
@@ -1419,7 +1295,7 @@ class ProactiveLayer:
                     reason=(
                         f"Rapid cooling ({trend_rate:.2f}°C/h), "
                         f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
-                        f"{forecast_reason}{warm_suffix}{volatile_suffix}"
+                        f"{forecast_reason}{volatile_suffix}"
                     ),
                     zone="RAPID_COOLING",
                     degree_minutes=degree_minutes,
@@ -1454,11 +1330,7 @@ class ProactiveLayer:
             else:
                 volatile_suffix = ""
 
-            # Apply warm house weight reduction
             weight = LAYER_WEIGHT_PROACTIVE_MIN
-            weight, warm_suffix = self._apply_warm_house_reduction(
-                weight, indoor_temp, target_temp, "Z1"
-            )
 
             # Apply weight reduction during volatile cheap periods
             if is_volatile:
@@ -1468,7 +1340,7 @@ class ProactiveLayer:
                 name="Z1",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{warm_suffix}{volatile_suffix}",
+                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{volatile_suffix}",
                 zone="Z1",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1485,11 +1357,7 @@ class ProactiveLayer:
             else:
                 volatile_suffix = ""
 
-            # Apply warm house weight reduction
             weight = PROACTIVE_ZONE2_WEIGHT
-            weight, warm_suffix = self._apply_warm_house_reduction(
-                weight, indoor_temp, target_temp, "Z2"
-            )
 
             # Apply weight reduction during volatile cheap periods
             if is_volatile:
@@ -1499,7 +1367,7 @@ class ProactiveLayer:
                 name="Z2",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, boost recovery speed{warm_suffix}{volatile_suffix}",
+                reason=f"DM {degree_minutes:.0f}, boost recovery speed{volatile_suffix}",
                 zone="Z2",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1519,11 +1387,7 @@ class ProactiveLayer:
             else:
                 volatile_suffix = ""
 
-            # Apply warm house weight reduction
             weight = PROACTIVE_ZONE3_WEIGHT
-            weight, warm_suffix = self._apply_warm_house_reduction(
-                weight, indoor_temp, target_temp, "Z3"
-            )
 
             # Apply weight reduction during volatile cheap periods
             if is_volatile:
@@ -1533,7 +1397,7 @@ class ProactiveLayer:
                 name="Z3",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{warm_suffix}{volatile_suffix}",
+                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{volatile_suffix}",
                 zone="Z3",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1550,11 +1414,7 @@ class ProactiveLayer:
             else:
                 volatile_suffix = ""
 
-            # Apply warm house weight reduction
             weight = PROACTIVE_ZONE4_WEIGHT
-            weight, warm_suffix = self._apply_warm_house_reduction(
-                weight, indoor_temp, target_temp, "Z4"
-            )
 
             # Apply weight reduction during volatile cheap periods
             if is_volatile:
@@ -1564,13 +1424,13 @@ class ProactiveLayer:
                 name="Z4",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, strong prevention{warm_suffix}{volatile_suffix}",
+                reason=f"DM {degree_minutes:.0f}, strong prevention{volatile_suffix}",
                 zone="Z4",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
             )
 
-        # PROACTIVE ZONE 5 (no warm house reduction - at warning boundary)
+        # PROACTIVE ZONE 5
         if expected_dm["warning"] < degree_minutes <= zone5_threshold:
             offset = PROACTIVE_ZONE5_OFFSET
 

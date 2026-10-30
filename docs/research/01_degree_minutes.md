@@ -42,7 +42,9 @@ the owner's offset at +10 on 2026-01-23 and 2026-01-31 with DM past −1500, and
 So:
 
 - A pump's own aux start has to be read from that pump. The model profiles' `aux_start_dm` holds
-  the factory default, and only the simulator's plant reads it.
+  the factory default; the simulator's plant and the heater guard read it (the guard keeps a room at
+  or above its floor short of it). A pump whose heater starts deeper, like the owner's, is held
+  shallower than it needs to be.
 - The elpatron is **not the enemy.** NIBE placed it to spare the compressor from grinding at full
   frequency for hours. Fighting it with a bigger curve offset trades cheap kWh for expensive
   compressor life.

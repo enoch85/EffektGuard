@@ -8,6 +8,13 @@ buffer (`apply_thermal_mass_buffer`: concrete 1.3, timber 1.15, radiators 1.0), 
 earlier. The ladder is Z1, Z2, Z3, Z4, Z5, T1, T2, T3, EMERGENCY. There is no WARNING or CAUTION
 tier: `normal_max` equals `warning` in every zone, so they could never fire.
 
+The ladder raises only for a room below its floor: the target less the mode's
+`room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it the room needs
+no heat, and a raise there only deepens DM toward the pump's immersion heater. Without a room
+sensor the ladder runs on DM alone. Near the heater start, the heater guard keeps such a room's
+DM off the heater, except while the pump is short of capacity; then nothing cuts below 0
+([08](08_layer_priority_system.md)).
+
 ## The rungs
 
 | Rung | Fires at DM | Offset | Weight |
@@ -58,13 +65,13 @@ Checked in this order, every cycle:
    100 DM/h, cut by 1 °C per 100 DM/h of fall, at weight 0.7, and no raise is allowed for 30
    minutes (`ANTI_WINDUP_COOLDOWN_MINUTES`). A fall with no recent raise is treated as weather and
    falls through to the tiers.
-3. **No vote** when the room is above its band, or at or above target while the price is not
-   cheap. Both need a real room sensor; without one the tiers run on DM alone.
+3. **No vote** when the room is at or above its floor. Needs a real room sensor; without one the
+   tiers run on DM alone.
 4. **T3, T2, T1** by the thresholds above. Each tier's offset is damped by
    `_apply_thermal_recovery_damping` when the house is warming on its own (0.3 °C/h or more: x0.6;
-   0.5 °C/h or more: x0.4) or already over target (+0.5 / +1.0 / +1.5 °C: x0.95 / x0.9 / x0.8),
-   never below +1.0 / +1.5 / +2.0 (`THERMAL_RECOVERY_T*_MIN_OFFSET`), and not at all when the
-   6-hour forecast drops more than 2 °C. Anti-windup caps a tier at the current offset.
+   0.5 °C/h or more: x0.4), never below +1.0 / +1.5 / +2.0 (`THERMAL_RECOVERY_T*_MIN_OFFSET`), and
+   not at all when the 6-hour forecast drops more than 2 °C. Anti-windup caps a tier at the current
+   offset.
 
 While a tier is recovering, a critical cost layer (a PEAK price quarter, or the effect layer at the
 monthly peak) may only moderate it down to `DM_CRITICAL_PEAK_AWARE_OFFSETS` (+0.5 / +0.75 / +1.0),
@@ -72,12 +79,12 @@ never reverse it ([08](08_layer_priority_system.md)).
 
 ## ProactiveLayer
 
-- **Rapid cooling** first: indoor falling 0.3 °C/h or faster (`RAPID_COOLING_THRESHOLD`) below
+- **No vote** when the room is at or above its floor (a real room sensor; without one the zones run
+  on DM alone).
+- **Rapid cooling** next: indoor falling 0.3 °C/h or faster (`RAPID_COOLING_THRESHOLD`) below
   0 °C outdoors with a deficit over 0.3 °C votes 2 x the rate, at most +3.0, weight 0.8; x1.3 when
   the next 3 forecast hours drop more than 1 °C, x0.8 otherwise.
 - Otherwise the Z-zone the DM is in, from the table.
-- A room more than 0.5 °C above target (`PROACTIVE_WARM_HOUSE_THRESHOLD`) cuts the weight to 30 %;
-  Z5 is exempt.
 
 ## Volatile prices
 

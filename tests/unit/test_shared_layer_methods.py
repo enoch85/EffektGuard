@@ -596,7 +596,6 @@ class TestDhwOptimizerEmergencyLayerIntegration:
         climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm
         return EmergencyLayer(
             climate_detector=climate_detector,
-            price_analyzer=None,
             heating_type="radiator",
         )
 

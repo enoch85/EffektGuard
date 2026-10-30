@@ -975,13 +975,15 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 39.75},
+                    houses={"airsource_f2040": 34.0},
                     why=(
                         "F-124 on the air-source F2040 only: aux above what its capacity deficit "
                         "forces. The wear guard caps raises while the compressor is saturated "
                         "(54.25 kWh before it had a trigger), but lets a share of them through for "
                         "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. 39.75 kWh against 19.8 forced since the bench runs the "
+                        "attributed yet. 34.0 kWh against 17.8 forced since the ladder raises only "
+                        "for a room below its floor and the heater guard keeps such a room's DM "
+                        "off the heater; 39.75 against 19.8 before, since the bench runs the "
                         "coordinator's gate policy and hands the engine the projected period-mean "
                         "power; 35.75 against 20.4 while it gated every proposal on the "
                         "instantaneous draw (eaa3986). The projected power alone takes it to "
@@ -1009,41 +1011,47 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 179.67},
+                    houses={"concrete_f1155": 175.01},
                     why=(
-                        "F-124 on the undersized F1155: 179.7 kWh of immersion against 126.7 forced, "
-                        "where NIBE alone burns 146.4. The wear guard judges it against the maximum "
-                        "the pump publishes. 188.4 before the register landed on the whole degree "
-                        "nearest to the guard's cap (191.3 recorded before that). 203.0 against "
-                        "133.9 before the bench ran the "
-                        "coordinator's gate policy: the wear guard's withdrawals and anti-windup "
-                        "going past the tracker take it to 179.7 alone, the projected period-mean "
-                        "power alone to 201.8, both to 191.3. 191.9 before #54: the slab's longer "
-                        "pre-heat lead votes on 22 % of cycles instead of 14 %, +11.1 kWh, 61 SEK "
-                        "cheaper."
+                        "F-124 on the undersized F1155: 175.0 kWh of immersion against 131.5 "
+                        "forced, where NIBE alone burns 146.4 - 179.7 against 126.7 before the "
+                        "ladder's room floor, the heater guard and the capacity shortfall. The "
+                        "floor and the guard without the shortfall burn 182.0: this pump's heater "
+                        "holds its DM AT its start, which the shortfall must count to keep the "
+                        "guard off it. The wear guard judges it against the maximum the pump "
+                        "publishes. 188.4 before the register landed on the whole degree nearest "
+                        "to the guard's cap (191.3 recorded before that). 203.0 against 133.9 "
+                        "before the bench ran the coordinator's gate policy: the wear guard's "
+                        "withdrawals and anti-windup going past the tracker take it to 179.7 "
+                        "alone, the projected period-mean power alone to 201.8, both to 191.3. "
+                        "191.9 before #54: the slab's longer pre-heat lead votes on 22 % of cycles "
+                        "instead of 14 %, +11.1 kWh, 61 SEK cheaper."
                     ),
                 ),
                 KnownRed(
                     fails_with="minutes below the comfort band",
                     stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 1450},
+                    houses={"airsource_f2040": 890},
                     why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 1450 minutes "
-                        "below the band, where NIBE alone has 585. 1200 before the bench ran the "
-                        "coordinator's gate policy. Each bypass measured alone, with the projected "
-                        "period-mean power: anti-windup 1445, the wear guard's withdrawal 1385 (DM "
-                        "to the -3000 integrator floor), emergency 1085 - the same as the "
-                        "projected power alone, so it changes nothing here - and all three 1450. "
-                        "Not attributed below that (F-124)."
+                        "The undersized F2040 is colder under EffektGuard than alone: 890 minutes "
+                        "below the band, where NIBE alone has 585 - 1450 before EffektGuard "
+                        "learned where this pump runs short of capacity and stopped cutting below "
+                        "its curve there; the ladder's room floor and the heater guard without "
+                        "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
+                        "policy. Each bypass measured alone, with the projected period-mean power: "
+                        "anti-windup 1445, the wear guard's withdrawal 1385 (DM to the -3000 "
+                        "integrator floor), emergency 1085 - the same as the projected power "
+                        "alone, so it changes nothing here - and all three 1450. Not attributed "
+                        "below that (F-124)."
                     ),
                 ),
                 KnownRed(
                     fails_with="past the -1500 auxiliary-heat limit",
                     houses={"airsource_f2040": None},
                     why=(
-                        "The undersized F2040's DM reaches -2804 (-2779 before the bench ran the "
-                        "coordinator's gate policy); NIBE alone reaches -1890 (F-124, F-112: its "
-                        "own heater starts at -760)."
+                        "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
+                        "shortfall, -2779 before the bench ran the coordinator's gate policy); "
+                        "NIBE alone reaches -1890 (F-124, F-112: its own heater starts at -760)."
                     ),
                 ),
             ),
@@ -1067,15 +1075,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 68.75},
+                    houses={"airsource_f2040": 63.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024: 68.75 kWh against 46.5 forced (87.25 before the "
-                        "wear guard had a trigger; 76.75 before the bench ran the coordinator's "
-                        "gate policy - the bypasses alone give 66.5, the projected period-mean "
-                        "power alone 76.25, both 68.75). The other four houses hold every "
-                        "invariant. First reproduction of F-124 on REAL weather rather than a "
-                        "synthetic temperature shift."
+                        "nordic_coldsnap_jan2024: 63.25 kWh against 44.0 forced (68.75 against "
+                        "46.5 before the ladder's room floor and the heater guard; 87.25 before "
+                        "the wear guard had a trigger; 76.75 before the bench ran the "
+                        "coordinator's gate policy - the bypasses alone give 66.5, the projected "
+                        "period-mean power alone 76.25, both 68.75). The other four houses hold "
+                        "every invariant. First reproduction of F-124 on REAL weather rather than "
+                        "a synthetic temperature shift."
                     ),
                 ),
             ),
@@ -1109,7 +1118,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.28, "apartment_f730": 8.01, "airsource_f2040": 8.60},
+                    houses={"wooden_f750": 6.34, "apartment_f730": 8.01, "airsource_f2040": 8.66},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1119,7 +1128,9 @@ SCENARIOS = {
                         "therefore too low, and no saving may be quoted from it. The overshoot "
                         "ramp moved them up from 6.17, 7.71 and 8.56; the projected period-mean "
                         "power the bench now hands the engine moved the F2040's from 8.59 to 8.60 "
-                        "(the gate bypasses alone leave it at 8.59)."
+                        "(the gate bypasses alone leave it at 8.59); the ladder's room floor, the "
+                        "heater guard and the capacity shortfall the F750's from 6.28 to 6.34 and "
+                        "the F2040's to 8.66."
                     ),
                 ),
                 KnownRed(
@@ -1137,20 +1148,9 @@ SCENARIOS = {
                     ),
                 ),
                 KnownRed(
-                    fails_with="in weather this mild",
-                    stat="aux_kwh",
-                    houses={"villa_s1155": 0.6},
-                    why=(
-                        "CONTROLLER, the same cause as the ladder above: the S1155's DM drifts to "
-                        "-460, which is its own aux-start setting, so its immersion heater runs "
-                        "briefly in May. Unrecorded until the sweep began checking which failure "
-                        "each note covers."
-                    ),
-                ),
-                KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3405, "apartment_f730": 11505},
+                    houses={"wooden_f750": 3305, "apartment_f730": 11390},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1159,7 +1159,8 @@ SCENARIOS = {
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
                         "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
-                        "correction below it."
+                        "correction below it. The ladder's room floor and the heater guard moved "
+                        "them from 3405 and 11505."
                     ),
                 ),
             ),
@@ -1176,7 +1177,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.66, "apartment_f730": 7.40, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.68, "apartment_f730": 7.43, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
@@ -1188,7 +1189,8 @@ SCENARIOS = {
                         "model and are the part this window is read for. The comfort side is "
                         "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
-                        "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C."
+                        "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
+                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40."
                     ),
                 ),
             ),

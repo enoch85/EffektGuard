@@ -2,7 +2,7 @@
 
 Intelligent NIBE heat pump control for Home Assistant, optimizing against Swedish spot prices and
 the effect tariff (*effektavgift*). **Production code running in real homes**: safety and pump
-health before savings, comfort before cost.
+health first, then savings, down to the room temperature the chosen mode keeps.
 
 It controls exactly **one** actuator - the heating-curve offset register (47011) - plus two
 optional switches (DHW temporary lux, increased ventilation). It calls no external API; it reads
@@ -85,6 +85,14 @@ thermal mass (concrete ×1.3, timber ×1.15, radiator ×1.0). The same pump at �
 Kiruna and "in trouble" in Malmö, with no configuration. Past DM −1500 the EMERGENCY tier floors
 the offset at 0 unless the room is above its band, and raises nothing itself - the compressor is
 flat out there, so a raise only buys immersion heat (F-124).
+
+The ladder raises only for a room below its floor - the target less the mode's
+`room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it, the heater
+guard keeps degree minutes off the pump's immersion heater start (the model profile's factory
+`aux_start_dm`), and no price cut goes deeper than −2. Where the pump has been seen short of
+capacity - DM held at its heater start for three hours at its own curve, six hours after a cut of
+ours (`utils/capacity_shortfall.py`) - and the next 12 forecast hours are as cold, nothing cuts
+below 0 and the guard stands down.
 
 The ladder is `Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY` - eight rungs that fire. There
 is no WARNING or CAUTION tier; see the open-findings register for why.

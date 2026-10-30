@@ -21,7 +21,6 @@ from custom_components.effektguard.const import (
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
 )
-from custom_components.effektguard.models.nibe import NibeF750Profile
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
@@ -344,8 +343,20 @@ class TestThePumpsOwnMaximum:
         assert verdicts[11] and all(verdicts[12:])
 
 
-def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None) -> DecisionEngine:
-    return DecisionEngine(
+ASKED = 3.0  # a raise the layers ask for, for the guards that follow them
+
+
+def _engine(
+    target: float = TARGET, tolerance: float = TOLERANCE, predictor=None, asks: float | None = None
+) -> DecisionEngine:
+    """An engine whose layers ask for `asks` when it is given, else what the real layers ask for.
+
+    The degree-minute ladder raises only for a room below its floor, and these tests place a
+    room across its whole comfort band: what follows the layers is what they are about. No model
+    profile, so the heater guard - which reads the profile's heater start - stays out of them;
+    it has tests of its own.
+    """
+    engine = DecisionEngine(
         price_analyzer=PriceAnalyzer(),
         effect_manager=EffectManager(MagicMock()),
         thermal_model=ThermalModel(0.7, 1.0),
@@ -359,9 +370,11 @@ def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None
             "thermal_mass": 0.7,
             "insulation_quality": 1.0,
         },
-        heat_pump_model=NibeF750Profile(),
         thermal_predictor=predictor,
     )
+    if asks is not None:
+        engine._aggregate_layers = lambda layers, starvation=0.0: asks
+    return engine
 
 
 def _decision(saturated: bool, dm: float = -600.0, engine=None, **state):
@@ -387,7 +400,11 @@ class TestTheCap:
     def test_a_saturated_compressor_gets_its_own_curve(self, current_offset, above):
         """At the top of its comfort band or above a raise is declined, and one already on the
         register is withdrawn - never turned into a cut."""
-        top = {"indoor_temp": TARGET + BAND + above, "current_offset": current_offset}
+        top = {
+            "indoor_temp": TARGET + BAND + above,
+            "current_offset": current_offset,
+            "engine": _engine(asks=ASKED),
+        }
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"
         assert _offset(True, **top) == 0.0
@@ -409,11 +426,11 @@ class TestTheCap:
     def test_lower_in_the_band_a_share_of_the_raise_passes(self, share):
         """Half at the target, all of it at the band's lower edge: there, immersion heat is the heat
         the house is short of."""
-        indoor = TARGET + BAND - share * 2 * BAND
-        asked = _offset(False, indoor_temp=indoor)
+        room = {"indoor_temp": TARGET + BAND - share * 2 * BAND, "engine": _engine(asks=ASKED)}
+        asked = _offset(False, **room)
 
         assert asked > 0.5, "precondition: a raise"
-        assert _offset(True, indoor_temp=indoor) == pytest.approx(asked * min(share, 1.0))
+        assert _offset(True, **room) == pytest.approx(asked * min(share, 1.0))
 
     def test_at_the_bands_lower_edge_nothing_is_capped(self):
         """Read in tenths, as a sensor reports it: 21.0 + 0.2 - 20.8 falls a hair short of 0.4 in
@@ -429,7 +446,7 @@ class TestTheCap:
         assert _offset(True, indoor_temp=TARGET + 1.5) == cut
 
     def test_past_the_aux_limit_it_is_neither_cut_nor_raised(self):
-        top = {"dm": -1600.0, "indoor_temp": TARGET + BAND}
+        top = {"dm": -1600.0, "indoor_temp": TARGET + BAND, "engine": _engine(asks=ASKED)}
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"
         assert _offset(True, **top) == 0.0
@@ -464,7 +481,7 @@ class TestTheCap:
                 flow_temp=40.0,
                 degree_minutes=-600.0,
             )
-        return {"engine": _engine(predictor=predictor), "indoor_temp": top}
+        return {"engine": _engine(predictor=predictor, asks=ASKED), "indoor_temp": top}
 
     def test_a_room_two_ticks_down_in_two_hours_gets_the_whole_raise(self, monkeypatch):
         """On a slab the room falls for hours after the guard holds back: what it holds back from a
@@ -520,7 +537,7 @@ class TestTheCap:
 
 def _share_of_the_raise(share: float, **state) -> dict:
     """A room placed so that the guard lets `share` of the raise through (no cooling trend)."""
-    return {"indoor_temp": TARGET + BAND - share * 2 * BAND, **state}
+    return {"indoor_temp": TARGET + BAND - share * 2 * BAND, "engine": _engine(asks=ASKED), **state}
 
 
 def _asked(state: dict) -> float:
@@ -567,6 +584,7 @@ class TestTheRegister:
             "indoor_temp": TARGET + BAND,
             "current_offset": 1.0,
             "compressor_hz_max": CEILING_HZ + below_max,
+            "engine": _engine(asks=ASKED),
         }
 
         assert _offset(False, **{**top, "compressor_hz_max": None}) > 1.5, "precondition: a raise"
@@ -597,7 +615,7 @@ class TestTheRegister:
         ],
     )
     def test_otherwise_the_raise_passes(self, state):
-        top = {"indoor_temp": TARGET + BAND, "current_offset": 1.0}
+        top = {"indoor_temp": TARGET + BAND, "current_offset": 1.0, "engine": _engine(asks=ASKED)}
 
         assert _offset(False, **top, **state) == pytest.approx(
             _offset(False, **top, compressor_hz_max=None)

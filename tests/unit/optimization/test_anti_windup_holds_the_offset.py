@@ -66,9 +66,9 @@ def _drive(current_offset: float, dm_start: float, dm_step: float, samples: int 
                 dm_start + dm_step * i, current_offset, start + timedelta(minutes=5 * i)
             ),
             weather_data=None,
-            price_data=None,
             target_temp=TARGET,
             tolerance_range=0.2,
+            room_floor=TARGET,
         )
     return decision
 
