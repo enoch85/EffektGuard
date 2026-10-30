@@ -70,7 +70,7 @@ Under the gear icon:
 
 | Setting | Range (default) | What it does |
 |---|---|---|
-| Mode | Comfort, Balanced, Savings (Balanced) | Comfort keeps the temperature steadiest and follows the price least. Savings lets it swing more and follows the price most |
+| Mode | Comfort, Balanced, Savings (Balanced) | Comfort keeps the room at your target or above, and follows the price least. Balanced may let it dip about 0.2 °C below your target to save more. Savings may let it dip about 1 °C below, and follows the price most |
 | Tolerance | 0.5-3.0 (0.5) | How far the room may drift to save money: ±0.4 × this value. Higher also makes the price steps bigger, from 20 % (0.5) to 100 % (3.0), but a price never takes more than 2 °C off |
 | Thermal mass, insulation | 0.5-2.0 (1.0) | Your house. Thermal mass 1.5 or more is a concrete slab, 1.2 or more timber floor heating |
 | Hot water | Target 45-60 °C (50), amount 1-30 min (5), ready at 07:00 and 18:00 | See [Hot water](#hot-water) |
@@ -89,14 +89,22 @@ Every 5 minutes it sets the heat, in whole degrees, from:
   cheap times, never at the most expensive.
 - Monthly peak: less heat close to this month's highest power use. Needs peak protection, and a
   power meter or the pump's current readings.
-- Falling behind: when the pump can't keep up (NIBE's degree minutes drop), more heat. A little at
-  first, more if it gets worse and the room is below target or power is cheap. Where this starts
-  depends on your location, the weather and your house.
+- Falling behind: when the pump can't keep up (NIBE's degree minutes drop) and the room is below
+  the level your mode keeps (your target in Comfort, about 0.2 °C below in Balanced, about 1 °C
+  below in Savings), more heat. A little at first, more if it gets worse. Where this starts depends
+  on your location, the weather and your house.
+- The pump's electric heater: while the room is at or above that level, it keeps the pump from
+  starting its electric heater, which gives one kWh of heat for each kWh of electricity where the
+  compressor gives more. Below that level the heater may help.
+- Cold your pump can't keep up with: once EffektGuard has seen your pump need its electric heater
+  at some outdoor temperature, it never turns the heat below the pump's own heating curve when it
+  is that cold, or will be within 12 hours. Heat saved then could only come back from the heater.
 - Comfort: it pulls the room back to your target.
 
-Safety, the most expensive times, a new monthly peak and a room far too warm always win. One
-exception: while the pump catches up after falling far behind, a price or power peak only limits the
-extra heat to +0.5 to +1 °C.
+Safety, the most expensive times, a new monthly peak and a room far too warm always win. Two
+exceptions: while the pump catches up after falling far behind, a price or power peak only limits
+the extra heat to +0.5 to +1 °C; and in a cold your pump can't keep up with, none of them turns the
+heat below the pump's own heating curve.
 
 When the room drifts below your tolerance, the cuts for price and peaks ease off. To avoid
 flip-flopping, it holds back a reversal of 2 °C or more within 45 minutes. Safety comes first.
@@ -117,8 +125,8 @@ yourself is left alone, and the pump still heats a cold tank by itself.
 - Room below 18 °C: full heat (+10). If the room is already warming up quickly (over 0.3 °C an
   hour), it eases to +7.5 so it doesn't overshoot. This needs a room sensor.
 - Pump very far behind (past -1500 degree minutes): it never runs cooler than normal, unless the
-  room is too warm. It adds no heat just to catch up: the compressor is already flat out, so the
-  extra would come from the electric heater.
+  room is at or above the level your mode keeps. It adds no heat just to catch up: the compressor
+  is already flat out, so the extra would come from the electric heater.
 - In both cases it stops its own hot-water boosts and starts none.
 - It only sets whole degrees from -10 to +10, within your offset entity's range, and on its own at
   most once every 5 minutes.

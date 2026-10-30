@@ -21,7 +21,6 @@ def emergency_layer():
     climate_detector = ClimateZoneDetector(latitude=59.33)  # Stockholm
     layer = EmergencyLayer(
         climate_detector=climate_detector,
-        price_analyzer=None,
         heating_type="concrete_ufh",
         get_thermal_trend=lambda: {"rate_per_hour": 0.0, "confidence": 0.8},
         get_outdoor_trend=lambda: {"rate_per_hour": 0.0, "confidence": 0.8},
@@ -246,9 +245,9 @@ class TestAntiWindupIntegration:
         decision = layer.evaluate_layer(
             nibe_state=state,
             weather_data=None,
-            price_data=None,
             target_temp=21.5,
             tolerance_range=0.5,
+            room_floor=21.5,
         )
 
         # Should include dm_rate in decision
@@ -282,9 +281,9 @@ class TestAntiWindupIntegration:
         decision = layer.evaluate_layer(
             nibe_state=state,
             weather_data=None,
-            price_data=None,
             target_temp=21.5,
             tolerance_range=0.5,
+            room_floor=21.5,
         )
 
         # Anti-windup should have prevented escalation or reduced the offset.
@@ -333,9 +332,9 @@ class TestAntiWindupRealScenario:
             decision = layer.evaluate_layer(
                 nibe_state=state,
                 weather_data=None,
-                price_data=None,
                 target_temp=21.5,
                 tolerance_range=0.5,
+                room_floor=21.5,
             )
 
             offsets_applied.append(decision.offset)
@@ -446,9 +445,9 @@ class TestCausationWindow:
         decision = layer.evaluate_layer(
             nibe_state=state,
             weather_data=None,
-            price_data=None,
             target_temp=21.5,
             tolerance_range=0.5,
+            room_floor=21.5,
         )
 
         # Anti-windup should be active (recent raise + DM dropping)
@@ -480,9 +479,9 @@ class TestCausationWindow:
         decision = layer.evaluate_layer(
             nibe_state=state,
             weather_data=None,
-            price_data=None,
             target_temp=21.5,
             tolerance_range=0.5,
+            room_floor=21.5,
         )
 
         # Anti-windup should be SKIPPED (old offset, likely environmental)
@@ -530,9 +529,9 @@ class TestCausationWindow:
         decision = layer.evaluate_layer(
             nibe_state=state,
             weather_data=None,
-            price_data=None,
             target_temp=21.5,
             tolerance_range=0.5,
+            room_floor=21.5,
         )
 
         # Causation window (90 min) expired long ago

@@ -35,9 +35,9 @@ def _asked(indoor_temp: float) -> float:
     return layer.evaluate_layer(
         _SaturatedPump(indoor_temp),
         weather_data=None,
-        price_data=None,
         target_temp=21.0,
         tolerance_range=1.0,
+        room_floor=21.0,
     ).offset
 
 

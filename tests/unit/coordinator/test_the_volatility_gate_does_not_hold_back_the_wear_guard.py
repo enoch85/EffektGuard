@@ -1,4 +1,4 @@
-"""The volatility gate does not hold back the wear guard's cap.
+"""The volatility gate does not hold back the wear guard's cap, or the heater guard's cut.
 
 The gate defers an offset reversal of 2 °C or more toward zero for 45 minutes, so that price-driven
 votes cannot flip the curve faster than the compressor can follow. A raise into a saturated
@@ -22,14 +22,7 @@ from custom_components.effektguard.const import (
     UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
-from custom_components.effektguard.models.nibe import NibeF750Profile
-from custom_components.effektguard.optimization.decision_engine import (
-    DecisionEngine,
-    OptimizationDecision,
-)
-from custom_components.effektguard.optimization.effect_layer import EffectManager
-from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
-from custom_components.effektguard.optimization.thermal_layer import ThermalModel
+from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
 from custom_components.effektguard.utils.volatile_helpers import OffsetVolatilityTracker
 
 from tests.conftest import create_mock_hass
@@ -101,26 +94,31 @@ async def _registers(engine, register: int = 0, cycles: int = CYCLES) -> list[in
 
 
 @pytest.mark.asyncio
-async def test_a_raise_into_a_saturated_compressor_is_withdrawn_at_once():
-    """The engine raises the pump, the tracker latches on the fourth cycle, and the cap's 0 reaches
-    the register on that cycle - fifteen minutes after the raise, well inside the gate's window."""
-    engine = DecisionEngine(
-        price_analyzer=PriceAnalyzer(),
-        effect_manager=EffectManager(MagicMock()),
-        thermal_model=ThermalModel(0.7, 1.0),
-        config={
-            "target_indoor_temp": TARGET,
-            "tolerance": TOLERANCE,
-            "latitude": 59.33,
-            "heating_type": "radiator",
-        },
-        heat_pump_model=NibeF750Profile(),
+@pytest.mark.parametrize(
+    ("guard", "taken_back_to"),
+    [
+        pytest.param("saturation_capped", 0.0, id="the-wear-guard-withdraws-the-raise"),
+        pytest.param("heater_capped", -2.0, id="the-heater-guard-cuts-past-zero"),
+    ],
+)
+async def test_a_guard_taking_back_a_raise_reaches_the_register_at_once(guard, taken_back_to):
+    """The engine raises the pump for three cycles, then a guard takes the raise back - fifteen
+    minutes after it, well inside the window in which the gate holds a reversal of 2 C or more."""
+    engine = MagicMock()
+    engine.calculate_decision = MagicMock(
+        side_effect=[OptimizationDecision(offset=3.0, reasoning="a raise")] * 3
+        + [OptimizationDecision(offset=taken_back_to, reasoning="capped", **{guard: True})] * 2
     )
 
     registers = await _registers(engine)
 
-    assert registers[2] >= OffsetVolatilityTracker.LARGE_CHANGE_THRESHOLD, "precondition: a raise"
-    assert registers[3:] == [0, 0], f"the gate kept a raise on a saturated compressor: {registers}"
+    assert registers == [
+        3,
+        3,
+        3,
+        taken_back_to,
+        taken_back_to,
+    ], f"the gate kept a raise a guard took back: {registers}"
 
 
 @pytest.mark.asyncio

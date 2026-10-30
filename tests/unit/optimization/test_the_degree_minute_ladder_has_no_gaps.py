@@ -82,12 +82,12 @@ def _sweep(heating_type: str, step: int = 1):
         tier = emergency.evaluate_layer(
             nibe_state=_State(float(dm)),
             weather_data=None,
-            price_data=None,
             target_temp=TARGET,
             tolerance_range=0.2,
+            room_floor=TARGET,
         ).tier
         zone = proactive.evaluate_layer(
-            nibe_state=_State(float(dm)), weather_data=None, target_temp=TARGET
+            nibe_state=_State(float(dm)), weather_data=None, target_temp=TARGET, room_floor=TARGET
         ).zone
         out[dm] = (tier, zone)
     return out

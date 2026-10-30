@@ -48,7 +48,7 @@ def _zones_reachable(latitude: float, outdoor: float) -> dict[str, float]:
     seen: dict[str, float] = {}
     for dm_tenths in range(0, -16000, -10):  # 1 DM resolution, 0 to -1600
         decision = layer.evaluate_layer(
-            _state(dm_tenths / 10.0, outdoor), None, 21.0, is_volatile=False
+            _state(dm_tenths / 10.0, outdoor), None, 21.0, 21.0, is_volatile=False
         )
         if decision.zone and decision.zone not in seen:
             seen[decision.zone] = decision.offset
@@ -108,8 +108,8 @@ def test_the_ladder_escalates_monotonically(latitude):
     previous = (0.0, "start")
     for dm in range(0, DM_THRESHOLD_AUX_LIMIT, -5):
         state = _state(float(dm), -10.0)
-        p = proactive.evaluate_layer(state, None, 21.0, is_volatile=False)
-        e = emergency.evaluate_layer(state, None, None, 21.0, 1.0, is_volatile=False)
+        p = proactive.evaluate_layer(state, None, 21.0, 21.0, is_volatile=False)
+        e = emergency.evaluate_layer(state, None, 21.0, 1.0, 21.0, is_volatile=False)
 
         asked = max(p.offset, e.offset)
         rung = e.tier if e.offset >= p.offset else p.zone

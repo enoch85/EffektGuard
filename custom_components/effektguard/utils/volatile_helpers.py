@@ -423,6 +423,7 @@ class OffsetProposal(Protocol):
     is_emergency: bool
     anti_windup_active: bool
     saturation_capped: bool
+    heater_capped: bool
 
 
 @dataclass(frozen=True)
@@ -459,13 +460,15 @@ def gate_offset(
     - A user command is authoritative and is recorded, never held: a manual override
       (force_offset, boost), or optimization switched OFF, whose neutral offset must not be
       swapped for the last automatic one behind an OFF display.
-    - Three safety paths are recorded without consulting the tracker, because holding them for
+    - Four safety paths are recorded without consulting the tracker, because holding them for
       45 minutes is the harm they exist to stop. An EMERGENCY decision (indoor below
       MIN_TEMP_LIMIT, or DM past the aux limit): a held cut leaves DM falling with the immersion
       heater running. An ANTI-WINDUP decision: on 31 January 2026 a blocked reduction 10 -> 3 C
       held the spiral for 45 minutes while DM fell from -1566 to -1855. The wear guard's
       WITHDRAWAL of a raise the saturated compressor cannot follow (F-124) - only the withdrawal;
       the cap stops at the pump's own curve, so a cut onto a saturated compressor is still held.
+      The heater guard's CUT for a room at or above its floor: held, DM reaches the pump's
+      immersion heater, which then heats a room that needs no heat.
     - Otherwise a volatile reversal is refused: the tracker's last offset is published, with the
       refusal in front of the proposal's reasoning, and nothing is recorded. Anything else is
       recorded as the new baseline.
@@ -494,6 +497,8 @@ def gate_offset(
         bypass = "Anti-windup active"
     elif decision.saturation_capped and decision.offset < (tracker.last_offset or 0.0):
         bypass = "Compressor saturated"
+    elif decision.heater_capped and decision.offset < (tracker.last_offset or 0.0):
+        bypass = "Heater guard"
     else:
         bypass = None
 

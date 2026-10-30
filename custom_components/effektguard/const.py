@@ -115,36 +115,49 @@ class OptimizationModeConfig:
     - comfort_weight_multiplier: Scales comfort layer influence (higher = comfort wins more)
     - price_tolerance_multiplier: Scales price layer effect (higher = more aggressive)
     - preheat_overshoot_allowed: How much overshoot to accept during pre-heating (°C)
+    - room_floor_below_target: How far below the target the room may go before the mode buys
+      heat for it - the degree-minute ladder's raises and the pump's immersion heater (°C)
     """
 
     dead_zone: float  # °C - no action within this range
     comfort_weight_multiplier: float  # Scales comfort layer weight
     price_tolerance_multiplier: float  # Scales price layer tolerance factor
     preheat_overshoot_allowed: float  # °C - acceptable overshoot during cheap pre-heat
+    room_floor_below_target: float  # °C - the room's floor, below the target
 
 
 # Mode configurations - these define the behavior philosophy
 # Comfort: Rock-solid temperature, price is secondary
 # Balanced: Smart trade-offs between comfort and savings
 # Savings: Maximum savings, temperature can drift more
+#
+# The room's floor is the owner's decision of 2026-10-29: comfort "should always try to be AT the
+# set degree" (above is fine), balanced sits "like 0.2 degrees" below it to save more, and savings
+# "is allowed to cut below the set degree within reasonable limits" - the owner asked whether 1-2 C
+# is reasonable. A degree for savings, closed loop on the owner's F750 + slab, four plant fits, Oct
+# 18 - Apr 30, per season: the room 0.62 C above the 21 C target on average, 103 hours below 20.5 C,
+# at its coldest 18.7 C (the heater guard reading the F750 profile's -700, the plant -1450).
 MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
     OPTIMIZATION_MODE_COMFORT: OptimizationModeConfig(
         dead_zone=0.1,  # Tighter: react faster to any deviation
         comfort_weight_multiplier=1.3,  # Comfort layer wins more often
         price_tolerance_multiplier=0.7,  # Reduce price layer effect
         preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
+        room_floor_below_target=0.0,  # At the target
     ),
     OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
         dead_zone=0.2,  # Standard dead zone
         comfort_weight_multiplier=1.0,  # Normal comfort influence
         price_tolerance_multiplier=1.0,  # Normal price effect
         preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
+        room_floor_below_target=0.2,  # A little below, to save more
     ),
     OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
         dead_zone=0.3,  # Wider: ignore small deviations
         comfort_weight_multiplier=0.7,  # Price wins more often
         price_tolerance_multiplier=1.3,  # Amplify price effect
         preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
+        room_floor_below_target=1.0,  # A degree below
     ),
 }
 
@@ -420,30 +433,6 @@ THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD: Final = (
     -2.0  # Temperature drop (°C) that blocks damping (significant cold incoming)
 )
 
-# Overshoot-Aware Damping (Oct 23, 2025)
-# ============================================================================
-# Context: v0.1.0 showed DM recovery caused indoor 23.6°C vs target 21.5°C
-#          (2.1°C overshoot during STRONG RECOVERY tier)
-#
-# Problem: Traditional damping only considers warming rate, not absolute error
-#          Large overshoot = need stronger damping regardless of warming rate
-#
-# Solution: Overshoot severity multiplies with warming damping
-#          Example: 2.0°C overshoot (severe) + rapid warming (0.4) = 0.8 × 0.4 = 0.32
-#                   Final offset = base_offset × 0.32 (68% reduction for safety)
-#
-# Thresholds:
-#   Severe ≥1.5°C: 80% strength (0.8 multiplier, strong reduction)
-#   Moderate ≥1.0°C: 90% strength (0.9 multiplier, moderate reduction)
-#   Mild ≥0.5°C: 95% strength (0.95 multiplier, gentle reduction)
-#   <0.5°C: 100% strength (no overshoot penalty)
-THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD: Final = 1.5  # °C over target (severe)
-THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD: Final = 1.0  # °C over target (moderate)
-THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD: Final = 0.5  # °C over target (mild)
-THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING: Final = 0.8  # Multiplier for severe overshoot
-THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING: Final = 0.9  # Multiplier for moderate overshoot
-THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING: Final = 0.95  # Multiplier for mild overshoot
-
 # Tier-specific minimum offsets after damping (safety floors)
 # Each tier has appropriate minimum to maintain recovery progress
 THERMAL_RECOVERY_T1_MIN_OFFSET: Final = 1.0  # T1 damped minimum (moderate recovery)
@@ -697,13 +686,6 @@ PROACTIVE_ZONE4_OFFSET: Final = 2.5  # Strong prevention
 PROACTIVE_ZONE4_WEIGHT: Final = 0.55  # Strong weight (below WARNING)
 PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNING)
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
-
-# Warm house weight reduction (Dec 10, 2025): above target + threshold the proactive zones vote at
-# reduced weight. DM can be negative in a warm house because the heat is being cut; that is not a
-# shortfall to boost against while the comfort layer is lowering the heat.
-# Z5 exemption: At warning boundary, prioritize DM recovery over temperature
-PROACTIVE_WARM_HOUSE_THRESHOLD: Final = 0.5  # °C above target to consider "warm"
-PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION: Final = 0.3  # Apply 30% of normal weight when warm
 
 # Overshoot protection (comfort_layer.py): above its band the comfort layer ramps from the in-band
 # correction at the band edge to a full coast - OVERSHOOT_PROTECTION_OFFSET_MAX at
@@ -1881,6 +1863,50 @@ COMPRESSOR_RISK_OK: Final = "OK"
 # band of 3 Hz gives up 4-20 SEK and six hours of memory 4-15 SEK.
 COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
 COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
+
+# THE HEATER GUARD (DecisionEngine._limit_for_heater). While a measured room is at or above its
+# mode's floor it needs no heat, so the offset may not drive degree minutes to where the pump starts
+# its immersion heater: the model profile's aux_start_dm, the pump's factory setting. From
+# HEATER_GUARD_ENGAGE_DM above that start DM may fall only toward the hold point
+# HEATER_GUARD_HOLD_DM above it, at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS per hour, and
+# must rise back from below it. The cap follows the supply both ways in whole offset steps of
+# DM_PER_HOUR_PER_OFFSET_STEP, judged on readings taken outside hot water at the register as it is
+# now, once they span HEATER_GUARD_MIN_SPAN_MINUTES; within HEATER_GUARD_FADE of the floor it hands
+# back to the layers. Closed loop on the owner's F750 + slab (slider 1.2, target 21 C), four plant
+# fits, Oct 18 2025 - Apr 30 2026, with the ladder's room floor and the capacity shortfall, per
+# season against PRICE_OFFSET_DEEPEST_CUT alone: heating cost comfort 4766 -> 4705 SEK, balanced
+# 4769 -> 4642, savings 4772 -> 4372, cheaper on every fit; immersion heat 274 -> 244, 276 -> 213,
+# 278 -> 43 kWh; offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143. ASSUMED the hold and
+# engage depths and the approach time. The plant starts its heater at the owner's -1450 and the
+# guard reads the F750 profile's -700: a prototype told -1450 cost balanced 4628, comfort 4706 and
+# savings 4504 SEK, and savings mode's coldest moment was 19.6 C instead of 18.7 C.
+HEATER_GUARD_HOLD_DM: Final = 200.0  # DM above the heater start
+HEATER_GUARD_ENGAGE_DM: Final = 500.0  # DM above the heater start
+HEATER_GUARD_APPROACH_HOURS: Final = 2.0
+HEATER_GUARD_FADE: Final = 0.2  # °C above the room's floor
+HEATER_GUARD_MIN_SPAN_MINUTES: Final = 15
+# Degree minutes per hour that one offset step moves while the supply holds: DM integrates the gap
+# between the supply and S1 every minute, and one step moves S1 by the curve sensitivity.
+DM_PER_HOUR_PER_OFFSET_STEP: Final = DEFAULT_CURVE_SENSITIVITY * 60
+
+# THE CAPACITY SHORTFALL (utils/capacity_shortfall.py). A pump short of capacity at its own curve
+# holds its degree minutes at its heater start; a pump with capacity to spare only reaches it after
+# a cut of ours. Repository simulator, undersized_coldsnap_jan2024: the undersized F1155, S1155 and
+# F2040 kept DM within SHORTFALL_NEAR_HEATER_START_DM of their heater starts 78 / 65 / 83 % of the
+# time; the closed loop on the owner's F750 model 0.9-2.2 % (told its true start, -1450). Counting
+# only DM strictly past the start never saw the F1155 short - its heater holds DM AT the start - and
+# it burned 2.3 kWh more immersion heat than recorded. SHORTFALL_DWELL_MINUTES, on the same closed
+# loop told the true start: an hour flagged 10 % of winter cycles and cost 60 SEK that winter on one
+# fit (F3a, balanced); two and three hours 3.3-3.4 %, and three hours no autumn flag. ASSUMED
+# SHORTFALL_AFTER_CUT_HOURS, SHORTFALL_MEMORY_DAYS and SHORTFALL_FORECAST_HOURS; in the undersized
+# cold snap (F2040 minutes below the band / F1155 immersion kWh: 890 / 175.0 as set) three hours
+# after a cut gave 900 / 168.0, seven days of memory 950 for the F2040, and six or 24 forecast hours
+# 915 / 177.3 and 890 / 174.4. Not measured on the owner's model.
+SHORTFALL_NEAR_HEATER_START_DM: Final = 50.0  # DM above the heater start
+SHORTFALL_DWELL_MINUTES: Final = 180
+SHORTFALL_AFTER_CUT_HOURS: Final = 6
+SHORTFALL_MEMORY_DAYS: Final = 30
+SHORTFALL_FORECAST_HOURS: Final = 12
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

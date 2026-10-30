@@ -10,8 +10,8 @@
 Heat your house when electricity is cheap, and save when it is expensive.
 
 EffektGuard turns your house into a heat battery. It stores heat in the cheap hours, lets the house
-coast through the expensive ones, and helps you avoid a new monthly power peak. Comfort and the
-pump's health come first.
+coast through the expensive ones, and helps you avoid a new monthly power peak. Safety and the
+pump's health come first, and the mode you pick decides how warm the house stays.
 
 Set it up once in Home Assistant, and it runs on its own.
 

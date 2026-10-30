@@ -1,7 +1,7 @@
 # Contributing
 
-Production code in real homes: safety and pump health before savings, comfort before cost. The
-rules are in [CLAUDE.md](../../CLAUDE.md), [IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) and
+Production code in real homes: safety and pump health first, then savings, down to the room
+temperature the chosen mode keeps. The rules are in [CLAUDE.md](../../CLAUDE.md), [IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) and
 [PROJECT_NOTES.md](../agent/PROJECT_NOTES.md). This page is the sequence.
 
 ## 1. Set up

@@ -125,7 +125,8 @@ class HeatPumpProfile(ABC):
     # start (S-series/F11xx). An installer can move it - the owner's F750 starts its heater at
     # -1450 - and it is distinct from DM_THRESHOLD_AUX_LIMIT (EffektGuard's emergency floor, F-112):
     # a real pump's elpatron fires at its own setting and works DM back up, so a plant model that
-    # waits for -1500 misreports both aux energy and overshoot. Only the simulator reads it.
+    # waits for -1500 misreports both aux energy and overshoot. The simulator's plant reads it, and
+    # so does the heater guard (DecisionEngine._limit_for_heater).
     aux_start_dm: float = -700.0
 
     # Whether the pump publishes the frequency its compressor may run up to right now: 43123 "Compr.

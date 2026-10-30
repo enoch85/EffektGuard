@@ -378,9 +378,9 @@ class TestF750RealisticScenarios:
             decision = engine.emergency_layer.evaluate_layer(
                 nibe_state=state,
                 weather_data=None,
-                price_data=None,
                 target_temp=engine.target_temp,
                 tolerance_range=engine.tolerance_range,
+                room_floor=engine.target_temp,
             )
 
             print(
