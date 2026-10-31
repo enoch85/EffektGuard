@@ -96,8 +96,9 @@ Every 5 minutes it sets the heat, in whole degrees, from:
 - The pump's electric heater: while the room is at or above that level, it keeps the pump from
   starting its electric heater, which gives one kWh of heat for each kWh of electricity where the
   compressor gives more. Below that level the heater may help. It learns where your pump starts
-  the heater by watching the heater's power (on nibe_heatpump, turn on "Int. el.add. Power");
-  until it has seen that, it uses your model's factory setting.
+  the heater by watching the heater's power (on nibe_heatpump, turn on "Int. el.add. Power", on an
+  S-series "Power internal additional heat"); until it has seen that, it uses your model's factory
+  setting.
 - Cold your pump can't keep up with: once EffektGuard has seen your pump need its electric heater
   at some outdoor temperature, it never turns the heat below the pump's own heating curve when it
   is that cold, or will be within 12 hours. Heat saved then could only come back from the heater.
