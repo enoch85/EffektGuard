@@ -25,6 +25,7 @@ def _env(unload_ok: bool):
 
     coordinator = MagicMock()
     coordinator.async_shutdown = AsyncMock()
+    coordinator.async_hand_the_pump_back = AsyncMock()
     hass.data = {DOMAIN: {"test-entry": coordinator}}
     return hass, entry, coordinator
 
@@ -37,6 +38,7 @@ async def test_a_refused_platform_unload_leaves_the_coordinator_alive():
 
     assert result is False
     coordinator.async_shutdown.assert_not_awaited()
+    coordinator.async_hand_the_pump_back.assert_not_awaited()
     assert hass.data[DOMAIN]["test-entry"] is coordinator, (
         "The entry is still loaded - HA keeps serving its entities - so the coordinator "
         "must still be the live object behind them."
@@ -50,5 +52,6 @@ async def test_a_successful_unload_shuts_the_coordinator_down_after():
     result = await async_unload_entry(hass, entry)
 
     assert result is True
+    coordinator.async_hand_the_pump_back.assert_awaited_once()
     coordinator.async_shutdown.assert_awaited_once()
     assert "test-entry" not in hass.data[DOMAIN]

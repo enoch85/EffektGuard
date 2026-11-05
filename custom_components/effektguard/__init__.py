@@ -211,6 +211,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator: EffektGuardCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator:
+        # Leave the pump on its normal curve before the coordinator stops writing.
+        await coordinator.async_hand_the_pump_back()
         try:
             await coordinator.async_shutdown()
             _LOGGER.debug("Coordinator shutdown complete")

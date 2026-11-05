@@ -64,6 +64,8 @@ To change something later, go to Settings → Devices & services → EffektGuard
 To see why it did something, look at `sensor.effektguard_optimization_reasoning`. After a restart
 it waits a cycle or two before changing anything.
 
+Disabling or removing EffektGuard puts the pump back on its normal curve, as Off does.
+
 ## Settings
 
 Under the gear icon:

@@ -102,5 +102,5 @@ a measured sensitivity. `tests/validation/` enforces this.
   latitude- and temperature-derived, then adjusted for thermal mass.
 - All optimization respects the thermal-debt limits and the comfort floor.
 - Nothing writes to the pump outside the guarded write path. Reads never drive it, and an
-  unloaded integration never writes.
+  unloaded integration never writes. Its last write, on unload, puts the pump back on its curve.
 - An offset that cannot be confirmed is not reported as applied.
