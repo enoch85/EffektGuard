@@ -2536,33 +2536,64 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         else:
             _LOGGER.info("Optimization disabled - resetting offset to neutral")
             async with self._control_lock:
-                applied_offset = await self.async_set_offset(0.0, force_write=True)
-                await self._cancel_our_dhw_boost()
-                is_enhanced = await self.nibe.is_enhanced_ventilation_active()
-                if is_enhanced is None and self.nibe.has_ventilation_control:
-                    # The fan may be enhanced and the switch cannot say. OFF must not be
-                    # displayed until every owned actuator is KNOWN neutral.
-                    raise HomeAssistantError(
-                        "Cannot confirm the NIBE ventilation is back to normal - "
-                        "the ventilation switch is unavailable"
-                    )
-                if is_enhanced:
-                    ventilation_stopped = await self._write_enhanced_ventilation(
-                        False,
-                        force_write=True,
-                    )
-                    if not ventilation_stopped:
-                        raise HomeAssistantError(
-                            "Could not return NIBE ventilation to its normal setting"
-                        )
-                    self._airflow_enhance_start = None
-                    self._airflow_normal_since = dt_util.utcnow()
-            if applied_offset != 0:
-                raise HomeAssistantError("Could not reset the NIBE heating offset to neutral")
+                not_neutral = await self._put_the_pump_back_on_its_curve()
+            if not_neutral:
+                # OFF must not be displayed until every owned actuator is KNOWN neutral.
+                raise HomeAssistantError(not_neutral)
 
             disabled_data = dict(self.entry.data)
             disabled_data[CONF_ENABLE_OPTIMIZATION] = False
             self.hass.config_entries.async_update_entry(self.entry, data=disabled_data)
+
+    async def _put_the_pump_back_on_its_curve(self) -> str | None:
+        """Offset 0, our hot-water boost cancelled, the fan back to normal. Caller holds the lock.
+
+        Returns what could not be confirmed neutral, or None. Shared by OFF and by unloading the
+        integration, so turning it off and disabling or removing it leave the pump the same way.
+        """
+        applied_offset = await self.async_set_offset(0.0, force_write=True)
+        await self._cancel_our_dhw_boost()
+        is_enhanced = await self.nibe.is_enhanced_ventilation_active()
+        if is_enhanced is None and self.nibe.has_ventilation_control:
+            # The fan may be enhanced and the switch cannot say.
+            return (
+                "Cannot confirm the NIBE ventilation is back to normal - "
+                "the ventilation switch is unavailable"
+            )
+        if is_enhanced:
+            if not await self._write_enhanced_ventilation(False, force_write=True):
+                return "Could not return NIBE ventilation to its normal setting"
+            self._airflow_enhance_start = None
+            self._airflow_normal_since = dt_util.utcnow()
+        if applied_offset != 0:
+            return "Could not reset the NIBE heating offset to neutral"
+        return None
+
+    async def async_hand_the_pump_back(self) -> None:
+        """On unload - disable, remove or a full reload - leave the pump on its normal curve.
+
+        Without this, unloading left the offset wherever the last cycle put it, -10 in a peak
+        quarter, and nothing was left to bring it back (hacs/default#12414). OFF already returns
+        the pump to its curve, so there is nothing to hand back then. Runs under the control lock
+        and before async_shutdown: an in-flight cycle either writes first and is overwritten, or
+        waits and is refused once the shutdown has set its flag. A failure does not block the
+        unload; the user is told to check the offset.
+        """
+        if self._shutdown_requested or not self.optimization_enabled:
+            return
+        async with self._control_lock:
+            try:
+                not_neutral = await self._put_the_pump_back_on_its_curve()
+            except (HomeAssistantError, AttributeError, OSError, ValueError) as err:
+                not_neutral = str(err)
+        if not_neutral:
+            _LOGGER.warning(
+                "EffektGuard is unloading but could not leave the pump on its normal curve: %s. "
+                "Check the heating offset on the pump.",
+                not_neutral,
+            )
+        else:
+            _LOGGER.info("Unloading: the pump is back on its normal curve (offset 0)")
 
     async def async_start_dhw_boost(self, duration_minutes: int, now_time: datetime) -> None:
         """Start a user-commanded hot-water boost that price optimization may not cancel.
