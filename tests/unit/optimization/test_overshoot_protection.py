@@ -1,8 +1,9 @@
 """Overshoot protection: the ComfortLayer coasts a warm house, never a cold one, and never in a jump.
 
 Drives the real ComfortLayer.evaluate_layer. Above its band the vote ramps continuously from the
-in-band correction at the band edge to OVERSHOOT_PROTECTION_OFFSET_MAX at
-LAYER_WEIGHT_COMFORT_CRITICAL at OVERSHOOT_PROTECTION_FULL, whatever the prices ahead.
+in-band correction at the band edge toward OVERSHOOT_PROTECTION_OFFSET_MAX, stopping at
+OVERSHOOT_PROTECTION_DEEPEST, and reaches LAYER_WEIGHT_COMFORT_CRITICAL at
+OVERSHOOT_PROTECTION_FULL, whatever the prices ahead.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from custom_components.effektguard.const import (
     OPTIMIZATION_MODE_BALANCED,
     OPTIMIZATION_MODE_COMFORT,
     OPTIMIZATION_MODE_SAVINGS,
+    OVERSHOOT_PROTECTION_DEEPEST,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
@@ -135,7 +137,7 @@ class TestTheRampHasNoCliff:
         for overshoot in (OVERSHOOT_PROTECTION_FULL, OVERSHOOT_PROTECTION_FULL + 4.0):
             vote = _decide(overshoot, mode, slider)
 
-            assert vote.offset == OVERSHOOT_PROTECTION_OFFSET_MAX, vote.reason
+            assert vote.offset == OVERSHOOT_PROTECTION_DEEPEST, vote.reason
             assert vote.weight >= LAYER_WEIGHT_SAFETY, vote.reason
 
 

@@ -689,15 +689,26 @@ PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNI
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
 # Overshoot protection (comfort_layer.py): above its band the comfort layer ramps from the in-band
-# correction at the band edge to a full coast - OVERSHOOT_PROTECTION_OFFSET_MAX at
-# LAYER_WEIGHT_COMFORT_CRITICAL - at OVERSHOOT_PROTECTION_FULL, and reads no prices. It replaces
-# -7 C at weight 0.7 from 0.6 C, swapped for a near-neutral vote whenever a pricier quarter came
-# into view: two cliffs, about 72 coast entries in 59 days, half of them from the price swap (closed
-# loop on the owner's F750 + slab, Jan-Feb 2026). FULL is the deepest bank the owner wants a slab to
-# hold before a cold snap; a later full coast measured cheaper, but from 1.7-1.8 C on it held the
-# room above target + 1.5 C longer than the cliff did.
+# correction at the band edge toward OVERSHOOT_PROTECTION_OFFSET_MAX, no deeper than
+# OVERSHOOT_PROTECTION_DEEPEST, reaching LAYER_WEIGHT_COMFORT_CRITICAL at OVERSHOOT_PROTECTION_FULL,
+# and reads no prices. It replaces -7 C at weight 0.7 from 0.6 C, swapped for a near-neutral vote
+# whenever a pricier quarter came into view: two cliffs, about 72 coast entries in 59 days, half of
+# them from the price swap (closed loop on the owner's F750 + slab, Jan-Feb 2026). FULL is the
+# deepest bank the owner wants a slab to hold before a cold snap; a later full coast measured
+# cheaper, but from 1.7-1.8 C on it held the room above target + 1.5 C longer than the cliff did.
 OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for the full coast
-OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # Offset at full threshold (full coast)
+OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # what the ramp aims at at FULL: its slope
+# The ramp keeps that slope and stops here. Closed loop on the owner's F750 + slab, plant fitted to
+# the pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, slider 1.2, balanced), against the
+# ramp to -10, Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026: the heat pump's electricity cost
+# 941.8 -> 911.1 / 1760.5 -> 1722.5 / 226.4 -> 220.5 SEK; hours with the compressor stopped outside
+# hot water 363.2 -> 310.8 / 168.8 -> 133.1 / 404.9 -> 393.2, and at 60 Hz or more
+# 370.8 -> 326.1 / 515.2 -> 460.2 / 42.2 -> 33.8; offset writes 636 -> 505 / 644 -> 511 / 284 -> 188;
+# the room's mean 22.01 -> 22.05 / 21.98 -> 22.06 / 22.63 -> 22.72 C; immersion heat (Jan-Feb)
+# 37.8 -> 38.4 kWh. Together the three periods cost 2841 / 2861 / 2887 / 2882 SEK stopped at
+# -3 / -4 / -6 / -7, 2854 at -5 and 2929 at -10; -3 and -4 held the room 1.5 C over target for 314
+# and 191 hours of Jan-Feb, -5 for 132, -10 for 81.
+OVERSHOOT_PROTECTION_DEEPEST: Final = -5.0
 
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively

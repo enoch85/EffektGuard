@@ -1119,7 +1119,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.34, "apartment_f730": 8.01, "airsource_f2040": 8.66},
+                    houses={"wooden_f750": 6.45, "apartment_f730": 8.00, "airsource_f2040": 8.66},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1131,7 +1131,8 @@ SCENARIOS = {
                         "power the bench now hands the engine moved the F2040's from 8.59 to 8.60 "
                         "(the gate bypasses alone leave it at 8.59); the ladder's room floor, the "
                         "heater guard and the capacity shortfall the F750's from 6.28 to 6.34 and "
-                        "the F2040's to 8.66."
+                        "the F2040's to 8.66; the overshoot coast's stop at -5 the F750's to 6.45 "
+                        "and the F730's to 8.00."
                     ),
                 ),
                 KnownRed(
@@ -1151,7 +1152,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3305, "apartment_f730": 11390},
+                    houses={"wooden_f750": 3310, "apartment_f730": 12690},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1161,7 +1162,8 @@ SCENARIOS = {
                         "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
                         "correction below it. The ladder's room floor and the heater guard moved "
-                        "them from 3405 and 11505."
+                        "them from 3405 and 11505; the overshoot coast's stop at -5 from 3305 and "
+                        "11390, the F730 0.10 C warmer on average."
                     ),
                 ),
             ),
@@ -1178,7 +1180,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.68, "apartment_f730": 7.43, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.67, "apartment_f730": 7.40, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
@@ -1191,7 +1193,8 @@ SCENARIOS = {
                         "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
                         "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
-                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40."
+                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40, "
+                        "the overshoot coast's stop at -5 them from 5.68 and 7.43."
                     ),
                 ),
             ),

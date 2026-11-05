@@ -102,7 +102,8 @@ the band edge to the full coast at +1.5 °C. In the closed loop on the owner's F
 2026) the bank is cut in 31-41 % of armed pre-heat time instead of 51-54 %, but it is not
 consistently deeper:
 the room over target in the 24 h before a cold snap is 0.82 / 0.78 / 0.75 / 0.73 °C against
-0.82 / 0.73 / 0.83 / 0.75 (two plant fits at the 1.2 and 0.5 sliders).
+0.82 / 0.73 / 0.83 / 0.75 (two plant fits at the 1.2 and 0.5 sliders). The coast has since stopped
+at −5 rather than −10 (`OVERSHOOT_PROTECTION_DEEPEST`, measured in `const.py`).
 
 ## Owner's words
 
