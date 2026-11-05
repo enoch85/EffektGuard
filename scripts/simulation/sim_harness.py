@@ -974,23 +974,22 @@ SCENARIOS = {
             expect=("comfort_held", "no_dm_past_aux_limit"),
             known_open=(
                 KnownRed(
-                    fails_with="capacity deficit only forced",
-                    stat="aux_kwh",
-                    houses={"airsource_f2040": 34.0},
+                    fails_with="minutes below the comfort band",
+                    stat="comfort_minutes_below",
+                    houses={"airsource_f2040": 295},
                     why=(
-                        "F-124 on the air-source F2040 only: aux above what its capacity deficit "
-                        "forces. The wear guard caps raises while the compressor is saturated "
-                        "(54.25 kWh before it had a trigger), but lets a share of them through for "
-                        "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. 34.0 kWh against 17.8 forced since the ladder raises only "
-                        "for a room below its floor and the heater guard keeps such a room's DM "
-                        "off the heater; 39.75 against 19.8 before, since the bench runs the "
-                        "coordinator's gate policy and hands the engine the projected period-mean "
-                        "power; 35.75 against 20.4 while it gated every proposal on the "
-                        "instantaneous draw (eaa3986). The projected power alone takes it to "
-                        "49.75, the three bypasses alone to 37.0, both to 39.75. The other four "
-                        "houses hold every invariant through Sweden's coldest wave since 1999 AND "
-                        "the 589 ore/kWh spike it caused."
+                        "F-124 on the air-source F2040 only: 295 minutes below the band, at its "
+                        "coldest 21.27 C. Its immersion is within what its capacity deficit "
+                        "forces (20.5 kWh against 18.7) since EffektGuard stopped adding heat "
+                        "ahead of dearer hours; that pre-heat held its DM at the heater start, so "
+                        "the heater ran early and the room stayed in band, at 34.0 kWh against "
+                        "17.8 forced. Without it the heater waits for DM and the room dips first. "
+                        "Before the ladder raised only for a room below its floor: 39.75 against "
+                        "19.8 with the bench on the coordinator's gate policy and the projected "
+                        "period-mean power, 35.75 against 20.4 while it gated every proposal on "
+                        "the instantaneous draw (eaa3986). The other four houses hold "
+                        "every invariant through Sweden's coldest wave since 1999 AND the 589 "
+                        "ore/kWh spike it caused."
                     ),
                 ),
             ),
@@ -1012,10 +1011,11 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 175.01},
+                    houses={"concrete_f1155": 173.26},
                     why=(
-                        "F-124 on the undersized F1155: 175.0 kWh of immersion against 131.5 "
-                        "forced, where NIBE alone burns 146.4 - 179.7 against 126.7 before the "
+                        "F-124 on the undersized F1155: 173.25 kWh of immersion against 119.9 "
+                        "forced (175.0 against 131.5 while EffektGuard added heat ahead of dearer "
+                        "hours), where NIBE alone burns 146.4 - 179.7 against 126.7 before the "
                         "ladder's room floor, the heater guard and the capacity shortfall. The "
                         "floor and the guard without the shortfall burn 182.0: this pump's heater "
                         "holds its DM AT its start, which the shortfall must count to keep the "
@@ -1032,10 +1032,11 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes below the comfort band",
                     stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 890},
+                    houses={"airsource_f2040": 875},
                     why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 890 minutes "
-                        "below the band, where NIBE alone has 585 - 1450 before EffektGuard "
+                        "The undersized F2040 is colder under EffektGuard than alone: 875 minutes "
+                        "below the band (890 while it added heat ahead of dearer hours), where "
+                        "NIBE alone has 585 - 1450 before EffektGuard "
                         "learned where this pump runs short of capacity and stopped cutting below "
                         "its curve there; the ladder's room floor and the heater guard without "
                         "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
@@ -1050,7 +1051,8 @@ SCENARIOS = {
                     fails_with="past the -1500 auxiliary-heat limit",
                     houses={"airsource_f2040": None},
                     why=(
-                        "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
+                        "The undersized F2040's DM reaches -2526 (-2554 while EffektGuard added "
+                        "heat ahead of dearer hours, -2804 before the capacity "
                         "shortfall, -2779 before the bench ran the coordinator's gate policy); "
                         "NIBE alone reaches -1890 (F-124, F-112: its own heater starts at -760)."
                     ),
@@ -1074,18 +1076,19 @@ SCENARIOS = {
             expect=("comfort_held", "no_dm_past_aux_limit"),
             known_open=(
                 KnownRed(
-                    fails_with="capacity deficit only forced",
-                    stat="aux_kwh",
-                    houses={"airsource_f2040": 63.25},
+                    fails_with="minutes below the comfort band",
+                    stat="comfort_minutes_below",
+                    houses={"airsource_f2040": 135},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024: 63.25 kWh against 44.0 forced (68.75 against "
-                        "46.5 before the ladder's room floor and the heater guard; 87.25 before "
-                        "the wear guard had a trigger; 76.75 before the bench ran the "
-                        "coordinator's gate policy - the bypasses alone give 66.5, the projected "
-                        "period-mean power alone 76.25, both 68.75). The other four houses hold "
-                        "every invariant. First reproduction of F-124 on REAL weather rather than "
-                        "a synthetic temperature shift."
+                        "nordic_coldsnap_jan2024: 135 minutes below the band, at its coldest "
+                        "21.32 C, with its immersion within what its capacity deficit forces "
+                        "(59.25 kWh against 43.6) since EffektGuard stopped adding heat ahead of "
+                        "dearer hours - 63.25 against 44.0 with the room in band before (68.75 "
+                        "against 46.5 before the ladder's room floor and the heater guard; 87.25 "
+                        "before the wear guard had a trigger). The other four houses hold every "
+                        "invariant. First reproduction of F-124 on REAL weather rather than a "
+                        "synthetic temperature shift."
                     ),
                 ),
             ),
@@ -1119,7 +1122,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.34, "apartment_f730": 8.01, "airsource_f2040": 8.66},
+                    houses={"wooden_f750": 6.38, "apartment_f730": 8.02, "airsource_f2040": 8.44},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1131,7 +1134,8 @@ SCENARIOS = {
                         "power the bench now hands the engine moved the F2040's from 8.59 to 8.60 "
                         "(the gate bypasses alone leave it at 8.59); the ladder's room floor, the "
                         "heater guard and the capacity shortfall the F750's from 6.28 to 6.34 and "
-                        "the F2040's to 8.66."
+                        "the F2040's to 8.66; no heat ahead of dearer hours the F750's to 6.38, "
+                        "the F730's to 8.02 and the F2040's back to 8.44."
                     ),
                 ),
                 KnownRed(
@@ -1151,7 +1155,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3305, "apartment_f730": 11390},
+                    houses={"wooden_f750": 3155, "apartment_f730": 11145},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1161,7 +1165,8 @@ SCENARIOS = {
                         "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
                         "correction below it. The ladder's room floor and the heater guard moved "
-                        "them from 3405 and 11505."
+                        "them from 3405 and 11505, no heat ahead of dearer hours from 3305 and "
+                        "11390."
                     ),
                 ),
             ),
@@ -1178,12 +1183,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.68, "apartment_f730": 7.43, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.70, "apartment_f730": 7.46, "airsource_f2040": 7.50},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
                         "rating points the exergy COP fit is anchored on, so the fit extrapolates "
-                        "and seasonal COP comes out 1.20-1.61x the best published figure. The "
+                        "and seasonal COP comes out 1.21-1.61x the best published figure. The "
                         "harness's own datasheet guard catches it, which is the guard working. "
                         "Every COST number in this run is therefore too low; the CONTROL decisions "
                         "- which layer voted, which offset was written - do not depend on the COP "
@@ -1191,7 +1196,8 @@ SCENARIOS = {
                         "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
                         "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
-                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40."
+                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40; "
+                        "no heat ahead of dearer hours to 5.70, 7.46 and the F2040's 7.50."
                     ),
                 ),
             ),

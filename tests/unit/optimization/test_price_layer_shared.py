@@ -19,7 +19,6 @@ from custom_components.effektguard.const import (
     DHW_NORMAL_RUNTIME_MINUTES,
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
-    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     VOLATILE_MIN_DURATION_QUARTERS,
 )
 
@@ -69,9 +68,6 @@ class TestPriceForecast:
             next_cheap_quarters_away=5,
             cheap_period_duration=4,
             cheap_price_ratio=0.6,
-            next_expensive_quarters_away=10,
-            expensive_period_duration=3,
-            expensive_price_ratio=1.8,
             is_volatile=True,
             current_run_length=2,
             remaining_quarters=1,
@@ -83,9 +79,6 @@ class TestPriceForecast:
         assert forecast.next_cheap_quarters_away == 5
         assert forecast.cheap_period_duration == 4
         assert forecast.cheap_price_ratio == 0.6
-        assert forecast.next_expensive_quarters_away == 10
-        assert forecast.expensive_period_duration == 3
-        assert forecast.expensive_price_ratio == 1.8
         assert forecast.is_volatile is True
         assert forecast.current_run_length == 2
         assert forecast.remaining_quarters == 1
@@ -305,7 +298,6 @@ class TestGetPriceForecast:
         )
 
         assert forecast.next_cheap_quarters_away is None
-        assert forecast.next_expensive_quarters_away is None
         assert forecast.is_volatile is False
 
     def test_detects_upcoming_cheap_period(self):
@@ -328,26 +320,6 @@ class TestGetPriceForecast:
         # Cheap ratio should be < PRICE_FORECAST_CHEAP_THRESHOLD
         # 30/100 = 0.3, which is < 0.75 threshold
         assert forecast.cheap_price_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-
-    def test_detects_upcoming_expensive_period(self):
-        """Test detects upcoming expensive period within threshold."""
-        analyzer = PriceAnalyzer()
-
-        # Create prices: normal now, expensive soon
-        prices = [50.0] * 10 + [150.0] * 6 + [50.0] * 80  # Expensive at Q10-15
-
-        price_data = self._create_price_data(prices)
-        analyzer.update_prices(price_data)
-
-        forecast = analyzer.get_price_forecast(
-            current_quarter=5,  # Start at Q5
-            price_data=price_data,
-            lookahead_hours=4.0,  # Look ahead 16 quarters
-        )
-
-        # Expensive ratio should be > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-        # 150/50 = 3.0, which is > 1.25 threshold
-        assert forecast.expensive_price_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
 
     def test_detects_volatility_brief_run(self):
         """Test detects volatility when current run is brief."""

@@ -22,8 +22,6 @@ from ..const import (
     PRICE_FORECAST_BASE_HORIZON,
     PRICE_FORECAST_CHEAP_THRESHOLD,
     PRICE_FORECAST_DM_DEBT_OFFSET,
-    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
     PRICE_OFFSET_CHEAP,
     PRICE_OFFSET_DEEPEST_CUT,
@@ -93,7 +91,7 @@ class PriceForecast:
     """Forward-looking price analysis result.
 
     Consolidated forecast logic used by:
-    - Space heating: Pre-heat before expensive, reduce before cheap
+    - Space heating: reduce before a much cheaper period
     - DHW: Wait for cheap if adequate, heat now if urgent
 
     Extracted from price_layer.evaluate_layer() for shared reuse.
@@ -103,11 +101,6 @@ class PriceForecast:
     next_cheap_quarters_away: int | None  # Quarters until next cheap period (None if not found)
     cheap_period_duration: int  # Duration in quarters of the cheap period
     cheap_price_ratio: float  # Price ratio vs current (e.g., 0.6 = 40% cheaper)
-
-    # Expensive period info
-    next_expensive_quarters_away: int | None  # Quarters until next expensive period
-    expensive_period_duration: int  # Duration in quarters of the expensive period
-    expensive_price_ratio: float  # Price ratio vs current (e.g., 1.5 = 50% more expensive)
 
     # Volatility detection
     is_volatile: bool  # True if current run is too brief for effective heating
@@ -643,9 +636,6 @@ class PriceAnalyzer:
                 next_cheap_quarters_away=None,
                 cheap_period_duration=0,
                 cheap_price_ratio=1.0,
-                next_expensive_quarters_away=None,
-                expensive_period_duration=0,
-                expensive_price_ratio=1.0,
                 is_volatile=False,
                 current_run_length=0,
                 remaining_quarters=0,
@@ -665,9 +655,6 @@ class PriceAnalyzer:
         cheap_quarters_away = None
         cheap_duration = 0
         cheap_ratio = 1.0
-        expensive_quarters_away = None
-        expensive_duration = 0
-        expensive_ratio = 1.0
 
         # Build list of upcoming periods
         forecast_quarters = int(lookahead_hours * 4)
@@ -682,16 +669,10 @@ class PriceAnalyzer:
 
         # Analyze upcoming periods if we have data
         if upcoming_periods and current_price > 0:
-            # Find cheap and expensive periods
+            # Find the cheapest period ahead
             min_price = min(p.price for p in upcoming_periods)
-            max_price = max(p.price for p in upcoming_periods)
-
             min_idx = next(i for i, p in enumerate(upcoming_periods) if p.price == min_price)
-            max_idx = next(i for i, p in enumerate(upcoming_periods) if p.price == max_price)
-
-            # Calculate price ratios
             cheap_ratio = min_price / current_price
-            expensive_ratio = max_price / current_price
 
             # Count consecutive quarters around min price meeting CHEAP threshold
             if cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
@@ -708,27 +689,6 @@ class PriceAnalyzer:
                     else:
                         break
 
-            # Count consecutive quarters around max price meeting EXPENSIVE threshold
-            if expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                expensive_quarters_away = max_idx + 1  # +1 because we skip current
-                expensive_duration = 1
-                for i in range(max_idx + 1, len(upcoming_periods)):
-                    if (
-                        upcoming_periods[i].price / current_price
-                        > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                    ):
-                        expensive_duration += 1
-                    else:
-                        break
-                for i in range(max_idx - 1, -1, -1):
-                    if (
-                        upcoming_periods[i].price / current_price
-                        > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                    ):
-                        expensive_duration += 1
-                    else:
-                        break
-
         # Get volatility and cluster info from shared helper
         volatile_info = get_volatile_info(self, price_data, current_quarter)
         is_volatile = volatile_info.is_volatile
@@ -742,9 +702,6 @@ class PriceAnalyzer:
             next_cheap_quarters_away=cheap_quarters_away,
             cheap_period_duration=cheap_duration,
             cheap_price_ratio=cheap_ratio,
-            next_expensive_quarters_away=expensive_quarters_away,
-            expensive_period_duration=expensive_duration,
-            expensive_price_ratio=expensive_ratio,
             is_volatile=is_volatile,
             current_run_length=current_run_length,
             remaining_quarters=remaining_quarters,
@@ -769,7 +726,6 @@ class PriceAnalyzer:
         Enhanced Nov 27, 2025: Added forward-looking price analysis
         - Looks ahead 4 hours for significant price changes
         - Reduces heating when much cheaper period coming soon
-        - Pre-heats when much more expensive period approaching
 
         Refactored Dec 2025: Uses shared get_price_forecast() for forecast analysis
         to reduce code duplication with DHW optimizer.
@@ -838,51 +794,13 @@ class PriceAnalyzer:
         cheap_quarters_away = forecast.next_cheap_quarters_away
         cheap_duration = forecast.cheap_period_duration
         cheap_ratio = forecast.cheap_price_ratio
-        expensive_quarters_away = forecast.next_expensive_quarters_away
-        expensive_duration = forecast.expensive_period_duration
-        expensive_ratio = forecast.expensive_price_ratio
 
-        if classification in BENEFICIAL_CLASSIFICATIONS:
-            # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
-            if (
-                expensive_quarters_away is not None
-                and expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
-                and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
-            ):
-                increase_percent = int((expensive_ratio - 1) * 100)
-                forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {increase_percent}% more expensive in "
-                    f"{expensive_quarters_away // 4}h - pre-heat now"
-                )
-            elif expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                # DEBUG: Log non-actionable expensive periods for troubleshooting
-                # Period meets price threshold but fails duration/lead-time requirements.
-                # Common cause: lookahead window boundary cuts off part of the period
-                # (e.g., we see 15min of a 45min peak because the rest is beyond horizon).
-                if expensive_duration < VOLATILE_MIN_DURATION_QUARTERS:
-                    _LOGGER.debug(
-                        "Forecast: Expensive period too brief "
-                        "(%dmin < %dmin) - may extend beyond lookahead",
-                        expensive_duration * MINUTES_PER_QUARTER,
-                        VOLATILE_MIN_DURATION_MINUTES,
-                    )
-                elif (
-                    expensive_quarters_away is not None
-                    and expensive_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
-                ):
-                    _LOGGER.debug(
-                        "Forecast: Expensive period too soon " "(%dmin < %dmin lookahead)",
-                        expensive_quarters_away * MINUTES_PER_QUARTER,
-                        VOLATILE_MIN_DURATION_MINUTES,
-                    )
-
-        elif classification in [
-            QuarterClassification.EXPENSIVE,
-            QuarterClassification.PEAK,
-        ]:
-            # Wait for upcoming cheap periods (if sustained AND far enough away)
+        # A quarter that is not cheap waits for a sustained, much cheaper period ahead. Nothing adds
+        # heat ahead of a dearer one: in the owner's closed loop (F750 + slab, two plants of four
+        # fits, Nov 5 - Apr 30, sun, the forecasts as issued) that pre-heat cost 13.6-82.1 SEK a
+        # season, energy and effect tariff, in every plant and mode, and waiting for a 2x or 3x
+        # price spread before it fired saved less than removing it.
+        if classification not in BENEFICIAL_CLASSIFICATIONS:
             if (
                 cheap_quarters_away is not None
                 and cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
@@ -916,91 +834,6 @@ class PriceAnalyzer:
                         cheap_quarters_away * MINUTES_PER_QUARTER,
                         VOLATILE_MIN_DURATION_MINUTES,
                     )
-
-        else:  # NORMAL - check both directions, take most significant sustained change
-            expensive_valid = (
-                expensive_quarters_away is not None
-                and expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
-                and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
-                and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
-            )
-            cheap_valid = (
-                cheap_quarters_away is not None
-                and cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD
-                and cheap_duration >= VOLATILE_MIN_DURATION_QUARTERS
-                and cheap_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
-            )
-
-            if expensive_valid and cheap_valid:
-                # Both valid - choose larger magnitude
-                if (expensive_ratio - 1.0) > (1.0 - cheap_ratio):
-                    increase_percent = int((expensive_ratio - 1) * 100)
-                    forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {increase_percent}% more expensive in "
-                        f"{expensive_quarters_away // 4}h - pre-heat now"
-                    )
-                else:
-                    savings_percent = int((1 - cheap_ratio) * 100)
-                    forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {savings_percent}% cheaper in "
-                        f"{cheap_quarters_away // 4}h - reduce heating"
-                    )
-            elif expensive_valid:
-                increase_percent = int((expensive_ratio - 1) * 100)
-                forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {increase_percent}% more expensive in "
-                    f"{expensive_quarters_away // 4}h - pre-heat now"
-                )
-            elif cheap_valid:
-                savings_percent = int((1 - cheap_ratio) * 100)
-                forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {savings_percent}% cheaper in "
-                    f"{cheap_quarters_away // 4}h - reduce heating"
-                )
-            else:
-                # DEBUG: Log non-actionable forecast periods for troubleshooting
-                # Periods meet price thresholds but fail duration/lead-time requirements.
-                # Common cause: lookahead window boundary cuts off part of the period
-                # (e.g., we see 15min of a 45min peak beyond horizon). Expected behavior.
-                if expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
-                    if expensive_duration < VOLATILE_MIN_DURATION_QUARTERS:
-                        _LOGGER.debug(
-                            "Forecast NORMAL: Expensive period too brief "
-                            "(%dmin < %dmin) - may extend beyond lookahead",
-                            expensive_duration * MINUTES_PER_QUARTER,
-                            VOLATILE_MIN_DURATION_MINUTES,
-                        )
-                    elif (
-                        expensive_quarters_away is not None
-                        and expensive_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
-                    ):
-                        _LOGGER.debug(
-                            "Forecast NORMAL: Expensive period too soon "
-                            "(%dmin < %dmin lookahead)",
-                            expensive_quarters_away * MINUTES_PER_QUARTER,
-                            VOLATILE_MIN_DURATION_MINUTES,
-                        )
-                if cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
-                    if cheap_duration < VOLATILE_MIN_DURATION_QUARTERS:
-                        _LOGGER.debug(
-                            "Forecast NORMAL: Cheap period too brief "
-                            "(%dmin < %dmin) - may extend beyond lookahead",
-                            cheap_duration * MINUTES_PER_QUARTER,
-                            VOLATILE_MIN_DURATION_MINUTES,
-                        )
-                    elif (
-                        cheap_quarters_away is not None
-                        and cheap_quarters_away < VOLATILE_MIN_DURATION_QUARTERS
-                    ):
-                        _LOGGER.debug(
-                            "Forecast NORMAL: Cheap period too soon " "(%dmin < %dmin lookahead)",
-                            cheap_quarters_away * MINUTES_PER_QUARTER,
-                            VOLATILE_MIN_DURATION_MINUTES,
-                        )
 
         # DM debt gate: Don't suppress heating when thermal debt exists (Dec 13, 2025)
         # Price layer was fighting thermal recovery by applying -1.5°C during critical DM debt.
@@ -1068,21 +901,16 @@ class PriceAnalyzer:
         else:
             final_offset = adjusted_offset + forecast_adjustment
 
-        # Check for strategic overshoot context when pre-heating. Past the mode's allowed overshoot
-        # the pre-heat is taken back, down to zero - a vote at or below zero has none to take back.
-        # Applied to one, the zero floor RAISED it: in debt (DM < -400) the gate above makes a
-        # PEAK quarter's forecast positive, and a warm house's -2 PEAK cut became 0 at weight 1.0,
-        # overriding the comfort layer's coast too, in the dearest quarter of the day.
+        # Past the mode's allowed overshoot the debt gate's raise is taken back, down to zero - a
+        # vote at or below zero has none to take back. Applied to one, the zero floor RAISED it: in
+        # debt (DM < -400) the gate above makes a PEAK quarter's forecast positive, and a warm
+        # house's -2 PEAK cut became 0 at weight 1.0, overriding the comfort layer's coast too, in
+        # the dearest quarter of the day.
         strategic_context = ""
-        max_overshoot = mode_config.preheat_overshoot_allowed
+        max_overshoot = mode_config.raise_overshoot_allowed
         if forecast_adjustment > 0 and nibe_state.indoor_temp > target_temp:
             overshoot = nibe_state.indoor_temp - target_temp
-            if overshoot <= max_overshoot:
-                strategic_context = (
-                    f" | Strategic storage: +{overshoot:.1f}°C overshoot OK "
-                    f"(≤{max_overshoot:.1f}°C)"
-                )
-            elif final_offset > 0:
+            if overshoot > max_overshoot and final_offset > 0:
                 final_offset = max(final_offset - (overshoot - max_overshoot), 0)
                 strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
 
@@ -1097,10 +925,8 @@ class PriceAnalyzer:
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority
         elif is_volatile and forecast_adjustment <= 0:
-            # Volatility is the CURRENT quarter's class running short. A vote that adds heat for the
-            # hours ahead (a pre-heat, or the debt gate's +0.3) comes from the look-ahead, which
-            # does not read that class, so it keeps its weight. On 15-minute prices the cut took
-            # the night's pre-heat down to 30 % in 116 of 529 pre-heat quarters (SE4, 14-27 Oct 2026).
+            # Volatility is the CURRENT quarter's class running short. The debt gate's +0.3 comes
+            # from the look-ahead, which does not read that class, so it keeps its weight.
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
         else:
             price_weight = LAYER_WEIGHT_PRICE

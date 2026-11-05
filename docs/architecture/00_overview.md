@@ -32,7 +32,7 @@ Each returns an offset, a weight and a reason. The engine runs them in this orde
 | Learned pre-heat | `ThermalStatePredictor` | Pre-heats from the learned house response, after 24 hours of history, at weight 0.65 |
 | Weather compensation | `WeatherCompensationLayer` | Supply temperature from the outdoor temperature (EN 442 emitter law) |
 | Weather pre-heat | `WeatherPredictionLayer` | Heats ahead of a colder day, earlier for a heavy house |
-| Price | `PriceAnalyzer` | Classifies the 15-minute prices: up when cheap, down when expensive, extra before a jump |
+| Price | `PriceAnalyzer` | Classifies the 15-minute prices: up when cheap, down when expensive or before a much cheaper spell |
 | Comfort | `ComfortLayer` | Pulls the room back to its band; a room far too warm wins at full weight |
 
 ## Modules

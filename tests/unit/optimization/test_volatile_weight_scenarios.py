@@ -14,8 +14,6 @@ from custom_components.effektguard.adapters.gespot_adapter import PriceData, Qua
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_PRICE,
-    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
-    PRICE_FORECAST_PREHEAT_OFFSET,
     QuarterClassification,
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_WEIGHT_REDUCTION,
@@ -211,33 +209,6 @@ class TestVolatileWeightReduction:
         price_layer = next((l for l in decision.layers if l.name == "Spot Price"), None)
         assert price_layer is not None, "Should have Spot Price layer"
 
-    def test_weight_reduction_math(self):
-        """The reduced volatile weight still lets a strong pre-heat signal outweigh a normal
-        cheap-period boost through weighted aggregation.
-        """
-        # Normal price layer weight (from const.py)
-        normal_weight = LAYER_WEIGHT_PRICE
-
-        # Volatile period weight (calculated from constants)
-        volatile_weight = normal_weight * VOLATILE_WEIGHT_REDUCTION
-        expected_volatile_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
-
-        # Verify reduction matches expected value from constants
-        assert volatile_weight == pytest.approx(expected_volatile_weight), (
-            f"Volatile weight should be {expected_volatile_weight} "
-            f"({LAYER_WEIGHT_PRICE} × {VOLATILE_WEIGHT_REDUCTION}), got {volatile_weight}"
-        )
-
-        # Calculate influence using actual constants
-        extreme_spike_influence = PRICE_FORECAST_PREHEAT_OFFSET * volatile_weight
-        normal_offset_influence = 0.5 * normal_weight  # Example normal cheap boost
-
-        # A ~30% weight retention still lets the price layer keep meaningful influence.
-        assert extreme_spike_influence > normal_offset_influence, (
-            f"With reduction {VOLATILE_WEIGHT_REDUCTION}, extreme spike ({extreme_spike_influence}) "
-            f"should still beat normal offset ({normal_offset_influence}) through weighted aggregation"
-        )
-
     def test_early_morning_edge_case(self, engine, base_nibe_state, base_weather_data):
         """The backward volatile scan must not crash when the full 8-quarter history is
         unavailable (Q1, only 2 quarters back) and must still return a valid offset.
@@ -417,11 +388,6 @@ class TestVolatileWeightReduction:
         assert (
             0.25 <= VOLATILE_WEIGHT_REDUCTION <= 0.35
         ), f"Weight reduction should be moderate (25-35% retention), got {VOLATILE_WEIGHT_REDUCTION}"
-
-        # Expensive threshold for spikes should require significant increase
-        assert (
-            PRICE_FORECAST_EXPENSIVE_THRESHOLD >= 1.5
-        ), f"Expensive threshold should require significant increase, got {PRICE_FORECAST_EXPENSIVE_THRESHOLD}"
 
     @freeze_time("2025-01-15 17:15:00")
     def test_peak_cluster_expensive_between_peaks(self, engine, base_nibe_state, base_weather_data):

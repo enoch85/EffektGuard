@@ -27,7 +27,6 @@ from custom_components.effektguard.const import (
     OPTIMIZATION_MODE_SAVINGS,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
-    PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
     TOLERANCE_RANGE_MULTIPLIER,
@@ -41,6 +40,7 @@ from custom_components.effektguard.optimization.thermal_layer import ThermalMode
 TARGET = 21.0
 STEP = 0.01
 NOW = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)
+PRICIER_AHEAD = 3.0  # the two quarters ahead at three times the rest of the day's price
 # Every mode at the slider's minimum (the default), the owner's 1.2 and the slider's maximum.
 CASES = [
     (mode, slider)
@@ -185,7 +185,7 @@ class TestTheVoteDoesNotReadPrices:
             return vote.offset, vote.weight
 
         flat = comfort_vote(self._prices(1.0))
-        spike = comfort_vote(self._prices(2.0 * PRICE_FORECAST_EXPENSIVE_THRESHOLD))
+        spike = comfort_vote(self._prices(PRICIER_AHEAD))
 
         assert spike == flat, (
             f"A house 1.0 C above target got comfort vote {flat} with flat prices and {spike} "

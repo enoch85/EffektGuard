@@ -114,7 +114,8 @@ class OptimizationModeConfig:
     - dead_zone: Temperature band around target where no action is taken
     - comfort_weight_multiplier: Scales comfort layer influence (higher = comfort wins more)
     - price_tolerance_multiplier: Scales price layer effect (higher = more aggressive)
-    - preheat_overshoot_allowed: How much overshoot to accept during pre-heating (°C)
+    - raise_overshoot_allowed: How far above the target the price layer's debt-gate raise may
+      still hold the room (°C)
     - room_floor_below_target: How far below the target the room may go before the mode buys
       heat for it - the degree-minute ladder's raises and the pump's immersion heater (°C)
     """
@@ -122,7 +123,7 @@ class OptimizationModeConfig:
     dead_zone: float  # °C - no action within this range
     comfort_weight_multiplier: float  # Scales comfort layer weight
     price_tolerance_multiplier: float  # Scales price layer tolerance factor
-    preheat_overshoot_allowed: float  # °C - acceptable overshoot during cheap pre-heat
+    raise_overshoot_allowed: float  # °C - overshoot the price layer's debt-gate raise may keep
     room_floor_below_target: float  # °C - the room's floor, below the target
 
 
@@ -143,21 +144,21 @@ MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
         dead_zone=0.1,  # Tighter: react faster to any deviation
         comfort_weight_multiplier=1.3,  # Comfort layer wins more often
         price_tolerance_multiplier=0.7,  # Reduce price layer effect
-        preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
+        raise_overshoot_allowed=0.3,  # Minimal overshoot accepted
         room_floor_below_target=0.0,  # At the target
     ),
     OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
         dead_zone=0.2,  # Standard dead zone
         comfort_weight_multiplier=1.0,  # Normal comfort influence
         price_tolerance_multiplier=1.0,  # Normal price effect
-        preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
+        raise_overshoot_allowed=0.5,  # Moderate overshoot OK
         room_floor_below_target=0.2,  # A little below, to save more
     ),
     OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
         dead_zone=0.3,  # Wider: ignore small deviations
         comfort_weight_multiplier=0.7,  # Price wins more often
         price_tolerance_multiplier=1.3,  # Amplify price effect
-        preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
+        raise_overshoot_allowed=1.0,  # Accept more overshoot for savings
         room_floor_below_target=1.0,  # A degree below
     ),
 }
@@ -841,13 +842,9 @@ PRICE_FORECAST_BASE_HORIZON: Final = 5.0  # hours - base value multiplied by the
 PRICE_FORECAST_CHEAP_THRESHOLD: Final = (
     0.5  # Price ratio - upcoming < 50% of current = "much cheaper"
 )
-PRICE_FORECAST_EXPENSIVE_THRESHOLD: Final = (
-    1.5  # Price ratio - upcoming > 150% of current = "much more expensive"
-)
 PRICE_FORECAST_REDUCTION_OFFSET: Final = (
     -1.5
 )  # °C - reduce heating when cheap period coming (Dec 5, 2025: strengthened from -1.0)
-PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive period coming
 
 # Price layer DM debt gate (Dec 13, 2025)
 # When thermal debt exists, price layer should not suppress heating (fighting thermal recovery).

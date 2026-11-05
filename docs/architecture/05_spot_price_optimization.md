@@ -31,12 +31,13 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 4. **Tolerance**: the 0.5-3.0 slider maps to a factor of 0.2-1.0 (`PRICE_TOLERANCE_FACTOR_*`),
    times the mode multiplier (comfort 0.7, balanced 1.0, savings 1.3).
 5. **Forecast**, not on PEAK: the look-ahead is 5 h times the thermal mass
-   (`PRICE_FORECAST_BASE_HORIZON`, 2.5-10 h, running into tomorrow when published). A run at least
-   3 quarters long and 3 quarters away under 50 % of the current price adds -1.5
-   (`PRICE_FORECAST_REDUCTION_OFFSET`); one over 150 % adds +2.0 (`PRICE_FORECAST_PREHEAT_OFFSET`).
+   (`PRICE_FORECAST_BASE_HORIZON`, 2.5-10 h, running into tomorrow when published). In a quarter
+   that is not cheap, a run at least 3 quarters long and 3 quarters away under 50 % of the current
+   price adds -1.5 (`PRICE_FORECAST_REDUCTION_OFFSET`). Nothing is added ahead of a dearer run:
+   that pre-heat cost more than it saved in every plant and mode of the owner's closed loop.
    With DM below -400 a negative adjustment becomes +0.3 (`PRICE_FORECAST_DM_DEBT_OFFSET`).
-6. **Stored heat**: pre-heating into a room already above target by more than the mode allows
-   (0.3 / 0.5 / 1.0 °C) is trimmed by the excess.
+6. **Overshoot**: that +0.3 in a room already above target by more than the mode allows
+   (0.3 / 0.5 / 1.0 °C, `raise_overshoot_allowed`) is trimmed by the excess.
 7. **No deeper than -2.0** (`PRICE_OFFSET_DEEPEST_CUT`), whatever the class, the slider and the
    mode. A deeper cut stops the compressor instead of slowing it: the slab drains, and the heat
    comes back from the immersion heater or not at all.
@@ -45,7 +46,7 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 
 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 at PEAK or in a PEAK cluster, which makes it a critical cost layer
 ([08](08_layer_priority_system.md)); x0.3 when volatile (`VOLATILE_WEIGHT_REDUCTION`), unless the
-look-ahead adds heat for the hours ahead. No price data, or the Price Optimization switch off: no
+debt gate's +0.3 applies. No price data, or the Price Optimization switch off: no
 vote. Missing prices also raise a repair issue.
 
 ## Example
