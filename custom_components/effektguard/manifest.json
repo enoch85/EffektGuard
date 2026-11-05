@@ -2,6 +2,7 @@
   "domain": "effektguard",
   "name": "EffektGuard",
   "after_dependencies": ["ge_spot", "modbus", "mqtt", "myuplink", "nibe_heatpump", "recorder", "sunspec", "template", "weather"],
+  "categories": ["climate.heat_pumps_air_conditioning", "energy"],
   "codeowners": ["@enoch85"],
   "config_flow": true,
   "dependencies": [],
