@@ -21,6 +21,7 @@ from custom_components.effektguard.optimization.price_layer import (
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.const import (
     LAYER_WEIGHT_PRICE,
+    PRICE_OFFSET_DEEPEST_CUT,
     VOLATILE_WEIGHT_REDUCTION,
 )
 
@@ -185,9 +186,10 @@ class TestRealWorldScenario:
             # Mode multiplier: 1.0 (balanced)
             # Base: -1.0 × 1.5 × 0.68 × 1.0 = -1.02°C
             # Forecast adjustment: -1.5°C (cheaper period ahead, Q44-48 @ 0.90 öre = 62% cheaper)
-            # Expected: -1.02 + (-1.5) = -2.52°C
+            # Together -2.52°C, held at the deepest cut the price layer votes
 
-            assert price_layer.offset == pytest.approx(-2.5, abs=0.3)
+            assert price_layer.offset == PRICE_OFFSET_DEEPEST_CUT
+            assert "Cut held" in price_layer.reason
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
             # Weight may be reduced based on VOLATILE_WEIGHT_REDUCTION constant
             min_expected_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
@@ -342,7 +344,8 @@ class TestRealWorldScenario:
                 # Mode multiplier: 1.0 (balanced)
                 # Forecast adjustment: -1.5°C (cheaper period ahead)
                 expected_base = -1.0 * 1.5 * expected_factor * 1.0  # mode mult = 1.0
-                expected_offset = expected_base + (-1.5)  # Add forecast adjustment
+                # Add the forecast adjustment; no cut goes deeper than the price layer's deepest
+                expected_offset = max(expected_base + (-1.5), PRICE_OFFSET_DEEPEST_CUT)
 
                 print(
                     f"\nTolerance {tolerance_setting}: "

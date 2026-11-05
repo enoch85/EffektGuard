@@ -113,7 +113,7 @@ def test_a_naive_datetime_from_a_foreign_price_integration_is_not_silently_accep
     """A naive datetime parses but must resolve to None at the containment lookup.
 
     A naive timestamp compared against an aware dt_util.now() raises TypeError, which
-    _index_containing catches and answers with None - it must never raise into pump control.
+    index_containing catches and answers with None - it must never raise into pump control.
     """
     from custom_components.effektguard.adapters.gespot_adapter import PriceData
 

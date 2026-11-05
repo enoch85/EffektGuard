@@ -12,7 +12,6 @@ real layers with every heating_type, and check the warm-side ceiling never touch
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 import pytest
 
@@ -135,9 +134,7 @@ def test_a_healthy_pump_in_july_is_not_given_a_curve_boost(heating_type):
         climate_detector=ClimateZoneDetector(latitude=59.33), heating_type=heating_type
     )
     pump = _HealthyPumpOnASummerMorning(outdoor=25.0, degree_minutes=-85.0)
-    now = datetime(2026, 7, 13, 6, 0, tzinfo=timezone.utc)
-
-    decision = layer.evaluate_layer(pump, None, None, TARGET, TOLERANCE, lambda: now, False)
+    decision = layer.evaluate_layer(pump, None, TARGET, TOLERANCE, TARGET, False)
 
     assert decision.weight == 0.0 and decision.offset == 0.0, (
         f"A {heating_type} house at {pump.indoor_temp} C ({TARGET - pump.indoor_temp:.1f} C under "
@@ -161,9 +158,7 @@ def test_a_pump_in_real_thermal_debt_in_winter_still_gets_help(heating_type):
     pump = _HealthyPumpOnASummerMorning(outdoor=-30.0, degree_minutes=-1300.0)
     pump.indoor_temp = 19.5  # well below the comfort band
     pump.supply_temp = 55.0
-    now = datetime(2026, 1, 13, 6, 0, tzinfo=timezone.utc)
-
-    decision = layer.evaluate_layer(pump, None, None, TARGET, TOLERANCE, lambda: now, False)
+    decision = layer.evaluate_layer(pump, None, TARGET, TOLERANCE, TARGET, False)
 
     assert decision.offset > 0 and decision.weight > 0, (
         f"A {heating_type} house at 19.5 C in a -30 C snap, {pump.degree_minutes:+.0f} degree "

@@ -17,6 +17,8 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
+from custom_components.effektguard.utils.capacity_shortfall import CapacityShortfall
+from custom_components.effektguard.utils.heater_start import HeaterStart
 
 
 def _make_minimal_hass() -> MagicMock:
@@ -74,9 +76,12 @@ def _make_coordinator(decision: OptimizationDecision) -> EffektGuardCoordinator:
     engine.calculate_decision = MagicMock(return_value=decision)
     engine.price = MagicMock()
     engine.price.get_current_classification = MagicMock(return_value="normal")
+    engine.capacity_shortfall = CapacityShortfall()  # stored with the learned data
+    engine.heater_start = HeaterStart()  # so is this
 
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
 
     coordinator = EffektGuardCoordinator(
         hass=hass,

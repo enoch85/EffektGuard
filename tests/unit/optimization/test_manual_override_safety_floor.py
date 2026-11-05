@@ -11,6 +11,7 @@ safety requires is passed through untouched (boost_heating(+10) still boosts); a
 would leave the system below the safety floor is raised to it.
 """
 
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -22,13 +23,27 @@ from custom_components.effektguard.const import (
     MIN_OFFSET,
     MIN_TEMP_LIMIT,
     SAFETY_EMERGENCY_OFFSET,
+    UPDATE_INTERVAL_MINUTES,
 )
-from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+from custom_components.effektguard.optimization.decision_engine import (
+    DecisionEngine,
+    OptimizationDecision,
+)
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
+from custom_components.effektguard.utils.volatile_helpers import (
+    SECONDS_PER_MINUTE,
+    OffsetVolatilityTracker,
+    gate_offset,
+)
 
 STOCKHOLM_LATITUDE = 59.33
+# A PEAK-layer cut on the register, and the floor the engine lifts it to at the aux limit
+# (TestAbsoluteSafetyFloor): a reversal of 6 C toward zero, which the gate holds for 45 minutes
+# unless the decision is flagged.
+PEAK_CUT = -6.0
+SAFETY_FLOOR_AT_AUX_LIMIT = 0.0
 
 
 @pytest.fixture
@@ -137,24 +152,28 @@ class TestAbsoluteSafetyFloor:
 class TestVolatilityBlockerBypassesEmergency:
     """The coordinator must not defer an emergency for 45 minutes."""
 
-    def test_coordinator_bypasses_volatile_check_for_emergency(self):
+    def test_an_emergency_goes_past_the_tracker_inside_its_window(self):
         """Regression guard for the offset-volatility blocker.
 
-        Pre-fix the blocker bypassed only `is_manual_override` and `anti_windup_active`.
-        An aux-limit emergency sets neither, so lifting a -6.0 PEAK offset there was a
-        "volatile reversal" and got deferred for up to 45 minutes while DM kept falling.
+        Pre-fix the blocker bypassed only `is_manual_override` and `anti_windup_active`. An
+        aux-limit emergency sets neither, so lifting a -6.0 PEAK offset there was a "volatile
+        reversal" and got deferred for up to 45 minutes while DM kept falling. The policy is
+        `gate_offset`, which the coordinator and the simulator both run; the same lift without the
+        flag is held, which is what makes the flag observable.
         """
-        import inspect
+        clock = {"now": 0.0}
+        tracker = OffsetVolatilityTracker(time_source=lambda: clock["now"])
+        tracker.record_change(PEAK_CUT, "peak")
+        clock["now"] += UPDATE_INTERVAL_MINUTES * SECONDS_PER_MINUTE
 
-        from custom_components.effektguard.coordinator import EffektGuardCoordinator
+        lift = OptimizationDecision(offset=SAFETY_FLOOR_AT_AUX_LIMIT, reasoning="lift")
+        assert gate_offset(tracker, lift).blocked, "precondition: an automatic lift is held"
+        assert tracker.last_offset == PEAK_CUT
 
-        src = inspect.getsource(EffektGuardCoordinator._read_and_decide)
+        gated = gate_offset(tracker, replace(lift, is_emergency=True))
 
-        assert "elif decision.is_emergency:" in src, (
-            "The offset-volatility blocker does not bypass emergency decisions. It would "
-            "defer an aux-limit recovery for up to 45 minutes."
-        )
-        # The emergency bypass must be evaluated BEFORE the volatile-reversal branch.
-        assert src.index("elif decision.is_emergency:") < src.index(
-            "is_reversal_volatile"
-        ), "The emergency bypass must precede the volatile-reversal check."
+        assert not gated.blocked, "an aux-limit recovery was deferred behind a price cut"
+        assert gated.offset == pytest.approx(SAFETY_FLOOR_AT_AUX_LIMIT)
+        assert tracker.last_offset == pytest.approx(
+            SAFETY_FLOOR_AT_AUX_LIMIT
+        ), "the recovery must become the tracker's baseline, or the next cycle re-fights it"

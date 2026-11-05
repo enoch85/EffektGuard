@@ -2,7 +2,7 @@
 
 Intelligent NIBE heat pump control for Home Assistant, optimizing against Swedish spot prices and
 the effect tariff (*effektavgift*). **Production code running in real homes**: safety and pump
-health before savings, comfort before cost.
+health first, then savings, down to the room temperature the chosen mode keeps.
 
 It controls exactly **one** actuator - the heating-curve offset register (47011) - plus two
 optional switches (DHW temporary lux, increased ventilation). It calls no external API; it reads
@@ -29,12 +29,15 @@ entities other integrations publish.
 | [docs/dev/CODE_STANDARDS.md](docs/dev/CODE_STANDARDS.md) | Imports, type hints, async, docstrings |
 | [docs/dev/TESTING.md](docs/dev/TESTING.md) | Test layout and categories |
 | [docs/dev/ENVIRONMENT_SETUP.md](docs/dev/ENVIRONMENT_SETUP.md) | First-time setup |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Setup, thermostat, settings, services, troubleshooting (the README is the overview) |
+| [docs/LOCAL_MODBUS.md](docs/LOCAL_MODBUS.md) | The offset entity on a generic Modbus setup |
+| [docs/dashboard-charts.yaml](docs/dashboard-charts.yaml) | The README's charts as an apexcharts-card dashboard card |
 
 **Add any new doc to this table.** It is the single index.
 
 ---
 
-## Three rules that get broken most often
+## Six rules that get broken most often
 
 1. **No AI attribution in any committed artifact.** No `Co-Authored-By:` naming an AI, no
    "Generated with", no robot emoji, no "claude" in a branch name - in commits, branches, PRs,
@@ -45,6 +48,17 @@ entities other integrations publish.
 3. **Verify by running it.** This repo's history is full of review notes that were wrong until
    someone executed them. A claim about behaviour is not established until the code produced the
    number.
+4. **Every number is measured. No estimates, no guesses.** A figure in a reply, PR, commit, code
+   comment, doc or release note comes from a run you did, and says what it counts and over which
+   period. If it cannot be measured, say so instead of giving a number. A number from a subagent
+   or an earlier session is re-run before it is repeated.
+5. **The README and the docs match the code.** A change that makes either one false updates it in
+   the same PR, and every claim in them is checked against the code before it is written. End
+   users read the README: a wrong line there is a bug.
+6. **Write less, for someone with no technical knowledge.** The README is a short overview; details
+   go in `docs/`. PR descriptions and release notes are a few short bullets saying what changed, not
+   how. If a line needs a second read, cut it. Every release opens with a short description and uses
+   the format in [RELEASING.md](docs/agent/RELEASING.md); v0.8.0 is the model.
 
 ---
 
@@ -71,6 +85,15 @@ thermal mass (concrete ×1.3, timber ×1.15, radiator ×1.0). The same pump at �
 Kiruna and "in trouble" in Malmö, with no configuration. Past DM −1500 the EMERGENCY tier floors
 the offset at 0 unless the room is above its band, and raises nothing itself - the compressor is
 flat out there, so a raise only buys immersion heat (F-124).
+
+The ladder raises only for a room below its floor - the target less the mode's
+`room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it, the heater
+guard keeps degree minutes off the pump's immersion heater start - where the heater's power reading
+has shown it switching on, or staying off (`utils/heater_start.py`), until then the model profile's
+factory `aux_start_dm` - and no price cut goes deeper than −2. Where the pump has been seen short of
+capacity - DM held at its heater start for three hours at its own curve, six hours after a cut of
+ours (`utils/capacity_shortfall.py`) - and the next 12 forecast hours are as cold, nothing cuts
+below 0 and the guard stands down.
 
 The ladder is `Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY` - eight rungs that fire. There
 is no WARNING or CAUTION tier; see the open-findings register for why.

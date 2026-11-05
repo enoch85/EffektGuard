@@ -55,6 +55,7 @@ from custom_components.effektguard.const import (
     CONF_GESPOT_ENTITY,
     DM_THRESHOLD_AUX_LIMIT,
     INTERNAL_GAINS_W,
+    MODE_CONFIGS,
     POWER_SOURCE_EXTERNAL_METER,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
 )
@@ -63,6 +64,7 @@ from custom_components.effektguard.utils.emitter import en442_flow_temp
 from custom_components.effektguard.utils.offset import integer_offset_for
 from custom_components.effektguard.utils.volatile_helpers import (
     OffsetVolatilityTracker,
+    gate_offset,
 )
 from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
@@ -80,7 +82,11 @@ from custom_components.effektguard.models.nibe import (
 )
 from custom_components.effektguard.optimization.billing_period import BillingPeriodAccumulator
 from custom_components.effektguard.optimization.effect_layer import effective_tariff_power_kw
-from custom_components.effektguard.optimization.decision_engine import DecisionEngine
+from custom_components.effektguard.optimization.decision_engine import (
+    DecisionEngine,
+    OptimizationDecision,
+    get_safe_default_decision,
+)
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
@@ -240,8 +246,8 @@ EXHAUST_AIR_SOURCE_C = 20.0  # F750/F730 draw ~20 C indoor extract air, all year
 BRINE_SOURCE_C = 0.0  # F1155/S1155 draw ~0 C brine, stable year-round
 
 
-# Comfort accounting matches the engine's configured tolerance (not a looser
-# ad-hoc band): minutes below target-tolerance count as under-heating.
+# Comfort accounting matches the band the engine keeps in the mode it runs (not a looser ad-hoc
+# band): minutes below it count as under-heating. See comfort_band_low.
 TARGET_INDOOR = 22.0
 COMFORT_TOLERANCE = 0.5
 # THE DESIGN TEMPERATURE IS THE SIZING CONVENTION, AND IT IS LOAD-BEARING.
@@ -970,16 +976,21 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 35.75},
+                    houses={"airsource_f2040": 34.0},
                     why=(
                         "F-124 on the air-source F2040 only: aux above what its capacity deficit "
                         "forces. The wear guard caps raises while the compressor is saturated "
                         "(54.25 kWh before it had a trigger), but lets a share of them through for "
                         "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. Measured with the coordinator's own "
-                        "volatility gate in the loop (eaa3986). The other four houses hold every "
-                        "invariant through Sweden's coldest wave since 1999 AND the 589 ore/kWh "
-                        "spike it caused."
+                        "attributed yet. 34.0 kWh against 17.8 forced since the ladder raises only "
+                        "for a room below its floor and the heater guard keeps such a room's DM "
+                        "off the heater; 39.75 against 19.8 before, since the bench runs the "
+                        "coordinator's gate policy and hands the engine the projected period-mean "
+                        "power; 35.75 against 20.4 while it gated every proposal on the "
+                        "instantaneous draw (eaa3986). The projected power alone takes it to "
+                        "49.75, the three bypasses alone to 37.0, both to 39.75. The other four "
+                        "houses hold every invariant through Sweden's coldest wave since 1999 AND "
+                        "the 589 ore/kWh spike it caused."
                     ),
                 ),
             ),
@@ -1001,29 +1012,47 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 203.01},
+                    houses={"concrete_f1155": 175.01},
                     why=(
-                        "F-124 on the undersized F1155: 203.0 kWh of immersion against 133.9 forced, "
-                        "where NIBE alone burns 146.4. The wear guard judges it against the maximum "
-                        "the pump publishes. 191.9 before #54: the slab's longer pre-heat lead votes on "
-                        "22 % of cycles instead of 14 %, +11.1 kWh, 61 SEK cheaper."
+                        "F-124 on the undersized F1155: 175.0 kWh of immersion against 131.5 "
+                        "forced, where NIBE alone burns 146.4 - 179.7 against 126.7 before the "
+                        "ladder's room floor, the heater guard and the capacity shortfall. The "
+                        "floor and the guard without the shortfall burn 182.0: this pump's heater "
+                        "holds its DM AT its start, which the shortfall must count to keep the "
+                        "guard off it. The wear guard judges it against the maximum the pump "
+                        "publishes. 188.4 before the register landed on the whole degree nearest "
+                        "to the guard's cap (191.3 recorded before that). 203.0 against 133.9 "
+                        "before the bench ran the coordinator's gate policy: the wear guard's "
+                        "withdrawals and anti-windup going past the tracker take it to 179.7 "
+                        "alone, the projected period-mean power alone to 201.8, both to 191.3. "
+                        "191.9 before #54: the slab's longer pre-heat lead votes on 22 % of cycles "
+                        "instead of 14 %, +11.1 kWh, 61 SEK cheaper."
                     ),
                 ),
                 KnownRed(
                     fails_with="minutes below the comfort band",
                     stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 1200},
+                    houses={"airsource_f2040": 890},
                     why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 1200 minutes "
-                        "below the band, where NIBE alone has 585. Not attributed yet (F-124)."
+                        "The undersized F2040 is colder under EffektGuard than alone: 890 minutes "
+                        "below the band, where NIBE alone has 585 - 1450 before EffektGuard "
+                        "learned where this pump runs short of capacity and stopped cutting below "
+                        "its curve there; the ladder's room floor and the heater guard without "
+                        "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
+                        "policy. Each bypass measured alone, with the projected period-mean power: "
+                        "anti-windup 1445, the wear guard's withdrawal 1385 (DM to the -3000 "
+                        "integrator floor), emergency 1085 - the same as the projected power "
+                        "alone, so it changes nothing here - and all three 1450. Not attributed "
+                        "below that (F-124)."
                     ),
                 ),
                 KnownRed(
                     fails_with="past the -1500 auxiliary-heat limit",
                     houses={"airsource_f2040": None},
                     why=(
-                        "The undersized F2040's DM reaches -2779; NIBE alone reaches -1890 (F-124, "
-                        "F-112: its own heater starts at -760)."
+                        "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
+                        "shortfall, -2779 before the bench ran the coordinator's gate policy); "
+                        "NIBE alone reaches -1890 (F-124, F-112: its own heater starts at -760)."
                     ),
                 ),
             ),
@@ -1047,12 +1076,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 76.75},
+                    houses={"airsource_f2040": 63.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024 (87.25 kWh before the wear guard had a trigger). "
-                        "The other four houses hold every invariant. First reproduction of F-124 "
-                        "on REAL weather rather than a synthetic temperature shift."
+                        "nordic_coldsnap_jan2024: 63.25 kWh against 44.0 forced (68.75 against "
+                        "46.5 before the ladder's room floor and the heater guard; 87.25 before "
+                        "the wear guard had a trigger; 76.75 before the bench ran the "
+                        "coordinator's gate policy - the bypasses alone give 66.5, the projected "
+                        "period-mean power alone 76.25, both 68.75). The other four houses hold "
+                        "every invariant. First reproduction of F-124 on REAL weather rather than "
+                        "a synthetic temperature shift."
                     ),
                 ),
             ),
@@ -1086,7 +1119,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.28, "apartment_f730": 8.01, "airsource_f2040": 8.59},
+                    houses={"wooden_f750": 6.34, "apartment_f730": 8.01, "airsource_f2040": 8.66},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own Carnot/"
@@ -1094,7 +1127,11 @@ SCENARIOS = {
                         "rating points taken at winter source temperatures and extrapolates above "
                         "them when the source is mild. Every COST number in this scenario is "
                         "therefore too low, and no saving may be quoted from it. The overshoot "
-                        "ramp moved them up from 6.17, 7.71 and 8.56."
+                        "ramp moved them up from 6.17, 7.71 and 8.56; the projected period-mean "
+                        "power the bench now hands the engine moved the F2040's from 8.59 to 8.60 "
+                        "(the gate bypasses alone leave it at 8.59); the ladder's room floor, the "
+                        "heater guard and the capacity shortfall the F750's from 6.28 to 6.34 and "
+                        "the F2040's to 8.66."
                     ),
                 ),
                 KnownRed(
@@ -1112,20 +1149,9 @@ SCENARIOS = {
                     ),
                 ),
                 KnownRed(
-                    fails_with="in weather this mild",
-                    stat="aux_kwh",
-                    houses={"villa_s1155": 0.6},
-                    why=(
-                        "CONTROLLER, the same cause as the ladder above: the S1155's DM drifts to "
-                        "-460, which is its own aux-start setting, so its immersion heater runs "
-                        "briefly in May. Unrecorded until the sweep began checking which failure "
-                        "each note covers."
-                    ),
-                ),
-                KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3405, "apartment_f730": 11505},
+                    houses={"wooden_f750": 3305, "apartment_f730": 11390},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1134,7 +1160,8 @@ SCENARIOS = {
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
                         "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
-                        "correction below it."
+                        "correction below it. The ladder's room floor and the heater guard moved "
+                        "them from 3405 and 11505."
                     ),
                 ),
             ),
@@ -1151,7 +1178,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.66, "apartment_f730": 7.40, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.68, "apartment_f730": 7.43, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
@@ -1163,7 +1190,8 @@ SCENARIOS = {
                         "model and are the part this window is read for. The comfort side is "
                         "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
-                        "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C."
+                        "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
+                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40."
                     ),
                 ),
             ),
@@ -1308,7 +1336,8 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
     if "comfort_held" in scenario.expect:
         if stats["comfort_minutes_below"] > SCENARIO_COMFORT_BREACH_BUDGET_MIN:
             failures.append(
-                f"{stats['comfort_minutes_below']} minutes below the comfort band "
+                f"{stats['comfort_minutes_below']} minutes below the comfort band of "
+                f"{stats['comfort_band_low_c']:.1f} C "
                 f"(budget {SCENARIO_COMFORT_BREACH_BUDGET_MIN}) - the optimiser let the "
                 f"house go cold in real weather it will meet every winter"
             )
@@ -1658,6 +1687,18 @@ def build_engine(
     return engine, effect
 
 
+def comfort_band_low(mode: str) -> float:
+    """The lowest room the mode keeps: the comfort band a run in that mode is judged against.
+
+    The configured tolerance below the target, or the mode's own room floor where that is wider.
+    Savings "is allowed to cut below the set degree within reasonable limits" (the owner,
+    2026-10-29), a degree in MODE_CONFIGS: a savings run living between the tolerance and its floor
+    is doing what it was asked, not starving the house. Comfort's floor (the target) and
+    balanced's (0.2 below) lie inside the tolerance, so theirs is the tolerance band.
+    """
+    return TARGET_INDOOR - max(COMFORT_TOLERANCE, MODE_CONFIGS[mode].room_floor_below_target)
+
+
 def simulate(
     house: HouseConfig,
     times,
@@ -1675,6 +1716,7 @@ def simulate(
     latitude: float = STOCKHOLM_LATITUDE,
 ):
     engine, effect = build_engine(house, mode, enable_price, enable_weather, latitude=latitude)
+    band_low = comfort_band_low(mode)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
     steps = days * 24 * 60 // STEP_MIN
@@ -1703,6 +1745,7 @@ def simulate(
         "offset_min": 0,
         "offset_max": 0,
         "exceptions": 0,
+        "comfort_band_low_c": band_low,
         "comfort_minutes_below": 0,
         "comfort_degree_minutes_below": 0.0,
         "comfort_minutes_grazing": 0,
@@ -1713,6 +1756,7 @@ def simulate(
         "compressor_blocked_hours": 0.0,
         "offset_reversals": 0,
         "offset_reversals_blocked": 0,
+        "offset_gate_bypasses": {},
         "offset_reversal_degrees": 0,
         "heat_kwh": 0.0,
         "loss_kwh": 0.0,
@@ -1723,11 +1767,14 @@ def simulate(
         "datasheet_cop_x_heat": 0.0,
     }
     best_published_cop = max(p.cop for p in house.profile.datasheet_points)
-    # THE REAL BLOCKER, not a copy of it. The coordinator runs every decision through this
-    # before the offset reaches the pump: a reversal of >= 2 C that moves toward or through
-    # zero, within VOLATILE_MIN_DURATION_MINUTES of the last change, is refused and the
-    # previous offset is kept. The harness used to skip it entirely, which measured the
-    # engine's raw output and reported it as what the pump does (F-142).
+    # THE REAL BLOCKER, run under THE REAL POLICY. The coordinator runs every decision through
+    # this before the offset reaches the pump: a reversal of >= 2 C that moves toward or through
+    # zero, within VOLATILE_MIN_DURATION_MINUTES of the last change, is refused and the previous
+    # offset is kept. The harness used to skip it entirely, which measured the engine's raw output
+    # and reported it as what the pump does (F-142) - and then ran EVERY proposal through it, while
+    # the coordinator took emergency, anti-windup and the wear guard's withdrawal past it. Sharing
+    # the class did not share that policy; gate_offset does, and is called below as the
+    # coordinator calls it.
     #
     # Driven by simulated time: `time` is not monkeypatched here, only `dt_util`.
     sim_clock = {"now": 0.0}
@@ -2028,16 +2075,89 @@ def simulate(
                     if house.profile.publishes_max_frequency
                     else None
                 ),
+                # The heater's power, as the pump publishes it: where it starts is learned from it.
+                heater_power_kw=round(aux_kw, 2),
                 power_kw=round(power_kw, 2),
             )
 
+            # Booked BEFORE the decision, as the coordinator books it (_update_peak_tracking):
+            # this cycle's power into the billing period, and a period that closes on it into
+            # the peak history. The engine is then handed the period mean this cycle projects
+            # to and the month's peak as it stands after it, not one cycle late.
+            # EFFECT TARIFF BASIS: the owner's 15-minute period mean (BILLING_PERIOD_MINUTES).
+            # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
+            #
+            # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
+            # keyed on its own idea of an hour. The coordinator has always used a TIME-WEIGHTED mean over
+            # an absolute hour. Two implementations of the single most consequential number this
+            # integration computes - and the harness was validating the one nobody runs.
+            #
+            # They agreed only because this loop steps a perfectly uniform five minutes, which Home
+            # Assistant does not. And they were both wrong on the night the clocks go back, INDEPENDENTLY,
+            # so neither could see the other's bug: the coordinator merged the repeated hour and deleted a
+            # 9 kW billing peak. An instrument that re-implements the thing it measures cannot measure it.
+            #
+            # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
+            # and --dst fails here as well as in the unit tests.
+            completed = billing.add(now, power_kw, POWER_SOURCE_EXTERNAL_METER)
+            if completed is not None:
+                # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
+                #
+                # The first version of this counter re-derived the hour key here, from `now`, and so it
+                # kept reporting 25 hours on the fall-back day even when the production accumulator was
+                # merging the two 02:00s into one. It was measuring the harness, not the code under test
+                # - the exact vacuity this whole commit exists to remove, reintroduced one line below the
+                # comment complaining about it. Verified by mutation: reinstate the DST bug in
+                # billing_period.py and this now reports 24 hours and fails the run.
+                # COUNTED, not collected in a set: on the fall-back day both 02:00 hours carry the SAME
+                # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
+                # equal), so a set would silently merge them back into one and report 24 again - passing
+                # the check by making the same mistake it exists to catch.
+                billing_periods[completed.started_at.date()] = (
+                    billing_periods.get(completed.started_at.date(), 0) + 1
+                )
+
+                day = completed.started_at.date()
+                daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
+                # What the tariff COUNTS is the effective power - Ellevio halves 22:00-06:00.
+                # The harness used to skip the night weighting, overstating every tariff figure
+                # with night-shifted load - which is exactly where this optimiser puts load.
+                daily_billed[day] = max(
+                    daily_billed.get(day, 0.0),
+                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_period),
+                )
+                running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
+
+                # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
+                # `running_peak_kw` and handed it to the engine, but never called
+                # `record_quarter_measurement()` - so `EffectManager._monthly_peaks` stayed empty for
+                # all 8928 steps, and `should_limit_power()` short-circuits on an empty history:
+                #
+                #     if not self._monthly_peaks:
+                #         return PowerLimitDecision(should_limit=False, severity="OK", ...)
+                #
+                # The peak layer therefore voted weight 0.00 on every single step of every run. Every
+                # claim this harness made about effect-tariff protection - the feature the integration
+                # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
+                # houses; this is the same hole, in the instrument that was supposed to catch it.)
+                asyncio.run(
+                    effect.record_period_measurement(
+                        power_kw=completed.mean_power_kw,
+                        period=completed.billing_period,
+                        timestamp=completed.started_at,
+                        source=POWER_SOURCE_EXTERNAL_METER,
+                    )
+                )
+
             # --- the real decision engine (or neutral baseline) ---
             if battery:
-                calc_offset = battery_reference_offset(price_data, now, indoor)
+                decision = OptimizationDecision(
+                    offset=battery_reference_offset(price_data, now, indoor)
+                )
             elif fixed_offset is not None:
-                calc_offset = fixed_offset
+                decision = OptimizationDecision(offset=fixed_offset)
             elif baseline:
-                calc_offset = 0.0
+                decision = OptimizationDecision(offset=0.0)
             else:
                 try:
                     # The peak the effect layer defends is the one this simulation has
@@ -2050,12 +2170,15 @@ def simulate(
                         price_data=price_data,
                         weather_data=weather,
                         current_peak=running_peak_kw,
-                        current_power=power_kw,
+                        # LIKE FOR LIKE, as the coordinator hands it over: the monthly record is
+                        # a period mean, so the effect layer is compared against the 15-minute
+                        # period this cycle projects to, not the instant. The harness used to
+                        # pass the instantaneous draw.
+                        current_power=billing.projected_period_mean(now, power_kw),
                         compressor_saturated=saturation.update(
                             nibe, hot_water=False, airflow_enhanced=False
                         ),
                     )
-                    calc_offset = decision.offset
                     # WHICH LAYERS ACTUALLY VOTED. "5/5 PASS" says nothing about a layer that never
                     # fired - and this harness has already shipped a run where the Peak layer voted
                     # weight 0.00 in all 8928 steps of every run ever made, while reporting PASS. A
@@ -2075,16 +2198,21 @@ def simulate(
                             "detail": f"{type(err).__name__}: {err}",
                         }
                     )
-                    calc_offset = 0.0
+                    decision = get_safe_default_decision()
 
             # The coordinator's own volatility gate, in the same place it sits in production:
-            # after the layers have voted, before anything reaches the register.
+            # after the layers have voted, before anything reaches the register - and under the
+            # coordinator's own policy, so an emergency, an anti-windup decision and the wear
+            # guard's withdrawal go past the tracker here exactly as they do there.
             sim_clock["now"] = now.timestamp()
-            if offset_volatility.is_reversal_volatile(calc_offset):
+            gated = gate_offset(offset_volatility, decision)
+            calc_offset = gated.offset
+            if gated.blocked:
                 stats["offset_reversals_blocked"] += 1
-                calc_offset = offset_volatility.last_offset or 0.0
-            else:
-                offset_volatility.record_change(calc_offset, "sim")
+            elif gated.bypass is not None:
+                stats["offset_gate_bypasses"][gated.bypass] = (
+                    stats["offset_gate_bypasses"].get(gated.bypass, 0) + 1
+                )
 
             # The REAL quantisation the adapter uses, not a copy of it. This harness used to carry its
             # own transcription of that arithmetic - including the int() truncation - which is exactly
@@ -2197,73 +2325,8 @@ def simulate(
             )
             stats["cost_sek"] += energy * cur_price_ore / 100.0
 
-            # EFFECT TARIFF BASIS: the owner's 15-minute period mean (BILLING_PERIOD_MINUTES).
-            # THE BILLED QUANTITY IS COMPUTED BY THE PRODUCTION CODE, NOT BY A LOOKALIKE.
-            #
-            # This used to be the harness's OWN accumulator: `sum(period_samples) / len(period_samples)`,
-            # keyed on its own idea of an hour. The coordinator has always used a TIME-WEIGHTED mean over
-            # an absolute hour. Two implementations of the single most consequential number this
-            # integration computes - and the harness was validating the one nobody runs.
-            #
-            # They agreed only because this loop steps a perfectly uniform five minutes, which Home
-            # Assistant does not. And they were both wrong on the night the clocks go back, INDEPENDENTLY,
-            # so neither could see the other's bug: the coordinator merged the repeated hour and deleted a
-            # 9 kW billing peak. An instrument that re-implements the thing it measures cannot measure it.
-            #
-            # `BillingPeriodAccumulator` is now the only definition, and this is the real one. Break it
-            # and --dst fails here as well as in the unit tests.
-            completed = billing.add(now, power_kw, POWER_SOURCE_EXTERNAL_METER)
-            if completed is not None:
-                # COUNT WHAT THE ACCUMULATOR ACTUALLY BILLED, not what this loop thinks an hour is.
-                #
-                # The first version of this counter re-derived the hour key here, from `now`, and so it
-                # kept reporting 25 hours on the fall-back day even when the production accumulator was
-                # merging the two 02:00s into one. It was measuring the harness, not the code under test
-                # - the exact vacuity this whole commit exists to remove, reintroduced one line below the
-                # comment complaining about it. Verified by mutation: reinstate the DST bug in
-                # billing_period.py and this now reports 24 hours and fails the run.
-                # COUNTED, not collected in a set: on the fall-back day both 02:00 hours carry the SAME
-                # local `started_at`, and PEP 495 makes those two datetimes compare EQUAL (and hash
-                # equal), so a set would silently merge them back into one and report 24 again - passing
-                # the check by making the same mistake it exists to catch.
-                billing_periods[completed.started_at.date()] = (
-                    billing_periods.get(completed.started_at.date(), 0) + 1
-                )
-
-                day = completed.started_at.date()
-                daily_peaks[day] = max(daily_peaks.get(day, 0.0), completed.mean_power_kw)
-                # What the tariff COUNTS is the effective power - Ellevio halves 22:00-06:00.
-                # The harness used to skip the night weighting, overstating every tariff figure
-                # with night-shifted load - which is exactly where this optimiser puts load.
-                daily_billed[day] = max(
-                    daily_billed.get(day, 0.0),
-                    effective_tariff_power_kw(completed.mean_power_kw, completed.billing_period),
-                )
-                running_peak_kw = max(running_peak_kw, completed.mean_power_kw)
-
-                # THE EFFECT LAYER WAS NEVER GIVEN A PEAK HISTORY. The harness computed
-                # `running_peak_kw` and handed it to the engine, but never called
-                # `record_quarter_measurement()` - so `EffectManager._monthly_peaks` stayed empty for
-                # all 8928 steps, and `should_limit_power()` short-circuits on an empty history:
-                #
-                #     if not self._monthly_peaks:
-                #         return PowerLimitDecision(should_limit=False, severity="OK", ...)
-                #
-                # The peak layer therefore voted weight 0.00 on every single step of every run. Every
-                # claim this harness made about effect-tariff protection - the feature the integration
-                # is named for - was vacuous. (The coordinator had the mirror-image bug for meter-less
-                # houses; this is the same hole, in the instrument that was supposed to catch it.)
-                asyncio.run(
-                    effect.record_period_measurement(
-                        power_kw=completed.mean_power_kw,
-                        period=completed.billing_period,
-                        timestamp=completed.started_at,
-                        source=POWER_SOURCE_EXTERNAL_METER,
-                    )
-                )
-
-            if indoor < TARGET_INDOOR - COMFORT_TOLERANCE:
-                depth = TARGET_INDOOR - COMFORT_TOLERANCE - indoor
+            if indoor < band_low:
+                depth = band_low - indoor
                 # Grazing the edge is recorded but is not a breach - see
                 # SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. Both numbers are kept so a shallow
                 # excursion is visible rather than silently dropped.
@@ -2391,9 +2454,6 @@ FATAL_VIOLATIONS = frozenset(
     }
 )
 
-# The optimiser is allowed to move heat around, but not to make the house colder
-# than a do-nothing controller would. Baseline mean indoor is the comparison.
-MIN_MEAN_INDOOR_C = TARGET_INDOOR - COMFORT_TOLERANCE
 
 # THE INVARIANTS BELOW USED TO BE UNFALSIFIABLE, AND SO DID THIS WHOLE HARNESS.
 #
@@ -2449,10 +2509,12 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     if stats["indoor_min"] < 18.0:
         failures.append(f"indoor fell to {stats['indoor_min']:.2f} C (floor is 18.0)")
 
-    if stats["indoor_mean"] < MIN_MEAN_INDOOR_C:
+    # The optimiser is allowed to move heat around, but not to keep the house colder on average than
+    # the band its mode keeps.
+    if stats["indoor_mean"] < stats["comfort_band_low_c"]:
         failures.append(
             f"mean indoor {stats['indoor_mean']:.2f} C is below the comfort band "
-            f"({MIN_MEAN_INDOOR_C:.2f} C) - the optimiser under-heated the house"
+            f"({stats['comfort_band_low_c']:.2f} C) - the optimiser under-heated the house"
         )
 
     if stats["exceptions"]:
@@ -2517,8 +2579,9 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
 
     if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:
         failures.append(
-            f"{stats['comfort_minutes_below']} minutes below the comfort band "
-            f"(budget {MAX_COMFORT_MINUTES_BELOW}) - the optimiser starved the house"
+            f"{stats['comfort_minutes_below']} minutes below the comfort band of "
+            f"{stats['comfort_band_low_c']:.1f} C (budget {MAX_COMFORT_MINUTES_BELOW}) - the "
+            f"optimiser starved the house"
         )
 
     if stats["comfort_minutes_above"] > MAX_COMFORT_MINUTES_ABOVE:

@@ -6,7 +6,7 @@ periods for optimization decisions.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from math import ceil
 
 import numpy as np
@@ -26,6 +26,7 @@ from ..const import (
     PRICE_FORECAST_PREHEAT_OFFSET,
     PRICE_FORECAST_REDUCTION_OFFSET,
     PRICE_OFFSET_CHEAP,
+    PRICE_OFFSET_DEEPEST_CUT,
     PRICE_OFFSET_EXPENSIVE,
     PRICE_OFFSET_NORMAL,
     PRICE_OFFSET_PEAK,
@@ -48,13 +49,13 @@ from ..const import (
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
-from ..utils.time_utils import resolve_period_index
+from ..utils.time_utils import after, resolve_period_index, seconds_between
 from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
 
 # Re-export from adapters for convenience
-from ..adapters.gespot_adapter import PriceData, QuarterPeriod
+from ..adapters.gespot_adapter import QUARTER_DURATION, PriceData, QuarterPeriod
 
 __all__ = [
     "CheapestWindowResult",
@@ -276,9 +277,8 @@ class PriceAnalyzer:
             PEAK: -10.0 (maximum reduction, coast through expensive period)
 
         Note: These are BASE offsets before tolerance factor is applied.
-        Final offset depends on user tolerance setting and optimization mode:
-        - Savings mode: PEAK bypasses tolerance (always full -10.0°C)
-        - Balanced/Comfort modes: Tolerance factor applied (e.g., -3.0°C)
+        Final offset depends on user tolerance setting and optimization mode, and no cut goes
+        deeper than PRICE_OFFSET_DEEPEST_CUT (evaluate_layer).
 
         Effect tariff weighting:
             - Daytime (06:00-22:00): Full weight, EXPENSIVE gets 1.5x multiplier
@@ -445,31 +445,33 @@ class PriceAnalyzer:
             return None
 
         # Convert duration to quarters (45 min = 3 quarters)
-        quarters_needed = ceil(duration_minutes / 15)
+        quarters_needed = ceil(duration_minutes / MINUTES_PER_QUARTER)
 
-        # Filter to lookahead window
-        end_time = current_time + timedelta(hours=lookahead_hours)
+        # Every distance below is real seconds from current_time. Subtracting the local datetimes
+        # is wall-clock arithmetic (PEP 495 ignores `fold`): on the night the clocks go back it
+        # put the quarter after 02:45 CEST an hour BEFORE it, so a continuous window across the
+        # change was rejected as a gap, and a two-hour horizon was an hour too long or too short.
+        horizon_seconds = lookahead_hours * 3600
+        quarter_seconds = QUARTER_DURATION.total_seconds()
 
         # Build available quarters from price periods
-        # QuarterPeriod has: quarter_of_day, hour, minute, price, is_daytime, start_time
         available_quarters = []
 
         for period in price_periods:
-            # Use actual datetime from spot price (already handles timezone and date correctly)
-            period_time = period.start_time
+            starts_in = seconds_between(current_time, period.start_time)
 
             # Check if within lookahead window
-            if period_time >= current_time and period_time < end_time:
+            if 0 <= starts_in < horizon_seconds:
                 # Display-only label (day-offset + wall-clock quarter): repeats
                 # during autumn DST's second 02:xx hour. Selection and
-                # continuity below use timestamps, never this number.
-                days_ahead = (period_time.date() - current_time.date()).days
+                # continuity below use the real distances, never this number.
+                days_ahead = (period.start_time.date() - current_time.date()).days
                 quarter_id = period.quarter_of_day + (days_ahead * QUARTERS_PER_DAY)
 
                 available_quarters.append(
                     {
-                        "start": period_time,
-                        "end": period_time + timedelta(minutes=15),
+                        "start": period.start_time,
+                        "starts_in": starts_in,
                         "quarter": quarter_id,
                         "price": period.price,
                     }
@@ -479,10 +481,11 @@ class PriceAnalyzer:
             # Short of price data only if the prices end before the horizon does. A horizon shorter
             # than the run holds no window, and nothing is missing: the scheduled hot-water window
             # asks for one inside whatever time it has left before its deadline.
-            prices_end = max(period.start_time for period in price_periods) + timedelta(
-                minutes=MINUTES_PER_QUARTER
+            prices_end = (
+                max(seconds_between(current_time, period.start_time) for period in price_periods)
+                + quarter_seconds
             )
-            if prices_end < end_time:
+            if prices_end < horizon_seconds:
                 _LOGGER.warning(
                     "Not enough price data for window search: %d quarters available, %d needed",
                     len(available_quarters),
@@ -511,13 +514,11 @@ class PriceAnalyzer:
         for i in range(len(available_quarters) - quarters_needed + 1):
             window = available_quarters[i : i + quarters_needed]
 
-            # Verify continuity (15-min gaps)
-            is_continuous = True
-            for j in range(len(window) - 1):
-                time_gap = (window[j + 1]["start"] - window[j]["end"]).total_seconds()
-                if abs(time_gap) > 1:  # Allow 1 second tolerance
-                    is_continuous = False
-                    break
+            # Verify continuity: each quarter starts where the one before it ends (1 s tolerance)
+            is_continuous = all(
+                abs(window[j + 1]["starts_in"] - window[j]["starts_in"] - quarter_seconds) <= 1
+                for j in range(len(window) - 1)
+            )
 
             if not is_continuous:
                 continue
@@ -529,7 +530,7 @@ class PriceAnalyzer:
                 {
                     "start": window[0]["start"],
                     "avg_price": window_avg,
-                    "hours_until": (window[0]["start"] - current_time).total_seconds() / 3600,
+                    "hours_until": window[0]["starts_in"] / 3600,
                 }
             )
 
@@ -568,10 +569,10 @@ class PriceAnalyzer:
 
         result = CheapestWindowResult(
             start_time=optimal_window[0]["start"],
-            end_time=optimal_window[-1]["end"],
-            quarters=[q.get("quarter", i + lowest_index) for i, q in enumerate(optimal_window)],
+            end_time=after(optimal_window[-1]["start"], QUARTER_DURATION),
+            quarters=[q["quarter"] for q in optimal_window],
             avg_price=lowest_price,
-            hours_until=(optimal_window[0]["start"] - current_time).total_seconds() / 3600,
+            hours_until=optimal_window[0]["starts_in"] / 3600,
             savings_vs_current=savings_vs_current,
         )
 
@@ -1059,20 +1060,19 @@ class PriceAnalyzer:
 
         # Apply mode multiplier (comfort=0.7, balanced=1.0, savings=1.3)
         tolerance_factor *= mode_config.price_tolerance_multiplier
+        adjusted_offset = base_offset * tolerance_factor
 
-        # Savings mode: PEAK bypasses tolerance (always full reduction)
-        if classification == QuarterClassification.PEAK and mode_config.peak_bypass_tolerance:
-            adjusted_offset = base_offset
-        else:
-            adjusted_offset = base_offset * tolerance_factor
-
-        # Apply forecast adjustment (additive to base classification)
+        # Apply forecast adjustment (additive to base classification); PEAK takes none
         if classification == QuarterClassification.PEAK:
-            final_offset = adjusted_offset  # Already -10 from base_offset
+            final_offset = adjusted_offset
         else:
             final_offset = adjusted_offset + forecast_adjustment
 
-        # Check for strategic overshoot context when pre-heating
+        # Check for strategic overshoot context when pre-heating. Past the mode's allowed overshoot
+        # the pre-heat is taken back, down to zero - a vote at or below zero has none to take back.
+        # Applied to one, the zero floor RAISED it: in debt (DM < -400) the gate above makes a
+        # PEAK quarter's forecast positive, and a warm house's -2 PEAK cut became 0 at weight 1.0,
+        # overriding the comfort layer's coast too, in the dearest quarter of the day.
         strategic_context = ""
         max_overshoot = mode_config.preheat_overshoot_allowed
         if forecast_adjustment > 0 and nibe_state.indoor_temp > target_temp:
@@ -1082,14 +1082,25 @@ class PriceAnalyzer:
                     f" | Strategic storage: +{overshoot:.1f}°C overshoot OK "
                     f"(≤{max_overshoot:.1f}°C)"
                 )
-            else:
+            elif final_offset > 0:
                 final_offset = max(final_offset - (overshoot - max_overshoot), 0)
                 strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
+
+        # No deeper than PRICE_OFFSET_DEEPEST_CUT. Savings mode used to take PEAK's full -10, and
+        # the owner's ±1.2 slider -4.2 in balanced: either stops the compressor, the slab drains,
+        # and the heat the cut saved comes back from the immersion heater or not at all.
+        if final_offset < PRICE_OFFSET_DEEPEST_CUT:
+            strategic_context += f" | Cut held at {PRICE_OFFSET_DEEPEST_CUT:.1f}°C"
+            final_offset = PRICE_OFFSET_DEEPEST_CUT
 
         # Apply weight based on classification and volatility
         if classification == QuarterClassification.PEAK or in_peak_cluster:
             price_weight = 1.0  # Critical priority
-        elif is_volatile:
+        elif is_volatile and forecast_adjustment <= 0:
+            # Volatility is the CURRENT quarter's class running short. A vote that adds heat for the
+            # hours ahead (a pre-heat, or the debt gate's +0.3) comes from the look-ahead, which
+            # does not read that class, so it keeps its weight. On 15-minute prices the cut took
+            # the night's pre-heat down to 30 % in 116 of 529 pre-heat quarters (SE4, 14-27 Oct 2026).
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
         else:
             price_weight = LAYER_WEIGHT_PRICE

@@ -88,7 +88,6 @@ def test_dhw_waits_for_optimal_window_when_time_allows():
         price_classification="peak",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=None,
         is_volatile=False,
         dhw_amount_minutes=9.0,
     )
@@ -139,7 +138,6 @@ def test_dhw_heats_now_when_optimal_window_imminent():
         price_classification="normal",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=None,
         is_volatile=False,
         dhw_amount_minutes=9.0,
     )
@@ -185,7 +183,6 @@ def test_dhw_heats_priority_when_savings_insufficient():
         price_classification="normal",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=None,
         is_volatile=False,
         dhw_amount_minutes=9.0,
     )
@@ -228,7 +225,6 @@ def test_dhw_heats_priority_when_not_enough_time():
         price_classification="peak",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=None,
         is_volatile=False,
         dhw_amount_minutes=9.0,
     )
@@ -274,7 +270,6 @@ def test_dhw_adequate_temp_continues_normal_rules():
         price_classification="peak",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=None,
         is_volatile=False,
         dhw_amount_minutes=9.0,
     )
@@ -322,7 +317,6 @@ def test_dhw_optimal_window_with_real_jan15_prices():
         price_classification="peak",
         current_time=current_time,
         price_periods=price_periods,
-        hours_since_last_dhw=2.0,
         is_volatile=False,
         dhw_amount_minutes=5.0,
     )

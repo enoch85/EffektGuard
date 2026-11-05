@@ -1,35 +1,39 @@
-# Logo Implementation for EffektGuard
+# Logo and icons
 
-## Where the images live
+## Where the files are
 
 | Folder | Files | Used by |
 |---|---|---|
-| `custom_components/effektguard/brand/` | `icon.png`, `icon@2x.png` | Home Assistant's UI (integration cards, Devices & Services, config flow) |
-| `icons/` (repository root) | `icon.png`, `icon@2x.png`, `logo.png`, `logo@2x.png` | The README and GitHub |
+| `custom_components/effektguard/brand/` | `icon.png` 256 × 256, `icon@2x.png` 512 × 512 | Home Assistant's UI (integration cards, Devices & services, config flow) |
+| `icons/` (repository root) | the same two, plus `logo.png` 256 × 256 and `logo@2x.png` 512 × 512 | `README.md` (`icons/logo.png`) |
+
+All PNG, square.
 
 ## How Home Assistant finds them
 
-Home Assistant's `brands` integration serves a custom integration's images from a `brand/` folder in
-the integration's directory, when there is one (`Integration.has_branding`). A missing image falls
-back to the next one that exists - `logo.png` to `icon.png`, `icon@2x.png` to `icon.png`, the dark
-variants to the light ones (`homeassistant/components/brands/const.py`, `IMAGE_FALLBACKS`). So
-`brand/` holds only the two icon files: the logo requests fall back to them.
+Home Assistant 2026.3 and later ships a `brands` integration. The frontend requests
+`/api/brands/integration/effektguard/<image>`; the view first looks in the custom integration's own
+`brand/` folder (`Integration.has_branding` in `homeassistant/loader.py`), then the brands CDN. A
+missing file falls back along `IMAGE_FALLBACKS` in `homeassistant/components/brands/const.py`:
 
-The `brand/` folder was added in #56 ("Add local brand assets"). An install on an older Home
-Assistant without the `brands` integration ignores the folder.
+- `logo.png` → `icon.png`
+- `icon@2x.png` → `icon.png`
+- `logo@2x.png` → `logo.png` → `icon.png`
+- `dark_icon.png` → `icon.png`
+- `dark_logo.png` → `dark_icon.png` → `logo.png` → `icon.png`
+- `dark_icon@2x.png` → `icon@2x.png` → `icon.png`
+- `dark_logo@2x.png` → `dark_icon@2x.png` → `logo@2x.png` → `logo.png` → `icon.png`
 
-## Specifications
+So `brand/` only needs the two icon files. The accepted names are `icon.png`, `logo.png`,
+`icon@2x.png`, `logo@2x.png` and their `dark_` variants (`ALLOWED_IMAGES`).
 
-- PNG, square
-- `icon.png` 256 × 256 pixels, `icon@2x.png` 512 × 512 pixels
+An install older than 2026.3 (`hacs.json` allows 2025.11.0) has no `brands` integration and
+ignores the folder: its frontend loads `https://brands.home-assistant.io/effektguard/<image>`,
+built from the [home-assistant/brands](https://github.com/home-assistant/brands) repository, where
+`custom_integrations/effektguard/` holds the same `icon.png` and `icon@2x.png`. A new icon goes
+there too.
 
-## Updating the images
+## Changing the images
 
-1. Replace the files in `custom_components/effektguard/brand/` (and in `icons/` for the README)
-2. Keep the sizes above
-3. Release as usual (`docs/agent/RELEASING.md`)
-
-## References
-
-- [Home Assistant Brands Repository](https://github.com/home-assistant/brands)
-- [HACS Publishing Documentation](https://hacs.xyz/docs/publish/integration/)
+1. Replace the files in `custom_components/effektguard/brand/` and `icons/`, keeping the sizes.
+2. Release as usual ([RELEASE_PROCESS.md](RELEASE_PROCESS.md)).

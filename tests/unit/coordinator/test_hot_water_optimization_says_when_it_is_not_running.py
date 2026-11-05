@@ -17,6 +17,7 @@ import pytest
 
 from custom_components.effektguard.const import DHW_CONTROL_ISSUE_ID, DOMAIN
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
 NOW = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)
 
@@ -29,6 +30,8 @@ def _coordinator(lux_entity: str | None) -> EffektGuardCoordinator:
     coordinator._dhw_issue_active = False
     coordinator._lux_boost_is_ours = False
     coordinator._service_boost_until = None
+    coordinator._lux_boost_started_at = None
+    coordinator.dhw_optimizer = IntelligentDHWScheduler()
     coordinator._last_dhw_control_time = None
     # `__new__` skips `__init__`, so anything the real object always carries has to be set here or
     # the fake is not the object. Home Assistant's DataUpdateCoordinator.__init__ sets this, and the
@@ -50,6 +53,8 @@ def _decision():
     decision = MagicMock()
     decision.should_heat = True
     decision.priority_reason = "cheap window"
+    decision.target_temp = 50.0
+    decision.for_safety = False
     return decision
 
 

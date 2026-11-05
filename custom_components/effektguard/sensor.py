@@ -18,7 +18,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import UNDEFINED, UndefinedType
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -29,6 +29,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BILLING_PERIOD_MINUTES,
     BILLABLE_POWER_SOURCES,
+    CONF_INDOOR_TEMP_METHOD,
+    DEFAULT_INDOOR_TEMP_METHOD,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
@@ -38,6 +40,7 @@ from .const import (
 )
 from .coordinator import EffektGuardCoordinator
 from .optimization.effect_layer import effective_tariff_power_kw
+from .utils.time_utils import seconds_between
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -471,9 +474,11 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
         # compressor_frequency is restored to avoid "unavailable" state on restart
         # indoor_temperature is restored to avoid wrong readings during startup
         # when MQTT sensors aren't ready yet (uses NIBE BT50 only otherwise)
+        # peak_this_month is not: the month's peaks are the EffectManager's stored record, which
+        # knows their dates. A last state does not, and after a restart in a new month it was last
+        # month's peak.
         should_restore = self.entity_description.key in {
             "peak_today",
-            "peak_this_month",
             "savings_estimate",
             "compressor_frequency",
             "indoor_temperature",
@@ -483,6 +488,16 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             last_state = await self.async_get_last_state()
             if last_state and last_state.state not in ("unknown", "unavailable"):
                 try:
+                    peak_time = None
+                    if self.entity_description.key == "peak_today":
+                        peak_time = self._todays_peak_time(last_state)
+                        if peak_time is None:
+                            _LOGGER.debug(
+                                "Not restoring peak_today %s kW: it is not today's peak",
+                                last_state.state,
+                            )
+                            return
+
                     self._restored_value = float(last_state.state)
                     _LOGGER.debug(
                         "Restored %s: %.2f", self.entity_description.key, self._restored_value
@@ -492,16 +507,19 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                     # from overwriting restored value with lower values
                     if self.entity_description.key == "peak_today":
                         if self._restored_value > self.coordinator.peak_today:
+                            # The whole record, so the attributes describe the peak that is shown
+                            # and the next restart can still date it.
+                            attributes = last_state.attributes
                             self.coordinator.peak_today = self._restored_value
+                            self.coordinator.peak_today_time = peak_time
+                            self.coordinator.peak_today_source = attributes.get(
+                                "measurement_source", self.coordinator.peak_today_source
+                            )
+                            self.coordinator.peak_today_period = attributes.get(
+                                "peak_billing_period"
+                            )
                             _LOGGER.info(
                                 "Restored peak_today to coordinator: %.2f kW",
-                                self._restored_value,
-                            )
-                    elif self.entity_description.key == "peak_this_month":
-                        if self._restored_value > self.coordinator.peak_this_month:
-                            self.coordinator.peak_this_month = self._restored_value
-                            _LOGGER.info(
-                                "Restored peak_this_month to coordinator: %.2f kW",
                                 self._restored_value,
                             )
                 except (ValueError, TypeError):
@@ -509,6 +527,20 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         "Could not restore %s, will use coordinator value",
                         self.entity_description.key,
                     )
+
+    @staticmethod
+    def _todays_peak_time(last_state: State) -> datetime | None:
+        """When a restored daily peak happened, or None when that was not today.
+
+        The coordinator holds the day's peak in memory and resets it on the first cycle of a new
+        day, so a restart hands back the sensor's last state - yesterday's peak, when Home Assistant
+        was down across midnight. Its peak_time attribute dates it.
+        """
+        peak_time = last_state.attributes.get("peak_time")
+        parsed = dt_util.parse_datetime(peak_time) if isinstance(peak_time, str) else None
+        if parsed is None or dt_util.as_local(parsed).date() != dt_util.now().date():
+            return None
+        return parsed
 
     @property
     def native_value(self) -> float | str | datetime | None:
@@ -696,8 +728,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
             # Add schedule stability indicator (Phase 2 - Jan 2026)
             native_val = self.native_value
             if native_val and isinstance(native_val, datetime):
-                time_until = native_val - dt_util.now()
-                hours_until = time_until.total_seconds() / 3600
+                hours_until = seconds_between(dt_util.now(), native_val) / 3600
 
                 # Mark as "confirmed" if within 30 minutes (imminent)
                 # Mark as "planning" if further out (may change)
@@ -827,7 +858,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
 
                         if additional_sensors:
                             # User has configured additional sensors
-                            attrs["calculation_method"] = config.get("indoor_temp_method", "median")
+                            attrs["calculation_method"] = config.get(
+                                CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
+                            )
                             attrs["sensor_count"] = len(additional_sensors) + 1  # +1 for NIBE
 
                             # Show each additional sensor value
@@ -944,10 +977,9 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 attrs["peak_hour"] = self.coordinator.peak_today_time.hour
 
                 # Calculate time since peak for context
-                now = dt_util.now()
-                time_since = now - self.coordinator.peak_today_time
-                hours = int(time_since.total_seconds() // 3600)
-                minutes = int((time_since.total_seconds() % 3600) // 60)
+                since_peak = seconds_between(self.coordinator.peak_today_time, dt_util.now())
+                hours = int(since_peak // 3600)
+                minutes = int((since_peak % 3600) // 60)
                 if hours > 0:
                     attrs["time_since_peak"] = f"{hours}h {minutes}m ago"
                 else:
@@ -1264,8 +1296,8 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 heating_start = self.coordinator.data.get("dhw_heating_start")
                 if heating_start:
                     attrs["heating_start"] = (
-                        heating_start.strftime("%H:%M:%S")
-                        if hasattr(heating_start, "strftime")
+                        dt_util.as_local(heating_start).strftime("%H:%M:%S")
+                        if isinstance(heating_start, datetime)
                         else str(heating_start)
                     )
 
@@ -1273,15 +1305,15 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                 heating_end = self.coordinator.data.get("dhw_heating_end")
                 if heating_end:
                     attrs["heating_end"] = (
-                        heating_end.strftime("%H:%M:%S")
-                        if hasattr(heating_end, "strftime")
+                        dt_util.as_local(heating_end).strftime("%H:%M:%S")
+                        if isinstance(heating_end, datetime)
                         else str(heating_end)
                     )
 
                     # Calculate duration if we have both start and end
                     heating_start = self.coordinator.data.get("dhw_heating_start")
                     if heating_start and heating_end:
-                        duration_minutes = (heating_end - heating_start).total_seconds() / 60
+                        duration_minutes = seconds_between(heating_start, heating_end) / 60
                         attrs["last_cycle_duration"] = f"{duration_minutes:.1f} min"
 
             # Last heated time (legacy - when any heating was detected)
@@ -1347,8 +1379,10 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         )
                         attrs["water_amount_status"] = "normal_optimization"
                         if scheduled_starts_in is not None and scheduled_starts_in > 0:
-                            # Calculate the actual start time
-                            start_time = dt_util.now() + timedelta(hours=scheduled_starts_in)
+                            # Calculate the actual start time: real hours ahead, shown local
+                            start_time = dt_util.as_local(
+                                dt_util.utcnow() + timedelta(hours=scheduled_starts_in)
+                            )
                             attrs["water_amount_reasoning"] = (
                                 f"Target: {target} min by {availability_time.strftime('%H:%M') if availability_time else 'N/A'}. "
                                 f"Currently {current:.0f} min. Normal price optimization active. "

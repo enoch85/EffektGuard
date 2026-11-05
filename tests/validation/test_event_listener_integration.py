@@ -1,15 +1,12 @@
-"""Tests for event listener integration and recorder usage.
+"""Tests for event listener integration.
 
 Validates:
 - Event listener setup without deprecated event_filter parameter
 - Power sensor state change listeners
-- DHW history retrieval using recorder executor
-- Graceful handling when recorder unavailable
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 
 def create_mock_coordinator_dependencies(mock_hass, entry):
@@ -159,112 +156,3 @@ async def test_power_sensor_listener_no_event_filter_param():
 
     # Verify event_type is correct
     assert listen_calls[0]["event_type"] == "state_changed"
-
-
-@pytest.mark.asyncio
-async def test_dhw_history_uses_recorder_executor():
-    """Test that DHW history lookup uses recorder instance executor.
-
-    Fix 1.2: Should use recorder.get_instance().async_add_executor_job
-    instead of hass.async_add_executor_job for database queries.
-    """
-    from custom_components.effektguard.coordinator import EffektGuardCoordinator
-
-    # Create mock hass
-    mock_hass = MagicMock()
-    mock_hass.data = {}
-
-    # Mock entity state to be OFF (so history lookup is triggered)
-    mock_entity_state = MagicMock()
-    mock_entity_state.state = "off"
-    mock_entity_state.last_changed = datetime.now()
-
-    mock_hass.states = MagicMock()
-    mock_hass.states.get = MagicMock(return_value=mock_entity_state)
-    mock_hass.config = MagicMock()
-    mock_hass.config.latitude = 59.3
-    mock_hass.config.config_dir = "/tmp/test"
-
-    entry = MagicMock()
-    entry.data = {
-        "nibe_degree_minutes_entity": "sensor.degree_minutes",
-        "nibe_indoor_temp_entity": "sensor.indoor_temp",
-        "nibe_outdoor_temp_entity": "sensor.outdoor_temp",
-        "nibe_curve_offset_entity": "number.curve_offset",
-        "nibe_temp_lux_entity": "binary_sensor.dhw_active",
-    }
-    entry.options = {}
-
-    # Create coordinator with all dependencies
-    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
-    coordinator = EffektGuardCoordinator(mock_hass, nibe, gespot, weather, engine, effect, entry)
-
-    # Mock recorder module and instance
-    mock_recorder_instance = MagicMock()
-    mock_recorder_instance.async_add_executor_job = AsyncMock(
-        return_value={"binary_sensor.dhw_active": []}
-    )
-
-    mock_recorder = MagicMock()
-    mock_recorder.get_instance = MagicMock(return_value=mock_recorder_instance)
-    mock_recorder.history = MagicMock()
-    mock_recorder.history.state_changes_during_period = MagicMock(return_value={})
-
-    # Patch recorder import where it's used (inside the function)
-    with patch("homeassistant.components.recorder", mock_recorder):
-        # This should use recorder instance executor, not hass executor
-        result = await coordinator._get_last_dhw_heating_time()
-
-        # Verify recorder.get_instance was called
-        mock_recorder.get_instance.assert_called_once_with(mock_hass)
-
-        # Verify recorder executor was used
-        assert (
-            mock_recorder_instance.async_add_executor_job.called
-        ), "FAIL: Should use recorder.get_instance().async_add_executor_job (Phase 1 Fix 1.2)"
-
-
-@pytest.mark.asyncio
-async def test_dhw_history_handles_no_recorder():
-    """Test that DHW history handles recorder being unavailable gracefully.
-
-    Fix 1.2: Should log warning and return None when recorder not available.
-    """
-    from custom_components.effektguard.coordinator import EffektGuardCoordinator
-
-    # Create mock hass
-    mock_hass = MagicMock()
-    mock_hass.data = {}
-    mock_hass.states = MagicMock()
-    mock_hass.states.get = MagicMock(return_value=MagicMock(state="off"))
-    mock_hass.config = MagicMock()
-    mock_hass.config.latitude = 59.3
-    mock_hass.config.config_dir = "/tmp/test"
-
-    entry = MagicMock()
-    entry.data = {
-        "nibe_degree_minutes_entity": "sensor.degree_minutes",
-        "nibe_indoor_temp_entity": "sensor.indoor_temp",
-        "nibe_outdoor_temp_entity": "sensor.outdoor_temp",
-        "nibe_curve_offset_entity": "number.curve_offset",
-        "nibe_temp_lux_entity": "binary_sensor.dhw_active",
-    }
-    entry.options = {}
-
-    # Create coordinator with all dependencies
-    nibe, gespot, weather, engine, effect = create_mock_coordinator_dependencies(mock_hass, entry)
-    coordinator = EffektGuardCoordinator(mock_hass, nibe, gespot, weather, engine, effect, entry)
-
-    # Mock recorder module returning None for get_instance
-    mock_recorder_module = MagicMock()
-    mock_recorder_module.get_instance = MagicMock(return_value=None)
-
-    # Patch the recorder import in coordinator module
-    with patch.dict(
-        "sys.modules",
-        {"homeassistant.components.recorder": mock_recorder_module},
-    ):
-        result = await coordinator._get_last_dhw_heating_time()
-
-        # Should return None gracefully
-        assert result is None

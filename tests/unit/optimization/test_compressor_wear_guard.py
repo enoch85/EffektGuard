@@ -21,13 +21,13 @@ from custom_components.effektguard.const import (
     SAFETY_EMERGENCY_OFFSET,
     TOLERANCE_RANGE_MULTIPLIER,
 )
-from custom_components.effektguard.models.nibe import NibeF750Profile
 from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 from custom_components.effektguard.utils.compressor_monitor import CompressorSaturation
+from custom_components.effektguard.utils.offset import integer_offset_for
 
 START = datetime(2026, 1, 15, 2, 0, tzinfo=timezone.utc)
 CYCLE = timedelta(minutes=5)
@@ -47,7 +47,7 @@ def _reading(at: datetime, hz, dm: float, **state) -> NibeState:
         degree_minutes=dm,
         current_offset=state.get("current_offset", 0.0),
         is_heating=True,
-        is_hot_water=False,
+        is_hot_water=state.get("is_hot_water", False),
         timestamp=at,
         compressor_hz=hz,
         compressor_hz_max=state.get("compressor_hz_max"),
@@ -343,8 +343,20 @@ class TestThePumpsOwnMaximum:
         assert verdicts[11] and all(verdicts[12:])
 
 
-def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None) -> DecisionEngine:
-    return DecisionEngine(
+ASKED = 3.0  # a raise the layers ask for, for the guards that follow them
+
+
+def _engine(
+    target: float = TARGET, tolerance: float = TOLERANCE, predictor=None, asks: float | None = None
+) -> DecisionEngine:
+    """An engine whose layers ask for `asks` when it is given, else what the real layers ask for.
+
+    The degree-minute ladder raises only for a room below its floor, and these tests place a
+    room across its whole comfort band: what follows the layers is what they are about. No model
+    profile, so the heater guard - which reads the profile's heater start - stays out of them;
+    it has tests of its own.
+    """
+    engine = DecisionEngine(
         price_analyzer=PriceAnalyzer(),
         effect_manager=EffectManager(MagicMock()),
         thermal_model=ThermalModel(0.7, 1.0),
@@ -358,9 +370,11 @@ def _engine(target: float = TARGET, tolerance: float = TOLERANCE, predictor=None
             "thermal_mass": 0.7,
             "insulation_quality": 1.0,
         },
-        heat_pump_model=NibeF750Profile(),
         thermal_predictor=predictor,
     )
+    if asks is not None:
+        engine._aggregate_layers = lambda layers, starvation=0.0: asks
+    return engine
 
 
 def _decision(saturated: bool, dm: float = -600.0, engine=None, **state):
@@ -386,7 +400,11 @@ class TestTheCap:
     def test_a_saturated_compressor_gets_its_own_curve(self, current_offset, above):
         """At the top of its comfort band or above a raise is declined, and one already on the
         register is withdrawn - never turned into a cut."""
-        top = {"indoor_temp": TARGET + BAND + above, "current_offset": current_offset}
+        top = {
+            "indoor_temp": TARGET + BAND + above,
+            "current_offset": current_offset,
+            "engine": _engine(asks=ASKED),
+        }
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"
         assert _offset(True, **top) == 0.0
@@ -408,11 +426,11 @@ class TestTheCap:
     def test_lower_in_the_band_a_share_of_the_raise_passes(self, share):
         """Half at the target, all of it at the band's lower edge: there, immersion heat is the heat
         the house is short of."""
-        indoor = TARGET + BAND - share * 2 * BAND
-        asked = _offset(False, indoor_temp=indoor)
+        room = {"indoor_temp": TARGET + BAND - share * 2 * BAND, "engine": _engine(asks=ASKED)}
+        asked = _offset(False, **room)
 
         assert asked > 0.5, "precondition: a raise"
-        assert _offset(True, indoor_temp=indoor) == pytest.approx(asked * min(share, 1.0))
+        assert _offset(True, **room) == pytest.approx(asked * min(share, 1.0))
 
     def test_at_the_bands_lower_edge_nothing_is_capped(self):
         """Read in tenths, as a sensor reports it: 21.0 + 0.2 - 20.8 falls a hair short of 0.4 in
@@ -428,7 +446,7 @@ class TestTheCap:
         assert _offset(True, indoor_temp=TARGET + 1.5) == cut
 
     def test_past_the_aux_limit_it_is_neither_cut_nor_raised(self):
-        top = {"dm": -1600.0, "indoor_temp": TARGET + BAND}
+        top = {"dm": -1600.0, "indoor_temp": TARGET + BAND, "engine": _engine(asks=ASKED)}
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"
         assert _offset(True, **top) == 0.0
@@ -446,27 +464,53 @@ class TestTheCap:
 
         assert offset == SAFETY_EMERGENCY_OFFSET
 
-    def test_a_cooling_room_gets_the_whole_raise(self, monkeypatch):
-        """On a slab the room falls for hours after the guard holds back: what it holds back from a
-        cooling room is the reserve the house lacks by the time it reaches the band's lower edge."""
+    @staticmethod
+    def _room_at_the_band_top(monkeypatch, drop: float) -> dict:
+        """A room that fell `drop` C over the last two hours to the top of its band (a negative
+        drop rose); its predictor's two-hour slope is -drop / 2 C/h."""
         monkeypatch.setattr(dt_util, "now", lambda time_zone=None: START)
         monkeypatch.setattr(dt_util, "utcnow", lambda: START)
         top = TARGET + BAND
         predictor = ThermalStatePredictor()
-        for k in range(25):  # 0.2 C down over the last two hours, to the top of the band
+        for k in range(25):
             predictor.record_state(
                 timestamp=START - CYCLE * (24 - k),
-                indoor_temp=top + 0.2 - 0.2 * k / 24,
+                indoor_temp=top + drop - drop * k / 24,
                 outdoor_temp=-12.0,
                 heating_offset=0.0,
                 flow_temp=40.0,
                 degree_minutes=-600.0,
             )
-        room = {"engine": _engine(predictor=predictor), "indoor_temp": top}
+        return {"engine": _engine(predictor=predictor, asks=ASKED), "indoor_temp": top}
+
+    def test_a_room_two_ticks_down_in_two_hours_gets_the_whole_raise(self, monkeypatch):
+        """On a slab the room falls for hours after the guard holds back: what it holds back from a
+        cooling room is the reserve the house lacks by the time it reaches the band's lower edge."""
+        room = self._room_at_the_band_top(monkeypatch, drop=0.2)  # -0.1 C/h
         asked = _offset(False, **room)
 
         assert asked > 0.5, "precondition: a raise"
         assert _offset(True, **room) == asked
+
+    def test_a_steady_room_read_to_a_tenth_of_a_degree_gets_one_answer(self, monkeypatch):
+        """BT50 reports to 0.1 C, so a steady room's two-hour slope flips between -0.05, 0 and
+        +0.05 C/h on one tick. A sign test passed the whole raise at -0.05 and withdrew it at 0 or
+        above: the register moved three degrees every five minutes while the compressor was
+        saturated (control review F-1: 36 writes in 36 cycles)."""
+        offsets = {
+            drop: _offset(True, **self._room_at_the_band_top(monkeypatch, drop))
+            for drop in (0.1, 0.0, -0.1)
+        }
+
+        assert max(offsets.values()) - min(offsets.values()) == pytest.approx(0.0), offsets
+
+    def test_the_raise_grows_with_the_rate_the_room_falls(self, monkeypatch):
+        passed = [
+            _offset(True, **self._room_at_the_band_top(monkeypatch, drop))
+            for drop in (0.1, 0.125, 0.15, 0.175, 0.2)
+        ]
+
+        assert passed == sorted(passed) and passed[0] < passed[-1], passed
 
     def test_a_damped_safety_offset_is_left_alone(self, monkeypatch):
         """A house below MIN_TEMP_LIMIT that is warming fast gets a damped safety offset. Nothing
@@ -489,3 +533,90 @@ class TestTheCap:
 
         assert 0.0 < damped < SAFETY_EMERGENCY_OFFSET, "precondition: a damped safety offset"
         assert _offset(True, **cold) == damped
+
+
+def _share_of_the_raise(share: float, **state) -> dict:
+    """A room placed so that the guard lets `share` of the raise through (no cooling trend)."""
+    return {"indoor_temp": TARGET + BAND - share * 2 * BAND, "engine": _engine(asks=ASKED), **state}
+
+
+def _asked(state: dict) -> float:
+    """The engine's raise before the guard: not saturated, and no maximum to be at."""
+    return _offset(False, **{**state, "compressor_hz_max": None})
+
+
+class TestTheRegister:
+    """The register holds whole degrees and moves only once the ask is a whole degree away from it:
+    the cap has to land on it, or it stays on the pump as degree-minute debt (F-124)."""
+
+    def test_saturated_a_withdrawal_under_one_degree_reaches_the_register(self):
+        """The guard allows +0.3 and the register holds +1: without this rule it kept +1."""
+        room = _share_of_the_raise(0.1, current_offset=1.0, compressor_hz_max=CEILING_HZ)
+        allowed = _asked(room) * 0.1
+
+        assert 0.0 < allowed < 0.5, "precondition: a share under half a degree"
+        assert integer_offset_for(allowed, 1) == 1, "precondition: the register would keep +1"
+        assert _offset(True, **room) == 0.0
+        assert integer_offset_for(_offset(True, **room), 1) == 0
+
+    def test_saturated_the_nearest_whole_degree_keeps_the_rooms_share(self):
+        room = _share_of_the_raise(0.3, current_offset=1.0, compressor_hz_max=CEILING_HZ)
+        allowed = _asked(room) * 0.3
+
+        assert 0.5 <= allowed < 1.0, "precondition: nearest to the +1 the register holds"
+        assert _offset(True, **room) == pytest.approx(allowed)
+
+    def test_saturated_a_register_already_lower_is_left_alone(self):
+        room = _share_of_the_raise(0.1, current_offset=0.0, compressor_hz_max=CEILING_HZ)
+
+        assert _offset(True, **room) == pytest.approx(_asked(room) * 0.1)
+
+    def test_without_a_published_maximum_the_register_keeps_its_whole_degree(self):
+        """A learned ceiling moves with our own cut (an F2040 behind its SMO): the old rule stands."""
+        room = _share_of_the_raise(0.1, current_offset=1.0)
+
+        assert _offset(True, **room) == pytest.approx(_offset(False, **room) * 0.1)
+
+    @pytest.mark.parametrize("below_max", [0, 3], ids=["at-it", "within-the-band"])
+    def test_at_its_published_maximum_a_raise_gets_only_the_rooms_share(self, below_max):
+        """DM still holds, so the verdict says not saturated - yet there is no frequency left."""
+        top = {
+            "indoor_temp": TARGET + BAND,
+            "current_offset": 1.0,
+            "compressor_hz_max": CEILING_HZ + below_max,
+            "engine": _engine(asks=ASKED),
+        }
+
+        assert _offset(False, **{**top, "compressor_hz_max": None}) > 1.5, "precondition: a raise"
+        decision = _decision(False, **top)
+        assert decision.offset == 1.0
+        assert "at its published maximum" in decision.reasoning
+
+    def test_at_its_published_maximum_nothing_on_the_register_is_withdrawn(self):
+        top = {"indoor_temp": TARGET + BAND, "current_offset": 5.0, "compressor_hz_max": CEILING_HZ}
+        asked = _offset(False, **{**top, "compressor_hz_max": None})
+
+        assert asked < 5.0, "precondition: the engine asks below the register"
+        assert _offset(False, **top) == pytest.approx(asked)
+
+    def test_at_its_published_maximum_a_room_low_in_its_band_gets_the_raise(self):
+        low = {"indoor_temp": TARGET - BAND, "current_offset": 0.0, "compressor_hz_max": CEILING_HZ}
+
+        assert _offset(False, **low) == pytest.approx(
+            _offset(False, **{**low, "compressor_hz_max": None})
+        )
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            pytest.param({"compressor_hz_max": CEILING_HZ + 10}, id="frequency-left"),
+            pytest.param({"compressor_hz_max": None}, id="no-published-maximum"),
+            pytest.param({"compressor_hz_max": CEILING_HZ, "is_hot_water": True}, id="hot-water"),
+        ],
+    )
+    def test_otherwise_the_raise_passes(self, state):
+        top = {"indoor_temp": TARGET + BAND, "current_offset": 1.0, "engine": _engine(asks=ASKED)}
+
+        assert _offset(False, **top, **state) == pytest.approx(
+            _offset(False, **top, compressor_hz_max=None)
+        )

@@ -124,6 +124,7 @@ async def test_airflow_control_not_applied_during_startup_grace(monkeypatch):
 
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
 
     entry = MagicMock(
         data={
@@ -227,14 +228,15 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         )
         m.setattr("custom_components.effektguard.coordinator.Store.async_save", AsyncMock())
 
-        # Mock dt_util.now to control time
+        # Mock both of dt_util's clocks to control time: the lockout deadline is kept in UTC
         start_time = datetime(2025, 12, 19, 4, 0, 0, tzinfo=timezone.utc)
         current_time = start_time
 
-        def mock_now():
+        def mock_now(*_args):
             return current_time
 
         m.setattr(dt_util, "now", mock_now)
+        m.setattr(dt_util, "utcnow", mock_now)
 
         coordinator = EffektGuardCoordinator(
             hass=hass,
@@ -260,8 +262,11 @@ async def test_rapid_fire_updates_dont_consume_grace_period(monkeypatch):
         await coordinator._async_update_data()
         assert coordinator._startup_update_count == 0  # Still lockout
 
-        # Update 4: 2 minutes later (lockout passed, first observation)
+        # Update 4: 2 minutes later (lockout passed): a read is not an observation cycle...
         current_time = start_time + timedelta(minutes=2)
         await coordinator._async_update_data()
-        # With STARTUP_GRACE_UPDATES=1, count goes to 1, which means grace ends
+        assert coordinator._startup_update_count == 0
+
+        # ...the control cycle is. With STARTUP_GRACE_UPDATES=1 the count goes to 1 and grace ends.
+        await coordinator._drive_the_pump()
         assert coordinator._startup_update_count == 1  # Observation cycle done

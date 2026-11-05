@@ -7,7 +7,7 @@ Phase 1 implementation tests for DHW_NEXT_BOOST_IMPLEMENTATION_PLAN.md
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from custom_components.effektguard.const import (
@@ -38,7 +38,7 @@ def scheduler_with_climate():
     scheduler = IntelligentDHWScheduler(
         climate_detector=climate_detector, price_analyzer=mock_analyzer
     )
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 
@@ -47,7 +47,7 @@ def scheduler_no_climate():
     """Scheduler without climate zone detector (fallback thresholds)."""
     mock_analyzer = create_mock_price_analyzer()
     scheduler = IntelligentDHWScheduler(price_analyzer=mock_analyzer)
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 
@@ -75,7 +75,6 @@ def test_critical_thermal_debt_has_next_time(scheduler_with_climate, current_tim
         price_classification="normal",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is False
@@ -99,7 +98,6 @@ def test_space_heating_emergency_has_next_time(scheduler_with_climate, current_t
         price_classification="normal",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is False
@@ -124,7 +122,6 @@ def test_high_space_heating_demand_has_next_time(scheduler_with_climate, current
         price_classification="normal",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is False
@@ -148,7 +145,6 @@ def test_dhw_adequate_has_next_time(scheduler_with_climate, current_time):
         price_classification="expensive",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=5.0,
     )
 
     assert decision.should_heat is False
@@ -181,7 +177,6 @@ def test_dhw_safety_minimum_heats_immediately(scheduler_with_climate, current_ti
         price_classification="normal",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
@@ -205,7 +200,6 @@ def test_dhw_hygiene_boost_heats_immediately(scheduler_with_climate, current_tim
         price_classification="cheap",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
@@ -226,32 +220,10 @@ def test_dhw_complete_emergency_heating_heats_immediately(scheduler_with_climate
         price_classification="cheap",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
     assert decision.priority_reason == "DHW_COMPLETE_EMERGENCY_HEATING"
-    # When heating now, recommended_start_time should be None (no future time needed)
-    assert decision.recommended_start_time is None
-
-
-def test_dhw_max_wait_exceeded_heats_immediately(scheduler_with_climate, current_time):
-    """Verify DHW_MAX_WAIT_EXCEEDED sets recommended_start_time=None (heating now)."""
-    decision = scheduler_with_climate.should_start_dhw(
-        current_dhw_temp=45.0,
-        space_heating_demand_kw=2.0,
-        thermal_debt_dm=-50,  # Healthy
-        indoor_temp=21.0,
-        target_indoor_temp=21.0,
-        outdoor_temp=5.0,
-        price_classification="cheap",
-        current_time=current_time,
-        price_periods=[],
-        hours_since_last_dhw=40.0,  # Exceeded max wait
-    )
-
-    assert decision.should_heat is True
-    assert "DHW_MAX_WAIT_EXCEEDED" in decision.priority_reason
     # When heating now, recommended_start_time should be None (no future time needed)
     assert decision.recommended_start_time is None
 
@@ -268,7 +240,6 @@ def test_dhw_comfort_low_cheap_heats_immediately(scheduler_with_climate, current
         price_classification="cheap",
         current_time=current_time,
         price_periods=None,  # No price data triggers fallback
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
@@ -289,7 +260,6 @@ def test_cheap_no_window_data_heats_immediately(scheduler_with_climate, current_
         price_classification="cheap",
         current_time=current_time,
         price_periods=None,  # No price data
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
@@ -310,7 +280,6 @@ def test_cheap_electricity_opportunity_heats_immediately(scheduler_with_climate,
         price_classification="cheap",
         current_time=current_time,
         price_periods=None,  # No price data
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is True
@@ -384,7 +353,6 @@ def test_fallback_thresholds_without_climate(scheduler_no_climate, current_time)
         price_classification="normal",
         current_time=current_time,
         price_periods=[],
-        hours_since_last_dhw=10.0,
     )
 
     assert decision.should_heat is False
@@ -406,15 +374,15 @@ def test_all_blocking_reasons_have_recommended_time(scheduler_with_climate, curr
     """
     blocking_scenarios = [
         # (current_dhw_temp, space_heating_demand_kw, thermal_debt_dm,
-        #  indoor_temp, outdoor_temp, price_classification, hours_since_last_dhw)
+        #  indoor_temp, outdoor_temp, price_classification)
         # CRITICAL_THERMAL_DEBT
-        (45.0, 3.0, -500, 21.0, 5.0, "normal", 10.0),
+        (45.0, 3.0, -500, 21.0, 5.0, "normal"),
         # SPACE_HEATING_EMERGENCY
-        (45.0, 3.0, -100, 20.0, -5.0, "normal", 10.0),
+        (45.0, 3.0, -100, 20.0, -5.0, "normal"),
         # HIGH_SPACE_HEATING_DEMAND
-        (45.0, 7.0, -100, 21.0, 0.0, "normal", 10.0),
+        (45.0, 7.0, -100, 21.0, 0.0, "normal"),
         # DHW_ADEQUATE
-        (55.0, 2.0, -50, 21.5, 10.0, "expensive", 5.0),
+        (55.0, 2.0, -50, 21.5, 10.0, "expensive"),
     ]
 
     for scenario in blocking_scenarios:
@@ -425,7 +393,6 @@ def test_all_blocking_reasons_have_recommended_time(scheduler_with_climate, curr
             indoor_temp,
             outdoor_temp,
             price_class,
-            hours_since,
         ) = scenario
 
         decision = scheduler_with_climate.should_start_dhw(
@@ -438,7 +405,6 @@ def test_all_blocking_reasons_have_recommended_time(scheduler_with_climate, curr
             price_classification=price_class,
             current_time=current_time,
             price_periods=[],
-            hours_since_last_dhw=hours_since,
         )
 
         # ALL blocking decisions MUST have recommended_start_time

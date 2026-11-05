@@ -16,6 +16,7 @@ Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without config
 
 import logging
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Optional, TypedDict
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING, Final, Optional, TypedDict
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    COMPRESSOR_SATURATION_BAND_HZ,
     WEATHER_DAILY_MEAN_HOURS,
     WEATHER_FORECAST_PERIOD_HOURS,
     WEATHER_FORECAST_HORIZON,
@@ -32,11 +34,18 @@ from ..const import (
     DEFAULT_TOLERANCE,
     DEFAULT_WEATHER_COMPENSATION_WEIGHT,
     DM_CRITICAL_PEAK_AWARE_OFFSETS,
+    DM_PER_HOUR_PER_OFFSET_STEP,
+    DM_RATE_WINDOW_MINUTES,
     DM_RECOVERY_TIERS,
     DM_THRESHOLD_AUX_LIMIT,
     DM_TIER_EMERGENCY,
     THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     THERMAL_MASS_TIMBER_UFH_THRESHOLD,
+    HEATER_GUARD_APPROACH_HOURS,
+    HEATER_GUARD_ENGAGE_DM,
+    HEATER_GUARD_FADE,
+    HEATER_GUARD_HOLD_DM,
+    HEATER_GUARD_MIN_SPAN_MINUTES,
     LAYER_WEIGHT_SAFETY,
     MAX_OFFSET,
     MIN_OFFSET,
@@ -44,6 +53,8 @@ from ..const import (
     MIN_TEMP_LIMIT,
     POWER_VALIDATION_MARGIN,
     SAFETY_EMERGENCY_OFFSET,
+    WEAR_GUARD_COOLING_RATE,
+    WEAR_GUARD_STEADY_ROOM_RATE,
     TOLERANCE_RANGE_MULTIPLIER,
     TREND_BOOST_OFFSET_LIMIT,
     TREND_DAMPING_COOLING_BOOST,
@@ -52,6 +63,9 @@ from ..const import (
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
 )
+from ..utils.capacity_shortfall import CapacityShortfall
+from ..utils.heater_start import HeaterStart
+from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
 from .comfort_layer import ComfortLayer
@@ -141,6 +155,10 @@ class OptimizationDecision:
     # compressor cannot follow only deepens the DM deficit and brings the immersion heater in
     # sooner (F-124). The cap never goes below the pump's own curve, so no cut rides on it.
     saturation_capped: bool = False
+    # True when the heater guard lowered this offset: the room is at or above its floor and
+    # degree minutes are heading for the pump's immersion heater. Held for 45 minutes, the cut
+    # lets DM reach the heater's start, and the heater then buys heat the room does not need.
+    heater_capped: bool = False
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -298,7 +316,6 @@ class DecisionEngine:
         # Emergency layer for thermal debt response
         self.emergency_layer = EmergencyLayer(
             climate_detector=self.climate_detector,
-            price_analyzer=self.price,
             heating_type=heating_type,  # Use inferred heating_type (lines 335-342)
             get_thermal_trend=self._get_thermal_trend,
             get_outdoor_trend=self._get_outdoor_trend,
@@ -317,6 +334,15 @@ class DecisionEngine:
             tolerance_range=self.tolerance_range,
             target_temp=self.target_temp,
         )
+
+        # The heater guard's degree-minute readings (time, DM, register), outside hot water and at
+        # the register as it is now - see _limit_for_heater.
+        self._heater_readings: deque[tuple[datetime, float, float]] = deque()
+
+        # Where this pump runs short of capacity, and where it starts its immersion heater - both
+        # stored across restarts by the coordinator.
+        self.capacity_shortfall = CapacityShortfall()
+        self.heater_start = HeaterStart()
 
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
@@ -352,11 +378,14 @@ class DecisionEngine:
 
         if duration_minutes > 0:
             self._manual_override_one_shot = False
-            self._manual_override_until = dt_util.now() + timedelta(minutes=duration_minutes)
+            # A deadline in UTC. On the local clock `now + timedelta` is wall-clock arithmetic:
+            # a 60-minute override set at 02:30 CEST on the night the clocks go back expired at
+            # 03:30 CET, 120 real minutes later.
+            self._manual_override_until = dt_util.utcnow() + timedelta(minutes=duration_minutes)
             _LOGGER.info(
                 "Manual override set: %s°C until %s",
                 offset,
-                self._manual_override_until.strftime("%Y-%m-%d %H:%M"),
+                dt_util.as_local(self._manual_override_until).strftime("%Y-%m-%d %H:%M"),
             )
         else:
             self._manual_override_one_shot = True
@@ -390,7 +419,7 @@ class DecisionEngine:
 
         # Check if time-based override expired
         if self._manual_override_until:
-            if dt_util.now() >= self._manual_override_until:
+            if dt_util.utcnow() >= self._manual_override_until:
                 _LOGGER.info("Manual override expired, returning to automatic")
                 self.clear_manual_override()
                 return None
@@ -546,6 +575,16 @@ class DecisionEngine:
         """
         _LOGGER.debug("Calculating optimization decision")
 
+        # Where this pump starts its heater and where it runs short of capacity: read every cycle,
+        # a manual override included - one below the curve is a cut of ours as much as the layers'.
+        # A pump short of capacity is held by its heater, at a start it has switched the heater on at.
+        self.heater_start.update(nibe_state)
+        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        if factory is not None:
+            self.capacity_shortfall.update(
+                nibe_state, self.heater_start.started_degree_minutes(float(factory))
+            )
+
         # Check for manual override first (Phase 5 service support).
         #
         # A user command is authoritative, but it is NOT permitted to hold the system
@@ -566,6 +605,7 @@ class DecisionEngine:
                     nibe_state.indoor_temp,
                     nibe_state.degree_minutes,
                 )
+                self.capacity_shortfall.record_ask(nibe_state.timestamp, safety_floor)
                 return OptimizationDecision(
                     offset=self._clamp_offset(safety_floor),
                     layers=[
@@ -589,6 +629,7 @@ class DecisionEngine:
                 )
 
             _LOGGER.info("Using manual override: %.2f°C", manual_override)
+            self.capacity_shortfall.record_ask(nibe_state.timestamp, manual_override)
             return OptimizationDecision(
                 offset=self._clamp_offset(manual_override),
                 layers=[
@@ -607,8 +648,10 @@ class DecisionEngine:
         if price_data:
             self.price.update_prices(price_data)
 
-        # Validate power consumption if model available
-        if self.heat_pump_model and hasattr(nibe_state, "power_kw"):
+        # Validate power consumption if model available. A missing reading (power_kw None: no
+        # sensor, and the adapter's own estimate failed) has nothing to validate; compared, it
+        # raised TypeError, and the coordinator's safe default wrote 0 °C for that cycle.
+        if self.heat_pump_model and getattr(nibe_state, "power_kw", None) is not None:
             validation = self._validate_power_consumption(
                 nibe_state.power_kw, nibe_state.outdoor_temp
             )
@@ -629,13 +672,22 @@ class DecisionEngine:
         # Check volatility once for reuse across all layers
         is_volatile = get_volatile_info(self.price, price_data).is_volatile
 
+        # The lowest room the mode accepts before it buys heat - the degree-minute ladder's raises
+        # and the pump's immersion heater both wait for a room below it.
+        room_floor = self.target_temp - self.mode_config.room_floor_below_target
+
+        # Is it, or will it be within the forecast's next hours, as cold as where this pump has
+        # been seen short of capacity? Then heat held back comes back only from the immersion
+        # heater, or not at all: nothing below the pump's curve, and the heater guard stands down.
+        short = self.capacity_shortfall.is_short(nibe_state, weather_data)
+
         # 2. Emergency Layer
         emergency_decision = self.emergency_layer.evaluate_layer(
             nibe_state=nibe_state,
             weather_data=weather_data,
-            price_data=price_data,
             target_temp=self.target_temp,
             tolerance_range=self.tolerance_range,
+            room_floor=room_floor,
             is_volatile=is_volatile,
         )
 
@@ -644,6 +696,7 @@ class DecisionEngine:
             nibe_state=nibe_state,
             weather_data=weather_data,
             target_temp=self.target_temp,
+            room_floor=room_floor,
             is_volatile=is_volatile,
         )
 
@@ -799,12 +852,23 @@ class DecisionEngine:
 
         asked_offset = raw_offset * damping_factor
 
-        final_offset, wear_note = self._limit_for_compressor_wear(
+        worn_offset, wear_note = self._limit_for_compressor_wear(
             asked_offset, nibe_state, compressor_saturated, trend_rate
         )
+        self.capacity_shortfall.record_ask(nibe_state.timestamp, worn_offset)
+        final_offset, heater_note = self._limit_for_heater(
+            worn_offset, nibe_state, room_floor, short
+        )
+        if short and final_offset < 0:
+            heater_note = (
+                f" | Pump short of capacity at or below "
+                f"{self.capacity_shortfall.temperature:.1f}°C: no cut below its curve "
+                f"(asked {final_offset:+.1f}°C)"
+            )
+            final_offset = 0.0
 
         # Generate human-readable reasoning
-        reasoning = self._generate_reasoning(layers) + reason_suffix + wear_note
+        reasoning = self._generate_reasoning(layers) + reason_suffix + wear_note + heater_note
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
 
@@ -829,7 +893,8 @@ class DecisionEngine:
             reasoning=reasoning,
             anti_windup_active=anti_windup,
             is_emergency=is_emergency,
-            saturation_capped=final_offset < asked_offset,
+            saturation_capped=worn_offset < asked_offset,
+            heater_capped=final_offset < worn_offset,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
@@ -898,31 +963,178 @@ class DecisionEngine:
         passes - half at the target, all of it at the band's lower edge, where immersion heat is
         the heat the house is short of. Starting at the target instead left a house that the guard
         had kept from banking immersion heat colder than the band through a peak-price cut or a
-        boost to the ventilation (closed loop on the owner's F750). A cooling room gets all of it
-        too: on a slab the room falls for hours after the guard holds back, and what was held back
-        is the reserve the house lacks by the time it reaches the band's lower edge. A cut stands,
-        and the absolute safety floor bounds the cap: below MIN_TEMP_LIMIT the house gets
-        everything.
+        boost to the ventilation (closed loop on the owner's F750). A cooling room earns a share
+        too, all of it once it falls at WEAR_GUARD_COOLING_RATE: on a slab the room falls for hours
+        after the guard holds back, and what was held back is the reserve the house lacks by the
+        time it reaches the band's lower edge. The share grows with the rate from
+        WEAR_GUARD_STEADY_ROOM_RATE instead of switching on the slope's sign: a steady room read to
+        0.1 °C has a two-hour slope that flips between -0.05 and +0.05 °C/h, and a sign test moved
+        a saturated compressor's whole raise on and off the register with it. A cut stands, and the absolute safety floor bounds the cap: below
+        MIN_TEMP_LIMIT the house gets everything.
+
+        The register holds whole degrees and moves only once the ask is a whole degree away from
+        it, so two more rules make the cap reach the pump (closed loop, owner's F750 + slab, six
+        plant fits, Oct-Dec 2025 and Jan-Feb 2026: immersion 3410 -> 3200 kWh over the 12 runs,
+        cost against NIBE alone at the same mean room +73 -> +55 SEK per run, comfort unchanged):
+
+        - Saturated at the maximum frequency its pump publishes, the register lands on the whole
+          degree nearest to what the guard allows. A withdrawal of less than one degree used to
+          stay on the pump - the guard capped at +0.4 and the register kept +1 - and every minute
+          of it was degree-minute debt. A pump that publishes no maximum keeps the old rule: its
+          verdict rests on a learned ceiling that our own cut moves, and landing the withdrawal
+          there added reversals and cold minutes (repository simulator, F2040).
+        - At the maximum frequency its pump publishes the compressor has none left, even while DM
+          still holds and the saturation verdict waits for it to fall: a raise above what the
+          register holds gets only the room's share. Nothing already on the register is withdrawn
+          here; that is the saturated verdict's job.
         """
         cap = max(0.0, self._absolute_safety_floor(nibe_state) or 0.0)
-        if not saturated or offset <= cap or trend_rate < 0:
+        at_max = not saturated and self._at_published_maximum(nibe_state)
+        if not (saturated or at_max):
+            return offset, ""
+        register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
+        if at_max:
+            cap = max(cap, register)
+        if offset <= cap:
             return offset, ""
 
-        need = 0.0
+        cooling = (trend_rate - WEAR_GUARD_STEADY_ROOM_RATE) / (
+            WEAR_GUARD_COOLING_RATE - WEAR_GUARD_STEADY_ROOM_RATE
+        )
+        need = min(max(cooling, 0.0), 1.0)
         if getattr(nibe_state, "indoor_temp_valid", True):
             short = self.target_temp + self.tolerance_range - nibe_state.indoor_temp
-            need = max(short / (2 * self.tolerance_range), 0.0)
+            need = max(short / (2 * self.tolerance_range), need)
         held = cap + (offset - cap) * need
+        if saturated and self._publishes_maximum(nibe_state):
+            nearest = float(math.floor(held + 0.5))
+            if nearest < register:
+                held = nearest
         if held >= offset or math.isclose(held, offset):
             return offset, ""
 
+        state = "at its published maximum" if at_max else "saturated"
         _LOGGER.info(
-            "Compressor saturated: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
+            "Compressor %s: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
             "from a compressor with no frequency left - only a deeper DM deficit and immersion heat.",
+            state,
             offset,
             held,
         )
-        return held, f" | Compressor saturated: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+        return held, f" | Compressor {state}: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    @staticmethod
+    def _publishes_maximum(nibe_state) -> bool:
+        """The pump reports the maximum frequency it allows itself right now (43123, 31043)."""
+        return isinstance(getattr(nibe_state, "compressor_hz_max", None), (int, float))
+
+    @classmethod
+    def _at_published_maximum(cls, nibe_state) -> bool:
+        """Heating, within COMPRESSOR_SATURATION_BAND_HZ of the maximum frequency the pump publishes."""
+        hz = getattr(nibe_state, "compressor_hz", None)
+        return (
+            getattr(nibe_state, "is_hot_water", None) is False
+            and cls._publishes_maximum(nibe_state)
+            and isinstance(hz, (int, float))
+            and hz >= nibe_state.compressor_hz_max - COMPRESSOR_SATURATION_BAND_HZ
+        )
+
+    def _limit_for_heater(
+        self, offset: float, nibe_state, room_floor: float, short: bool
+    ) -> tuple[float, str]:
+        """Keep degree minutes off the pump's immersion heater while the room needs no heat.
+
+        DM = integral(BT25 - S1). After a cut the slab is cold and the supply lags far behind a
+        restored S1, so DM falls by hundreds an hour; in cold weather it keeps falling at the
+        curve's own S1 once the compressor has no frequency left. Either way the pump starts its
+        immersion heater where DM crosses its own setting, whatever the room says, and buys heat at
+        a COP of 1 for a room at or above its floor - most of the immersion heat the closed loop on
+        the owner's F750 + slab bought.
+
+        So while a measured room is at or above its floor, DM approaches the heater start slowly
+        and stops short of it. From HEATER_GUARD_ENGAGE_DM above the start it may fall toward a
+        hold point HEATER_GUARD_HOLD_DM above it at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS
+        per hour, and must rise back from below. The cap is the register plus the whole steps that
+        close the gap between the rate measured and the rate allowed - a step moves
+        DM_PER_HOUR_PER_OFFSET_STEP - so it cuts while DM falls too fast and lets the offset back
+        up as the water warms. The compressor keeps its speed while DM falls; only the heater is
+        kept out. Within HEATER_GUARD_FADE of the floor the cap fades into the layers' ask; below
+        the floor the heat is the room's, and past DM_THRESHOLD_AUX_LIMIT the emergency tier's
+        floor at 0 is the room's too - above its floor the room overrides it here.
+
+        The rate is judged on readings at the register as it is now and outside hot water (DM
+        falls while the compressor heats the tank), once they span HEATER_GUARD_MIN_SPAN_MINUTES;
+        until then the register holds. The heater start is as the pump has shown it
+        (heater_start_dm). Without a room sensor, or without a model profile, nothing is guarded.
+
+        While the pump is short of capacity (CapacityShortfall) the heater is the pump's own answer
+        to a cold it cannot cover, and nothing is guarded either: held off, the house only enters
+        the cold with less heat in it. The readings are kept all the same.
+        """
+        heater_start = self.heater_start_dm()
+        if heater_start is None:
+            return offset, ""
+        register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
+        readings = self._heater_readings
+        if nibe_state.is_hot_water or (readings and readings[-1][2] != register):
+            readings.clear()
+        if nibe_state.is_hot_water:
+            return offset, ""
+        now = nibe_state.timestamp
+        degree_minutes = float(nibe_state.degree_minutes)
+        readings.append((now, degree_minutes, register))
+        window = timedelta(minutes=DM_RATE_WINDOW_MINUTES).total_seconds()
+        while seconds_between(readings[0][0], now) > window:
+            readings.popleft()
+
+        if short or not getattr(nibe_state, "indoor_temp_valid", True):
+            return offset, ""
+        above_floor = nibe_state.indoor_temp - room_floor
+        if above_floor < 0 or degree_minutes > heater_start + HEATER_GUARD_ENGAGE_DM:
+            return offset, ""
+
+        span = seconds_between(readings[0][0], now)
+        if span < timedelta(minutes=HEATER_GUARD_MIN_SPAN_MINUTES).total_seconds():
+            cap = register
+        else:
+            rate = (degree_minutes - readings[0][1]) / (span / timedelta(hours=1).total_seconds())
+            allowed = (heater_start + HEATER_GUARD_HOLD_DM - degree_minutes) / (
+                HEATER_GUARD_APPROACH_HOURS
+            )
+            # Whole steps only, toward zero: the register holds until a step is due either way.
+            cap = register + float(int((rate - allowed) / DM_PER_HOUR_PER_OFFSET_STEP))
+        cap = self._clamp_offset(cap)
+        if offset <= cap:
+            return offset, ""
+
+        held = offset + (cap - offset) * min(above_floor / HEATER_GUARD_FADE, 1.0)
+        # DEBUG, not INFO: on a pump whose heater starts shallow (an S1155 at -460) the guard is
+        # engaged in all ordinary running, and the decision's own reasoning already carries it.
+        _LOGGER.debug(
+            "Heater guard: offset %.2f°C capped at %.2f°C. The room (%.1f°C) is at or above its "
+            "floor (%.1f°C) and DM %.0f is heading for the pump's immersion heater (%.0f).",
+            offset,
+            held,
+            nibe_state.indoor_temp,
+            room_floor,
+            degree_minutes,
+            heater_start,
+        )
+        return held, f" | Heater guard: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+
+    def heater_start_dm(self) -> float | None:
+        """Where this pump starts its immersion heater, or None without a model profile.
+
+        The model profile's aux_start_dm is the pump's factory setting, and an installer can move it:
+        the owner's F750 starts at -1450, its profile says -700, so the guard held its degree minutes
+        far short of a heater that was nowhere near. Once the pump has shown that its heater starts
+        deeper - switching it on there, or holding deeper with it off (HeaterStart) - what it has
+        shown is the start.
+        """
+        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        if factory is None:
+            return None
+        return self.heater_start.degree_minutes(float(factory))
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:

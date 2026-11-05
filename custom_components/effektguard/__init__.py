@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.core import HassJob, HomeAssistant, SupportsResponse
 from homeassistant.exceptions import (
     ConfigEntryNotReady,
     HomeAssistantError,
@@ -31,13 +31,18 @@ from .const import (
     CONF_TARGET_INDOOR_TEMP,
     ATTR_DURATION,
     ATTR_OFFSET,
+    CONF_INDOOR_TEMP_METHOD,
     CONF_NIBE_TEMP_LUX_ENTITY,
+    CONFIG_ENTRY_MINOR_VERSION,
+    CONFIG_ENTRY_VERSION,
     DHW_BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_DEFAULT_DURATION_MINUTES,
     DHW_BOOST_MAX_DURATION_MINUTES,
     DHW_BOOST_MIN_DURATION_MINUTES,
     DOMAIN,
     HEATING_BOOST_COOLDOWN_MINUTES,
+    INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN,
+    INDOOR_TEMP_METHOD_MEDIAN,
     MAX_OFFSET,
     MIN_OFFSET,
     SERVICE_BOOST_DHW,
@@ -61,6 +66,9 @@ _LOGGER = logging.getLogger(__name__)
 # coordinator - so a user could boost to +10 C, reload to clear the cooldown, and boost again.
 # single_config_entry is true, so a module global cannot leak across entries.
 # See tests/unit/test_the_boost_cooldown_survives_a_reload.py.
+# Stamped in UTC: a cooldown is an elapsed duration, and on the local clock the subtraction is
+# wall-clock arithmetic - 50 real minutes after a boost at 02:50 CEST on the night the clocks go
+# back it still reported 3300 s of a 45-minute cooldown remaining.
 _service_last_called: dict[str, datetime] = {}
 
 
@@ -77,7 +85,7 @@ def _check_service_cooldown(service_name: str, cooldown_minutes: int) -> tuple[b
         - remaining_time_seconds: Seconds remaining in cooldown (0 if allowed)
     """
     service_key = f"{DOMAIN}_{service_name}"
-    now = dt_util.now()
+    now = dt_util.utcnow()
 
     if service_key not in _service_last_called:
         return True, 0
@@ -97,7 +105,7 @@ def _check_service_cooldown(service_name: str, cooldown_minutes: int) -> tuple[b
 def _update_service_timestamp(service_name: str) -> None:
     """Update the last called timestamp for a service."""
     service_key = f"{DOMAIN}_{service_name}"
-    _service_last_called[service_key] = dt_util.now()
+    _service_last_called[service_key] = dt_util.utcnow()
 
 
 PLATFORMS: list[Platform] = [
@@ -107,6 +115,31 @@ PLATFORMS: list[Platform] = [
     # Number and Select entities removed - configuration sliders only in Options flow (Configure button)
     # This prevents duplicate controls in Controls panel
 ]
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Bring an entry made by an older EffektGuard up to date.
+
+    1.1 -> 1.2: the median, which the setup stored by default, becomes the interquartile mean (see
+    DEFAULT_INDOOR_TEMP_METHOD). Median and average stay selectable in Reconfigure.
+    """
+    if entry.version > CONFIG_ENTRY_VERSION:
+        # Made by a newer EffektGuard: this one cannot know what its data means.
+        return False
+
+    if entry.minor_version < CONFIG_ENTRY_MINOR_VERSION:
+        data = dict(entry.data)
+        if data.get(CONF_INDOOR_TEMP_METHOD) == INDOOR_TEMP_METHOD_MEDIAN:
+            data[CONF_INDOOR_TEMP_METHOD] = INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN
+            _LOGGER.info(
+                "Room sensors are now combined by their interquartile mean instead of the median "
+                "(Reconfigure offers the median again)"
+            )
+        hass.config_entries.async_update_entry(
+            entry, data=data, minor_version=CONFIG_ENTRY_MINOR_VERSION
+        )
+
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -140,6 +173,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # This ensures coordinator is fully initialized before setting up event listeners
     # Event listener provides instant detection when external power sensor becomes available
     coordinator.setup_power_sensor_listener()
+    coordinator.setup_lux_listener()
+
+    # Home Assistant stops without unloading its config entries, so on a restart the coordinator's
+    # shutdown never ran - and with it the cleanup of a hot-water boost EffektGuard started, which
+    # ran on to NIBE's own lux timeout with nothing left to stop it. A shutdown job runs before
+    # EVENT_HOMEASSISTANT_STOP, where a local transport (modbus, nibe_heatpump) closes and a stop
+    # sent after it no longer reaches the pump. The shutdown is idempotent.
+    entry.async_on_unload(hass.async_add_shutdown_job(HassJob(coordinator.async_shutdown)))
 
     # Forward setup to platforms (only if coordinator initialized successfully)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -262,16 +303,16 @@ async def _create_coordinator(
     # Create decision engine with all dependencies
     # Add latitude from Home Assistant config for climate zone detection
     # CRITICAL: Merge entry.data (switch states) and entry.options (runtime settings)
-    config_with_latitude = dict(entry.data)  # Start with switch states
-    config_with_latitude.update(entry.options)  # Overlay runtime options
-    config_with_latitude["latitude"] = hass.config.latitude
-    config_with_latitude[CONF_TARGET_INDOOR_TEMP] = held_target_of(config_with_latitude)
+    engine_config = dict(entry.data)  # Start with switch states
+    engine_config.update(entry.options)  # Overlay runtime options
+    engine_config["latitude"] = hass.config.latitude
+    engine_config[CONF_TARGET_INDOOR_TEMP] = held_target_of(engine_config)
 
     decision_engine = DecisionEngine(
         price_analyzer=price_analyzer,
         effect_manager=effect_manager,
         thermal_model=thermal_model,
-        config=config_with_latitude,
+        config=engine_config,
         thermal_predictor=None,  # Will be set after coordinator is created (Phase 6)
         weather_learner=None,  # Will be set after coordinator is created (Phase 6)
     )
@@ -290,14 +331,17 @@ async def _create_coordinator(
         entry=entry,
     )
 
-    # Restore peak values from effect manager
-    await coordinator.async_restore_peaks()
-
     # Initialize learning modules (Phase 6)
     await coordinator.async_initialize_learning()
 
     # Connect thermal predictor and weather learner to decision engine (Phase 6)
     # CRITICAL: Use adaptive learning model for UFH-specific prediction horizons (enoch85 feedback)
+    # It carries the owner's building settings, as the rest of the engine was built from them above
+    # and as a hot reload writes them (async_update_config). Swapped in bare, the price layer's
+    # look-ahead and the learned pre-heat ran on 1.0, or on what learning last saved, after every
+    # restart until the options were saved again.
+    coordinator.adaptive_learning.thermal_mass = thermal_model.thermal_mass
+    coordinator.adaptive_learning.insulation_quality = thermal_model.insulation_quality
     decision_engine.thermal = coordinator.adaptive_learning  # AdaptiveThermalModel
     decision_engine.predictor = coordinator.thermal_predictor
     decision_engine.weather_learner = coordinator.weather_learner
@@ -487,7 +531,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         _LOGGER.info(
             "DHW boost activated via NIBE temporary lux on %s for %s minutes. The pump decides "
             "the lux temperature; EffektGuard ends the boost when the window closes, unless "
-            "NIBE's own lux timeout or the thermal-debt safety stop ends it first.",
+            "NIBE's own lux timeout or the safety stop (degree minutes at the auxiliary-heat "
+            "limit, or the house below its safety floor) ends it first.",
             temp_lux_entity,
             duration,
         )
@@ -518,10 +563,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
             # Calculate hourly schedule for next 24 hours
             schedule = []
-            current_time = dt_util.now()
+            now = dt_util.utcnow()
 
             for hour_offset in range(24):
-                forecast_time = current_time + timedelta(hours=hour_offset)
+                # Real hours ahead, stepped in UTC; the local clock is for the labels below
+                forecast_time = now + timedelta(hours=hour_offset)
+                local_time = dt_util.as_local(forecast_time)
 
                 # Locate the native interval by timestamp: positions and
                 # classifications stay aligned even on 92/100-quarter DST days
@@ -552,8 +599,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
                 schedule.append(
                     {
-                        "time": forecast_time.strftime("%Y-%m-%d %H:%M"),
-                        "hour": forecast_time.hour,
+                        "time": local_time.strftime("%Y-%m-%d %H:%M"),
+                        "hour": local_time.hour,
                         "quarter": period.quarter_of_day if period else None,
                         "classification": classification,
                         "estimated_offset": round(estimated_offset, 2),
@@ -563,7 +610,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 )
 
             _LOGGER.info("Calculated optimal schedule for next 24 hours")
-            return {"schedule": schedule, "generated_at": current_time.isoformat()}
+            return {"schedule": schedule, "generated_at": dt_util.as_local(now).isoformat()}
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
             _LOGGER.error("Failed to calculate optimal schedule: %s", err)

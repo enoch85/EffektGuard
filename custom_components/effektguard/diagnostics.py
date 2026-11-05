@@ -1,7 +1,8 @@
 """Diagnostics: what the decision actually saw.
 
 The dump carries the DECISION, not just entity states: the commanded offset, every layer's vote
-and weight, the NIBE state behind it, the degree-minute band actually in force, and whether the
+and weight, the NIBE state behind it, the degree-minute band actually in force, where the pump
+starts its heater (as seen, or the model's factory value until it has been), and whether the
 price and weather sources were live - a missing price source silently withdraws the whole price
 layer (F-123), leaving the offset inexplicable without that fact.
 
@@ -43,6 +44,7 @@ async def async_get_config_entry_diagnostics(
         "decision": _decision(decision),
         "dm_thresholds": _dm_thresholds(coordinator, nibe),
         "compressor_saturation": _saturation(coordinator),
+        "heater_start": _heater_start(coordinator),
         "peaks": _peaks(coordinator),
     }
 
@@ -54,6 +56,20 @@ def _saturation(coordinator) -> dict[str, object]:
         "saturated": saturation.saturated,
         "level_hz": saturation.level,
         "ceiling_hz": saturation.ceiling,
+    }
+
+
+def _heater_start(coordinator) -> dict[str, object]:
+    """Where the heater guard keeps degree minutes off: as the pump has shown it, else the model's
+    factory value - and what the pump has shown: its heater's starts, and how deep it held with the
+    heater off."""
+    engine = coordinator.engine
+    shown = engine.heater_start.to_dict()
+    return {
+        "in_force_dm": engine.heater_start_dm(),
+        "factory_dm": getattr(engine.heat_pump_model, "aux_start_dm", None),
+        "starts_seen": shown["starts"],
+        "held_off_dm": shown["held_off"],
     }
 
 
@@ -93,6 +109,7 @@ def _nibe(nibe: object) -> dict[str, object]:
             "return_temp",
             "current_offset",
             "compressor_hz",
+            "heater_power_kw",
             "power_kw",
             "is_heating",
             "is_hot_water",

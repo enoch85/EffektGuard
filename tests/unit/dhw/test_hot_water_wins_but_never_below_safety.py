@@ -33,17 +33,17 @@ IN_THE_RUN_UP = datetime(2026, 1, 15, 6, 0, tzinfo=STOCKHOLM)  # hot water wante
 LONG_AFTER = datetime(2026, 1, 15, 11, 0, tzinfo=STOCKHOLM)  # window long gone
 
 
-def _scheduler() -> IntelligentDHWScheduler:
+def _scheduler(target: float = 50.0) -> IntelligentDHWScheduler:
     detector = ClimateZoneDetector(latitude=59.33)
     return IntelligentDHWScheduler(
         demand_periods=[
             DHWDemandPeriod(
-                availability_hour=7, target_temp=50.0, duration_hours=2, min_amount_minutes=5
+                availability_hour=7, target_temp=target, duration_hours=2, min_amount_minutes=5
             )
         ],
         climate_detector=detector,
         emergency_layer=EmergencyLayer(detector, heating_type="radiator"),
-        user_target_temp=50.0,
+        user_target_temp=target,
     )
 
 
@@ -58,7 +58,6 @@ def _ask(scheduler, thermal_debt: float, indoor: float, when=IN_THE_RUN_UP, dhw_
         price_classification="expensive",
         current_time=when,
         price_periods=None,
-        hours_since_last_dhw=8.0,
     )
 
 
@@ -184,3 +183,37 @@ def test_the_retry_does_not_fire_forever_once_the_water_is_hot():
     assert (
         again.priority_reason != "DHW_SCHEDULED_RETRY_AFTER_SAFETY"
     ), "the missed-window debt was settled and must not resurrect itself"
+
+
+@pytest.mark.parametrize(
+    "target,dhw_temp,amount",
+    [(55.0, 54.0, None), (50.0, 40.0, 10.0)],
+    ids=["target_above_the_luxury_stop", "amount_reached"],
+)
+def test_what_is_owed_is_what_the_window_would_have_done(target, dhw_temp, amount):
+    """Settled where the window itself stops forcing heat: the tank adequate, or the amount there.
+
+    Settled on the target alone, a 55 C target - allowed by the options, above the luxury stop
+    where temporary lux ends - was never reached, and the debt forced lux at peak price on every
+    cycle, for days. The window itself waits for a price at 45 C and stops at the amount.
+    """
+    scheduler = _scheduler(target)
+    assert not _ask(scheduler, thermal_debt=-400.0, indoor=MIN_TEMP_LIMIT - 0.5).should_heat
+
+    later = scheduler.should_start_dhw(
+        current_dhw_temp=dhw_temp,
+        space_heating_demand_kw=5.0,
+        thermal_debt_dm=-200.0,
+        indoor_temp=21.0,
+        target_indoor_temp=21.0,
+        outdoor_temp=-10.0,
+        price_classification="peak",
+        current_time=LONG_AFTER,
+        price_periods=None,
+        dhw_amount_minutes=amount,
+    )
+
+    assert not later.should_heat, (
+        f"{later.priority_reason}: a tank at {dhw_temp} C (amount {amount}) is heated at PEAK price "
+        f"for a window safety refused - more than the window itself would have done"
+    )

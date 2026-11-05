@@ -155,7 +155,7 @@ class TestRapidCoolingDetection:
         nibe_state_mock.outdoor_temp = -5.0  # Cold enough
 
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0, room_floor=21.0
         )
 
         assert decision.offset > 0
@@ -178,7 +178,7 @@ class TestRapidCoolingDetection:
         nibe_state_mock.degree_minutes = -3  # Ensure we are not in any Proactive Zone
 
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0, room_floor=21.0
         )
 
         assert decision.offset == 0.0
@@ -200,7 +200,7 @@ class TestRapidCoolingDetection:
         nibe_state_mock.outdoor_temp = -10.0
 
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0, room_floor=21.0
         )
 
         # Should trigger Zone 1 or 2 boost
@@ -226,7 +226,7 @@ class TestTrendAwareZoneBoost:
         nibe_state_mock.outdoor_temp = -5.0
 
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0, room_floor=21.0
         )
 
         # Should be boosted
@@ -265,7 +265,7 @@ class TestPredictiveDeficitCalculation:
 
         # Proactive layer uses predicted deficit
         decision = engine.proactive_layer.evaluate_layer(
-            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0
+            nibe_state=nibe_state_mock, weather_data=None, target_temp=21.0, room_floor=21.0
         )
 
         assert decision.offset > 0

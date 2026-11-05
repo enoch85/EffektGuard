@@ -12,7 +12,7 @@ This replaces multiple separate DHW test files with one comprehensive suite.
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 from custom_components.effektguard.const import (
@@ -154,7 +154,7 @@ def scheduler_with_morning_demand():
     scheduler = IntelligentDHWScheduler(
         demand_periods=[demand_period], price_analyzer=mock_analyzer
     )
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=2)
+    scheduler.last_legionella_boost = datetime.now(timezone.utc) - timedelta(days=2)
     return scheduler
 
 
@@ -296,9 +296,9 @@ class TestSafetyRules:
             current_time=current_time,
         )
 
-        # Should NOT heat during expensive period (temp is safe at 22°C)
+        # Should NOT heat during expensive period (temp is safe at 22°C) - and not call it adequate
         assert decision.should_heat is False
-        assert decision.priority_reason == "DHW_ADEQUATE"
+        assert decision.priority_reason == "DHW_COMFORT_WAITING_CHEAP"
 
     def test_dhw_safety_deferred_for_peak_pricing(self):
         """RULE 3: Safety minimum CAN be deferred if temp safe, DM healthy, and price peak."""
@@ -345,19 +345,13 @@ class TestSafetyRules:
         assert decision.should_heat is False
         assert decision.priority_reason == "HIGH_SPACE_HEATING_DEMAND"
 
-    def test_hygiene_boost_after_14_days(self):
-        """RULE 2.7: Hygiene boost when DHW hasn't been above 60°C in 14 days.
-
-        With new low thresholds (10°C/20°C), bacteria can grow in 20-45°C range.
-        Ensure high-temp cycle (60°C) every 14 days for Legionella prevention.
-        """
+    def test_hygiene_fallback_once_the_cycle_is_overdue(self):
+        """RULE 2.3: the fallback runs once NIBE's own cycle is overdue (21 days without one)."""
         from datetime import timedelta
 
         scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 12, 0)
-
-        # Simulate last Legionella boost was 15 days ago
-        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+        scheduler.last_legionella_boost = current_time - timedelta(days=22)
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=45.0,  # Normal temp, but needs hygiene boost
@@ -409,8 +403,8 @@ class TestSafetyRules:
         scheduler = create_dhw_scheduler()
         current_time = datetime(2025, 10, 18, 17, 0)  # Evening peak
 
-        # 15 days since last boost, but expensive price
-        scheduler.last_legionella_boost = current_time - timedelta(days=15)
+        # Overdue, but expensive price
+        scheduler.last_legionella_boost = current_time - timedelta(days=22)
 
         decision = scheduler.should_start_dhw(
             current_dhw_temp=45.0,
@@ -454,103 +448,6 @@ class TestSafetyRules:
         # Should heat for comfort, NOT hygiene boost
         assert decision.should_heat is True
         assert decision.priority_reason != "DHW_HYGIENE_BOOST"
-
-
-# ==============================================================================
-# MAXIMUM WAIT ENFORCEMENT - RULE 3.5
-# ==============================================================================
-
-
-class TestMaximumWaitEnforcement:
-    """Test 36-hour maximum wait enforcement."""
-
-    def test_max_wait_forces_dhw_after_36_hours(self):
-        """RULE 4: Max 36h wait enforces DHW heating during cheap/normal prices only."""
-        from datetime import timedelta
-
-        scheduler = create_dhw_scheduler()
-        current_time = datetime(2025, 10, 20, 12, 0)
-
-        # Set recent Legionella boost so hygiene boost doesn't trigger
-        scheduler.last_legionella_boost = current_time - timedelta(days=7)
-
-        # Test with cheap pricing - should heat
-        decision = scheduler.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP,
-            space_heating_demand_kw=1.0,
-            thermal_debt_dm=-50,
-            indoor_temp=DEFAULT_INDOOR_TEMP,
-            target_indoor_temp=DEFAULT_INDOOR_TEMP,
-            outdoor_temp=0.0,
-            price_classification="cheap",
-            current_time=current_time,
-            hours_since_last_dhw=36.1,
-        )
-
-        assert decision.should_heat is True
-        assert "DHW_MAX_WAIT" in decision.priority_reason
-        assert "36.1" in decision.priority_reason
-
-    def test_max_wait_deferred_during_expensive(self):
-        """RULE 4: Max 36h wait does NOT override expensive pricing."""
-        scheduler = create_dhw_scheduler()
-
-        # Even with max wait exceeded, expensive pricing blocks
-        decision = scheduler.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP,
-            space_heating_demand_kw=1.0,
-            thermal_debt_dm=-50,
-            indoor_temp=DEFAULT_INDOOR_TEMP,
-            target_indoor_temp=DEFAULT_INDOOR_TEMP,
-            outdoor_temp=0.0,
-            price_classification="expensive",  # Expensive pricing
-            current_time=datetime(2025, 10, 20, 12, 0),
-            hours_since_last_dhw=36.1,
-        )
-
-        # Should wait for better prices, not heat during expensive
-        assert decision.should_heat is False
-        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
-
-    def test_max_wait_deferred_during_peak(self):
-        """RULE 2.6: NEVER heat at PEAK prices (even if max wait exceeded)."""
-        scheduler = create_dhw_scheduler()
-
-        # Even with max wait exceeded, peak pricing blocks
-        decision = scheduler.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP,
-            space_heating_demand_kw=1.0,
-            thermal_debt_dm=-50,
-            indoor_temp=DEFAULT_INDOOR_TEMP,
-            target_indoor_temp=DEFAULT_INDOOR_TEMP,
-            outdoor_temp=0.0,
-            price_classification="peak",  # Peak pricing - NEVER heat
-            current_time=datetime(2025, 10, 20, 12, 0),
-            hours_since_last_dhw=36.1,
-        )
-
-        # Should definitely NOT heat during peak - new PEAK avoidance rule
-        assert decision.should_heat is False
-        assert "DHW_PEAK_AVOIDED" in decision.priority_reason
-
-    def test_max_wait_under_36_hours_no_heating(self):
-        """DHW adequate at 48°C, under 36h wait, no heating needed."""
-        scheduler = create_dhw_scheduler()
-
-        decision = scheduler.should_start_dhw(
-            current_dhw_temp=MIN_DHW_TARGET_TEMP + 3.0,  # Adequate
-            space_heating_demand_kw=1.0,
-            thermal_debt_dm=-50,
-            indoor_temp=21.0,
-            target_indoor_temp=21.0,
-            outdoor_temp=5.0,
-            price_classification="expensive",
-            current_time=datetime(2025, 10, 18, 12, 0),
-            hours_since_last_dhw=24.0,  # Under limit
-        )
-
-        assert decision.should_heat is False
-        assert "DHW_ADEQUATE_WAITING_CHEAP" in decision.priority_reason
 
 
 # ==============================================================================
@@ -940,7 +837,7 @@ class TestHeatingRateLearning:
     def test_persistence_roundtrip(self):
         """Heating rate survives save/restore cycle."""
         scheduler = create_dhw_scheduler()
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # Build up learned data
         scheduler.last_legionella_boost = now - timedelta(days=5)

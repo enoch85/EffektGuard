@@ -23,9 +23,12 @@ from .const import (
     CONF_NIBE_TEMP_LUX_ENTITY,
     CONF_POWER_SENSOR_ENTITY,
     CONF_WEATHER_ENTITY,
+    CONFIG_ENTRY_MINOR_VERSION,
+    CONFIG_ENTRY_VERSION,
     DEFAULT_HEAT_PUMP_MODEL,
     DEFAULT_INDOOR_TEMP_METHOD,
     DOMAIN,
+    INDOOR_TEMP_METHODS,
     NIBE_DISCOVERY_PATTERNS,
     NIBE_MANUAL_OVERRIDE_KEYS,
 )
@@ -86,10 +89,22 @@ def _manual_override_schema(schema_dict: dict[Any, Any], current: dict[str, Any]
         )
 
 
+def _indoor_temp_method_selector() -> selector.SelectSelector:
+    """How the room sensors combine - offered at setup and in Reconfigure."""
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=list(INDOOR_TEMP_METHODS),
+            mode=selector.SelectSelectorMode.DROPDOWN,
+            translation_key=CONF_INDOOR_TEMP_METHOD,
+        )
+    )
+
+
 class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for EffektGuard."""
 
-    VERSION = 1
+    VERSION = CONFIG_ENTRY_VERSION
+    MINOR_VERSION = CONFIG_ENTRY_MINOR_VERSION
 
     def __init__(self) -> None:
         """Initialize config flow."""
@@ -359,12 +374,7 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Indoor temperature calculation method
         schema_dict[vol.Optional(CONF_INDOOR_TEMP_METHOD, default=DEFAULT_INDOOR_TEMP_METHOD)] = (
-            selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=["median", "average"],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
+            _indoor_temp_method_selector()
         )
 
         return self.async_show_form(
@@ -638,6 +648,10 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_POWER_SENSOR_ENTITY: user_input.get(CONF_POWER_SENSOR_ENTITY),
                 CONF_NIBE_TEMP_LUX_ENTITY: user_input.get(CONF_NIBE_TEMP_LUX_ENTITY),
                 CONF_ADDITIONAL_INDOOR_SENSORS: user_input.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
+                CONF_INDOOR_TEMP_METHOD: user_input.get(
+                    CONF_INDOOR_TEMP_METHOD,
+                    entry.data.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD),
+                ),
             }
             for conf_key in MANUAL_SENSOR_OVERRIDE_FIELDS:
                 data_updates[conf_key] = user_input.get(conf_key)
@@ -726,6 +740,13 @@ class EffektGuardConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             entry.data.get(CONF_ADDITIONAL_INDOOR_SENSORS, []),
         )
+        # default= (not suggested_value), like the model: a method is always set
+        schema_dict[
+            vol.Optional(
+                CONF_INDOOR_TEMP_METHOD,
+                default=entry.data.get(CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD),
+            )
+        ] = _indoor_temp_method_selector()
         _manual_override_schema(schema_dict, dict(entry.data))
 
         return self.async_show_form(

@@ -59,6 +59,7 @@ def _coordinator(hot_water: bool | None, enhanced, lux: bool) -> EffektGuardCoor
     )
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
 
     hass = create_mock_hass()
     data = {"enable_optimization": True}

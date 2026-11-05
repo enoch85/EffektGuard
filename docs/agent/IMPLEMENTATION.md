@@ -1,8 +1,8 @@
 # How to work in this repository
 
 This is production code that controls heat pumps in real homes. **Safety and correctness over
-speed**; comfort and pump health over savings. When uncertain about NIBE behaviour, ask and verify
-rather than implement a plausible guess.
+speed**; safety and pump health first, then savings, down to the room temperature the chosen mode
+keeps. When uncertain about NIBE behaviour, ask and verify rather than implement a plausible guess.
 
 Read [CLAUDE.md](../../CLAUDE.md) for the map and commands, and
 [PROJECT_NOTES.md](PROJECT_NOTES.md) for the conventions, the

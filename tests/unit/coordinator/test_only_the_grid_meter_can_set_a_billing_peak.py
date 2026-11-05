@@ -50,7 +50,6 @@ def _coordinator(power_entity: str | None) -> EffektGuardCoordinator:
         hass, nibe, MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
     )
     coordinator.peak_today = 0.0
-    coordinator.peak_this_month = 0.0
     coordinator._power_sensor_available = True
     coordinator.effect.record_period_measurement = AsyncMock(return_value=None)
     return coordinator

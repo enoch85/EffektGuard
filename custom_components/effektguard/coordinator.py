@@ -10,10 +10,14 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.event import async_track_point_in_time
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_point_in_time,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -45,11 +49,13 @@ from .const import (
     DEFAULT_INDOOR_TEMP,
     DHW_CONTROL_MIN_INTERVAL_MINUTES,
     DHW_MIN_AMOUNT_DEFAULT,
+    DHW_MIN_RUN_MINUTES,
     DHW_READY_THRESHOLD,
     DHW_SAFETY_MIN,
     DHW_WEATHER_COOLDOWN_MINUTES,
     DM_THRESHOLD_START,
     DOMAIN,
+    HEAT_PUMP_READ_RETRY_SECONDS,
     MAX_BILLING_OBSERVATION_GAP_MINUTES,
     PEAK_CONTROL_POWER_SOURCES,
     LEARNING_OBSERVATION_INTERVAL_MINUTES,
@@ -87,8 +93,8 @@ from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor, CompressorSaturation
 from .utils.power import power_kw_from_state
-from .utils.time_utils import get_current_billing_period
-from .utils.volatile_helpers import OffsetVolatilityTracker
+from .utils.time_utils import get_current_billing_period, seconds_between
+from .utils.volatile_helpers import OffsetVolatilityTracker, gate_offset
 
 if TYPE_CHECKING:
     from .models.types import EffektGuardConfigDict
@@ -100,6 +106,10 @@ def held_target_of(config: Mapping[str, Any]) -> float:
     """The indoor temperature to hold: the configured target, AWAY_SETBACK lower while AWAY."""
     target = float(config.get(CONF_TARGET_INDOOR_TEMP, DEFAULT_INDOOR_TEMP))
     return target - AWAY_SETBACK if config.get(CONF_AWAY) else target
+
+
+class HeatPumpUnreadable(UpdateFailed):
+    """The heat pump's required readings could not be read, after it has answered once."""
 
 
 class EffektGuardCoordinator(DataUpdateCoordinator):
@@ -306,7 +316,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # until the midnight reset. NEVER pass this to the decision engine as
         # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
-        self.peak_this_month: float = 0.0
         # Instantaneous whole-house power (kW), refreshed every cycle by
         # _update_peak_tracking. None until the first successful measurement, in which
         # case peak protection stays disabled rather than acting on a guess.
@@ -348,11 +357,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.dhw_was_active = False  # Track DHW state (is_hot_water OR temp_lux)
         # True while a temporary-lux boost that EFFEKTGUARD started is still running. The owner may
         # also start one from the heat pump's own panel or their own automation, and that one is
-        # none of our business - so shutdown only cancels a boost we are responsible for.
+        # none of our business - so neither shutdown nor the optimiser cancels a boost we did not
+        # start.
         self._lux_boost_is_ours = False
         # While set, a boost_dhw SERVICE call owns the lux switch: ordinary price optimization
         # may not cancel it before this instant. Safety still may - see _apply_dhw_control.
         self._service_boost_until: datetime | None = None
+        # Unsubscribes the lux switch's off watch - see setup_lux_listener
+        self._lux_listener = None
+        # When EffektGuard's own running boost started - it runs DHW_MIN_RUN_MINUTES at least
+        self._lux_boost_started_at: datetime | None = None
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
@@ -370,8 +384,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         self._clock_aligned = False  # Wait for 5-min alignment (:00:10, :05:10, :10:10, etc.)
         self._unsub_aligned_refresh = None  # Clock-aligned refresh subscription
-        # Startup grace: timeout after which observation cycles begin
-        self._startup_grace_timeout = dt_util.now() + timedelta(seconds=STARTUP_GRACE_MIN_INTERVAL)
+        self._unsub_read_retry = None  # The second try of a cycle that could not read the pump
+        # Startup grace: timeout after which observation cycles begin. A deadline in UTC - on the
+        # local clock a restart at 02:59 CEST on the night the clocks go back stayed locked out
+        # until 03:01 CET, 62 real minutes.
+        self._startup_grace_timeout = dt_util.utcnow() + timedelta(
+            seconds=STARTUP_GRACE_MIN_INTERVAL
+        )
 
         # Whether the "no price source" repair issue is currently raised.
         self._price_issue_active = False
@@ -385,6 +404,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Event listener detects when external power sensor becomes available during startup
         # Listener unsubscribes after detection to avoid overhead
         self._power_sensor_available = False
+        # A meter that has answered before and is not answering now (unavailable, unknown or
+        # unreadable). Reported once when the outage begins and once when it ends, not every cycle.
+        self._power_meter_silent = False
+        # The last-resort estimate is reported once, until a real measurement is seen again
+        self._power_fallback_reported = False
         # Learning observes hourly, not per control cycle - see _record_learning_observations
         self._last_learning_observation: datetime | None = None
         self._power_sensor_listener = None
@@ -396,10 +420,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         to ensure consistent timing relative to 15-minute spot price quarters.
         The +10 seconds gives sensors time to update before we read them.
 
+        Computed in UTC so that consecutive ticks are five REAL minutes apart. On the local clock
+        `now + timedelta` is wall-clock arithmetic: at 02:55:10 CEST on the night the clocks go
+        back it scheduled 03:00:10 CET, 65 minutes away, and inside the repeated hour it scheduled
+        ticks up to 55 minutes in the past, which Home Assistant fires at once. Every UTC offset is
+        a multiple of 15 minutes, so the ticks still land at :XX:10 on the local clock.
+
         Returns:
-            Next aligned datetime
+            Next aligned datetime, in UTC
         """
-        now = dt_util.now()
+        now = dt_util.utcnow()
         # Align to 5-minute boundaries (UPDATE_INTERVAL_MINUTES)
         minutes_past = now.minute % UPDATE_INTERVAL_MINUTES
         seconds_past = now.second
@@ -445,15 +475,37 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self._clock_aligned = True
             _LOGGER.info(
                 "Clock aligned to %s (updates every 5 min at :00:10, :05:10, :10:10, etc.)",
-                next_time.strftime("%H:%M:%S"),
+                dt_util.as_local(next_time).strftime("%H:%M:%S"),
             )
         else:
-            _LOGGER.debug("Next update at %s", next_time.strftime("%H:%M:%S"))
+            _LOGGER.debug("Next update at %s", dt_util.as_local(next_time).strftime("%H:%M:%S"))
 
-    async def _do_aligned_refresh(self) -> None:
+    def _schedule_read_retry(self) -> None:
+        """Run the control cycle once more, HEAT_PUMP_READ_RETRY_SECONDS from now.
+
+        A timer of its own: every successful read re-arms the aligned one, a read-only refresh
+        included, and sharing it would let that read cancel the retry.
+        """
+        if self._shutdown_requested:
+            _LOGGER.debug("Coordinator shut down - not arming a read retry")
+            return
+
+        if self._unsub_read_retry:
+            self._unsub_read_retry()
+
+        @callback
+        def _on_retry(_now: datetime) -> None:
+            self._unsub_read_retry = None
+            self.hass.async_create_task(self._do_aligned_refresh(retry=True))
+
+        self._unsub_read_retry = async_call_later(
+            self.hass, HEAT_PUMP_READ_RETRY_SECONDS, _on_retry
+        )
+
+    async def _do_aligned_refresh(self, *, retry: bool = False) -> None:
         """Perform one refresh and ALWAYS re-arm the next aligned update.
 
-        Sole owner of the retry timer: the base scheduler is disabled (update_interval=None), so
+        Sole owner of the aligned timer: the base scheduler is disabled (update_interval=None), so
         nothing else re-arms it. That is why the broad `except Exception` is correct - anything the
         update path raises would otherwise kill the task silently and permanently
         (`last_update_success` stays True while the pump holds its last offset until HA restarts).
@@ -462,13 +514,31 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         A failure is published as Home Assistant's own refresh publishes one: logged and handed to
         the entities on the transition, so they go unavailable instead of showing the last good
         cycle, and the recovery is logged.
+
+        A cycle that cannot read the heat pump runs once more, HEAT_PUMP_READ_RETRY_SECONDS later,
+        before that failure is shown: the pump's source is often back by then, and the cycle's work
+        is done late rather than not at all. Until then the entities show the last cycle, as they
+        do between any two cycles.
+
+        Args:
+            retry: This run is that second try, so a failed read is shown.
         """
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
             # lock, so a service commanding the pump at the same moment waits its turn.
             data = await self._drive_the_pump()
+        except HeatPumpUnreadable as err:
+            if retry:
+                self.async_set_update_error(err)
+            else:
+                _LOGGER.info(
+                    "Could not read the heat pump, trying again in %d s: %s",
+                    HEAT_PUMP_READ_RETRY_SECONDS,
+                    err,
+                )
+                self._schedule_read_retry()
         except UpdateFailed as err:
-            # Expected degradation (e.g. required NIBE sensors unreadable).
+            # Expected degradation: the heat pump never answered after start-up.
             self.async_set_update_error(err)
         except Exception as err:  # noqa: BLE001 - supervisory loop; see docstring
             _LOGGER.exception(
@@ -523,16 +593,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                             int(self.last_applied_offset),
                         )
 
-                # Restore adaptive thermal model
+                # Restore adaptive thermal model. Not its thermal mass: setup gives the model the
+                # owner's setting (_create_coordinator), which a stored value must not outrank.
                 if "thermal_model" in learned_data:
                     thermal_data = learned_data["thermal_model"]
-                    self.adaptive_learning.thermal_mass = thermal_data.get("thermal_mass", 1.0)
                     self.adaptive_learning.ufh_type = thermal_data.get("ufh_type", "unknown")
-                    _LOGGER.info(
-                        "Restored thermal model: mass=%.2f, UFH=%s",
-                        self.adaptive_learning.thermal_mass,
-                        self.adaptive_learning.ufh_type,
-                    )
+                    _LOGGER.info("Restored thermal model: UFH=%s", self.adaptive_learning.ufh_type)
 
                 # Restore thermal predictor (temperature trends)
                 if "thermal_predictor" in learned_data:
@@ -564,6 +630,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # Use the new restore method for all DHW state
                     self.dhw_optimizer.restore_from_persistence(dhw_state)
 
+                # Restore where the pump runs short of capacity, and where it starts its heater
+                if "capacity_shortfall" in learned_data:
+                    self.engine.capacity_shortfall.restore(learned_data["capacity_shortfall"])
+                if "heater_start" in learned_data:
+                    self.engine.heater_start.restore(learned_data["heater_start"])
+
                 _LOGGER.info("Learning modules initialized successfully")
             else:
                 _LOGGER.info("No learned data found - starting fresh learning")
@@ -571,27 +643,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except (OSError, ValueError, KeyError, AttributeError) as err:
             _LOGGER.warning("Failed to initialize learning modules: %s", err)
             # Continue with fresh learning
-
-    async def async_restore_peaks(self) -> None:
-        """Restore peak tracking values from effect manager's loaded data.
-
-        Called after effect manager has loaded its persistent state to sync
-        coordinator's peak values with stored data.
-        """
-        try:
-            peak_summary = self.effect.get_monthly_peak_summary()
-            if peak_summary and peak_summary.get("count", 0) > 0:
-                self.peak_this_month = peak_summary["highest"]
-                _LOGGER.info(
-                    "Restored monthly peak: %.2f kW (%d peaks loaded)",
-                    self.peak_this_month,
-                    peak_summary["count"],
-                )
-            else:
-                _LOGGER.info("No monthly peaks to restore - starting fresh")
-        except (AttributeError, KeyError, ValueError) as err:
-            _LOGGER.warning("Failed to restore peaks: %s", err)
-            self.peak_this_month = 0.0
 
     def setup_power_sensor_listener(self) -> None:
         """Set up event listener to detect when external power sensor becomes available.
@@ -679,6 +730,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             return False
 
+        # Home Assistant skips a missing or unavailable entity with a log line and returns, so the
+        # call below would report a switch it never reached as switched.
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is None or state.state == STATE_UNAVAILABLE:
+            _LOGGER.warning(
+                "Temporary lux %s is %s - not switching it %s",
+                self.temp_lux_entity,
+                "missing" if state is None else "unavailable",
+                "on" if on else "off",
+            )
+            return False
+
         try:
             # The generic service, not switch.*: a nibe_heatpump/Modbus user has no lux
             # switch - their bridge is an input_boolean helper - and homeassistant.turn_on
@@ -693,14 +756,59 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Failed to set temporary lux to %s: %s", on, err)
             return False
 
+        if on and self._shutdown_requested:
+            # The entry unloaded while the call was in flight, and its cleanup found no boost of
+            # ours to cancel - the record below is made only now. Stop it here, or it runs to
+            # NIBE's lux timeout with nothing left to stop it.
+            _LOGGER.info(
+                "The entry unloaded while a hot-water boost was starting on %s - switching it off",
+                self.temp_lux_entity,
+            )
+            await self._set_temporary_lux(False)
+            return False
+
         # Ours if we switched it on; not ours once it is off, whoever asked for that.
-        self._lux_boost_is_ours = on
+        if on:
+            self._lux_boost_is_ours = True
+        else:
+            self._lux_turned_off()
         return True
+
+    @callback
+    def _lux_turned_off(self) -> None:
+        """An off reading ends every claim on the boost: EffektGuard's own and a boost_dhw window.
+
+        The one place a claim ends. Unavailable, unknown or a missing state says nothing - the boost
+        may well be running - so only an off reading comes here.
+        """
+        self._lux_boost_is_ours = False
+        self._service_boost_until = None
+        self._lux_boost_started_at = None
+
+    def setup_lux_listener(self) -> None:
+        """Watch the lux switch for off between control cycles.
+
+        Read only at each cycle, an off and on again in between left the old claim standing, and
+        the household's new boost was then switched off as EffektGuard's own - at the old window's
+        end, or on the next reload.
+        """
+        if not self.temp_lux_entity:
+            return
+
+        @callback
+        def _lux_changed(event) -> None:
+            new_state = event.data["new_state"]
+            if new_state is not None and new_state.state == STATE_OFF:
+                self._lux_turned_off()
+
+        self._lux_listener = async_track_state_change_event(
+            self.hass, [self.temp_lux_entity], _lux_changed
+        )
 
     async def _cancel_our_dhw_boost(self) -> None:
         """Turn off a temporary-lux boost that EffektGuard started, if one is still running.
 
-        Called on unload. A boost the OWNER started is left alone.
+        Called on unload, and when Home Assistant stops. A boost the OWNER started is left alone.
         """
         # Whatever happens below, the entry is going away - no service window survives it.
         self._service_boost_until = None
@@ -719,6 +827,47 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         await self._set_temporary_lux(False)
 
+    async def _end_user_dhw_boost_when_due(self, nibe_data, now_time: datetime) -> None:
+        """End a boost_dhw boost when its duration is over or the house is no longer safe for it.
+
+        Runs on every control cycle. It used to live inside the hot-water optimiser's control, which
+        runs only while hot-water optimisation is switched on (default off), the tank is read and the
+        optimiser gives a decision - so in the default configuration nothing ended the boost but
+        NIBE's own lux timeout, and even with it on, a decision to hold hot water back for thermal
+        debt carried no abort and left the boost running at any debt.
+
+        The stop is the predicate that refuses the start (async_start_dhw_boost) and gates the
+        scheduled window: price never ends a user boost, the ordinary thermal-debt block does not
+        either, the safety gate does.
+        """
+        if self._service_boost_until is None:
+            return
+
+        state = self.hass.states.get(self.temp_lux_entity) if self.temp_lux_entity else None
+        if state is not None and state.state == STATE_OFF:
+            # NIBE's own lux timeout, or the household, ended it first.
+            self._lux_turned_off()
+            return
+        if state is None or state.state != STATE_ON:
+            # Missing, unavailable or unknown is not an end: the boost may well be running.
+            return
+
+        unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
+            nibe_data.degree_minutes, nibe_data.indoor_temp
+        )
+        if unsafe is None and now_time < self._service_boost_until:
+            return
+
+        # The window closes with the switch: a stop that failed is tried again next cycle.
+        if not await self._set_temporary_lux(False):
+            return
+        self._service_boost_until = None
+        self._last_dhw_control_time = now_time
+        if unsafe:
+            _LOGGER.warning("User DHW boost stopped for safety: %s", unsafe)
+        else:
+            _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
 
@@ -726,7 +875,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         - Learning module data (thermal model, weather patterns)
         - Effect tracking state (monthly peaks)
 
-        Called during integration unload or reload.
+        Called during integration unload or reload, and when Home Assistant stops (it does not
+        unload config entries then - see async_setup_entry).
 
         IDEMPOTENT BY DESIGN. This runs TWICE per unload: the base DataUpdateCoordinator
         registers `config_entry.async_on_unload(self.async_shutdown)` in its __init__, and
@@ -751,12 +901,20 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if unsub is not None:
                 unsub()
                 self._unsub_aligned_refresh = None
+            unsub_retry = getattr(self, "_unsub_read_retry", None)
+            if unsub_retry is not None:
+                unsub_retry()
+                self._unsub_read_retry = None
 
             # Unsubscribe power sensor listener if still active
             if self._power_sensor_listener:
                 self._power_sensor_listener()
                 self._power_sensor_listener = None
                 _LOGGER.debug("Power sensor availability listener unsubscribed")
+            unsub_lux = getattr(self, "_lux_listener", None)
+            if unsub_lux is not None:
+                unsub_lux()
+                self._lux_listener = None
 
             # Cancel OUR OWN DHW boost on unload. Nothing else does: a reload or restart mid-boost
             # otherwise leaves the temporary-lux switch ON until NIBE's timeout, running a
@@ -964,6 +1122,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # During startup, MyUplink entities may not be ready yet (takes ~45-50 seconds)
             # Gracefully handle this by returning minimal data until entities are available
             if not self._first_successful_update:
+                if explicit_command:
+                    # The grace is the control loop's. A command answered with the startup data
+                    # reported success while nothing was read or written, and its override stayed
+                    # armed for the first ordinary cycle to apply.
+                    raise HomeAssistantError(
+                        f"The heat pump has not answered yet, so nothing was written: {err}"
+                    ) from err
+
                 self._startup_grace_attempts += 1
 
                 if self._startup_grace_attempts > STARTUP_MAX_GRACE_ATTEMPTS:
@@ -1009,7 +1175,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "startup_pending": True,  # Flag for entities to show proper status
                 }
             # After first success, NIBE failures are real errors. Each caller reports them.
-            raise UpdateFailed(f"Cannot read NIBE data: {err}") from err
+            raise HeatPumpUnreadable(f"Cannot read NIBE data: {err}") from err
 
         # Gather optional data with graceful degradation
         # Spot price data (native 15-minute intervals)
@@ -1099,7 +1265,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
             if month_changed:
                 self.effect.prune_peaks_for_current_month()
-                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info(
                     "Month change detected: pruned previous month's peaks, "
                     "monthly peak reset to %.2f kW",
@@ -1170,14 +1335,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Track DHW transition: active → inactive triggers weather layer cooldown
                 # When DHW stops, flow temp remains elevated - needs cooldown period
                 # Uses DHW_WEATHER_COOLDOWN_MINUTES (30 min) before weather comp re-enables
+                # Stamped in UTC: the cooldown and the cycle duration are elapsed times
                 if self.dhw_was_active and not dhw_is_active:
-                    self.dhw_heating_end = dt_util.now()
+                    self.dhw_heating_end = dt_util.utcnow()
                     _LOGGER.info(
                         "DHW heating stopped - triggering weather layer cooldown (%d min)",
                         DHW_WEATHER_COOLDOWN_MINUTES,
                     )
                 elif not self.dhw_was_active and dhw_is_active:
-                    self.dhw_heating_start = dt_util.now()
+                    self.dhw_heating_start = dt_util.utcnow()
                     _LOGGER.info(
                         "DHW heating started (is_hot_water=%s, temp_lux=%s)",
                         is_hot_water,
@@ -1209,7 +1375,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
                 # Startup grace period: lockout + observation cycles
-                now = dt_util.now()
+                now = dt_util.utcnow()
 
                 if explicit_command and decision.is_manual_override:
                     _LOGGER.info("Explicit user command bypasses startup observation")
@@ -1225,8 +1391,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
                     decision.reasoning = f"[Startup Lockout] {decision.reasoning}"
                 elif self._startup_update_count < self._startup_grace_updates:
-                    # Phase 2: Observation cycles (one per update interval)
-                    self._startup_update_count += 1
+                    # Phase 2: Observation cycles (one per update interval). A read is not one:
+                    # counted, a few reads in a row would end the observation early.
+                    if apply:
+                        self._startup_update_count += 1
                     is_grace_period = True
                     cycles_left = self._startup_grace_updates - self._startup_update_count
                     _LOGGER.info(
@@ -1260,91 +1428,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Fall back to safe operation (no offset)
                 decision = get_safe_default_decision()
 
-        # Check for volatile offset reversal before applying
-        # Prevents rapid back-and-forth that the heat pump can't follow
-        # (same logic as price volatility)
-        # Skip volatility tracking during startup - we're not applying offsets yet
-        #
-        # Anti-windup bypass (Feb 2026): When anti-windup is active, it means the system
-        # detected a self-induced DM spiral (raising S1 makes BT25-S1 gap grow → DM drops
-        # faster). The volatile blocker must NOT block anti-windup reductions — doing so
-        # keeps the harmful high offset active for 45 minutes while DM plunges.
-        # Jan 31 2026 incident: volatile blocked anti-windup reduction 10→3°C for 45 min,
-        # DM dropped from -1566 to -1855.
-        if is_grace_period:
-            # During startup, don't track decisions - they're not being applied
-            # The tracker will be initialized with actual NIBE offset when startup completes
-            pass
-        elif decision.is_manual_override:
-            # User-commanded offsets (force_offset/boost services) are
-            # authoritative — the volatile blocker must never defer an
-            # explicit user command for 45 minutes
-            _LOGGER.info(
-                "Manual override: bypassing volatile check (offset → %.1f°C)",
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif not optimization_enabled:
-            # OFF is a user command as well: its neutral offset must never be swapped for the last
-            # automatic one, which kept the pump on it for up to 45 minutes behind an OFF display.
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.is_emergency:
-            # Absolute safety path: indoor below MIN_TEMP_LIMIT, or DM past the aux limit.
-            # The volatile blocker damps price-driven flip-flopping; it must never defer a safety
-            # recovery. Blocking here would hold the previous (often negative) offset for up to
-            # 45 minutes while DM keeps falling and the immersion heater runs.
-            _LOGGER.warning(
-                "Emergency decision: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
-                (
-                    self._offset_volatility_tracker.last_offset
-                    if self._offset_volatility_tracker.last_offset is not None
-                    else 0.0
-                ),
+        # The gate between the engine and the register. Its policy - which proposals go past the
+        # tracker, what a refused one publishes - is gate_offset, shared with the simulator so the
+        # bench measures what the pump gets (F-142). During start-up nothing is applied, so nothing
+        # is tracked; the tracker is seeded from the pump's own offset when start-up ends. A read is
+        # gated as a control cycle would be, so what it publishes matches the register, and records
+        # nothing, so a decision nobody applied cannot become the baseline that later reaches it.
+        previous_offset = self._offset_volatility_tracker.last_offset
+        previous_change = self._offset_volatility_tracker.last_change
+        gated = gate_offset(
+            self._offset_volatility_tracker,
+            decision,
+            optimization_enabled=optimization_enabled,
+            track=not is_grace_period,
+            record=apply,
+        )
+        if gated.blocked:
+            _LOGGER.info("Offset change blocked: %s", gated.reasoning)
+            decision = OptimizationDecision(offset=gated.offset, reasoning=gated.reasoning)
+        elif gated.bypass is not None:
+            _LOGGER.log(
+                logging.WARNING if decision.is_emergency else logging.INFO,
+                "%s: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
+                gated.bypass,
+                previous_offset or 0.0,
                 decision.offset,
                 decision.reasoning,
             )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.anti_windup_active:
-            # Anti-windup is a safety mechanism — always apply immediately
-            # Record the change so volatile tracker knows the new baseline
-            _LOGGER.info(
-                "Anti-windup active: bypassing volatile check (offset %.1f°C → %.1f°C)",
-                (
-                    self._offset_volatility_tracker.last_offset
-                    if self._offset_volatility_tracker.last_offset is not None
-                    else 0.0
-                ),
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif decision.saturation_capped and decision.offset < (
-            self._offset_volatility_tracker.last_offset or 0.0
-        ):
-            # The wear guard withdrew a raise the saturated compressor cannot follow. Held for 45
-            # minutes it buys no heat, only a deeper DM deficit and the immersion heater sooner
-            # (F-124). Only the withdrawal passes: the cap stops at the pump's own curve.
-            _LOGGER.info(
-                "Compressor saturated: bypassing volatile check (offset %.1f°C → %.1f°C)",
-                self._offset_volatility_tracker.last_offset,
-                decision.offset,
-            )
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
-        elif self._offset_volatility_tracker.is_reversal_volatile(decision.offset):
-            volatile_reason = self._offset_volatility_tracker.get_volatile_reason(decision.offset)
-            _LOGGER.info(
-                "Offset change blocked: %s (keeping %.1f°C)",
-                volatile_reason,
-                self._offset_volatility_tracker.last_offset,
-            )
-            # Keep the previous offset (last_offset is always set when is_reversal_volatile is True)
-            last_offset = self._offset_volatility_tracker.last_offset or 0.0
-            decision = OptimizationDecision(
-                offset=last_offset,
-                reasoning=f"[{volatile_reason}] {decision.reasoning}",
-            )
-        else:
-            # Record the new offset for volatility tracking
-            self._offset_volatility_tracker.record_change(decision.offset, decision.reasoning)
 
         self.last_decision_time = dt_util.utcnow()
 
@@ -1395,6 +1505,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if explicit_command:
                     raise
                 # Automatic control retries on the next aligned cycle.
+            finally:
+                # A write that failed or was skipped is no baseline either: the gate's record is
+                # taken back, so the next cycle is compared with what the pump holds.
+                if not self.nibe.holds(decision.offset):
+                    self._offset_volatility_tracker.last_change = previous_change
 
         self._accumulate_spot_savings(nibe_data, price_data)
 
@@ -1406,7 +1521,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Save learned data if changed (every hour to avoid excessive writes)
         if self._learned_data_changed:
-            now = dt_util.now()
+            now = dt_util.utcnow()
             if (
                 self._last_learning_save is None
                 or (now - self._last_learning_save).total_seconds() > 3600
@@ -1450,7 +1565,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             savings_estimate.spot_savings,
         )
 
+        # A user's boost_dhw boost ends by its own rule on every control cycle, whatever the
+        # hot-water optimiser below is doing - switched off, without a tank reading, or without a
+        # decision this cycle.
+        if apply:
+            await self._end_user_dhw_boost_when_due(nibe_data, now_time)
+
         # Calculate DHW status and tracking
+        dhw_decision = None  # the hot-water optimiser's decision this cycle, if it has one
+        current_dhw_temp = None
         dhw_status = "not_configured"
         dhw_next_boost = None
         dhw_last_heated = self.last_dhw_heated
@@ -1499,19 +1622,24 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self._bt7_history_read = True
                 await self.dhw_optimizer.initialize_from_history(self.hass, bt7_entity)
 
-            # Track previous Legionella boost time before update
-            previous_legionella_boost = self.dhw_optimizer.last_legionella_boost
+            # A high-temperature cycle seen, or a hygiene fallback run counted, is saved at once: a
+            # restart before the hourly save would otherwise forget it and run the fallback again.
+            hygiene_before = (
+                self.dhw_optimizer.last_legionella_boost,
+                self.dhw_optimizer.last_hygiene_fallback,
+            )
 
             # Update DHW optimizer with temperature history
-            self.dhw_optimizer.update_bt7_temperature(current_dhw_temp, now_time)
+            self.dhw_optimizer.update_bt7_temperature(
+                current_dhw_temp, now_time, getattr(nibe_data, "is_hot_water", None)
+            )
 
-            # If Legionella boost was newly detected, save state immediately
-            if (
-                self.dhw_optimizer.last_legionella_boost != previous_legionella_boost
-                and self.dhw_optimizer.last_legionella_boost is not None
+            if hygiene_before != (
+                self.dhw_optimizer.last_legionella_boost,
+                self.dhw_optimizer.last_hygiene_fallback,
             ):
                 _LOGGER.info(
-                    "Legionella boost detected - saving DHW state to persist across reboots"
+                    "Hot-water hygiene recorded - saving DHW state to persist across reboots"
                 )
                 await self._save_dhw_state_immediate()
 
@@ -1555,23 +1683,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # Don't fail entire coordinator update for DHW subsystem issue
                 # Core heating optimization continues to work
 
-            # Apply DHW control based on optimizer decision (if hot water optimization enabled)
-            if (
-                optimization_enabled
-                and self.entry.data.get("enable_hot_water_optimization", False)
-                and dhw_result is not None
-                and dhw_result.decision is not None
-            ):
-                if not apply:
-                    _LOGGER.debug("Read-only refresh: not applying DHW control")
-                elif is_grace_period:
-                    _LOGGER.info("Skipping DHW control during startup grace period")
-                else:
-                    await self._apply_dhw_control(
-                        dhw_result.decision,
-                        current_dhw_temp,
-                        now_time,
-                    )
+            if dhw_result is not None:
+                dhw_decision = dhw_result.decision
         else:
             # DHW sensor not available - provide basic recommendation
             if nibe_data:
@@ -1589,6 +1702,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 dhw_recommendation = "NIBE data unavailable"
                 dhw_planning_summary = "NIBE data unavailable"
                 dhw_planning_details = {}
+
+        # Apply DHW control (if hot water optimization enabled) - with or without a decision: no
+        # decision (no tank reading, or the optimiser failed) stops a boost the optimiser started.
+        if optimization_enabled and self.entry.data.get("enable_hot_water_optimization", False):
+            if not apply:
+                _LOGGER.debug("Read-only refresh: not applying DHW control")
+            elif is_grace_period:
+                _LOGGER.info("Skipping DHW control during startup grace period")
+            else:
+                await self._apply_dhw_control(dhw_decision, current_dhw_temp, now_time)
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
@@ -1687,7 +1810,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """
         # Gather HA-specific data
         target_indoor = self.held_target
-        hours_since_last = await self._calculate_hours_since_last_dhw()
 
         # Get thermal trend from predictor
         thermal_trend = self.thermal_predictor.get_current_trend() if self.thermal_predictor else {}
@@ -1754,7 +1876,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             price_classification=price_classification,
             current_time=now_time,
             price_periods=price_periods,
-            hours_since_last_dhw=hours_since_last,
             thermal_trend_rate=trend_rate,
             climate_zone_name=climate_zone_name,
             weather_current_temp=weather_current_temp,
@@ -1764,95 +1885,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
         return result
-
-    async def _get_last_dhw_heating_time(self) -> datetime | None:
-        """Get timestamp when temporary lux was last activated.
-
-        Reads from MyUplink entity's last_changed attribute (source of truth).
-        Falls back to Home Assistant history API if entity is currently OFF.
-
-        Returns:
-            datetime: Last time DHW heating was activated (UTC)
-            None: If no history available
-        """
-        if not self.temp_lux_entity:
-            _LOGGER.debug("No temporary lux entity configured")
-            return None
-
-        # Try to read from current entity state
-        state = self.hass.states.get(self.temp_lux_entity)
-        if state:
-            if state.state == STATE_ON:
-                # Currently ON - last_changed is when it turned ON
-                _LOGGER.debug("DHW temp lux currently ON, last_changed: %s", state.last_changed)
-                return state.last_changed
-
-            # Entity is OFF - check history for last ON state
-            try:
-                from homeassistant.components import recorder
-
-                # Look back 48 hours
-                start_time = dt_util.utcnow() - timedelta(hours=48)
-                end_time = dt_util.utcnow()
-
-                # Get recorder instance and use its executor
-                # (get_instance/history are runtime attributes not in HA type stubs)
-                rec = recorder.get_instance(self.hass)  # type: ignore[attr-defined]
-                if rec is None:
-                    _LOGGER.warning("Recorder not available, cannot check DHW history")
-                    return None
-
-                # Get state history using recorder instance executor
-                states = await rec.async_add_executor_job(
-                    recorder.history.state_changes_during_period,  # type: ignore[attr-defined]
-                    self.hass,
-                    start_time,
-                    end_time,
-                    self.temp_lux_entity,
-                )
-
-                if self.temp_lux_entity in states:
-                    entity_states = states[self.temp_lux_entity]
-
-                    # Find most recent ON state
-                    for state_obj in reversed(entity_states):
-                        if state_obj.state == STATE_ON:
-                            _LOGGER.debug(
-                                "Last DHW heating from history: %s", state_obj.last_changed
-                            )
-                            return state_obj.last_changed
-
-                _LOGGER.debug("No ON state in history for %s", self.temp_lux_entity)
-
-            except (AttributeError, KeyError, ValueError, OSError) as err:
-                _LOGGER.error("Failed to read DHW heating history: %s", err)
-
-        else:
-            _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
-
-        # Fall back to stored value (if any)
-        if self._last_dhw_control_time is not None:
-            _LOGGER.debug("Using fallback stored DHW time: %s", self._last_dhw_control_time)
-            return self._last_dhw_control_time
-
-        return None
-
-    async def _calculate_hours_since_last_dhw(self) -> float:
-        """Calculate hours since last DHW heating.
-
-        Returns:
-            float: Hours since last heating (0.0+), or 24.0 if unknown
-        """
-        last_time = await self._get_last_dhw_heating_time()
-
-        if last_time is None:
-            _LOGGER.debug("Unknown DHW heating history - assuming 24 hours for safety")
-            return 24.0  # Safe assumption
-
-        now = dt_util.utcnow()
-        hours = (now - last_time).total_seconds() / 3600
-
-        return max(0.0, hours)  # Never negative
 
     async def _apply_airflow_decision(self, decision) -> None:
         """Apply automatic ventilation control based on airflow optimizer decision.
@@ -1955,7 +1987,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if self._last_dhw_control_time is None:
             return False
 
-        minutes_since_last = (now_time - self._last_dhw_control_time).total_seconds() / 60
+        minutes_since_last = seconds_between(self._last_dhw_control_time, now_time) / 60
         if minutes_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
             _LOGGER.debug(
                 "DHW start rate limited: %.1f min since last change (min %d min)",
@@ -1967,7 +1999,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         return False
 
     async def _apply_dhw_control(
-        self, decision, current_dhw_temp: float, now_time: datetime
+        self, decision, current_dhw_temp: float | None, now_time: datetime
     ) -> None:
         """Apply automatic DHW control based on optimizer decision.
 
@@ -1975,8 +2007,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         pre-calculated decision from optimizer.
 
         Args:
-            decision: DHWScheduleDecision from optimizer (reused from recommendation)
-            current_dhw_temp: Current DHW temperature
+            decision: DHWScheduleDecision from optimizer (reused from recommendation), or None
+                when the optimiser has none this cycle
+            current_dhw_temp: Current DHW temperature, None without a reading
             now_time: Current datetime
         """
         # Check temporary lux entity
@@ -1992,27 +2025,54 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         self._clear_dhw_control_issue()
 
+        # A user-commanded boost (boost_dhw) is not the optimiser's: while its window is open the
+        # optimiser neither stops it nor applies its own abort conditions to it. Its duration and
+        # its safety stop are _end_user_dhw_boost_when_due's, on every control cycle.
+        if self._service_boost_until is not None:
+            _LOGGER.debug(
+                "User DHW boost active until %s - the optimiser leaves it alone",
+                self._service_boost_until,
+            )
+            return
+
         # Get current state of temporary lux switch
         temp_lux_state = self.hass.states.get(self.temp_lux_entity)
         if not temp_lux_state:
             _LOGGER.warning("Temporary lux entity %s not found", self.temp_lux_entity)
             return
+        if temp_lux_state.state not in (STATE_ON, STATE_OFF):
+            # Unavailable or unknown says nothing about the boost: it keeps its owner, and nothing
+            # is started or stopped on it. The next reading decides.
+            _LOGGER.debug(
+                "Temporary lux is %s - no hot-water control this cycle", temp_lux_state.state
+            )
+            return
 
-        is_lux_on = temp_lux_state.state == "on"
+        is_lux_on = temp_lux_state.state == STATE_ON
 
-        # A user-commanded boost (boost_dhw) opens a window ordinary optimization must not
-        # close. Expiry closes it here, through the owned door; the safety abort below closes
-        # it too - only safety outranks the user.
-        if self._service_boost_until is not None:
-            if not is_lux_on:
-                # NIBE's own lux timeout, or the household, ended it first.
-                self._service_boost_until = None
-            elif now_time >= self._service_boost_until:
-                _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+        # The optimiser stops only a boost EffektGuard started, as the unload cleanup does. A lux the
+        # household switched on - on the pump's panel, in MyUplink, by its own automation - used to
+        # be turned off at the next cycle by any decision not to heat. Off, by anyone, ends ours: a
+        # household boost started after it is not mistaken for it.
+        if not is_lux_on:
+            self._lux_turned_off()
+        elif not self._lux_boost_is_ours:
+            _LOGGER.debug("Temporary lux is on and EffektGuard did not start it - leaving it alone")
+            return
+
+        # Our boost runs while the optimiser decides to heat. Without a decision - BT7 unavailable,
+        # stale or unreadable, or the optimiser failed - nothing supervises it: it used to run on
+        # unchecked until BT7 returned or NIBE's own lux timeout. Stop it, inside its minimum run
+        # too - nothing tells whether the house needs the compressor - and start nothing.
+        if decision is None:
+            if is_lux_on:
+                _LOGGER.warning(
+                    "DHW control: no hot-water decision this cycle (no tank reading, or the "
+                    "optimiser failed) - stopping the temporary lux EffektGuard started"
+                )
                 if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
-                self._service_boost_until = None
-                return
+            return
 
         # Use pre-calculated decision from _calculate_dhw_recommendation()
         # This avoids duplicate optimizer calls and log spam
@@ -2029,6 +2089,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         target_indoor = self.held_target
 
+        # EffektGuard's own boost runs DHW_MIN_RUN_MINUTES at least: each start runs the compressor
+        # near full speed, and short runs wear it. Inside that only safety ends it - a refusal for
+        # the house (decision.for_safety), or a thermal-debt or indoor abort condition. To the
+        # minute: the cycles that check it are five minutes apart, give or take the seconds each
+        # takes to reach this point, and the third after the start ends it.
+        in_minimum_run = (
+            is_lux_on
+            and self._lux_boost_started_at is not None
+            and round(seconds_between(self._lux_boost_started_at, now_time) / 60)
+            < DHW_MIN_RUN_MINUTES
+        )
+
         # ABORT MONITORING: If DHW is currently heating, check abort conditions
         # This allows us to stop DHW early if conditions deteriorate (thermal debt, indoor temp)
         # thermal_debt and indoor_temp from coordinator data (same as used in decision calculation)
@@ -2039,6 +2111,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 indoor_temp,
                 target_indoor,
                 current_dhw_temp,
+                safety_only=in_minimum_run,
             )
 
             if should_abort:
@@ -2046,9 +2119,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW heating aborted early: %s. Stopping DHW to prioritize space heating.",
                     abort_reason,
                 )
-                # Stop through the owned door so `_lux_boost_is_ours` is cleared. Safety also
-                # outranks a user boost - the window closes with the switch.
-                self._service_boost_until = None
+                # Stop through the owned door so `_lux_boost_is_ours` is cleared.
                 if await self._set_temporary_lux(False):
                     self._last_dhw_control_time = now_time
                 return  # Exit early - abort handled
@@ -2063,6 +2134,21 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if decision.should_heat and not is_lux_on:
             if self._is_dhw_start_rate_limited(now_time):
                 return
+            # Not a boost the tank would finish inside its minimum run, which would then heat on
+            # past the target for the rest of it. A tank below the safety minimum is heated anyway.
+            needed = (
+                self.dhw_optimizer.estimate_heating_time(current_dhw_temp, decision.target_temp)
+                * 60
+            )
+            if needed < DHW_MIN_RUN_MINUTES and not decision.for_safety:
+                _LOGGER.debug(
+                    "DHW control: %s needs %.0f min of heating, under the %d-min minimum run - "
+                    "not starting",
+                    decision.priority_reason,
+                    needed,
+                    DHW_MIN_RUN_MINUTES,
+                )
+                return
 
             # Turn ON temporary lux to boost DHW
             _LOGGER.info(
@@ -2075,14 +2161,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # what lets the unload cleanup find it again. See _set_temporary_lux.
             if await self._set_temporary_lux(True):
                 self._last_dhw_control_time = now_time
+                self._lux_boost_started_at = now_time
 
+        elif not decision.should_heat and is_lux_on and in_minimum_run and not decision.for_safety:
+            _LOGGER.debug(
+                "DHW control: %s - keeping the boost to its %d-min minimum run",
+                decision.priority_reason,
+                DHW_MIN_RUN_MINUTES,
+            )
         elif not decision.should_heat and is_lux_on:
-            if self._service_boost_until is not None:
-                _LOGGER.debug(
-                    "User DHW boost active until %s - price optimization does not cancel it",
-                    self._service_boost_until,
-                )
-                return
             # Turn OFF temporary lux to block/stop DHW
             _LOGGER.info(
                 "DHW control: Deactivating temporary lux - %s (DHW: %.1f°C, DM: %.0f)",
@@ -2184,6 +2271,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     if not self._power_sensor_available:
                         self._power_sensor_available = True
                         _LOGGER.debug("External power sensor marked as available")
+                    if self._power_meter_silent:
+                        _LOGGER.info(
+                            "External power meter %s is reporting again (%.3f kW)",
+                            power_entity_id,
+                            current_power,
+                        )
+                        self._power_meter_silent = False
                 elif not self._power_sensor_available:
                     # Never seen alive - wait for the listener rather than tracking peaks on nothing
                     _LOGGER.debug(
@@ -2197,17 +2291,19 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 else:
                     # It has answered before and is not answering now. Everything below still runs -
                     # the decision layers need SOME power figure - but the source stays unbillable,
-                    # so nothing invented here reaches the tariff record, and a silence longer than
-                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole hour rather than billing
-                    # a stale reading stretched across it.
-                    _LOGGER.warning(
-                        "External power meter %s did not yield a reading (state: %s). This cycle is "
-                        "not billable, and if the silence exceeds %d minutes the whole hour is "
-                        "refused rather than billed on a stale reading.",
+                    # so nothing invented here reaches the tariff record, and an outage longer than
+                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole period rather than
+                    # billing a stale reading stretched across it. Reported when the outage begins
+                    # and when it ends, not on every cycle it lasts.
+                    (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
+                        "External power meter %s is not reporting (state %s). This cycle is not "
+                        "billable, and an outage longer than %d minutes refuses the whole billing "
+                        "period rather than billing a stale reading.",
                         power_entity_id,
                         power_state.state if power_state else "None",
                         MAX_BILLING_OBSERVATION_GAP_MINUTES,
                     )
+                    self._power_meter_silent = True
 
             # PRIORITY 2: NIBE phase currents (NIBE heat pump only - for reference/debugging)
             # Calculates real NIBE power from BE1/BE2/BE3 current sensors
@@ -2254,11 +2350,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 outdoor_temp = getattr(nibe_data, "outdoor_temp", 0.0)
                 current_power = self.effect.estimate_power_consumption(is_heating, outdoor_temp)
                 power_source = POWER_SOURCE_ESTIMATE
-                _LOGGER.warning(
+                # Reported once: on an install with no meter it is every cycle the compressor stands
+                # still, and a meter outage has already been reported above. A real measurement
+                # (the meter, or the pump's phase currents) re-arms it.
+                quiet = self._power_meter_silent or self._power_fallback_reported
+                (_LOGGER.debug if quiet else _LOGGER.warning)(
                     "⚠️  Power estimation fallback: %.2f kW (no real data available) "
                     "[ESTIMATE ONLY - not used for peak billing]",
                     current_power,
                 )
+                self._power_fallback_reported = True
+            elif power_source in (POWER_SOURCE_EXTERNAL_METER, POWER_SOURCE_NIBE_CURRENTS):
+                self._power_fallback_reported = False
 
             # Do NOT override a low meter reading with a compressor-draw estimate on the assumption
             # that solar is masking grid import. The grid bills grid IMPORT, which is exactly what
@@ -2340,11 +2443,6 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:
-                # The HIGHEST of the tracked peaks, never peak_event.effective_power:
-                # record_period_measurement returns an event for ANY new entry while the top-3
-                # list is still filling, so a 6.0 kW peak followed by a 2.0 kW hour would drop the
-                # monthly peak to 2.0 and weaken the threshold for the rest of the month.
-                self.peak_this_month = self.effect.get_monthly_peak_summary()["highest"]
                 _LOGGER.info("New monthly peak: %.2f kW", self.peak_this_month)
 
         except (AttributeError, KeyError, ValueError, TypeError) as err:
@@ -2469,7 +2567,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
     async def async_start_dhw_boost(self, duration_minutes: int, now_time: datetime) -> None:
         """Start a user-commanded hot-water boost that price optimization may not cancel.
 
-        Only safety outranks the user: the thermal-debt abort still stops it, and so does
+        Only safety outranks the user: `hot_water_unsafe_reason` refuses the boost here, on the
+        last reading, and stops it on any later cycle (_end_user_dhw_boost_when_due); so does
         unload. The duration is real - EffektGuard turns the switch back off when it expires,
         through the same owned door the cleanup uses - so the service argument means what it
         says instead of being validated and discarded. NIBE's own lux timeout still applies
@@ -2479,6 +2578,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError(
                 "EffektGuard is OFF. Turn optimization on before boosting hot water."
             )
+
+        # Refused by the rule that would stop it on the next cycle, or it is a five-minute pulse.
+        # No reading yet (start-up): the first cycle with one judges it.
+        nibe = self.data.get("nibe") if self.data else None
+        unsafe = (
+            self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
+            if nibe is not None
+            else None
+        )
+        if unsafe:
+            raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
 
         if not await self._set_temporary_lux(True):
             raise HomeAssistantError(
@@ -2659,6 +2769,18 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         _LOGGER.info("Configuration updated without reload - changes apply on next cycle")
 
     @property
+    def peak_this_month(self) -> float:
+        """The month's highest peak, as the EffectManager holds it - the record, not a copy.
+
+        The HIGHEST of the tracked peaks: `record_period_measurement` returns an event for any new
+        entry while the top three fill, so a 6.0 kW peak followed by a 2.0 kW period is still 6.0.
+        A copy kept here drifted from the record: `reset_peak_tracking` cleared the store and left
+        the old peak shown and defended, and the sensor restored last month's peak into it after a
+        restart in a new month.
+        """
+        return self.effect.get_monthly_peak_summary()["highest"]
+
+    @property
     def current_peak(self) -> float:
         """Return current monthly peak power consumption.
 
@@ -2812,6 +2934,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if dhw_state:
                     learned_data["dhw_state"] = dhw_state
 
+            # Where the pump runs short of capacity: a restart must not forget a cold spell, nor
+            # where the pump starts its heater
+            learned_data["capacity_shortfall"] = self.engine.capacity_shortfall.to_dict()
+            learned_data["heater_start"] = self.engine.heater_start.to_dict()
+
             await self.learning_store.async_save(learned_data)
             _LOGGER.debug("Saved learned data to storage")
 
@@ -2891,24 +3018,28 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         Called when Legionella boost is detected to persist across reboots.
         Critical for safety - ensures we don't lose track of last boost time.
+
+        The whole state, as the hourly save writes it: a hand-built dict of the boost time alone
+        replaced the stored learned heating rate, which a restart before the next hourly save lost.
         """
         try:
             # Load existing learning data to preserve other modules
             existing_data = await self.learning_store.async_load() or {}
 
             # Update DHW state
-            if self.dhw_optimizer and self.dhw_optimizer.last_legionella_boost:
-                existing_data["dhw_state"] = {
-                    "last_legionella_boost": self.dhw_optimizer.last_legionella_boost.isoformat()
-                }
+            if self.dhw_optimizer and (
+                self.dhw_optimizer.last_legionella_boost or self.dhw_optimizer.last_hygiene_fallback
+            ):
+                existing_data["dhw_state"] = self.dhw_optimizer.get_dhw_state_for_persistence()
                 existing_data["last_updated"] = dt_util.utcnow().isoformat()
                 existing_data["version"] = existing_data.get("version", LEARNING_STORAGE_VERSION)
 
                 await self.learning_store.async_save(existing_data)
 
                 _LOGGER.debug(
-                    "Saved DHW state: last Legionella boost at %s",
+                    "Saved DHW state: last high-temperature cycle at %s, hygiene fallback at %s",
                     self.dhw_optimizer.last_legionella_boost,
+                    self.dhw_optimizer.last_hygiene_fallback,
                 )
             else:
                 _LOGGER.debug("No DHW state to save")

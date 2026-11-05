@@ -69,6 +69,7 @@
           "power_sensor_entity": "Tehomittarianturi",
           "nibe_temp_lux_entity": "Tilapäinen luksus-kytkin (lämmin vesi)",
           "additional_indoor_sensors": "Lisäsisälämpötila-anturit",
+          "indoor_temp_method": "Sisälämpötilan laskentatapa",
           "outdoor_temp_entity": "Ohita: ulkolämpötila (BT1)",
           "indoor_temp_entity": "Ohita: sisälämpötila (BT50/huoneanturi)",
           "supply_temp_entity": "Ohita: menoveden lämpötila (BT2/BT25)",
@@ -83,7 +84,6 @@
       "gespot_entity_not_found": "Spot-hinta-yksikköä ei löytynyt"
     },
     "abort": {
-      "nibe_not_found": "NIBE-integraatiota ei löytynyt. Asenna ja määritä ensin MyUplink (pilvi) tai nibe_heatpump (paikallinen Modbus/NibeGW).",
       "reconfigure_successful": "Uudelleenmääritys onnistui"
     }
   },
@@ -250,13 +250,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Pakota lämpökäyrän siirtymä",
+      "description": "Ohita lämpökäyrän siirtymä käsin tilapäisesti",
+      "fields": {
+        "offset": {
+          "name": "Siirtymä",
+          "description": "Käytettävä lämpökäyrän siirtymä (välillä -10 ja +10°C)"
+        },
+        "duration": {
+          "name": "Kesto",
+          "description": "Kuinka kauan ohitus on voimassa (minuuttia, 0 = seuraavaan optimointikierrokseen asti)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nollaa huipputehojen seuranta",
+      "description": "Nollaa kuukauden huipputehojen seuranta (käytetään uuden laskutuskauden alkaessa)"
+    },
     "boost_heating": {
       "name": "Tehosta lämmitystä",
-      "description": "Lisää väliaikaisesti lämmitystä nopeaa mukavuutta varten"
+      "description": "Maksimoi lämmitys tilapäisesti kustannuksista riippumatta (mukavuuden hätätila)",
+      "fields": {
+        "duration": {
+          "name": "Kesto",
+          "description": "Tehostuksen kesto (minuuttia)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Tehosta lämmintä vettä",
-      "description": "Käynnistä välitön lämpimän veden kierros"
+      "description": "Käynnistä välitön lämpimän veden tehostus NIBEn tilapäisellä luksuksella. Pumppu lämmittää omaan luksuslämpötilaansa; EffektGuard pitää tehostuksen käynnissä pyydetyn ajan ja kytkee sen sitten pois. Hintaoptimointi ei keskeytä sitä; vain turvapysäytys keskeyttää - asteminuutit lisälämmön rajalla tai talo alle turvarajansa, mikä myös estää tehostuksen.",
+      "fields": {
+        "duration": {
+          "name": "Kesto",
+          "description": "Kuinka kauan tehostus saa kestää ennen kuin EffektGuard kytkee sen pois (minuuttia)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Laske optimaalinen aikataulu",
+      "description": "Esikatsele optimointiaikataulua seuraaville 24 tunnille nykyisten olosuhteiden perusteella"
     }
   },
   "issues": {
@@ -267,6 +301,15 @@
     "no_dhw_control_entity": {
       "title": "Lämpimän veden ohjausentiteettiä ei löytynyt",
       "description": "EffektGuard ohjaa lämmintä vettä kytkemällä NIBEn väliaikaisen luksuksen päälle ja pois, eikä sille ole määritetty entiteettiä - lämpimän veden optimointi EI ole käynnissä, eikä sensorien näyttämä ajastettu ajo toteudu. MyUplink tarjoaa väliaikaisen luksuksen kytkimen F-sarjan lämpöpumpuille (parametri 50004). F-sarjan, SMO- ja VVM-pumpuilla paikallinen nibe_heatpump-integraatio tuo sen sijaan Temporary Lux -rekisterin (48132) esiin select-entiteettinä, jota EffektGuard ei voi ohjata suoraan: luo input_boolean-apuri ja automaatio, joka asettaa select-entiteetin arvoon \"ONE TIME INCREASE\", kun apuri kytkeytyy päälle, ja arvoon \"OFF\", kun se kytkeytyy pois. S-sarjan pumpuille nibe_heatpump ei tarjoa väliaikaisen luksuksen rekisteriä. Valitse kytkin tai apuri uudelleenmäärityksessä. Lämmityksen optimointiin tämä ei vaikuta."
+    }
+  },
+  "selector": {
+    "indoor_temp_method": {
+      "options": {
+        "interquartile_mean": "Kvartiilivälin keskiarvo (suositeltu)",
+        "median": "Mediaani",
+        "average": "Keskiarvo"
+      }
     }
   }
 }

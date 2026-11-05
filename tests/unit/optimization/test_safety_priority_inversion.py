@@ -311,9 +311,9 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
         decision = self._layer().evaluate_layer(
             nibe_state=self._state(degree_minutes=DM_THRESHOLD_AUX_LIMIT - 50, indoor_temp=21.3),
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.2,  # production default: tolerance 0.5 * 0.4
+            room_floor=21.0,
         )
 
         assert decision.tier != "EMERGENCY", (
@@ -340,9 +340,9 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
                 current_offset=1.0,
             ),
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.2,
+            room_floor=21.0,
         )
 
         assert decision.tier == "EMERGENCY", (

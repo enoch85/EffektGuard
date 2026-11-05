@@ -104,9 +104,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Should apply standard damping (0.6)
@@ -141,9 +141,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR = 7.0 * 0.4 = 2.8
@@ -181,9 +181,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Full offset, no damping
@@ -219,9 +219,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # No damping (safety: fighting cold spell)
@@ -254,9 +254,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # No damping (insufficient confidence)
@@ -295,9 +295,9 @@ class TestDampingConditions:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=cold_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # No damping (cold weather coming, need to prepare!)
@@ -334,9 +334,9 @@ class TestTierSpecificBehavior:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Should be >= T1 minimum
@@ -370,9 +370,9 @@ class TestTierSpecificBehavior:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Even with damping, should be >= T3 minimum (2.0°C)
@@ -415,9 +415,9 @@ class TestRealWorldScenario:
         night_decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=night_state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # MORNING: Solar gain warming
@@ -443,9 +443,9 @@ class TestRealWorldScenario:
         morning_decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=morning_state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Verify transition
@@ -495,9 +495,9 @@ class TestEdgeCases:
         decision = engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=engine.target_temp,
             tolerance_range=engine.tolerance_range,
+            room_floor=engine.target_temp,
         )
 
         # Should use full offset (safe fallback)
@@ -530,9 +530,9 @@ class TestEdgeCases:
         decision = decision_engine.emergency_layer.evaluate_layer(
             nibe_state=state,
             weather_data=stable_weather_forecast,
-            price_data=None,
             target_temp=decision_engine.target_temp,
             tolerance_range=decision_engine.tolerance_range,
+            room_floor=decision_engine.target_temp,
         )
 
         # Should apply damping (>= threshold)

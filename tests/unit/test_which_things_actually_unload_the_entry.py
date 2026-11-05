@@ -6,8 +6,11 @@ stays loaded, so the shutdown guards must NOT fire on it and the entities must b
 
 What DOES unload the entry: the reconfigure flow (changing entity selections - power meter, weather,
 pump model), which ends in `async_update_reload_and_abort` and schedules a full reload; plus manual
-reload, removal, and restart. The reconfigure case is exactly when a stray write from the old
-coordinator would land, which is the defect the shutdown guards close.
+reload and removal. A restart does not - Home Assistant stops without unloading entries - so the
+coordinator's shutdown also runs from a stop listener
+(tests/unit/test_a_restart_runs_the_shutdown_an_unload_runs.py). The reconfigure case is exactly
+when a stray write from the old coordinator would land, which is the defect the shutdown guards
+close.
 """
 
 from __future__ import annotations

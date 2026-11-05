@@ -51,7 +51,7 @@ PUMP = {"sensor.bt1": ("-3.0", FRESH), "sensor.bt2": ("35.0", FRESH), "sensor.dm
 
 
 @pytest.mark.asyncio
-async def test_a_quiet_room_thermometer_stays_in_the_median():
+async def test_a_quiet_room_thermometer_stays_in_the_reading():
     adapter = _adapter(
         {
             **PUMP,
@@ -63,7 +63,9 @@ async def test_a_quiet_room_thermometer_stays_in_the_median():
 
     state = await adapter.get_current_state()
 
-    assert state.indoor_temp == pytest.approx(21.0), "median of 21.0, 20.0 and 23.0"
+    assert state.indoor_temp == pytest.approx(
+        (21.0 + 20.0 + 23.0) / 3
+    ), "21.0, 20.0 and 23.0: the interquartile mean of three sensors is their mean"
 
 
 @pytest.mark.asyncio

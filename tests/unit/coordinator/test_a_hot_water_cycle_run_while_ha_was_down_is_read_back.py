@@ -60,6 +60,7 @@ def _coordinator() -> EffektGuardCoordinator:
     )
     effect = MagicMock()
     effect.async_save = AsyncMock()
+    effect.get_monthly_peak_summary.return_value = {"count": 0, "highest": 0.0}
     coordinator = EffektGuardCoordinator(
         hass=create_mock_hass(),
         nibe_adapter=nibe,

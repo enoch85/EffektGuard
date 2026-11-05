@@ -7,7 +7,8 @@ off space heating while thermal debt deepens ("DHW during heating demand"). The 
 rescue it either: every should_heat=False return carries an empty abort_conditions list.
 
 Stopping an EffektGuard lux boost cannot harm the pump (NIBE's own schedule is untouched), so STARTS
-stay rate-limited to bound oscillation while STOPS are always allowed.
+stay rate-limited to bound oscillation while STOPS are always allowed. The boost's minimum run
+(DHW_MIN_RUN_MINUTES) does not defer them either: these are refusals for the house.
 """
 
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ import pytest
 
 from custom_components.effektguard.const import DHW_CONTROL_MIN_INTERVAL_MINUTES
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 
 LUX_ENTITY = "switch.temporary_lux_50004"
 NOW = datetime(2026, 1, 15, 3, 5)
@@ -35,6 +37,8 @@ class FakeDHWDecision:
     # Every should_heat=False return in should_start_dhw() sets this to []. That is
     # precisely why the abort branch cannot rescue us and the limiter had to be fixed.
     abort_conditions: list[str] = field(default_factory=list)
+    target_temp: float = 50.0
+    for_safety: bool = False
 
 
 def make_coordinator(lux_is_on: bool, last_control_time: datetime | None):
@@ -69,6 +73,9 @@ def make_coordinator(lux_is_on: bool, last_control_time: datetime | None):
     coordinator._shutdown_requested = False
     # Same for the user-boost window: None means "no service boost", an auto-mock means chaos.
     coordinator._service_boost_until = None
+    # A running boost is EffektGuard's, started at the last control action - inside its minimum run.
+    coordinator._lux_boost_started_at = last_control_time if lux_is_on else None
+    coordinator.dhw_optimizer = IntelligentDHWScheduler()
     coordinator._set_temporary_lux = lambda on: EffektGuardCoordinator._set_temporary_lux(
         coordinator, on
     )
@@ -96,7 +103,9 @@ class TestSafetyStopIsNotRateLimited:
 
         await apply(
             coordinator,
-            FakeDHWDecision(should_heat=False, priority_reason="CRITICAL_THERMAL_DEBT"),
+            FakeDHWDecision(
+                should_heat=False, priority_reason="CRITICAL_THERMAL_DEBT", for_safety=True
+            ),
         )
 
         assert "turn_off" in switch_calls(coordinator), (
@@ -118,6 +127,7 @@ class TestSafetyStopIsNotRateLimited:
             should_heat=False,
             priority_reason="SPACE_HEATING_EMERGENCY",
             abort_conditions=[],
+            for_safety=True,
         )
         await apply(coordinator, decision)
 

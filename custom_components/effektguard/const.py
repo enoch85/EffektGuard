@@ -26,7 +26,7 @@ CONF_NIBE_TEMP_LUX_ENTITY: Final = "nibe_temp_lux_entity"  # Optional: switch.te
 CONF_ADDITIONAL_INDOOR_SENSORS: Final = (
     "additional_indoor_sensors"  # Optional: List of extra temp sensors
 )
-CONF_INDOOR_TEMP_METHOD: Final = "indoor_temp_method"  # average, median, weighted
+CONF_INDOOR_TEMP_METHOD: Final = "indoor_temp_method"  # one of INDOOR_TEMP_METHODS
 CONF_ENABLE_PRICE_OPTIMIZATION: Final = "enable_price_optimization"
 CONF_ENABLE_PEAK_PROTECTION: Final = "enable_peak_protection"
 CONF_ENABLE_WEATHER_PREDICTION: Final = "enable_weather_prediction"
@@ -48,7 +48,31 @@ DEFAULT_INSULATION_QUALITY: Final = 1.0
 DEFAULT_HEAT_PUMP_MODEL: Final = "nibe_f750"  # Most common model
 DEFAULT_OPTIMIZATION_MODE: Final = "balanced"
 DEFAULT_WEATHER_COMPENSATION_WEIGHT: Final = 0.49  # User-configurable weight (matches layer weight)
-DEFAULT_INDOOR_TEMP_METHOD: Final = "median"  # median more robust to outliers than average
+# How the room sensors (BT50 and any extra ones) become one indoor temperature.
+#
+# The median follows one sensor at a time: when a sensor in the middle moves, or one crosses the
+# middle, the reading moves with it - the owner's nine sensors made it jump 0.3-0.6 °C with no room
+# changing, and the comfort ramp turned each jump into -2..-5 °C on the offset. The interquartile
+# mean drops the lowest and highest quarter of the sensors and averages the rest, so no single
+# sensor moves it by more than a fraction of its own change, and an outlier room is still left out.
+# On v0.7.0's 3.6 days in production (open-loop replay, every layer computed) it took the pump from
+# 19.6 to 15.1 writes a day and from 8.1 to 6.2 reversals, at the same mean temperature (-0.02 °C).
+INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN: Final = "interquartile_mean"
+INDOOR_TEMP_METHOD_MEDIAN: Final = "median"
+INDOOR_TEMP_METHOD_AVERAGE: Final = "average"
+INDOOR_TEMP_METHODS: Final = (
+    INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN,
+    INDOOR_TEMP_METHOD_MEDIAN,
+    INDOOR_TEMP_METHOD_AVERAGE,
+)
+DEFAULT_INDOOR_TEMP_METHOD: Final = INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN
+# The config entry version. Minor 2: the median the setup stored by default became the
+# interquartile mean (async_migrate_entry).
+CONFIG_ENTRY_VERSION: Final = 1
+CONFIG_ENTRY_MINOR_VERSION: Final = 2
+# The share of sensors the interquartile mean drops at EACH end, rounded down: none of three, one of
+# four to seven, two of the owner's nine.
+INDOOR_SENSOR_TRIM_FRACTION: Final = 0.25
 DEFAULT_DHW_TARGET_TEMP: Final = 50.0  # °C - Default DHW target temperature
 DEFAULT_DHW_MORNING_HOUR: Final = 7  # Default morning DHW availability hour (07:00)
 DEFAULT_DHW_EVENING_HOUR: Final = 18  # Default evening DHW availability hour (18:00)
@@ -90,42 +114,51 @@ class OptimizationModeConfig:
     - dead_zone: Temperature band around target where no action is taken
     - comfort_weight_multiplier: Scales comfort layer influence (higher = comfort wins more)
     - price_tolerance_multiplier: Scales price layer effect (higher = more aggressive)
-    - peak_bypass_tolerance: If True, PEAK ignores tolerance scaling (always full reduction)
     - preheat_overshoot_allowed: How much overshoot to accept during pre-heating (°C)
+    - room_floor_below_target: How far below the target the room may go before the mode buys
+      heat for it - the degree-minute ladder's raises and the pump's immersion heater (°C)
     """
 
     dead_zone: float  # °C - no action within this range
     comfort_weight_multiplier: float  # Scales comfort layer weight
     price_tolerance_multiplier: float  # Scales price layer tolerance factor
-    peak_bypass_tolerance: bool  # PEAK always uses full offset
     preheat_overshoot_allowed: float  # °C - acceptable overshoot during cheap pre-heat
+    room_floor_below_target: float  # °C - the room's floor, below the target
 
 
 # Mode configurations - these define the behavior philosophy
 # Comfort: Rock-solid temperature, price is secondary
 # Balanced: Smart trade-offs between comfort and savings
 # Savings: Maximum savings, temperature can drift more
+#
+# The room's floor is the owner's decision of 2026-10-29: comfort "should always try to be AT the
+# set degree" (above is fine), balanced sits "like 0.2 degrees" below it to save more, and savings
+# "is allowed to cut below the set degree within reasonable limits" - the owner asked whether 1-2 C
+# is reasonable. A degree for savings, closed loop on the owner's F750 + slab, four plant fits, Oct
+# 18 - Apr 30, per season: the room 0.76 C above the 21 C target on average, 30.5 hours below 20.5 C,
+# at its coldest 19.6 C (the heater guard reading the start the pump has shown, THE HEATER START; on
+# the F750 profile's factory -700, 0.62 C, 103 hours and 18.7 C).
 MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
     OPTIMIZATION_MODE_COMFORT: OptimizationModeConfig(
         dead_zone=0.1,  # Tighter: react faster to any deviation
         comfort_weight_multiplier=1.3,  # Comfort layer wins more often
         price_tolerance_multiplier=0.7,  # Reduce price layer effect
-        peak_bypass_tolerance=False,  # Respect tolerance even during PEAK
         preheat_overshoot_allowed=0.3,  # Minimal overshoot accepted
+        room_floor_below_target=0.0,  # At the target
     ),
     OPTIMIZATION_MODE_BALANCED: OptimizationModeConfig(
         dead_zone=0.2,  # Standard dead zone
         comfort_weight_multiplier=1.0,  # Normal comfort influence
         price_tolerance_multiplier=1.0,  # Normal price effect
-        peak_bypass_tolerance=False,  # Respect tolerance setting
         preheat_overshoot_allowed=0.5,  # Moderate overshoot OK
+        room_floor_below_target=0.2,  # A little below, to save more
     ),
     OPTIMIZATION_MODE_SAVINGS: OptimizationModeConfig(
         dead_zone=0.3,  # Wider: ignore small deviations
         comfort_weight_multiplier=0.7,  # Price wins more often
         price_tolerance_multiplier=1.3,  # Amplify price effect
-        peak_bypass_tolerance=True,  # PEAK always full reduction
         preheat_overshoot_allowed=1.0,  # Accept more overshoot for savings
+        room_floor_below_target=1.0,  # A degree below
     ),
 }
 
@@ -166,6 +199,11 @@ DHW_BOOST_DEFAULT_DURATION_MINUTES: Final = 90
 DHW_BOOST_MIN_DURATION_MINUTES: Final = 30
 DHW_BOOST_MAX_DURATION_MINUTES: Final = 180
 DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
+# The shortest hot-water boost EffektGuard runs: it does not start one the tank would finish sooner,
+# and only safety ends one sooner. Each boost runs the compressor near full speed, and short runs
+# wear the pump; 19 of the 52 temporary-lux runs on the owner's F750, 8-21 October 2026, lasted
+# under 11 minutes (production history). The owner's choice, 2026-10-23.
+DHW_MIN_RUN_MINUTES: Final = 15
 SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 
 # DHW/Weather layer cooldown (Dec 19, 2025)
@@ -395,30 +433,6 @@ THERMAL_RECOVERY_FORECAST_HORIZON: Final = (
 THERMAL_RECOVERY_FORECAST_DROP_THRESHOLD: Final = (
     -2.0  # Temperature drop (°C) that blocks damping (significant cold incoming)
 )
-
-# Overshoot-Aware Damping (Oct 23, 2025)
-# ============================================================================
-# Context: v0.1.0 showed DM recovery caused indoor 23.6°C vs target 21.5°C
-#          (2.1°C overshoot during STRONG RECOVERY tier)
-#
-# Problem: Traditional damping only considers warming rate, not absolute error
-#          Large overshoot = need stronger damping regardless of warming rate
-#
-# Solution: Overshoot severity multiplies with warming damping
-#          Example: 2.0°C overshoot (severe) + rapid warming (0.4) = 0.8 × 0.4 = 0.32
-#                   Final offset = base_offset × 0.32 (68% reduction for safety)
-#
-# Thresholds:
-#   Severe ≥1.5°C: 80% strength (0.8 multiplier, strong reduction)
-#   Moderate ≥1.0°C: 90% strength (0.9 multiplier, moderate reduction)
-#   Mild ≥0.5°C: 95% strength (0.95 multiplier, gentle reduction)
-#   <0.5°C: 100% strength (no overshoot penalty)
-THERMAL_RECOVERY_OVERSHOOT_SEVERE_THRESHOLD: Final = 1.5  # °C over target (severe)
-THERMAL_RECOVERY_OVERSHOOT_MODERATE_THRESHOLD: Final = 1.0  # °C over target (moderate)
-THERMAL_RECOVERY_OVERSHOOT_MILD_THRESHOLD: Final = 0.5  # °C over target (mild)
-THERMAL_RECOVERY_OVERSHOOT_SEVERE_DAMPING: Final = 0.8  # Multiplier for severe overshoot
-THERMAL_RECOVERY_OVERSHOOT_MODERATE_DAMPING: Final = 0.9  # Multiplier for moderate overshoot
-THERMAL_RECOVERY_OVERSHOOT_MILD_DAMPING: Final = 0.95  # Multiplier for mild overshoot
 
 # Tier-specific minimum offsets after damping (safety floors)
 # Each tier has appropriate minimum to maintain recovery progress
@@ -674,13 +688,6 @@ PROACTIVE_ZONE4_WEIGHT: Final = 0.55  # Strong weight (below WARNING)
 PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNING)
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
-# Warm house weight reduction (Dec 10, 2025): above target + threshold the proactive zones vote at
-# reduced weight. DM can be negative in a warm house because the heat is being cut; that is not a
-# shortfall to boost against while the comfort layer is lowering the heat.
-# Z5 exemption: At warning boundary, prioritize DM recovery over temperature
-PROACTIVE_WARM_HOUSE_THRESHOLD: Final = 0.5  # °C above target to consider "warm"
-PROACTIVE_WARM_HOUSE_WEIGHT_REDUCTION: Final = 0.3  # Apply 30% of normal weight when warm
-
 # Overshoot protection (comfort_layer.py): above its band the comfort layer ramps from the in-band
 # correction at the band edge to a full coast - OVERSHOOT_PROTECTION_OFFSET_MAX at
 # LAYER_WEIGHT_COMFORT_CRITICAL - at OVERSHOOT_PROTECTION_FULL, and reads no prices. It replaces
@@ -705,6 +712,14 @@ RAPID_COOLING_OUTDOOR_THRESHOLD: Final = 0.0  # Cold weather threshold for boost
 # Source: DUPLICATE_CONSTANTS_ANALYSIS.md - 78% duplicate reduction
 THERMAL_CHANGE_MODERATE: Final = 0.3  # °C or °C/h - moderate temperature change threshold
 THERMAL_CHANGE_MODERATE_COOLING: Final = -0.2  # °C/h - moderate cooling rate threshold
+# The compressor wear guard's cooling share. The slowest cooling the predictor's two-hour slope can
+# show is one BT50 tick (0.1 °C) over the window, and a steady room's slope flips between -0.05, 0
+# and +0.05 °C/h on that tick alone: no share there. Two ticks - a room 0.2 °C down in two hours,
+# the case #45 gave the whole raise - get the whole raise. Between, a share in proportion. Ramped
+# to THERMAL_CHANGE_MODERATE_COOLING instead, the closed loop spent 275 more minutes below the band
+# (balanced and comfort) for 8 % less immersion heat; to two ticks, 65 minutes for 4 %.
+WEAR_GUARD_STEADY_ROOM_RATE: Final = -0.05  # °C/h - one tick over two hours
+WEAR_GUARD_COOLING_RATE: Final = 2 * WEAR_GUARD_STEADY_ROOM_RATE  # °C/h - two ticks
 
 # Consolidated multipliers (Oct 19, 2025 - Deduplication)
 # Standard multipliers used across multiple contexts for consistency
@@ -881,6 +896,15 @@ PRICE_OFFSET_NORMAL: Final = 0.0  # °C - maintain current heating
 PRICE_OFFSET_EXPENSIVE: Final = -1.0  # °C - conserve, reduce heating
 PRICE_OFFSET_PEAK: Final = MIN_OFFSET  # Maximum reduction (coast through expensive period)
 PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE during daytime (06:00-22:00)
+# The deepest cut the price layer votes, whatever the class, the slider and the mode. A deeper cut
+# stops the compressor instead of slowing it, the slab drains, and the heat comes back later from
+# the immersion heater or not at all. Closed loop on the owner's F750 + slab (slider 1.2, target
+# 21 C), four plant fits, Oct 18 2025 - Apr 30 2026, per season against no limit: heating cost
+# comfort 4778 -> 4766 SEK, balanced 4812 -> 4769, savings 5012 -> 4772; immersion heat 304 -> 274,
+# 374 -> 276, 637 -> 278 kWh; hours below 20.5 C 30 -> 21, 54 -> 20, 107 -> 17. In PEAK quarters
+# (balanced) the compressor stood still 44 % of the time before, 33 % after. Balanced at -1 cost
+# 4802 SEK, at -3 4779.
+PRICE_OFFSET_DEEPEST_CUT: Final = -2.0
 
 # Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
 # Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
@@ -1048,6 +1072,12 @@ PEAK_RECORDING_MAXIMUM: Final = 100.0  # kW - beyond any domestic main fuse; a s
 UPDATE_INTERVAL_MINUTES: Final = (
     5  # Coordinator update frequency + thermal predictor save throttle interval
 )
+# A control cycle that cannot read the heat pump runs once more this much later before the failure
+# is shown. Home Assistant's myuplink integration polls every 60 s with a 10 s timeout
+# (homeassistant/components/myuplink/coordinator.py, 2026.10), so its next poll has ended by then.
+# Owner's production 2026-10-14 to 10-24: 11 cycles could not read the pump, and in 6 of them the
+# readings were back 70 s later.
+HEAT_PUMP_READ_RETRY_SECONDS: Final = 70
 # The SPOT PRICE interval. Nordpool settles in quarter-hours, and this is that. It is a DIFFERENT
 # concern from the effect tariff's measurement window (BILLING_PERIOD_MINUTES) even though the
 # owner's tariff measures over the same 15-minute quarter: one is what electricity costs, the other
@@ -1074,8 +1104,9 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
 #
 # 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
-# less often than this cannot support five-minute heat-pump control anyway, and nothing that works
-# today can be broken by the guard. (Audit F-015.)
+# less often than this cannot support five-minute heat-pump control anyway. (Audit F-015.) It
+# guards the readings that drive the pump. The room thermometers and the offset register are read
+# without it: they report only when their value changes, so silence there is a steady value.
 NIBE_READING_MAX_AGE_MINUTES: Final = 30
 
 STARTUP_MAX_GRACE_ATTEMPTS: Final = 12  # cycles (~1 hour) before a missing pump is an error
@@ -1227,31 +1258,31 @@ DHW_READY_THRESHOLD: Final = (
 DHW_LEGIONELLA_DETECT: Final = 55.0
 """°C on BT7 taken as evidence that a high-temperature cycle occurred.
 
-Unsound as proof that OUR boost completed; kept only as a best-effort observation of NIBE's
-own periodic increase:
+A best-effort observation of NIBE's own periodic increase:
   - BT7 is "hot water, DISPLAY"; BT6 is "hot water, CONTROL". Every setpoint acts on BT6.
   - On F1155 / S1155, BT7 is OPTIONAL and may not physically exist.
-  - Temporary lux stops at 53-54 C on BT6, so it will not reach this threshold.
+  - On the owner's F750 the periodic increase reaches 56.2-56.3 C on BT7, and a temporary-lux run
+    54.3-55.3 C (54.3-54.9 on BT6) - so a lux run is seen as a cycle only sometimes; the hygiene
+    fallback counts its own run without it (dhw_optimizer RULE 2.3).
 """
 
 DHW_LEGIONELLA_PREVENT_TEMP: Final = 56.0
-"""°C - target requested for the opportunistic high-temperature top-up.
+"""°C - target the hygiene fallback (RULE 2.3) reports.
 
 NEVER ACTUALLY WRITTEN TO NIBE: the only DHW actuator is the temporary-lux switch, and the
 pump heats to ITS OWN configured lux stop temperature, not to this value.
 """
 
-# Days without any observed high-temperature cycle after which EffektGuard warns the user.
-# NIBE's periodic increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory, so
-# going well beyond that suggests it has been switched off on the pump. DIAGNOSTIC ONLY -
-# we warn, we do not attempt to substitute for the function (we cannot: see above).
+# Days without any observed high-temperature cycle after which EffektGuard warns the user and runs
+# its hygiene fallback (one temporary-lux run, then again after as many days). NIBE's periodic
+# increase runs every DHW_LEGIONELLA_MAX_DAYS (14) from the factory - every 14-17 days on the
+# owner's F750 - so going well beyond that suggests it has been switched off on the pump.
 DHW_LEGIONELLA_OVERDUE_DAYS: Final = 21.0
 DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle (hygiene)
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
 DHW_SCHEDULED_WINDOW_HOURS: Final = 6  # Hours before target time when scheduling becomes active
-DHW_MAX_WAIT_HOURS: Final = 36.0  # Max hours between DHW heating (hygiene/comfort)
 
 # DHW amount-based scheduling (minutes of hot water available)
 # Schedule time = when water should be AVAILABLE (ready), not when heating starts
@@ -1501,8 +1532,14 @@ NIBE_DEFAULT_SUPPLY_TEMP: Final = 35.0  # °C - Default supply/flow temp when se
 #
 # These bands are applied AFTER unit conversion to °C. They are deliberately wide: their job is to
 # catch a value that cannot be a temperature at all, not to second-guess a working sensor.
-INDOOR_SENSOR_PLAUSIBLE_MIN: Final = 15.0
+#
+# Indoor, the deci-degree mistake goes both ways. A missing scale reads a room ten times too warm,
+# above the maximum; a scale applied twice reads it a tenth, and a room no warmer than the maximum
+# then reads no more than the minimum. Anything between is a room, however cold - and a cold room is
+# the one the 18 C safety floor exists for. NIBE's Modbus registers hold tenths of a degree.
+NIBE_DECI_DEGREE_FACTOR: Final = 10
 INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
+INDOOR_SENSOR_PLAUSIBLE_MIN: Final = INDOOR_SENSOR_PLAUSIBLE_MAX / NIBE_DECI_DEGREE_FACTOR
 
 # Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
 # habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
@@ -1587,6 +1624,10 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "phase2_current": ["current_be2", "_be2", "phase_2_current", "40081"],
     "phase3_current": ["current_be3", "_be3", "phase_3_current", "40079"],
     "dhw_amount": ["hot_water_amount", "hw_amount"],
+    # The immersion heater's power: MyUplink "Power internal add. heat", nibe_heatpump "Int. el.add.
+    # Power" (43084, F-series) and "Power internal additional heat" (31028, S-series). Not "Max int
+    # add. power" (47212) or "Immersion heater power, emergency mode" (43029): settings.
+    "heater_power": ["power_internal_add", "int_el_add_power", "43084", "31028"],
 }
 
 # Entity-id substrings that must never be matched by discovery
@@ -1682,6 +1723,7 @@ NIBE_PRIO_HOT_WATER_STATES: Final[frozenset[str]] = frozenset(
     {"hot water", "hot_water", "20", "20.0"}
 )
 NIBE_PRIO_HEATING_STATES: Final[frozenset[str]] = frozenset({"heat", "heating", "30", "30.0"})
+NIBE_PRIO_OFF_STATES: Final[frozenset[str]] = frozenset({"off", "10", "10.0"})
 
 # Compressor frequency above this means the compressor is running.
 # Used to derive is_heating when no parseable status entity exists
@@ -1826,6 +1868,72 @@ COMPRESSOR_RISK_OK: Final = "OK"
 # band of 3 Hz gives up 4-20 SEK and six hours of memory 4-15 SEK.
 COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
 COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
+
+# THE HEATER GUARD (DecisionEngine._limit_for_heater). While a measured room is at or above its
+# mode's floor it needs no heat, so the offset may not drive degree minutes to where the pump starts
+# its immersion heater: as the pump has shown it (THE HEATER START), until then the model profile's
+# factory aux_start_dm. From
+# HEATER_GUARD_ENGAGE_DM above that start DM may fall only toward the hold point
+# HEATER_GUARD_HOLD_DM above it, at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS per hour, and
+# must rise back from below it. The cap follows the supply both ways in whole offset steps of
+# DM_PER_HOUR_PER_OFFSET_STEP, judged on readings taken outside hot water at the register as it is
+# now, once they span HEATER_GUARD_MIN_SPAN_MINUTES; within HEATER_GUARD_FADE of the floor it hands
+# back to the layers. Closed loop on the owner's F750 + slab (slider 1.2, target 21 C), four plant
+# fits, Oct 18 2025 - Apr 30 2026, with the ladder's room floor and the capacity shortfall, per
+# season against PRICE_OFFSET_DEEPEST_CUT alone: heating cost comfort 4766 -> 4705 SEK, balanced
+# 4769 -> 4642, savings 4772 -> 4372, cheaper on every fit; immersion heat 274 -> 244, 276 -> 213,
+# 278 -> 43 kWh; offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143 - the guard reading the
+# F750 profile's -700 where the plant starts at the owner's -1450. ASSUMED the hold and engage depths
+# and the approach time.
+HEATER_GUARD_HOLD_DM: Final = 200.0  # DM above the heater start
+HEATER_GUARD_ENGAGE_DM: Final = 500.0  # DM above the heater start
+HEATER_GUARD_APPROACH_HOURS: Final = 2.0
+HEATER_GUARD_FADE: Final = 0.2  # °C above the room's floor
+HEATER_GUARD_MIN_SPAN_MINUTES: Final = 15
+# Degree minutes per hour that one offset step moves while the supply holds: DM integrates the gap
+# between the supply and S1 every minute, and one step moves S1 by the curve sensitivity.
+DM_PER_HOUR_PER_OFFSET_STEP: Final = DEFAULT_CURVE_SENSITIVITY * 60
+
+# THE CAPACITY SHORTFALL (utils/capacity_shortfall.py). A pump short of capacity at its own curve
+# holds its degree minutes at its heater start; a pump with capacity to spare only reaches it after
+# a cut of ours. Repository simulator, undersized_coldsnap_jan2024: the undersized F1155, S1155 and
+# F2040 kept DM within SHORTFALL_NEAR_HEATER_START_DM of their heater starts 78 / 65 / 83 % of the
+# time; the closed loop on the owner's F750 model 0.9-2.2 % (told its true start, -1450). Counting
+# only DM strictly past the start never saw the F1155 short - its heater holds DM AT the start - and
+# it burned 2.3 kWh more immersion heat than recorded. SHORTFALL_DWELL_MINUTES, on the same closed
+# loop told the true start: an hour flagged 10 % of winter cycles and cost 60 SEK that winter on one
+# fit (F3a, balanced); two and three hours 3.3-3.4 %, and three hours no autumn flag. ASSUMED
+# SHORTFALL_AFTER_CUT_HOURS, SHORTFALL_MEMORY_DAYS and SHORTFALL_FORECAST_HOURS; in the undersized
+# cold snap (F2040 minutes below the band / F1155 immersion kWh: 890 / 175.0 as set) three hours
+# after a cut gave 900 / 168.0, seven days of memory 950 for the F2040, and six or 24 forecast hours
+# 915 / 177.3 and 890 / 174.4. Not measured on the owner's model.
+SHORTFALL_NEAR_HEATER_START_DM: Final = 50.0  # DM above the heater start
+SHORTFALL_DWELL_MINUTES: Final = 180
+SHORTFALL_AFTER_CUT_HOURS: Final = 6
+SHORTFALL_MEMORY_DAYS: Final = 30
+SHORTFALL_FORECAST_HOURS: Final = 12
+
+# THE HEATER START (utils/heater_start.py). Where the pump switches its immersion heater on while
+# the compressor heats the house, seen in the heater's power reading (43084 F-series, 31028
+# S-series), and before its first start the deepest DM it held for two readings with the heater
+# off: the heater guard and the capacity shortfall read it in place of the model profile's factory
+# aux_start_dm. The owner's F750 (start compressor -250, start diff additional heat 1200: -1450) in
+# Home Assistant's hourly statistics, 2025-10-28 to 2026-10-28: of the 351 hours in which its
+# heater switched on, the 25 without a hot-water charge (BT6 rising 1 C or more) all reached DM
+# -1441 or deeper, at its first steps (0.5-1.5 kW); the 326 with one began anywhere from DM +100 to
+# -1731. With its outdoor average (40067) above its "stop additional heat" (+1 C) the heater stayed
+# off and DM held between -1442 and -1450 (44 hours). The 25 came 2-7 a month, November to March,
+# so HEATER_START_MEMORY follows a start moved deeper within about a winter month, and one moved
+# shallower at the next start. ASSUMED HEATER_START_MAX_GAP_MINUTES: readings of consecutive
+# cycles, or with one failed read between. Closed loop on the owner's F750 + slab (the plant starts
+# at -1450), four plant fits, Oct 18 2025 - Apr 30 2026, learning from nothing on Oct 18: the start
+# in force ended the autumn at -1096 .. -1458 and every winter and spring at -1442 .. -1478, the depth
+# held off never past -1450. Per season against the factory -700: heating cost comfort 4705 -> 4684
+# SEK, balanced 4642 -> 4626, savings 4372 -> 4501; hours below 20.5 C 16.1 -> 6.3, 17.3 -> 7.2,
+# 102.8 -> 30.5; immersion heat 244 -> 211, 213 -> 169, 43 -> 83 kWh; savings mode's coldest moment
+# 18.7 -> 19.6 C. Told -1450 instead (a setting): 4706, 4628 and 4504 SEK.
+HEATER_START_MEMORY: Final = 5  # starts remembered
+HEATER_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

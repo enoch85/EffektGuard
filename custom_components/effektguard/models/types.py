@@ -125,4 +125,5 @@ class DiagnosticsDict(TypedDict, total=False):
     decision: DiagnosticsDecisionDict
     dm_thresholds: dict[str, object]
     compressor_saturation: dict[str, object]
+    heater_start: dict[str, object]
     peaks: dict[str, object]

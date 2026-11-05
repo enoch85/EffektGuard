@@ -107,8 +107,8 @@ def test_hygiene_boost_still_triggers_when_actually_overdue():
 
     scheduler = create_dhw_scheduler()
 
-    # Simulate history showing last boost was 15 days ago
-    scheduler.last_legionella_boost = datetime.now() - timedelta(days=15)
+    # Simulate history showing the last cycle 22 days ago - past the overdue line
+    scheduler.last_legionella_boost = datetime.now() - timedelta(days=22)
 
     result = scheduler.should_start_dhw(
         current_dhw_temp=46.6,
@@ -123,9 +123,9 @@ def test_hygiene_boost_still_triggers_when_actually_overdue():
 
     assert (
         result.priority_reason == "DHW_HYGIENE_BOOST"
-    ), f"Should trigger when genuinely overdue (15 days). Got: {result.priority_reason}"
+    ), f"Should trigger when genuinely overdue (22 days). Got: {result.priority_reason}"
 
-    print("✓ Hygiene boost correctly triggers when actually overdue (15 days)")
+    print("✓ Hygiene boost correctly triggers when actually overdue (22 days)")
 
 
 if __name__ == "__main__":

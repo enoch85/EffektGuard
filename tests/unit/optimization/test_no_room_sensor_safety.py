@@ -63,9 +63,9 @@ class TestEmergencyLayerStillProtectsSensorlessSystems:
         decision = self._layer().evaluate_layer(
             nibe_state=sensorless_state(),
             weather_data=None,
-            price_data=None,  # price not cheap -> the old Case 2 would return weight 0.0
             target_temp=21.0,
             tolerance_range=0.2,
+            room_floor=21.0,
         )
 
         assert decision.tier in DM_RECOVERY_TIERS, (
@@ -94,9 +94,9 @@ class TestEmergencyLayerStillProtectsSensorlessSystems:
         decision = self._layer().evaluate_layer(
             nibe_state=measured_at_target,
             weather_data=None,
-            price_data=None,
             target_temp=21.0,
             tolerance_range=0.2,
+            room_floor=21.0,
         )
 
         assert decision.tier == "OK"

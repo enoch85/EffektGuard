@@ -51,7 +51,6 @@ def test_a_slow_tank_starts_when_the_time_left_is_all_it_needs():
         price_classification="expensive",
         current_time=NOW,
         price_periods=quarters,
-        hours_since_last_dhw=5.0,
     )
 
     assert decision.should_heat, decision.priority_reason

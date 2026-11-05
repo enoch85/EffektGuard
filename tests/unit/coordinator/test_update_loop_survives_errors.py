@@ -9,18 +9,24 @@ IndexError (DST price lookup), ZeroDivisionError (savings), RuntimeError/numpy (
 daily-only weather entity raises on every cycle, so the first such raise must not kill the loop.
 """
 
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry, MockEntityPlatform
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockEntityPlatform,
+    async_fire_time_changed,
+)
 
 from custom_components.effektguard.adapters.weather_adapter import WeatherAdapter
 from custom_components.effektguard.climate import EffektGuardClimate
-from custom_components.effektguard.const import DOMAIN
-from custom_components.effektguard.coordinator import EffektGuardCoordinator
+from custom_components.effektguard.const import DOMAIN, HEAT_PUMP_READ_RETRY_SECONDS
+from custom_components.effektguard.coordinator import EffektGuardCoordinator, HeatPumpUnreadable
 from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
 
 WEATHER_ENTITY = "weather.daily_only_provider"
@@ -64,7 +70,8 @@ class TestUpdateLoopAlwaysRearms:
             IndexError("list index out of range"),  # DST 92/100-quarter day
             ZeroDivisionError("float division by zero"),  # savings maths
             RuntimeError("something unexpected"),
-            UpdateFailed("required NIBE sensors unreadable"),
+            UpdateFailed("the heat pump never answered after start-up"),
+            HeatPumpUnreadable("required NIBE sensors unreadable"),
         ],
         ids=[
             "HomeAssistantError",
@@ -73,6 +80,7 @@ class TestUpdateLoopAlwaysRearms:
             "ZeroDivisionError_savings",
             "RuntimeError",
             "UpdateFailed_expected",
+            "HeatPumpUnreadable_tried_again",
         ],
     )
     async def test_timer_is_rearmed_after_any_error(self, error):
@@ -96,42 +104,83 @@ class TestUpdateLoopAlwaysRearms:
         coordinator.async_set_updated_data.assert_called_once()
 
 
+def _good_cycle(indoor_temp: float) -> dict:
+    pump = SimpleNamespace(
+        indoor_temp=indoor_temp, outdoor_temp=-3.2, supply_temp=35.8, degree_minutes=-150
+    )
+    return {"nibe": pump, "decision": OptimizationDecision(offset=0.0, reasoning="good")}
+
+
+async def _coordinator_with_a_thermostat(hass, nibe) -> EffektGuardCoordinator:
+    """A real coordinator past start-up, its last cycle good, and the thermostat on screen."""
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    coordinator = EffektGuardCoordinator(
+        hass, nibe, MagicMock(), MagicMock(), MagicMock(), MagicMock(), entry
+    )
+    coordinator._schedule_aligned_refresh = MagicMock()  # the aligned timer is not under test
+    coordinator._first_successful_update = True  # past startup, a failed read is an error
+    coordinator.async_set_updated_data(_good_cycle(21.3))
+    platform = MockEntityPlatform(hass, domain="climate", platform_name=DOMAIN)
+    platform.config_entry = entry
+    await platform.async_add_entities([EffektGuardClimate(coordinator, entry)])
+    assert hass.states.get("climate.effektguard").state == "heat"
+    return coordinator
+
+
+async def _second_try_is_due(hass) -> None:
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=HEAT_PUMP_READ_RETRY_SECONDS)
+    )
+    await hass.async_block_till_done()
+
+
 async def test_the_entities_show_a_failed_cycle_and_the_recovery(hass):
     """Unavailable while the pump cannot be read, back when it can - and nothing written meanwhile.
 
     The loop only set `last_update_success` and told no listener, so until the next good cycle every
     entity went on showing the last one as if healthy (production 2026-10-20, five cycles while
-    myUplink failed; EG-02 of the log investigation).
+    myUplink failed; EG-02 of the log investigation). A cycle is shown failed once its second try
+    has failed too.
     """
-    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
-    entry.add_to_hass(hass)
     nibe = MagicMock()
     nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("required sensors unreadable"))
-    coordinator = EffektGuardCoordinator(
-        hass, nibe, MagicMock(), MagicMock(), MagicMock(), MagicMock(), entry
-    )
-    coordinator._schedule_aligned_refresh = MagicMock()  # the timer is not under test
-    coordinator._first_successful_update = True  # past startup, a failed read is an error
-    pump = SimpleNamespace(
-        indoor_temp=21.3, outdoor_temp=-3.2, supply_temp=35.8, degree_minutes=-150
-    )
-    good = {"nibe": pump, "decision": OptimizationDecision(offset=0.0, reasoning="good")}
-    coordinator.async_set_updated_data(good)
-    platform = MockEntityPlatform(hass, domain="climate", platform_name=DOMAIN)
-    platform.config_entry = entry
-    await platform.async_add_entities([EffektGuardClimate(coordinator, entry)])
+    coordinator = await _coordinator_with_a_thermostat(hass, nibe)
+
+    await coordinator._do_aligned_refresh()
+
     assert hass.states.get("climate.effektguard").state == "heat"
 
-    await coordinator._do_aligned_refresh()
-    await coordinator._do_aligned_refresh()
+    await _second_try_is_due(hass)
 
+    assert nibe.get_current_state.await_count == 2
     assert hass.states.get("climate.effektguard").state == "unavailable"
     nibe.set_curve_offset.assert_not_called()
 
-    coordinator._drive_the_pump = AsyncMock(return_value=good)
+    coordinator._drive_the_pump = AsyncMock(return_value=_good_cycle(21.3))
     await coordinator._do_aligned_refresh()
 
     assert hass.states.get("climate.effektguard").state == "heat"
+
+
+async def test_a_second_try_that_reads_the_pump_does_the_cycle(hass):
+    """One missed poll of the pump's source no longer costs the cycle or blanks the entities.
+
+    Owner's production 2026-10-14 to 10-24: 11 cycles could not read the pump, every entity went
+    unavailable for 4.4 to 40 minutes each time, and in 6 of them the readings were back 70 s later.
+    """
+    coordinator = await _coordinator_with_a_thermostat(hass, MagicMock())
+    coordinator._drive_the_pump = AsyncMock(
+        side_effect=[HeatPumpUnreadable("required sensors unreadable"), _good_cycle(21.6)]
+    )
+
+    await coordinator._do_aligned_refresh()
+    await _second_try_is_due(hass)
+
+    assert coordinator._drive_the_pump.await_count == 2
+    state = hass.states.get("climate.effektguard")
+    assert state.state == "heat"
+    assert state.attributes["current_temperature"] == 21.6
 
 
 class TestWeatherAdapterSurvivesUnsupportedForecast:

@@ -1,163 +1,48 @@
-# Scenario 3: Effect Tariff Peak Protection
+# Effect tariff peak protection
 
-**Description**: 15-minute peak avoidance using Spot Price quarterly data and monthly top-3 tracking.
+The effect tariff bills the mean power of the highest 15-minute periods of the month. EffektGuard
+records those periods and lowers the offset when the current period is about to set a new one.
+Code: `EffectManager` in `optimization/effect_layer.py`, the power reading in
+`coordinator._update_peak_tracking`, the period mean in `optimization/billing_period.py`.
 
-```mermaid
-flowchart TD
-    subgraph "15-Minute Measurement"
-        A[Current Quarter<br/>0-95 per day]
-        B[Estimate Heat Pump Power]
-        C[Is Daytime?<br/>Q24-87 = 06:00-22:00]
-        D[Calculate Effective Power<br/>Night = 50% weight]
-    end
+## What is recorded
 
-    subgraph "Monthly Peak Tracking"
-        E[Load Monthly Peaks<br/>Top 3 stored, at most one per day]
-        F{< 3 Peaks Recorded?<br/>or this day's peak beaten?}
-        G[Add New Peak<br/>or replace this day's]
-        H[Compare vs Lowest Peak]
-        I{Exceeds Lowest?}
-        J[Replace Lowest Peak]
-        K[Keep Current Peaks]
-    end
+- Power per cycle, first source that answers: the external power meter, else the pump's phase
+  currents (BE1-BE3), else an estimate from the compressor frequency. Only the first two are
+  measurements; an estimate is shown but never recorded.
+- `BillingPeriodAccumulator` builds the time-weighted mean of each 15-minute period
+  (`BILLING_PERIOD_MINUTES`). A completed period from a measured source goes to
+  `record_period_measurement`.
+- Night periods (22:00-06:00) count half (`NIGHT_TARIFF_WEIGHT`); day is quarters 24-87.
+- At most one period per day, the three highest of the month. Below 0.5 kW
+  (`PEAK_RECORDING_MINIMUM`) is ignored, above 100 kW (`PEAK_RECORDING_MAXIMUM`) refused as a sensor
+  fault. A month change drops last month's peaks.
+- Only a meter peak counts as a billing figure (`is_billable`); a phase-current peak still sets the
+  control threshold.
 
-    subgraph "Effect Layer Decision"
-        L[Get Peak Threshold<br/>Lowest of Top 3]
-        M[Calculate Margin<br/>Threshold - Current Power]
-        
-        N{Already Exceeding?}
-        O[CRITICAL<br/>Offset: -3.0°C<br/>Reduce immediately]
-        
-        P{Margin < 0.5 kW?}
-        Q[CRITICAL<br/>Offset: -2.0°C<br/>Approaching peak]
-        
-        R{Margin < 1.0 kW?}
-        S[WARNING<br/>Offset: -1.0°C<br/>Watch consumption]
-        
-        T[OK<br/>Offset: 0.0°C<br/>Safe margin]
-    end
+`sensor.effektguard_peak_today` and `sensor.effektguard_peak_this_month` show the day's high-water
+mark and the month's highest recorded period.
 
-    subgraph "Spot Price Integration"
-        U[96 Native Quarters/Day<br/>Perfect Effektavgift Match]
-        V[Q0: 00:00-00:15<br/>Q24: 06:00-06:15<br/>Q87: 21:45-22:00<br/>Q95: 23:45-00:00]
-    end
+## The vote
 
-    %% Flow
-    A --> B
-    B --> C
-    C --> D
-    D --> E
-    E --> F
-    F -->|Yes| G
-    F -->|No| H
-    H --> I
-    I -->|Yes| J
-    I -->|No| K
-    
-    G --> L
-    J --> L
-    K --> L
-    L --> M
-    M --> N
-    N -->|Yes| O
-    N -->|No| P
-    P -->|Yes| Q
-    P -->|No| R
-    R -->|Yes| S
-    R -->|No| T
+`EffectManager.evaluate_layer` gets the month's peak (the highest of the three), this cycle's power
+projected to the period mean, and the indoor trend. The severity comes from the margin between the
+tariff-weighted power and the lowest of the three peaks.
 
-    %% Spot Price connection
-    U --> A
-    V --> C
+| Condition | Offset | Weight |
+|---|---|---|
+| At or within 0.5 kW of the lowest peak (`EFFECT_PEAK_MARGIN_CRITICAL`) | -3.0 (`EFFECT_OFFSET_CRITICAL`) | 1.0 |
+| Power plus the trend term within 1.0 kW of the month's peak, trend rising (`EFFECT_MARGIN_PREDICTIVE`) | -1.5 (`EFFECT_OFFSET_PREDICTIVE`) | 0.85 |
+| Within 1.0 kW of the lowest peak (`EFFECT_PEAK_MARGIN_WARNING`), demand rising | -1.0 | 0.75 |
+| Within 1.0 kW, demand stable or falling | -0.5 | 0.65 |
+| Otherwise, no peaks yet, or peak protection off | 0 | 0 |
 
-    %% Styling
-    style A fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style D fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style L fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style N fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    style P fill:#000,stroke:#fff,stroke-width:2px,color:#fff  
-    style R fill:#000,stroke:#fff,stroke-width:2px,color:#fff
-    
-    style O fill:#333,stroke:#fff,stroke-width:2px,color:#fff
-    style Q fill:#666,stroke:#fff,stroke-width:2px,color:#fff
-    style S fill:#999,stroke:#fff,stroke-width:2px,color:#fff
-    style T fill:#ddd,stroke:#000,stroke-width:2px,color:#000
-```
+The trend term: indoor falling faster than 0.4 °C/h adds 1.5 kW, faster than 0.2 °C/h adds 0.5 kW,
+rising faster than 0.3 °C/h subtracts 0.5 kW.
 
-## Swedish Effektavgift Integration
+At weight 1.0 the layer is a critical cost layer: it wins the aggregation unless the safety floor
+or the EMERGENCY tier is active, and during T1-T3 recovery it only moderates the recovery down to
+the tier's peak-aware offset ([08](08_layer_priority_system.md)).
 
-### Perfect Quarter Alignment
-
-EffektGuard leverages Spot Price's **native 15-minute data structure** which provides exactly 96 quarterly periods per day:
-
-- **Q0**: 00:00-00:15 (Night, 50% weight)
-- **Q24**: 06:00-06:15 (Daytime starts, full weight)
-- **Q87**: 21:45-22:00 (Daytime ends, full weight)
-- **Q95**: 23:45-00:00 (Night, 50% weight)
-
-This matches the Swedish electricity market structure perfectly, eliminating the need for interpolation or approximation.
-
-### Day/Night Weighting
-
-Swedish Effektavgift applies different weights based on time of day:
-
-- **Daytime (06:00-22:00)**: Full weight - these peaks cost more
-- **Nighttime (22:00-06:00)**: 50% weight - reduced impact on bill
-
-The system accounts for this when calculating effective power consumption and determining when to limit heat pump operation.
-
-### Monthly Top-3 Peak Tracking
-
-Swedish effect tariffs are typically based on the **top 3 peaks** in a billing period, **at most one
-per day** (`EffectManager.record_period_measurement`):
-
-1. **Peak Detection**: Every 15-minute period's mean is compared against the stored peaks
-2. **Same day**: a higher period on a day that already has a peak replaces that day's peak; a lower
-   one is ignored
-3. **Replacement Logic**: otherwise a new peak replaces the lowest of the current top 3
-4. **Threshold Management**: The lowest peak becomes the threshold to avoid exceeding
-
-### Graduated Response System
-
-The effect layer provides four levels of response based on proximity to creating a new peak:
-
-#### Already Exceeding Threshold
-- **Action**: CRITICAL - Offset -3.0°C
-- **Rationale**: We're already creating a new peak, aggressive reduction needed
-
-#### Within 0.5 kW of Threshold  
-- **Action**: CRITICAL - Offset -2.0°C
-- **Rationale**: Very close to peak, prevent exceedance
-
-#### Within 1.0 kW of Threshold
-- **Action**: WARNING - Offset -1.0°C  
-- **Rationale**: Approaching danger zone, moderate reduction
-
-#### Safe Margin (> 1.0 kW)
-- **Action**: OK - Offset 0.0°C
-- **Rationale**: Sufficient margin, no action needed
-
-### Power Estimation
-
-The system estimates heat pump power consumption from NIBE state data:
-
-1. **Direct Power Sensor**: Most accurate if available
-2. **NIBE Power Entity**: Auto-discovered heat pump power
-3. **Temperature-Based Estimation**: Fallback using supply/outdoor temps
-
-Estimation accounts for:
-- Outdoor temperature (colder = more power)
-- Supply temperature (higher flow = more power)
-- Compressor status (on/off/modulating)
-
-### Real-Time Quarter Tracking
-
-Every coordinator update (5-minute intervals) performs multiple quarter measurements to ensure no peaks are missed:
-
-- Current quarter identification (0-95)
-- Power estimation at that moment
-- Comparison against peak thresholds
-- Immediate response if needed
-
-This provides near real-time protection against creating new effect tariff peaks while maintaining optimal heat pump operation during safe periods.
+Without a valid power reading this cycle the coordinator passes 0 kW rather than a guess.
+`effektguard.reset_peak_tracking` clears the month's peaks.

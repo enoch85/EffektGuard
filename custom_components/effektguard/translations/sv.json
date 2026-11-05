@@ -69,6 +69,7 @@
           "power_sensor_entity": "Effektmätarsensor",
           "nibe_temp_lux_entity": "Tillfällig lyx-brytare (varmvatten)",
           "additional_indoor_sensors": "Extra inomhustemperatursensorer",
+          "indoor_temp_method": "Beräkningsmetod för inomhustemperatur",
           "outdoor_temp_entity": "Åsidosätt: utomhustemperatur (BT1)",
           "indoor_temp_entity": "Åsidosätt: inomhustemperatur (BT50/rumssensor)",
           "supply_temp_entity": "Åsidosätt: framledningstemperatur (BT2/BT25)",
@@ -83,7 +84,6 @@
       "gespot_entity_not_found": "Spotpris-enhet hittades inte"
     },
     "abort": {
-      "nibe_not_found": "Ingen NIBE-integration hittades. Installera och konfigurera MyUplink (moln) eller nibe_heatpump (lokal Modbus/NibeGW) först.",
       "reconfigure_successful": "Omkonfigurering lyckades"
     }
   },
@@ -250,13 +250,47 @@
     }
   },
   "services": {
+    "force_offset": {
+      "name": "Tvinga förskjutning av värmekurvan",
+      "description": "Åsidosätt värmekurvans förskjutning manuellt under en begränsad tid",
+      "fields": {
+        "offset": {
+          "name": "Förskjutning",
+          "description": "Värmekurvans förskjutning som ska användas (-10 till +10°C)"
+        },
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Hur länge åsidosättningen ska gälla (minuter, 0 = till nästa optimeringscykel)"
+        }
+      }
+    },
+    "reset_peak_tracking": {
+      "name": "Nollställ effekttoppar",
+      "description": "Nollställ månadens effekttoppar (används när en ny debiteringsperiod börjar)"
+    },
     "boost_heating": {
       "name": "Boosta uppvärmning",
-      "description": "Öka tillfälligt uppvärmningen för snabb komfort"
+      "description": "Maximera uppvärmningen tillfälligt oavsett kostnad (nödläge för komfort)",
+      "fields": {
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Boostens varaktighet (minuter)"
+        }
+      }
     },
-    "boost_hot_water": {
+    "boost_dhw": {
       "name": "Boosta varmvatten",
-      "description": "Starta omedelbar varmvattencykel"
+      "description": "Starta en omedelbar varmvattenboost via NIBEs tillfälliga lyx. Pumpen värmer till sin egen lyxtemperatur; EffektGuard låter boosten pågå under den begärda tiden och stänger sedan av den. Prisoptimeringen avbryter den inte; bara säkerhetsstoppet gör det - gradminuter vid gränsen för tillsatsvärme eller ett hus under sitt säkerhetsgolv, som också gör att boosten vägras.",
+      "fields": {
+        "duration": {
+          "name": "Varaktighet",
+          "description": "Hur länge boosten får pågå innan EffektGuard stänger av den (minuter)"
+        }
+      }
+    },
+    "calculate_optimal_schedule": {
+      "name": "Beräkna optimalt schema",
+      "description": "Förhandsgranska optimeringsschemat för de kommande 24 timmarna utifrån rådande förhållanden"
     }
   },
   "issues": {
@@ -267,6 +301,15 @@
     "no_dhw_control_entity": {
       "title": "Ingen entitet för varmvattenstyrning",
       "description": "EffektGuard styr varmvatten genom att slå på och av NIBEs tillfälliga lyx, och ingen entitet för det är konfigurerad - varmvattenoptimeringen är INTE igång, och en schemalagd körning som sensorerna visar kommer inte att ske. MyUplink har en brytare för tillfällig lyx på F-seriens pumpar (parameter 50004). På pumpar i F-serien, SMO och VVM exponerar den lokala integrationen nibe_heatpump i stället Temporary Lux (register 48132) som en select-entitet, som EffektGuard inte kan styra direkt: skapa en input_boolean-hjälpare och en automatisering som sätter select-entiteten till \"ONE TIME INCREASE\" när hjälparen slås på och till \"OFF\" när den slås av. S-seriens pumpar har inget register för tillfällig lyx i nibe_heatpump. Välj brytaren eller hjälparen under Omkonfigurera. Värmeoptimeringen påverkas inte."
+    }
+  },
+  "selector": {
+    "indoor_temp_method": {
+      "options": {
+        "interquartile_mean": "Interkvartilmedelvärde (rekommenderas)",
+        "median": "Median",
+        "average": "Medelvärde"
+      }
     }
   }
 }
