@@ -1,7 +1,8 @@
 """Overshoot protection: the ComfortLayer coasts a warm house, never a cold one, and never in a jump.
 
-Drives the real ComfortLayer.evaluate_layer. Above its band the vote ramps continuously from the
-in-band correction at the band edge toward OVERSHOOT_PROTECTION_OFFSET_MAX, stopping at
+Drives the real ComfortLayer.evaluate_layer. Above its band - on the warm side no later than
+OVERSHOOT_PROTECTION_START - the vote ramps continuously from the in-band correction toward
+OVERSHOOT_PROTECTION_OFFSET_MAX, stopping at
 OVERSHOOT_PROTECTION_DEEPEST, and reaches LAYER_WEIGHT_COMFORT_CRITICAL at
 OVERSHOOT_PROTECTION_FULL, whatever the prices ahead.
 """
@@ -29,6 +30,7 @@ from custom_components.effektguard.const import (
     OVERSHOOT_PROTECTION_DEEPEST,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
+    OVERSHOOT_PROTECTION_START,
     PRICE_FORECAST_EXPENSIVE_THRESHOLD,
     PRICE_TOLERANCE_MAX,
     PRICE_TOLERANCE_MIN,
@@ -79,8 +81,10 @@ def _decide(
 
 
 def _ramp(mode: str, slider: float) -> tuple[float, float, float]:
-    """Where the ramp starts (the band edge, or a wider dead zone), and its vote there."""
-    edge = max(slider * TOLERANCE_RANGE_MULTIPLIER, MODE_CONFIGS[mode].dead_zone)
+    """Where the ramp starts (the band edge, no later than START, or a wider dead zone), and its vote
+    there."""
+    band = slider * TOLERANCE_RANGE_MULTIPLIER
+    edge = max(min(band, OVERSHOOT_PROTECTION_START), MODE_CONFIGS[mode].dead_zone)
     in_band_weight = LAYER_WEIGHT_COMFORT_MIN * MODE_CONFIGS[mode].comfort_weight_multiplier
     return edge, -edge * COMFORT_CORRECTION_MULT, in_band_weight
 
@@ -96,9 +100,19 @@ class TestTheRampHasNoCliff:
 
         assert (vote.offset, vote.weight) == pytest.approx((offset, weight), abs=1e-4), vote.reason
 
+    @pytest.mark.parametrize("mode, slider", CASES)
+    def test_a_wide_band_does_not_hold_off_the_coast(self, mode, slider):
+        """A wider slider lets the room drift further below the target, not further above it: past
+        START the vote coasts harder than the in-band correction, however wide the band."""
+        overshoot = _ramp(mode, slider)[0] + 0.1
+
+        vote = _decide(overshoot, mode, slider)
+
+        assert vote.offset < -overshoot * COMFORT_CORRECTION_MULT, vote.reason
+
     @pytest.mark.parametrize("mode", list(MODE_CONFIGS))
     def test_a_house_exactly_on_the_band_edge_is_on_the_ramp(self, mode):
-        """It used to fall through to "Too cold". 2.5 x 0.4 is exactly 1.0, as is 22.0 - 21.0."""
+        """It used to fall through to "Too cold"."""
         edge, offset, weight = _ramp(mode, 2.5)
 
         vote = _decide(edge, mode, 2.5)

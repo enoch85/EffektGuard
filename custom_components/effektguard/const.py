@@ -689,7 +689,8 @@ PROACTIVE_ZONE5_OFFSET: Final = 3.0  # Very strong prevention (bridging to WARNI
 PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 
 # Overshoot protection (comfort_layer.py): above its band the comfort layer ramps from the in-band
-# correction at the band edge toward OVERSHOOT_PROTECTION_OFFSET_MAX, no deeper than
+# correction at the band edge - no later than OVERSHOOT_PROTECTION_START - toward
+# OVERSHOOT_PROTECTION_OFFSET_MAX, no deeper than
 # OVERSHOOT_PROTECTION_DEEPEST, reaching LAYER_WEIGHT_COMFORT_CRITICAL at OVERSHOOT_PROTECTION_FULL,
 # and reads no prices. It replaces -7 C at weight 0.7 from 0.6 C, swapped for a near-neutral vote
 # whenever a pricier quarter came into view: two cliffs, about 72 coast entries in 59 days, half of
@@ -697,6 +698,15 @@ PROACTIVE_ZONE5_WEIGHT: Final = 0.60  # Below T1 (0.65)
 # deepest bank the owner wants a slab to hold before a cold snap; a later full coast measured
 # cheaper, but from 1.7-1.8 C on it held the room above target + 1.5 C longer than the cliff did.
 OVERSHOOT_PROTECTION_FULL: Final = 1.5  # °C above target for the full coast
+# A wider tolerance lets the room drift further below the target, not further above it: the ramp
+# starts at the band edge, no later than this. Closed loop on the owner's F750 + slab, plant fitted to
+# the pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, slider 1.2, balanced), against the
+# band edge (0.48 C), Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026: the heat pump's electricity cost
+# 911.1 -> 887.0 / 1722.5 -> 1714.1 / 220.5 -> 217.6 SEK; hours 1 C or more over the target
+# 697.0 -> 575.8 / 717.3 -> 582.2 / 594.3 -> 592.5; immersion heat (Jan-Feb) 38.4 -> 39.5 kWh, the
+# pump's dearest quarter 6.13 -> 6.15 kW. From the dead zone (0.2 C) 886.3 / 1701.5 / 212.0 SEK, but
+# Jan-Feb 41.9 kWh and 6.65 kW: the coldest morning (12 Jan) found less heat in the slab.
+OVERSHOOT_PROTECTION_START: Final = 0.3  # °C above target, at the latest
 OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # what the ramp aims at at FULL: its slope
 # The ramp keeps that slope and stops here. Closed loop on the owner's F750 + slab, plant fitted to
 # the pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, slider 1.2, balanced), against the

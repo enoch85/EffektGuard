@@ -91,12 +91,13 @@ class TestComfortLayerWithinTolerance:
             tolerance_range=0.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
         )
-        nibe_state = MockNibeState(indoor_temp=21.3)  # 0.3°C above, beyond 0.2 dead zone
+        # 0.25°C above: beyond the 0.2 dead zone, short of OVERSHOOT_PROTECTION_START
+        nibe_state = MockNibeState(indoor_temp=21.25)
 
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
         assert result.offset < 0.0  # Should reduce heating
-        expected_offset = -0.3 * COMFORT_CORRECTION_MULT
+        expected_offset = -0.25 * COMFORT_CORRECTION_MULT
         assert result.offset == pytest.approx(expected_offset, rel=0.01)
         assert "Slightly warm" in result.reason
 
@@ -158,7 +159,9 @@ class TestComfortLayerModeAdjustment:
             tolerance_range=0.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_SAVINGS],
         )
-        nibe_state = MockNibeState(indoor_temp=21.4)  # Outside 0.3 savings dead zone
+        # Outside the 0.3 savings dead zone, inside the band. Below the target: above it, the dead
+        # zone ends where the overshoot ramp starts (OVERSHOOT_PROTECTION_START).
+        nibe_state = MockNibeState(indoor_temp=20.6)
 
         result = layer.evaluate_layer(nibe_state=nibe_state)
 
