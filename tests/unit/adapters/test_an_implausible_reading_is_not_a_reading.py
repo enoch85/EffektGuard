@@ -170,7 +170,7 @@ class TestTheRequiredSensors:
 
     @pytest.mark.asyncio
     async def test_a_bt1_reading_105_below_zero_stops_the_integration(self):
-        """-105 C demands a 96.8 C flow and pushes the DM warning to within 50 of the aux limit."""
+        """-105 C demands a 96.8 C flow and puts the DM warning within 50 of the immersion limit."""
         adapter = _adapter({**HEALTHY, "sensor.bt1": "-105.0"})
 
         with pytest.raises(UpdateFailed, match="outdoor temperature"):

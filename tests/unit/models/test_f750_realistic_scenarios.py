@@ -95,7 +95,7 @@ class F750Specifications:
         # Check three-phase 20A limit (6.5kW)
         within_limit = electrical_kw <= self.max_electrical_kw
 
-        # Cap at three-phase limit (heat pump will modulate down or auxiliary needed)
+        # Cap at three-phase limit (heat pump will modulate down or immersion heat needed)
         electrical_kw = min(electrical_kw, self.max_electrical_kw)
 
         return electrical_kw, within_limit
@@ -226,7 +226,7 @@ class TestF750RealisticScenarios:
             electrical, within_limit = f750.calculate_electrical_consumption(heat_demand, temp)
             cop = f750.get_cop_at_temperature(temp)
 
-            status = "✓ YES" if within_limit else "✗ NO (AUX)"
+            status = "✓ YES" if within_limit else "✗ NO (IMMERSION)"
 
             print(
                 f"{temp:>6}°C | {heat_demand:>10.2f} kW | {cop:>5.2f} | "
@@ -266,7 +266,7 @@ class TestF750RealisticScenarios:
             cop = f750.get_cop_at_temperature(outdoor)
             electrical, within_limit = f750.calculate_electrical_consumption(heat_demand, outdoor)
 
-            status_limit = "OK" if within_limit else "AUX"
+            status_limit = "OK" if within_limit else "IMMERSION"
 
             # Determine system status based on DM
             if dm <= -1500:
@@ -285,14 +285,15 @@ class TestF750RealisticScenarios:
                 f"{cop:>5.2f} | {electrical:>4.1f}kW | {status_limit:>6} | {status:>10}"
             )
 
-    def test_auxiliary_heating_threshold(self, f750, house):
-        """Test when auxiliary heating becomes necessary on three-phase 20A."""
+    def test_immersion_heating_threshold(self, f750, house):
+        """Test when immersion heat becomes necessary on three-phase 20A."""
 
         print("\n" + "=" * 80)
-        print("AUXILIARY HEATING ANALYSIS - When does F750 need help on 3-phase 20A?")
+        print("IMMERSION HEAT ANALYSIS - When does F750 need help on 3-phase 20A?")
         print("=" * 80)
         print(
-            f"{'Outdoor':>8} | {'Heat Demand':>12} | {'F750 Max':>12} | {'Shortfall':>12} | {'Aux Needed':>12}"
+            f"{'Outdoor':>8} | {'Heat Demand':>12} | {'F750 Max':>12} | {'Shortfall':>12} "
+            f"| {'Immersion Needed':>12}"
         )
         print("-" * 80)
 
@@ -305,11 +306,11 @@ class TestF750RealisticScenarios:
 
             # Shortfall
             shortfall = max(0, heat_demand - max_heat)
-            aux_needed = "YES" if shortfall > 0.1 else "NO"
+            immersion_needed = "YES" if shortfall > 0.1 else "NO"
 
             print(
                 f"{temp:>6}°C | {heat_demand:>10.2f} kW | {max_heat:>10.2f} kW | "
-                f"{shortfall:>10.2f} kW | {aux_needed:>12}"
+                f"{shortfall:>10.2f} kW | {immersion_needed:>12}"
             )
 
     def test_dm_thresholds_with_real_conditions(self, f750, house):
@@ -422,5 +423,5 @@ if __name__ == "__main__":
 
         print(
             f"  {temp:>3}°C: Demand {demand:.1f}kW, COP {cop:.2f}, "
-            f"Electrical {electrical:.1f}kW {'✓' if ok else '✗ (needs aux)'}"
+            f"Electrical {electrical:.1f}kW {'✓' if ok else '✗ (needs immersion heat)'}"
         )

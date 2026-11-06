@@ -9,7 +9,7 @@ DM = ∫ (BT25 − S1) dt          BT25 = measured supply, S1 = calculated suppl
 ```
 
 Units are °C·minutes. DM goes **negative** when the pump is not keeping up, and NIBE uses it as the
-single scalar that decides when to start the compressor and when to call for auxiliary heat.
+single scalar that decides when to start the compressor and when to call for immersion heat.
 
 ## NIBE menu 4.9.3 — the primary source
 
@@ -24,43 +24,44 @@ single scalar that decides when to start the compressor and when to call for aux
 
 ## ⚠️ The consequence the codebase was built without
 
-**`start addition` is −700 at the factory. The immersion heater (elpatron) engages there and works
-DM back UP**, so on a factory-set F750 DM asymptotes near −700 rather than running away toward
-−1500. `DM_THRESHOLD_AUX_LIMIT = -1500` is treated throughout the code as the emergency threshold,
+**`start addition` is −700 at the factory. The immersion heater engages there and works DM back
+UP**, so on a factory-set F750 DM asymptotes near −700 rather than running away toward −1500.
+`DM_THRESHOLD_IMMERSION_LIMIT = -1500` is treated throughout the code as the emergency threshold,
 and EffektGuard's climate-zone warning threshold for Stockholm is **−740**, *deeper* than −700: on
-such a pump the elpatron fires **first**, every time.
+such a pump the immersion heater fires **first**, every time.
 
-**Where the heater starts is an installer setting, not a model constant.** The owner's F750 is not
-at factory settings: it starts its compressor at −250 (parameter 47206) and its additional heat
-1200 later (48072, "start diff additional heat"), at **−1450** - 50 degree minutes short of
-`DM_THRESHOLD_AUX_LIMIT` (myUplink, read 2026-10-17). Its heater ran 454 kWh in January-February
-2026 and about 820 kWh in the year to October 2026 (Home Assistant's hourly statistics of 43084,
-"Power internal add. heat"). And the −1500 tier did fire: before #39 made it a floor at 0, it held
-the owner's offset at +10 on 2026-01-23 and 2026-01-31 with DM past −1500, and DM went on to −2260
-(EffektGuard's hourly statistics).
+**Where the immersion heater starts is an installer setting, not a model constant.** The owner's
+F750 is not at factory settings: it starts its compressor at −250 (parameter 47206) and its
+additional heat 1200 later (48072, "start diff additional heat"), at **−1450** - 50 degree minutes
+short of `DM_THRESHOLD_IMMERSION_LIMIT` (myUplink, read 2026-10-17). Its immersion heater ran 454
+kWh in January-February 2026 and about 820 kWh in the year to October 2026 (Home Assistant's hourly
+statistics of 43084, "Power internal add. heat"). And the −1500 tier did fire: before #39 made it a
+floor at 0, it held the owner's offset at +10 on 2026-01-23 and 2026-01-31 with DM past −1500, and
+DM went on to −2260 (EffektGuard's hourly statistics).
 
 So:
 
-- A pump's own aux start has to be read from that pump. The model profiles' `aux_start_dm` holds
-  the factory default, and the simulator's plant reads it. The heater guard (which keeps a room at
-  or above its floor short of the heater) and the capacity shortfall read the start as the pump has
-  shown it, in its heater's power (43084, 31028 on the S-series) while the compressor heats the
-  house: where it switches on, the shallowest of the last five such starts, and before the first,
-  the deepest degree minutes it held with the heater off - never shallower than the factory default
-  (`utils/heater_start.py`). In Home Assistant's hourly statistics of the
-  owner's F750, 2025-10-28 to 2026-10-28, the heater switched on in 351 hours: in the 25 without a
-  hot-water charge DM reached -1441 or deeper, in the 326 with one it began anywhere from +100 to
-  -1731. With the pump's average outdoor temperature (40067) above +1 °C, its "stop additional
-  heat" (47376), the heater never switched on for space heating, and DM held between -1442 and
-  -1450 (44 hours): blocked, it does not run past the start.
-- The elpatron is **not the enemy.** NIBE placed it to spare the compressor from grinding at full
-  frequency for hours. Fighting it with a bigger curve offset trades cheap kWh for expensive
-  compressor life.
+- A pump's own immersion start has to be read from that pump. The model profiles'
+  `immersion_start_dm` holds the factory default, and the simulator's plant reads it. The immersion
+  guard (which keeps a room at or above its floor short of the immersion heater) and the capacity
+  shortfall read the start as the pump has shown it, in its immersion heater's power (43084, 31028
+  on the S-series) while the compressor heats the house: where it switches on, the shallowest of
+  the last five such starts, and before the first, the deepest degree minutes it held with the
+  immersion heater off - never shallower than the factory default (`utils/immersion_start.py`). In
+  Home Assistant's hourly statistics of the owner's F750, 2025-10-28 to 2026-10-28, the immersion
+  heater switched on in 351 hours: in the 25 without a hot-water charge DM reached -1441 or deeper,
+  in the 326 with one it began anywhere from +100 to -1731. With the pump's average outdoor
+  temperature (40067) above +1 °C, its "stop additional heat" (47376), the immersion heater never
+  switched on for space heating, and DM held between -1442 and -1450 (44 hours): blocked, it does
+  not run past the start.
+- The immersion heater is **not the enemy.** NIBE placed it to spare the compressor from grinding
+  at full frequency for hours. Fighting it with a bigger curve offset trades cheap kWh for
+  expensive compressor life.
 
 Audit findings F-112 and F-129 both turn on this. F-112 (rescaling the recovery ladder to the
-pump's real aux start) is **open with the owner** - the factory figure is sourced and the owner's is
-read from the pump, but the ladder redesign is not, and 68 existing safety tests encode the −1500
-world.
+pump's real immersion start) is **open with the owner** - the factory figure is sourced and the
+owner's is read from the pump, but the ladder redesign is not, and 68 existing safety tests encode
+the −1500 world.
 
 ## ⚠️ Why the DM safety net is structurally blind to EffektGuard's own under-heating
 
@@ -168,6 +169,6 @@ The frequencies quoted are the owner's long-term statistics, which carry no vent
 
 The **−1500** figure itself. It is attributed in the code to "Swedish forums" and to a `stevedvo`
 F2040 case study, neither of which is in this repository. It functions as an absolute backstop and
-sits below the pump's own aux start - far below at factory settings, 50 below on the owner's F750 -
-so it is harmless as a floor, but it should not be described as research-validated until someone
-can produce the research.
+sits below the pump's own immersion start - far below at factory settings, 50 below on the owner's
+F750 - so it is harmless as a floor, but it should not be described as research-validated until
+someone can produce the research.

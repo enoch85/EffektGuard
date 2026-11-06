@@ -69,7 +69,7 @@ async def test_a_reading_nobody_has_confirmed_for_hours_is_not_a_reading():
     assert value is None, (
         f"A degree-minute sensor that last reported {stale} ago was read as -150.0 and used to "
         f"drive the heat pump. Nothing has confirmed that number since. The real degree minutes "
-        f"could be anywhere - including past the auxiliary-heat limit - and the integration would "
+        f"could be anywhere - including past the immersion limit - and the integration would "
         f"go on trimming the curve for price, because as far as it can tell the pump is coping."
     )
 

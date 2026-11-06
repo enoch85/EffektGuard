@@ -1,9 +1,9 @@
-"""A winter reading with the elpatron running is normal, not an every-cycle warning.
+"""A winter reading with the immersion heater running is normal, not an every-cycle warning.
 
 typical_electrical_range_kw is the compressor draw alone (0.27-2.06 kW). The validator compared
 the whole-machine reading against it and flagged "exceeds max" on every cold cycle where the
 immersion heater was doing its job. The machine's plausible ceiling is compressor + immersion
-heater: below it, aux-range draw is normal; above it, the reading is implausible for the
+heater: below it, immersion-range draw is normal; above it, the reading is implausible for the
 hardware. That is a debug line, not a warning: the configured sensor is often the whole house.
 """
 

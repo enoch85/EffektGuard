@@ -318,7 +318,7 @@ class WeatherPatternLearner:
                         f"Extreme cold forecast ({forecast_min:.0f}°C). "
                         f"Aggressive pre-heating recommended. "
                         f"Monitor DM -1500 limit closely. "
-                        f"Auxiliary heating may be needed."
+                        f"Immersion heat may be needed."
                     )
                 else:
                     recommendation = (

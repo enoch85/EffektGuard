@@ -43,7 +43,7 @@ from ..const import (
     DM_THERMAL_MASS_BUFFER_RADIATOR,
     DM_RATE_WINDOW_MINUTES,
     DM_THERMAL_MASS_BUFFER_TIMBER,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     LAYER_WEIGHT_EMERGENCY,
     LAYER_WEIGHT_PROACTIVE_MIN,
     MIN_OFFSET,
@@ -217,7 +217,7 @@ class EmergencyLayerDecision:
     reason: str
     # Additional diagnostic fields
     # Authoritative discriminator for safety dispatch in the decision engine.
-    # "EMERGENCY" (DM past the aux limit), "T3", "T2", "T1", "WARNING", "CAUTION",
+    # "EMERGENCY" (DM past the immersion limit), "T3", "T2", "T1", "WARNING", "CAUTION",
     # "COOLDOWN", "ANTI_WINDUP", "OK". See const.DM_TIER_EMERGENCY / DM_RECOVERY_TIERS.
     tier: str = ""
     degree_minutes: float = 0.0
@@ -333,7 +333,7 @@ def apply_thermal_mass_buffer(base_thresholds: dict, heating_type: str) -> dict:
             "normal_min": base_thresholds["normal_min"] / multiplier,
             "normal_max": base_thresholds["normal_max"] / multiplier,
             "warning": base_thresholds["warning"] / multiplier,
-            # The auxiliary-heat limit is hardware. It is the same for every emitter.
+            # The immersion limit is hardware. It is the same for every emitter.
             "critical": base_thresholds["critical"],
         }
     )
@@ -371,8 +371,8 @@ class EmergencyLayer:
     spot-price run is shorter than VOLATILE_MIN_DURATION_QUARTERS, should_skip_volatile_boost()
     zeroes the T1/T2/T3 recovery offset and cuts weight to VOLATILE_WEIGHT_REDUCTION, to avoid
     compressor cycling on brief windows. Cost: DM may keep falling during a volatile run. Bounded
-    because the DM <= DM_THRESHOLD_AUX_LIMIT check at the TOP of evaluate_layer returns first, so the
-    EMERGENCY floor is never suppressed.
+    because the DM <= DM_THRESHOLD_IMMERSION_LIMIT check at the TOP of evaluate_layer returns first,
+    so the EMERGENCY floor is never suppressed.
     """
 
     def __init__(
@@ -681,29 +681,27 @@ class EmergencyLayer:
         indoor_is_measured = getattr(nibe_state, "indoor_temp_valid", True)
         too_warm = indoor_is_measured and temp_deviation > tolerance_range
 
-        # ========================================
-        # AUX LIMIT: past DM -1500, no cuts - and no raise (F-124)
-        # ========================================
-        # MUST come before anti-windup and the cooldown, which return early. Past this threshold the
-        # compressor is flat out and the immersion heater already running (from about -1450 on the
-        # owner's F750). Raising the curve cannot add compressor heat: S1 climbs where the supply
-        # cannot follow, DM falls faster and the heater steps up - in the owner's winter +10 latched
-        # for hours and cooked the house. What protects the house is not CUTTING here, so this tier
-        # is a floor at 0 that _aggregate_layers applies to the other layers' verdict. A room above
-        # its band skips it: a deep DM there means our own target is too high, and lowering it is
-        # what recovers DM.
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT and not too_warm:
+        # ======================================== IMMERSION LIMIT: past DM -1500, no cuts - and no
+        # raise (F-124) ======================================== MUST come before anti-windup and
+        # the cooldown, which return early. Past this threshold the compressor is flat out and the
+        # immersion heater already running (from about -1450 on the owner's F750). Raising the curve
+        # cannot add compressor heat: S1 climbs where the supply cannot follow, DM falls faster and
+        # the immersion heater steps up - in the owner's winter +10 latched for hours and cooked the
+        # house. What protects the house is not CUTTING here, so this tier is a floor at 0 that
+        # _aggregate_layers applies to the other layers' verdict. A room above its band skips it: a
+        # deep DM there means our own target is too high, and lowering it is what recovers DM.
+        if degree_minutes <= DM_THRESHOLD_IMMERSION_LIMIT and not too_warm:
             return EmergencyLayerDecision(
                 name="Thermal Debt",
                 offset=0.0,
                 weight=1.0,
                 reason=(
-                    f"EMERGENCY: DM {degree_minutes:.0f} past aux limit {DM_THRESHOLD_AUX_LIMIT}"
-                    " - no cuts"
+                    f"EMERGENCY: DM {degree_minutes:.0f} past immersion limit "
+                    f"{DM_THRESHOLD_IMMERSION_LIMIT} - no cuts"
                 ),
                 tier="EMERGENCY",
                 degree_minutes=degree_minutes,
-                threshold_used=DM_THRESHOLD_AUX_LIMIT,
+                threshold_used=DM_THRESHOLD_IMMERSION_LIMIT,
                 dm_rate=dm_rate,
             )
 
@@ -814,7 +812,7 @@ class EmergencyLayer:
         }
 
         # Distance from absolute maximum
-        margin_to_limit = degree_minutes - DM_THRESHOLD_AUX_LIMIT
+        margin_to_limit = degree_minutes - DM_THRESHOLD_IMMERSION_LIMIT
 
         # Calculate climate-aware tier thresholds
         warning_threshold = expected_dm["warning"]
@@ -1116,7 +1114,7 @@ class EmergencyLayer:
             True if DHW should be blocked, False otherwise
         """
         # Absolute limit always blocks DHW
-        if degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+        if degree_minutes <= DM_THRESHOLD_IMMERSION_LIMIT:
             return True
 
         # Get climate-aware thresholds

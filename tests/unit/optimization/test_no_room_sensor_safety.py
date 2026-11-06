@@ -132,9 +132,9 @@ class TestSafetyLayerAbstainsWithoutAMeasurement:
 
     def test_absolute_safety_floor_still_engages_on_degree_minutes(self, engine):
         """Sensorless systems are protected by DM, and that path must remain live."""
-        at_aux_limit = sensorless_state(degree_minutes=-1600.0)
+        at_immersion_limit = sensorless_state(degree_minutes=-1600.0)
 
-        floor = engine._absolute_safety_floor(at_aux_limit)
+        floor = engine._absolute_safety_floor(at_immersion_limit)
         assert floor is not None
 
     def test_safety_layer_still_fires_on_a_real_cold_reading(self, engine):

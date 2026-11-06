@@ -3,8 +3,8 @@
 `boost_dhw` records HOW LONG the user asked for, and while that window is open:
 - the hot-water optimiser leaves the switch alone - neither its price stops nor its own abort
   conditions end the boost,
-- the safety gate (`hot_water_unsafe_reason`: DM at the aux limit, the house below its floor) stops
-  it, and refuses to start it,
+- the safety gate (`hot_water_unsafe_reason`: DM at the immersion limit, the house below its floor)
+  stops it, and refuses to start it,
 - expiry stops it through the same owned door the unload cleanup uses,
 - and all of that on every control cycle, whether hot-water optimisation is switched on or not.
 
@@ -23,7 +23,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.effektguard.const import (
     CONF_NIBE_TEMP_LUX_ENTITY,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     MIN_TEMP_LIMIT,
 )
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
@@ -201,8 +201,8 @@ async def test_a_user_boost_ends_when_its_duration_is_over(hot_water_optimisatio
 
 @pytest.mark.parametrize(
     "dm,indoor,hot_water_optimisation",
-    [(DM_THRESHOLD_AUX_LIMIT - 100, 21.0, True), (-200.0, MIN_TEMP_LIMIT - 0.5, False)],
-    ids=["dm_past_the_aux_limit", "house_below_its_safety_floor"],
+    [(DM_THRESHOLD_IMMERSION_LIMIT - 100, 21.0, True), (-200.0, MIN_TEMP_LIMIT - 0.5, False)],
+    ids=["dm_past_the_immersion_limit", "house_below_its_safety_floor"],
 )
 @pytest.mark.asyncio
 async def test_the_safety_gate_stops_a_user_boost(dm, indoor, hot_water_optimisation):
@@ -229,7 +229,7 @@ async def test_a_safety_stop_that_failed_is_tried_again():
         house = _House(hot_water_optimisation=False, tank=45.0)
         await house.boost()
 
-        house.dm = DM_THRESHOLD_AUX_LIMIT - 100
+        house.dm = DM_THRESHOLD_IMMERSION_LIMIT - 100
         house.fail_next_stop = True
         for _ in range(2):
             clock.tick(CYCLE)
@@ -254,7 +254,7 @@ async def test_an_unavailable_reading_does_not_end_a_user_boost(reading):
         clock.tick(CYCLE)
         await house.cycle()
 
-        house.lux, house.dm = STATE_ON, DM_THRESHOLD_AUX_LIMIT - 100
+        house.lux, house.dm = STATE_ON, DM_THRESHOLD_IMMERSION_LIMIT - 100
         clock.tick(CYCLE)
         await house.cycle()
 

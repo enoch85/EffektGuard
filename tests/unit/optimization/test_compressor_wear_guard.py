@@ -353,7 +353,7 @@ def _engine(
 
     The degree-minute ladder raises only for a room below its floor, and these tests place a
     room across its whole comfort band: what follows the layers is what they are about. No model
-    profile, so the heater guard - which reads the profile's heater start - stays out of them;
+    profile, so the immersion guard - which reads the profile's immersion start - stays out of them;
     it has tests of its own.
     """
     engine = DecisionEngine(
@@ -445,7 +445,7 @@ class TestTheCap:
         assert cut < 0.0, "precondition: a cut"
         assert _offset(True, indoor_temp=TARGET + 1.5) == cut
 
-    def test_past_the_aux_limit_it_is_neither_cut_nor_raised(self):
+    def test_past_the_immersion_limit_it_is_neither_cut_nor_raised(self):
         top = {"dm": -1600.0, "indoor_temp": TARGET + BAND, "engine": _engine(asks=ASKED)}
 
         assert _offset(False, **top) > 0.5, "precondition: a raise"

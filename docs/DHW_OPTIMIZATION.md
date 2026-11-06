@@ -73,10 +73,10 @@ Every "wait" or "block" carries a `recommended_start_time`, shown by
 
 ### Thermal-debt thresholds
 
-- **Block** (rule 1): DM at or below −1500 (`DM_THRESHOLD_AUX_LIMIT`), or at or below the climate
-  zone's warning threshold, adjusted for thermal mass, minus 200 (`DM_CRITICAL_T2_MARGIN`) -
-  `EmergencyLayer.should_block_dhw()`. The zone thresholds come from
-  [CLIMATE_ZONES.md](CLIMATE_ZONES.md).
+- **Block** (rule 1): DM at or below −1500 (`DM_THRESHOLD_IMMERSION_LIMIT`), or at or
+  below the climate zone's warning threshold, adjusted for thermal mass, minus 200
+  (`DM_CRITICAL_T2_MARGIN`) - `EmergencyLayer.should_block_dhw()`. The zone thresholds
+  come from [CLIMATE_ZONES.md](CLIMATE_ZONES.md).
 - **Abort** (a running cycle): 160 below the block (`DM_DHW_ABORT_BUFFER`), never below −1500.
 - Without a climate detector the fallbacks are −340 and −500 (`DM_DHW_BLOCK_FALLBACK`,
   `DM_DHW_ABORT_FALLBACK`).

@@ -31,16 +31,16 @@ flowchart LR
 
 ## Decision
 
-`DecisionEngine.calculate_decision` runs in an executor. The layers, in order, each return
-`(offset, weight, reason)`: safety, thermal debt (`EmergencyLayer`), proactive (`ProactiveLayer`),
-effect tariff, learned pre-heat, weather compensation ("Math WC"), weather pre-heat, spot price,
-comfort. `_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)); a trend
-step then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating
-below +3 into a room cooling that fast), `_limit_for_compressor_wear` caps a raise the saturated
-compressor cannot follow, and `_limit_for_heater` keeps the degree minutes of a room at or above its
-floor off the pump's immersion heater. Where the pump has been seen short of capacity and it is, or
-within 12 forecast hours will be, as cold (`CapacityShortfall`), the guard stands down and nothing
-goes below 0.
+`DecisionEngine.calculate_decision` runs in an executor. The layers, in order, each return `(offset,
+weight, reason)`: safety, thermal debt (`EmergencyLayer`), proactive (`ProactiveLayer`), effect
+tariff, learned pre-heat, weather compensation ("Math WC"), weather pre-heat, spot price, comfort.
+`_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)); a trend step
+then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating below
++3 into a room cooling that fast), `_limit_for_compressor_wear` caps a raise the saturated
+compressor cannot follow, and `_limit_for_immersion` keeps the degree minutes of a room at or above
+its floor off the pump's immersion heater. Where the pump has been seen short of capacity and it is,
+or within 12 forecast hours will be, as cold (`CapacityShortfall`), the guard stands down and
+nothing goes below 0.
 
 With the master switch off the decision is offset 0 and no layer runs. A manual override
 (`force_offset`, `boost_heating`) replaces the layers, floored by `_absolute_safety_floor`.
@@ -54,7 +54,7 @@ A 120-second lockout (`STARTUP_GRACE_MIN_INTERVAL`), then one observation cycle
 
 - **Volatility gate** (`OffsetVolatilityTracker`): a change of 2 °C or more that reverses direction
   within 45 minutes keeps the previous offset. Manual overrides, OFF, emergencies (the 18 °C floor
-  or DM past -1500), anti-windup, a withdrawn raise on a saturated compressor and a heater guard
+  or DM past -1500), anti-windup, a withdrawn raise on a saturated compressor and an immersion guard
   cut bypass it.
 - **The integer** (`utils/offset.py`): only the whole degrees of the pending demand (asked minus
   the register) are written, truncated, clamped to -10..+10 and to the number entity's own range.

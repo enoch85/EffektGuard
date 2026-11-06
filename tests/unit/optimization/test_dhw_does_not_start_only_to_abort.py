@@ -19,7 +19,7 @@ from custom_components.effektguard.const import (
     DM_CRITICAL_T2_MARGIN,
     DM_DHW_ABORT_FALLBACK,
     DM_DHW_BLOCK_FALLBACK,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
@@ -93,7 +93,7 @@ def test_abort_never_sinks_past_the_absolute_limit(latitude, outdoor):
     """
     _, abort = _thresholds(latitude, outdoor)
 
-    assert abort >= DM_THRESHOLD_AUX_LIMIT, (
+    assert abort >= DM_THRESHOLD_IMMERSION_LIMIT, (
         f"Abort threshold {abort:.0f} is deeper than the absolute limit "
-        f"{DM_THRESHOLD_AUX_LIMIT:.0f}, past which DHW cannot run at all."
+        f"{DM_THRESHOLD_IMMERSION_LIMIT:.0f}, past which DHW cannot run at all."
     )

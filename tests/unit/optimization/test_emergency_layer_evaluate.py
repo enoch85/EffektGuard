@@ -9,7 +9,7 @@ import pytest
 
 from custom_components.effektguard.const import (
     DM_CRITICAL_T2_MARGIN,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.thermal_layer import (
@@ -76,10 +76,10 @@ class TestEmergencyLayerEvaluate:
         assert hasattr(result, "damping_applied")
 
     def test_absolute_limit_triggers_emergency(self):
-        """Past the aux limit the tier fires as a no-cut floor and asks for no raise of its own."""
+        """Past the immersion limit the tier is a no-cut floor and asks for no raise of its own."""
         layer = self._create_layer()
         nibe_state = MockNibeState(
-            degree_minutes=DM_THRESHOLD_AUX_LIMIT - 10,  # -1510
+            degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 10,  # -1510
             outdoor_temp=-10.0,
             indoor_temp=20.0,
         )
@@ -248,7 +248,7 @@ class TestEmergencyLayerShouldBlockDhw:
         )
 
         result = layer.should_block_dhw(
-            degree_minutes=DM_THRESHOLD_AUX_LIMIT - 10,  # -1510
+            degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 10,  # -1510
             outdoor_temp=-10.0,
         )
 

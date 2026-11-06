@@ -2,11 +2,11 @@
 people quote, so the harness `scripts/simulation/sim_harness.py` needs guards of its own. It once
 shipped three defects, all reported as PASS, which this file now pins:
 
-1. THE ENERGY "AUDITS" WERE ALGEBRAIC IDENTITIES. `metered = power - aux - standby` against
-   `owed = q/cop`, where power was DEFINED as `q/cop + aux + standby` - x - y + y = x. Doubling the
-   compressor's COP left the audit reporting 0.00 % error and PASS. There is no exact energy audit
-   to be had inside a closed ODE plant; what CAN fail is a physical BOUND or a LEAK, and those are
-   what the harness asserts now.
+1. THE ENERGY "AUDITS" WERE ALGEBRAIC IDENTITIES. `metered = power - immersion - standby` against
+   `owed = q/cop`, where power was DEFINED as `q/cop + immersion + standby` - x - y + y = x.
+   Doubling the compressor's COP left the audit reporting 0.00 % error and PASS. There is no exact
+   energy audit to be had inside a closed ODE plant; what CAN fail is a physical BOUND or a LEAK,
+   and those are what the harness asserts now.
 
 2. THE PLANT DESTROYED ENERGY IT HAD CHARGED FOR. The water node was force-clamped to the pump's
    maximum AFTER the ODE integrated it, so joules vanished with no residual noticing - the immersion
@@ -67,10 +67,10 @@ def _the_only_run_that_reaches_the_immersion_heater(fixed_offset: float | None =
 
     It is an outdoor-air machine, so it is the only one whose capacity collapses as the weather
     does. The other four sail through a Swedish January without ever touching resistive heat, which
-    means a leak test run on them proves nothing about a plant that mishandles the heater - and the
-    first version of that test was run on exactly those, and passed on a broken plant.
+    means a leak test run on them proves nothing about a plant that mishandles the immersion heater
+    - and the first version of that test was run on exactly those, and passed on a broken plant.
 
-    UNDERSIZED, because since the plant fires its elpatron at the pump's own start-addition
+    UNDERSIZED, because since the plant fires its immersion heater at the pump's own start-addition
     (menu 4.9.3) rather than EffektGuard's -1500 floor, a correctly-sized F2040 no longer
     latches the emergency ladder - the hardware catches DM at about -760 and holds the house.
     The saturation clamp this class tests only engages when the machine is genuinely beyond
@@ -183,16 +183,16 @@ class TestThePlantDoesNotDestroyEnergyItChargedFor:
         """
         stats = _the_only_run_that_reaches_the_immersion_heater()
 
-        assert stats["aux_kwh"] > 0, (
+        assert stats["immersion_kwh"] > 0, (
             "PRECONDITION FAILED, and this is the important half: if the immersion heater never "
             "ran, this test proves nothing about a plant that mishandles it - a leak test on mild "
-            "weather passes happily against a plant with the heater's thermostat removed."
+            "weather passes happily against a plant with the immersion heater's thermostat removed."
         )
         assert abs(stats["water_node_leak_kwh"]) <= sim.WATER_NODE_LEAK_BUDGET_KWH, (
-            f"The F2040 burned {stats['aux_kwh']:.1f} kWh of immersion heat and the flow clamp "
-            f"destroyed {abs(stats['water_node_leak_kwh']):.1f} kWh of it: energy the meter charged "
-            f"for and the room never received. No energy residual in this harness can see that, "
-            f"because they are all rearrangements of the ODE that runs BEFORE the clamp."
+            f"The F2040 burned {stats['immersion_kwh']:.1f} kWh of immersion heat and the flow "
+            f"clamp destroyed {abs(stats['water_node_leak_kwh']):.1f} kWh of it: energy the meter "
+            "charged for and the room never received. No energy residual in this harness can see "
+            "that, because they are all rearrangements of the ODE that runs BEFORE the clamp."
         )
 
     @pytest.mark.parametrize("coldsnap", [False, True], ids=["mild", "coldsnap"])
@@ -222,10 +222,11 @@ class TestThePumpIsNeverAskedForWaterItCannotMake:
         """The F2040 in a cold snap, held at +10, where the curve plus the offset overshoots.
 
         Degree minutes are the integral of (BT25 - S1). `flow` was clamped to max_flow_temp and
-        `flow_target` was not, so the plant integrated against a setpoint the pump was physically
-        forbidden to reach: DM fell regardless of the controller and floored on its own, and the
-        harness called it a control failure. The engine no longer raises past the aux limit (F-124),
-        so the overshoot is forced here: this is a property of the plant, not of the controller.
+        `flow_target` was not, so the plant integrated against a setpoint the pump was
+        physically forbidden to reach: DM fell regardless of the controller and floored on its
+        own, and the harness called it a control failure. The engine no longer raises past the
+        immersion limit (F-124), so the overshoot is forced here: this is a property of the
+        plant, not of the controller.
         """
         stats = _the_only_run_that_reaches_the_immersion_heater(fixed_offset=MAX_OFFSET)
         house = next(h for h in sim.HOUSES if h.name == _SATURATING_HOUSE)
@@ -267,7 +268,7 @@ class TestThePumpIsNeverAskedForWaterItCannotMake:
             "the plant is asking for water the pump cannot make, which floors the integrator on its "
             "own regardless of the controller - that is the artefact, and it is what this guards"
         )
-        assert stats["unavoidable_aux_kwh"] > 0, (
+        assert stats["unavoidable_immersion_kwh"] > 0, (
             "PRECONDITION: this pump must be genuinely saturated in this run, or the degree-minute "
             "collapse below would be an artefact rather than a symptom"
         )
@@ -282,10 +283,10 @@ class TestTheHarnessCannotGoBackToBeingUnfalsifiable:
 
         for banned in ("compressor_elec_metered_kwh", "compressor_elec_owed_kwh"):
             assert banned not in source, (
-                f"`{banned}` is back. It is one half of `metered = power - aux - standby` against "
-                f"`owed = q/cop`, where power was DEFINED as q/cop + aux + standby - an identity "
-                f"dressed up as an audit. It cannot fail, so it cannot detect, and it spent several "
-                f"commits being quoted as evidence that the plant was sound."
+                f"`{banned}` is back. It is one half of `metered = power - immersion - standby` "
+                "against `owed = q/cop`, where power was DEFINED as q/cop + immersion + standby - "
+                "an identity dressed up as an audit. It cannot fail, so it cannot detect, and it "
+                "spent several commits being quoted as evidence that the plant was sound."
             )
 
     def test_the_checks_that_can_fail_are_all_asserted(self):
@@ -293,12 +294,17 @@ class TestTheHarnessCannotGoBackToBeingUnfalsifiable:
         source = pathlib.Path("scripts/simulation/sim_harness.py").read_text(encoding="utf-8")
         checked = source.split("def check_invariants")[1]
 
-        for metric in ("water_node_leak_kwh", "datasheet_cop", "aux_kwh", "comfort_minutes_above"):
+        for metric in (
+            "water_node_leak_kwh",
+            "datasheet_cop",
+            "immersion_kwh",
+            "comfort_minutes_above",
+        ):
             assert metric in checked, (
-                f"`{metric}` is computed by the harness and never asserted in check_invariants. "
-                f"A number that is tracked and ignored is decoration: aux_kwh and the comfort "
-                f"minutes were both tracked and ignored while the optimiser overheated a house and "
-                f"burned resistive heat, and every run still printed PASS."
+                f"`{metric}` is computed by the harness and never asserted in check_invariants. A "
+                "number that is tracked and ignored is decoration: immersion_kwh and the comfort "
+                "minutes were both tracked and ignored while the optimiser overheated a house and "
+                "burned resistive heat, and every run still printed PASS."
             )
 
     def test_carnot_is_asserted_during_the_run_not_merely_available(self):

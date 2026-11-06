@@ -1,7 +1,7 @@
 """The degree-minute ladder must be contiguous, and every rung must be reachable.
 
 Two layers respond to thermal debt, and between them they must cover the whole range from
-"slightly negative" to the auxiliary-heat limit with no DM value falling through:
+"slightly negative" to the immersion limit with no DM value falling through:
 
     ProactiveLayer   Z1..Z5, percentages of the thermal-mass-adjusted normal_max
     EmergencyLayer   T1/T2/T3/EMERGENCY, from the adjusted warning threshold downward
@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.effektguard.const import (
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.thermal_layer import (
@@ -48,7 +48,7 @@ TARGET = 21.0
 # Indoor sits BELOW target on purpose. EmergencyLayer has two shortcuts before the ladder:
 # "above target + tolerance -> let it cool" and "AT target and the price is not cheap ->
 # ignore DM entirely". With indoor == target the second one returns tier OK for every
-# degree-minute value short of the aux limit, and a coverage sweep taken there measures the
+# degree-minute value short of the immersion limit, and a coverage sweep taken there measures the
 # shortcut rather than the ladder. A house that is cold is the condition under which the
 # ladder is supposed to act, so that is where coverage is asserted.
 INDOOR = TARGET - 0.5
@@ -71,11 +71,11 @@ class _State:
 
 
 def _sweep(heating_type: str, step: int = 1):
-    """DM -> (emergency tier, proactive zone) from just-negative to past the aux limit."""
+    """DM -> (emergency tier, proactive zone) from just-negative to past the immersion limit."""
     detector = ClimateZoneDetector(LATITUDE)
     proactive = ProactiveLayer(climate_detector=detector, heating_type=heating_type)
     out = {}
-    for dm in range(0, int(DM_THRESHOLD_AUX_LIMIT) - 100, -step):
+    for dm in range(0, int(DM_THRESHOLD_IMMERSION_LIMIT) - 100, -step):
         # A FRESH emergency layer per probe: it keeps a DM history for anti-windup, and a
         # sweep through one instance would have it comparing unrelated samples.
         emergency = EmergencyLayer(climate_detector=detector, heating_type=heating_type)

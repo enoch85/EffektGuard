@@ -26,7 +26,7 @@ from typing import Final
 
 from ..const import (
     DM_NORMAL_MIN_BUFFER,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     DM_THRESHOLD_START,
     DM_WARNING_BUFFER,
     CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG,
@@ -68,7 +68,7 @@ def keep_triggers_clear_of_the_compressor_band(
     `normal_min` is deliberately NOT clamped. Mind the naming - it is the SHALLOW end of the
     normal band (`normal_min` > `normal_max`, both negative) and it describes where degree minutes
     are ALLOWED to sit, rather than triggering anything. In mild weather they really do reach 0,
-    because that is where NIBE stops the compressor. `critical` is the hardware auxiliary-heat
+    because that is where NIBE stops the compressor. `critical` is the hardware immersion
     limit and is nowhere near the band.
     """
     warm_ceiling = DM_THRESHOLD_START - DM_WARNING_BUFFER
@@ -137,11 +137,11 @@ HEATING_CLIMATE_ZONES: Final = {
 # Zone order for detection (coldest to mildest)
 ZONE_ORDER: Final = ["extreme_cold", "very_cold", "cold", "moderate_cold", "standard"]
 
-# The absolute safety limit is imported from const.py (DM_THRESHOLD_AUX_LIMIT), never restated here:
-# a second copy could drift from the EMERGENCY tier and the `critical` threshold published here,
-# which must agree on when the house is in danger (F-112 is open because the number itself may be
-# wrong; audit F-076). The buffers below keep the expected band clear of that floor, so the edge of
-# "normal" is not also the emergency trigger.
+# The absolute safety limit is imported from const.py (DM_THRESHOLD_IMMERSION_LIMIT), never restated
+# here: a second copy could drift from the EMERGENCY tier and the `critical` threshold published
+# here, which must agree on when the house is in danger (F-112 is open because the number itself may
+# be wrong; audit F-076). The buffers below keep the expected band clear of that floor, so the edge
+# of "normal" is not also the emergency trigger.
 
 
 @dataclass
@@ -283,9 +283,9 @@ class ClimateZoneDetector:
         warning = self.zone_info.dm_warning_threshold + adjustment
 
         # COLD SIDE: never expect degree minutes beyond the absolute limit.
-        normal_min = max(normal_min, DM_THRESHOLD_AUX_LIMIT + DM_NORMAL_MIN_BUFFER)
-        normal_max = max(normal_max, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
-        warning = max(warning, DM_THRESHOLD_AUX_LIMIT + DM_WARNING_BUFFER)
+        normal_min = max(normal_min, DM_THRESHOLD_IMMERSION_LIMIT + DM_NORMAL_MIN_BUFFER)
+        normal_max = max(normal_max, DM_THRESHOLD_IMMERSION_LIMIT + DM_WARNING_BUFFER)
+        warning = max(warning, DM_THRESHOLD_IMMERSION_LIMIT + DM_WARNING_BUFFER)
 
         # WARM SIDE: see keep_triggers_clear_of_the_compressor_band. There was no clamp at all.
         return keep_triggers_clear_of_the_compressor_band(
@@ -293,7 +293,7 @@ class ClimateZoneDetector:
                 "normal_min": normal_min,
                 "normal_max": normal_max,
                 "warning": warning,
-                "critical": DM_THRESHOLD_AUX_LIMIT,
+                "critical": DM_THRESHOLD_IMMERSION_LIMIT,
             }
         )
 

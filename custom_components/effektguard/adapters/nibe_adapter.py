@@ -20,7 +20,7 @@ Data read includes:
 - Current heating curve offset
 - Compressor status
 - Priority (43086): whether the compressor serves the hot-water tank
-- Immersion heater power (43084 F-series, 31028 S-series): where the heater starts
+- Immersion heater power (43084 F-series, 31028 S-series): where the immersion heater starts
 """
 
 import logging
@@ -116,7 +116,7 @@ class NibeState:
     # S-series) - optional, and not published by every pump
     compressor_hz_max: int | None = None
     # The immersion heater's power (43084 on the F-series, 31028 on the S-series) - optional
-    heater_power_kw: float | None = None
+    immersion_power_kw: float | None = None
     power_kw: float | None = None  # Total power consumption in kW - optional
     # True when power_kw is a temperature-derived estimate, not a measurement. It rides in the same
     # field as a real reading, so anything that reports or bills consumption must check this first
@@ -396,8 +396,8 @@ class NibeAdapter:
         compressor_hz_max = await self._read_entity_float(
             self._entity_cache.get("compressor_hz_max"), default=None
         )
-        heater_power_kw = await self._read_entity_float(
-            self._entity_cache.get("heater_power"), default=None
+        immersion_power_kw = await self._read_entity_float(
+            self._entity_cache.get("immersion_power"), default=None
         )
 
         # Derive heating activity from compressor frequency when the status
@@ -450,7 +450,7 @@ class NibeAdapter:
             phase3_current=phase3_current,
             compressor_hz=int(compressor_hz) if compressor_hz is not None else None,
             compressor_hz_max=int(compressor_hz_max) if compressor_hz_max is not None else None,
-            heater_power_kw=heater_power_kw,
+            immersion_power_kw=immersion_power_kw,
             power_kw=power_kw,
             power_is_estimated=power_is_estimated,
             indoor_temp_valid=indoor_temp_valid,

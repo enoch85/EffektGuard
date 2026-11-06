@@ -114,7 +114,7 @@ class TestTheEmergencyPathIsDeliberatelyExemptFromSmoothing:
     """Why no per-update magnitude limit exists. Do not add one.
 
     A per-update magnitude limit would throttle the emergency response, and degree minutes at the
-    auxiliary-heat limit cannot wait several cycles for full heat.
+    immersion limit cannot wait several cycles for full heat.
     """
 
     def test_the_safety_layer_reaches_full_heat_in_a_single_update(self):

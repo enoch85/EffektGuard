@@ -1,23 +1,24 @@
 """Where this pump runs short of capacity, learned from its own immersion heater.
 
 A NIBE pump that cannot keep up with its own heating curve holds its degree minutes at the start of
-its immersion heater: the heater switches in where DM crosses the pump's setting and works it back
-up, so DM sits at that start for hours. A pump with capacity to spare only gets there after a cut
-of ours - the slab drains, and the return to the curve drops DM into the heater - and the
-compressor then works it back up within hours.
+its immersion heater: the immersion heater switches in where DM crosses the pump's setting and works
+it back up, so DM sits at that start for hours. A pump with capacity to spare only gets there after
+a cut of ours - the slab drains, and the return to the curve drops DM into the immersion heater -
+and the compressor then works it back up within hours.
 
 So the pump is short at the outdoor temperature of a stretch in which its degree minutes stayed
-within SHORTFALL_NEAR_HEATER_START_DM of its heater start for SHORTFALL_DWELL_MINUTES, outside hot
-water and at or above its own curve (register >= 0), beginning at least SHORTFALL_AFTER_CUT_HOURS
-after the last cut the layers asked for and after this memory started. The warmest such
-temperature of the last SHORTFALL_MEMORY_DAYS is where the pump runs short. The heater start is one
-the pump has switched its heater on at, or the model's factory value - not the depth it held with
-the heater off, which says only that its start is deeper (HeaterStart.started_degree_minutes).
+within SHORTFALL_NEAR_IMMERSION_START_DM of its immersion start for SHORTFALL_DWELL_MINUTES,
+outside hot water and at or above its own curve (register >= 0), beginning at least
+SHORTFALL_AFTER_CUT_HOURS after the last cut the layers asked for and after this memory
+started. The warmest such temperature of the last SHORTFALL_MEMORY_DAYS is where the pump runs
+short. The immersion start is one the pump has switched its immersion heater on at, or the
+model's factory value - not the depth it held with the immersion heater off, which says only
+that its start is deeper (ImmersionStart.started_degree_minutes).
 
 While the coldest of the outdoor temperature now and the next SHORTFALL_FORECAST_HOURS forecast
 hours is at or below it, heat held back cannot come back from the compressor: only from the
 immersion heater, or not at all. The decision engine then cuts nothing below the pump's own curve,
-and its heater guard stands down (DecisionEngine.calculate_decision).
+and its immersion guard stands down (DecisionEngine.calculate_decision).
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from ..const import (
     SHORTFALL_DWELL_MINUTES,
     SHORTFALL_FORECAST_HOURS,
     SHORTFALL_MEMORY_DAYS,
-    SHORTFALL_NEAR_HEATER_START_DM,
+    SHORTFALL_NEAR_IMMERSION_START_DM,
 )
 from .time_utils import seconds_between
 
@@ -56,17 +57,18 @@ class CapacityShortfall:
         """The warmest outdoor temperature at which the pump ran short, or None."""
         return max((outdoor for _, outdoor in self._seen), default=None)
 
-    def update(self, nibe_state, heater_start: float | None) -> None:
-        """Record one reading of an automatic cycle; with no heater start known, nothing is near it."""
+    def update(self, nibe_state, immersion_start: float | None) -> None:
+        """Record one automatic-cycle reading; with no immersion start known, nothing is near it."""
         now = nibe_state.timestamp
         if self._started is None:
             self._started = now
         register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
         near = (
-            heater_start is not None
+            immersion_start is not None
             and not nibe_state.is_hot_water
             and register >= 0
-            and float(nibe_state.degree_minutes) <= heater_start + SHORTFALL_NEAR_HEATER_START_DM
+            and float(nibe_state.degree_minutes)
+            <= immersion_start + SHORTFALL_NEAR_IMMERSION_START_DM
         )
         if not near:
             self._near_since = None
@@ -88,10 +90,10 @@ class CapacityShortfall:
             self._seen.append((now, float(nibe_state.outdoor_temp)))
             self._counted = True
             _LOGGER.info(
-                "The pump has held its degree minutes at its heater start (%.0f) for %d minutes at "
-                "%.1f°C outdoors without a cut of ours: it runs short of capacity at or below "
-                "%.1f°C.",
-                heater_start,
+                "The pump has held its degree minutes at its immersion start (%.0f) for %d "
+                "minutes at %.1f°C outdoors without a cut of ours: it runs short of capacity at "
+                "or below %.1f°C.",
+                immersion_start,
                 SHORTFALL_DWELL_MINUTES,
                 nibe_state.outdoor_temp,
                 self.temperature,

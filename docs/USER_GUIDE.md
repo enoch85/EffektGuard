@@ -95,15 +95,15 @@ Every 5 minutes it sets the heat, in whole degrees, from:
   the level your mode keeps (your target in Comfort, about 0.2 °C below in Balanced, about 1 °C
   below in Savings), more heat. A little at first, more if it gets worse. Where this starts depends
   on your location, the weather and your house.
-- The pump's electric heater: while the room is at or above that level, it keeps the pump from
-  starting its electric heater, which gives one kWh of heat for each kWh of electricity where the
-  compressor gives more. Below that level the heater may help. It learns where your pump starts
-  the heater by watching the heater's power (on nibe_heatpump, turn on "Int. el.add. Power", on an
-  S-series "Power internal additional heat"); until it has seen that, it uses your model's factory
-  setting.
-- Cold your pump can't keep up with: once EffektGuard has seen your pump need its electric heater
-  at some outdoor temperature, it never turns the heat below the pump's own heating curve when it
-  is that cold, or will be within 12 hours. Heat saved then could only come back from the heater.
+- The pump's immersion heater: while the room is at or above that level, it keeps the pump from
+  starting its immersion heater, which gives one kWh of heat for each kWh of electricity where the
+  compressor gives more. Below that level the immersion heater may help. It learns where your pump
+  starts it by watching its power (on nibe_heatpump, turn on "Int. el.add. Power", on an S-series
+  "Power internal additional heat"); until it has seen that, it uses your model's factory setting.
+- Cold your pump can't keep up with: once EffektGuard has seen your pump need its immersion
+  heater at some outdoor temperature, it never turns the heat below the pump's own heating curve
+  when it is that cold, or will be within 12 hours. Heat saved then could only come back from
+  the immersion heater.
 - Comfort: it pulls the room back to your target.
 
 Safety, the most expensive times, a new monthly peak and a room far too warm always win. Two
@@ -131,7 +131,7 @@ yourself is left alone, and the pump still heats a cold tank by itself.
   hour), it eases to +7.5 so it doesn't overshoot. This needs a room sensor.
 - Pump very far behind (past -1500 degree minutes): it never runs cooler than normal, unless the
   room is at or above the level your mode keeps. It adds no heat just to catch up: the compressor
-  is already flat out, so the extra would come from the electric heater.
+  is already flat out, so the extra would come from the immersion heater.
 - In both cases it stops its own hot-water boosts and starts none.
 - It only sets whole degrees from -10 to +10, within your offset entity's range, and on its own at
   most once every 5 minutes.

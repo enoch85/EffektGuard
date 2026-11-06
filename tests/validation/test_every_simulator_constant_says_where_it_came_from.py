@@ -43,9 +43,9 @@ NOT_A_PHYSICAL_CLAIM = frozenset(
         # controller, not claims about hardware, and each is argued where it is defined.
         "WATER_NODE_LEAK_BUDGET_KWH",
         "COP_ENVELOPE_TOLERANCE",
-        "AUX_OVER_PHYSICS_TOLERANCE",
-        "AUX_SLACK_KWH",
-        "DM_AUX_MARGIN",
+        "IMMERSION_OVER_PHYSICS_TOLERANCE",
+        "IMMERSION_SLACK_KWH",
+        "DM_IMMERSION_MARGIN",
         "MAX_COMFORT_MINUTES_BELOW",
         "MAX_COMFORT_MINUTES_ABOVE",
         "INDOOR_CEILING",

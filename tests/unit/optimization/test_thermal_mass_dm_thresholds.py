@@ -10,7 +10,7 @@ from custom_components.effektguard.const import (
     DM_THERMAL_MASS_BUFFER_CONCRETE,
     DM_THERMAL_MASS_BUFFER_TIMBER,
     DM_THERMAL_MASS_BUFFER_RADIATOR,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
@@ -109,7 +109,7 @@ class TestCriticalThresholdPreservation:
         assert adjusted["warning"] > base_thresholds["warning"]
 
         # Critical MUST remain -1500
-        assert adjusted["critical"] == DM_THRESHOLD_AUX_LIMIT
+        assert adjusted["critical"] == DM_THRESHOLD_IMMERSION_LIMIT
         assert adjusted["critical"] == -1500
 
     def test_all_types_preserve_critical(self, climate_detector):
