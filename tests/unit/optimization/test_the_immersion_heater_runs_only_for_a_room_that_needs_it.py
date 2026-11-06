@@ -1,7 +1,7 @@
 """The pump's immersion heater runs only for a room that needs the heat.
 
 While a measured room is at or above its mode's floor, the engine does not drive degree minutes to
-where the pump starts its immersion heater (the model profile's aux_start_dm): near it, DM may
+where the pump starts its immersion heater (the model profile's immersion_start_dm): near it, DM may
 fall only toward a hold point short of it, and the cap follows the supply both ways in whole
 steps. Below the floor the heat is the room's. Closed loop on the owner's F750 + slab: most of the
 immersion heat it bought ran with the room at or above its target.
@@ -81,13 +81,13 @@ def _run(engine, degree_minutes, register: float = 0.0, **state):
 FALLING = [-250.0 - 50.0 * i for i in range(5)]  # 600 DM an hour, toward the F750's -700
 
 
-def test_a_fall_toward_the_heater_is_braked_for_a_room_above_its_floor():
+def test_a_fall_toward_the_immersion_heater_is_braked_for_a_room_above_its_floor():
     """The register holds until the readings span a quarter of an hour, then the fall is cut."""
     decisions = _run(_engine(), FALLING)
 
     assert [d.offset for d in decisions[:3]] == [0.0, 0.0, 0.0]
     assert decisions[-1].offset <= -1.0
-    assert all(d.heater_capped for d in decisions)
+    assert all(d.immersion_capped for d in decisions)
 
 
 def test_as_degree_minutes_recover_the_offset_comes_back_up():
@@ -112,4 +112,4 @@ def test_otherwise_the_layers_ask_stands(engine, state):
     decision = _run(engine(), FALLING, **state)[-1]
 
     assert decision.offset == ASKED
-    assert not decision.heater_capped
+    assert not decision.immersion_capped

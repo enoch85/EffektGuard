@@ -288,13 +288,13 @@ class TestCapacityComesFromTheDatasheetToo:
 class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
     """It was ONE invented number, applied to five machines, matching none of them.
 
-    The simulator gave every house the same `AUX_STEP_KW = 3.0`. NIBE ships the F750 and F730 with a
-    6.5 kW heater set to 3.5 kW at delivery, the F1155-12 and S1155-12 with a 7 kW heater in seven
-    automatic steps, and the F2040 with NO HEATER AT ALL - it is an outdoor monobloc, and the
-    electric addition belongs to the indoor module it is paired with.
+    The simulator gave every house the same `IMMERSION_STEP_KW = 3.0`. NIBE ships the F750 and F730
+    with a 6.5 kW immersion heater set to 3.5 kW at delivery, the F1155-12 and S1155-12 with a 7 kW
+    immersion heater in seven automatic steps, and the F2040 with NO IMMERSION HEATER AT ALL - it is
+    an outdoor monobloc, and the electric addition belongs to the indoor module it is paired with.
     """
 
-    def test_each_machine_carries_its_own_published_heater(self, profile):
+    def test_each_machine_carries_its_own_published_immersion_heater(self, profile):
         published = {
             "F750": 3.5,  # "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
             "F730": 3.5,
@@ -313,7 +313,7 @@ class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
         """Not "0 kW by default". The machine physically does not have one."""
         f2040 = NibeF2040Profile()
 
-        assert f2040.immersion_heater_kw == 0.0 and not f2040.supports_aux_heating, (
+        assert f2040.immersion_heater_kw == 0.0 and not f2040.supports_immersion_heating, (
             "The F2040 is an outdoor monobloc. Its technical-specifications table has no "
             "immersion-heater row. The profile used to claim 'True # Larger immersion heaters'."
         )
@@ -324,11 +324,11 @@ class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
             published = house.profile.immersion_heater_kw
             if published > 0:
                 assert house.immersion_heater_kw == published, (
-                    f"{house.name} is simulated with a {house.immersion_heater_kw} kW heater while "
-                    f"its datasheet publishes {published} kW."
+                    f"{house.name} is simulated with a {house.immersion_heater_kw} kW immersion "
+                    f"heater while its datasheet publishes {published} kW."
                 )
             else:
-                assert house.immersion_heater_kw == sim.ASSUMED_INDOOR_MODULE_HEATER_KW, (
+                assert house.immersion_heater_kw == sim.ASSUMED_INDOOR_MODULE_IMMERSION_KW, (
                     "the F2040's backup heat is an assumption about the paired indoor module, and "
                     "the constant that supplies it must say so in its name"
                 )

@@ -8,7 +8,7 @@ separated by ` · `. First what changed the offset after the layers voted, the l
 only lower or raise what the layers asked for; they add nothing of their own:
 
 ```
-Heater guard lowered +0.0 to -1.0 (DM -582, heater starts at -700) · Compressor at max lowered +1.4 to +0.0
+Immersion heat lowered +0.0 to -1.0 (DM -582, starts at -700) · Compressor at max lowered +1.4 to +0.0
 ```
 
 Then each layer that voted, heaviest first, as offset@weight (why). Where more than one thing made

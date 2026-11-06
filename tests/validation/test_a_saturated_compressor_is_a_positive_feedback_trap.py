@@ -1,4 +1,4 @@
-"""F-124: a saturated compressor is a positive feedback trap; the aux-limit tier no longer feeds it.
+"""F-124: a saturated compressor is a positive feedback trap; the EMERGENCY tier no longer feeds it.
 
 `DM = integral(BT25 - S1)`. Raising the curve offset raises S1 instantly; BT25 - the water the
 pump actually makes - can only follow if the compressor has headroom. A SATURATED compressor has
@@ -7,8 +7,8 @@ with a raise keeps raising: a positive feedback loop. The EMERGENCY tier did exa
 DM -1500, and on the owner's F750 it latched for hours, the immersion heater (on from about -1450)
 cooking the house while DM sat at the floor.
 
-Past the aux limit the tier is now a floor at 0: no cut deepens the shortfall, and nothing of its
-own raises into a pump that has nothing left. A room above its band is let cool.
+Past the immersion limit the tier is now a floor at 0: no cut deepens the shortfall, and nothing of
+its own raises into a pump that has nothing left. A room above its band is let cool.
 """
 
 from __future__ import annotations

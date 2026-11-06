@@ -81,7 +81,7 @@ class NibeS1155Profile(HeatPumpProfile):
 
     # SOURCED: S1155 register 40680 "start diff additional heat" factory default 400, applied
     # below the compressor start (-60): the controller engages additive heat at about -460.
-    aux_start_dm: float = -460.0
+    immersion_start_dm: float = -460.0
 
     # Mid-range variant (3-12 kW) - VERIFIED from NIBE website
     datasheet_points: tuple[RatingPoint, ...] = S1155_12_DATASHEET
@@ -107,7 +107,7 @@ class NibeS1155Profile(HeatPumpProfile):
     optimal_flow_delta: float = 25.0  # Can run lower flow temps
     cop_curve: dict[float, float] = None
 
-    supports_aux_heating: bool = True
+    supports_immersion_heating: bool = True
     supports_modulation: bool = True
     supports_weather_compensation: bool = True
     max_flow_temp: float = 65.0  # "compressor provides a supply temperature up to 65 C"

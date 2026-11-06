@@ -1,11 +1,11 @@
-"""A pump short of capacity keeps its own curve: no cut below it, and no heater guard.
+"""A pump short of capacity keeps its own curve: no cut below it, and no immersion guard.
 
-A NIBE pump that cannot keep up with its curve holds its degree minutes at its immersion heater's
-start. Once the engine has seen that for SHORTFALL_DWELL_MINUTES - at or above the curve, outside
-hot water, at least SHORTFALL_AFTER_CUT_HOURS after its own last cut and after it started - it cuts
-nothing below the curve while the coming hours are as cold: heat held back then comes back only
-from the heater, or not at all. Repository simulator, undersized F2040 in the January 2024 cold
-snap: 1450 -> 890 minutes below the comfort band.
+A NIBE pump that cannot keep up with its curve holds its degree minutes at its immersion start. Once
+the engine has seen that for SHORTFALL_DWELL_MINUTES - at or above the curve, outside hot water, at
+least SHORTFALL_AFTER_CUT_HOURS after its own last cut and after it started - it cuts nothing below
+the curve while the coming hours are as cold: heat held back then comes back only from the immersion
+heater, or not at all. Repository simulator, undersized F2040 in the January 2024 cold snap: 1450 ->
+890 minutes below the comfort band.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from custom_components.effektguard.const import (
     SHORTFALL_DWELL_MINUTES,
     SHORTFALL_FORECAST_HOURS,
     SHORTFALL_MEMORY_DAYS,
-    SHORTFALL_NEAR_HEATER_START_DM,
+    SHORTFALL_NEAR_IMMERSION_START_DM,
     UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.models.nibe import NibeF750Profile
@@ -39,12 +39,12 @@ from custom_components.effektguard.optimization.thermal_layer import ThermalMode
 START = datetime(2026, 1, 15, 0, 0, tzinfo=timezone.utc)
 CYCLE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
 TARGET = 21.0
-# Below the balanced floor: the heater guard leaves the layers' ask alone, so what is tested is the
-# shortfall alone.
+# Below the balanced floor: the immersion guard leaves the layers' ask alone, so what is tested is
+# the shortfall alone.
 ROOM = TARGET - MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED].room_floor_below_target - 0.1
-HEATER_START = NibeF750Profile().aux_start_dm
-AT_START = HEATER_START + SHORTFALL_NEAR_HEATER_START_DM  # the heater holds DM here
-QUIET = -300.0  # DM well clear of the heater
+IMMERSION_START = NibeF750Profile().immersion_start_dm
+AT_START = IMMERSION_START + SHORTFALL_NEAR_IMMERSION_START_DM  # the immersion heater holds DM here
+QUIET = -300.0  # DM well clear of the immersion heater
 OUTDOOR = -12.0
 CUT = -2.0
 RAISE = 1.0
@@ -112,12 +112,12 @@ class _Pump:
         return decision
 
     def seen_short(self):
-        """Quiet hours, then the pump held at its heater start for the dwell."""
+        """Quiet hours, then the pump held at its immersion start for the dwell."""
         self.run(QUIET_CYCLES, RAISE, QUIET)
         self.run(DWELL_CYCLES + 1, RAISE, AT_START)
 
 
-def test_a_pump_held_at_its_heater_start_gets_no_cut_while_it_stays_as_cold():
+def test_a_pump_held_at_its_immersion_start_gets_no_cut_while_it_stays_as_cold():
     pump = _Pump()
     assert pump.run(1, CUT, QUIET).offset == CUT  # nothing seen yet: the cut stands
 
@@ -156,7 +156,7 @@ def test_a_pump_held_at_its_heater_start_gets_no_cut_while_it_stays_as_cold():
         pytest.param(
             lambda pump: pump.run(QUIET_CYCLES, RAISE, QUIET),
             {"degree_minutes": AT_START + 10.0},
-            id="short-of-the-heater-start",
+            id="short-of-the-immersion-start",
         ),
         pytest.param(
             lambda pump: pump.run(QUIET_CYCLES, RAISE, QUIET),
@@ -208,7 +208,7 @@ def test_the_coming_hours_decide(outdoor, forecast, kept):
 
 
 def test_a_manual_override_below_the_curve_is_a_cut_of_ours():
-    """Five hours after the owner forced a cut, the pump at its heater start is still recovering."""
+    """Five hours after a forced cut, a pump at its immersion start is still recovering."""
     pump = _Pump()
     pump.run(QUIET_CYCLES, RAISE, QUIET)
     pump.engine.set_manual_override(CUT)
@@ -252,8 +252,8 @@ async def test_the_coordinator_stores_it_across_a_restart(hass, hass_storage):
     assert after.engine.capacity_shortfall.temperature == OUTDOOR
 
 
-def test_the_heater_guard_stands_down_while_the_pump_is_short():
-    """Above its floor the room would have the guard cap a fall toward the heater; short, it may not."""
+def test_the_immersion_guard_stands_down_while_the_pump_is_short():
+    """Above its floor the guard would cap a fall toward the immersion heater; short, it may not."""
     pump = _Pump()
     pump.engine.capacity_shortfall.restore(
         {"seen": [[(START - timedelta(days=1)).isoformat(), OUTDOOR]]}
@@ -285,4 +285,4 @@ def test_the_heater_guard_stands_down_while_the_pump_is_short():
         pump.now += CYCLE
 
     assert [d.offset for d in decisions] == [RAISE] * len(falling)
-    assert not any(d.heater_capped for d in decisions)
+    assert not any(d.immersion_capped for d in decisions)

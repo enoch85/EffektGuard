@@ -181,7 +181,7 @@ class TestDMRangeCalculations:
 
     def test_never_exceeds_absolute_maximum(self, hass_mock):
         """DM thresholds should never go beyond -1500 absolute maximum."""
-        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
+        from custom_components.effektguard.const import DM_THRESHOLD_IMMERSION_LIMIT
 
         # Test extreme cold location at extreme temperature
         engine = create_engine_for_location(67.85, hass_mock)
@@ -191,8 +191,8 @@ class TestDMRangeCalculations:
         )
 
         # Should be clamped to absolute maximum
-        assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
-        assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_max"] >= DM_THRESHOLD_IMMERSION_LIMIT
+        assert dm_range["warning"] >= DM_THRESHOLD_IMMERSION_LIMIT
 
 
 class TestArcticScenario:
@@ -354,19 +354,19 @@ class TestSafetyLimits:
 
     def test_never_exceeds_absolute_max_extreme_cold(self, hass_mock):
         """Even in extreme conditions, never exceed -1500 DM."""
-        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
+        from custom_components.effektguard.const import DM_THRESHOLD_IMMERSION_LIMIT
 
         engine = create_engine_for_location(67.85, hass_mock)
 
         # Test extreme temperature
         dm_range = engine.climate_detector.get_expected_dm_range(-50.0)
 
-        assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
-        assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_max"] >= DM_THRESHOLD_IMMERSION_LIMIT
+        assert dm_range["warning"] >= DM_THRESHOLD_IMMERSION_LIMIT
 
     def test_absolute_max_is_hard_limit(self, hass_mock):
-        """DM_THRESHOLD_AUX_LIMIT should be the hardest limit."""
-        from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT
+        """DM_THRESHOLD_IMMERSION_LIMIT should be the hardest limit."""
+        from custom_components.effektguard.const import DM_THRESHOLD_IMMERSION_LIMIT
 
         # Test all zones at extreme temperatures
         latitudes = [67.85, 65.58, 59.33, 55.68, 48.85]
@@ -376,8 +376,8 @@ class TestSafetyLimits:
             dm_range = engine.climate_detector.get_expected_dm_range(-40.0)
 
             # All zones respect absolute maximum
-            assert dm_range["normal_max"] >= DM_THRESHOLD_AUX_LIMIT
-            assert dm_range["warning"] >= DM_THRESHOLD_AUX_LIMIT
+            assert dm_range["normal_max"] >= DM_THRESHOLD_IMMERSION_LIMIT
+            assert dm_range["warning"] >= DM_THRESHOLD_IMMERSION_LIMIT
 
 
 class TestDMThresholdProgression:

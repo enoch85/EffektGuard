@@ -13,7 +13,7 @@ from ..const import (
     DISPLAY_COP_CURVE_COLD_C,
     DISPLAY_COP_CURVE_SPAN_K,
     DISPLAY_COP_CURVE_TEMPS,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 
 
@@ -110,7 +110,7 @@ class HeatPumpProfile(ABC):
     cop_curve: dict[float, float]  # outdoor_temp → COP mapping
 
     # System capabilities
-    supports_aux_heating: bool
+    supports_immersion_heating: bool
     supports_modulation: bool
     supports_weather_compensation: bool
     max_flow_temp: float
@@ -118,17 +118,18 @@ class HeatPumpProfile(ABC):
 
     # The simulator reads this so the plant model tracks what the integration believes.
     # It cannot do that while the profile restates the number, so it references it (F-076).
-    dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
+    dm_threshold_immersion_swedish: float = DM_THRESHOLD_IMMERSION_LIMIT
 
     # The DM at which THE PUMP ITSELF engages its additive heat, at factory settings - NIBE menu
-    # 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with the compressor
-    # start (S-series/F11xx). An installer can move it - the owner's F750 starts its heater at
-    # -1450 - and it is distinct from DM_THRESHOLD_AUX_LIMIT (EffektGuard's emergency floor, F-112):
-    # a real pump's elpatron fires at its own setting and works DM back up, so a plant model that
-    # waits for -1500 misreports both aux energy and overshoot. The simulator's plant reads it, and
-    # so do the heater guard and the capacity shortfall until the pump has been seen starting its
-    # heater deeper (DecisionEngine.heater_start_dm).
-    aux_start_dm: float = -700.0
+    # 4.9.3 "start addition" (F-series) or "start diff additional heat" summed with the
+    # compressor start (S-series/F11xx). An installer can move it - the owner's F750 starts its
+    # immersion heater at -1450 - and it is distinct from DM_THRESHOLD_IMMERSION_LIMIT
+    # (EffektGuard's emergency floor, F-112): a real pump's immersion heater fires at its own
+    # setting and works DM back up, so a plant model that waits for -1500 misreports both
+    # immersion heat and overshoot. The simulator's plant reads it, and so do the immersion
+    # guard and the capacity shortfall until the pump has been seen starting its immersion
+    # heater deeper (DecisionEngine.immersion_start_in_force).
+    immersion_start_dm: float = -700.0
 
     # Whether the pump publishes the frequency its compressor may run up to right now: 43123 "Compr.
     # current max.freq." on the F730/F750/F1155/F1255, 31043 "Max frequency compressor" on the
@@ -155,9 +156,10 @@ class HeatPumpProfile(ABC):
     heating_capacity_range_kw: tuple[float, float] = (0.0, 0.0)
 
     # The immersion heater's DELIVERY SETTING, from the datasheet. 0.0 means the machine has none.
-    # NIBE ships the F750/F730 with a 6.5 kW heater set to 3.5 kW at delivery, the F1155-12/S1155-12
-    # with a 7 kW heater in seven automatic steps, and the F2040 with none (outdoor monobloc - its
-    # electric addition lives in the paired indoor module, which this package does not model).
+    # NIBE ships the F750/F730 with a 6.5 kW immersion heater set to 3.5 kW at delivery, the
+    # F1155-12/S1155-12 with a 7 kW immersion heater in seven automatic steps, and the F2040 with
+    # none (outdoor monobloc - its electric addition lives in the paired indoor module, which this
+    # package does not model).
     immersion_heater_kw: float = 0.0
     # The machine's published minimum OUTDOOR operating temperature, or None where the
     # manufacturer publishes none. Only meaningful for a machine whose heat source IS the outdoor

@@ -73,7 +73,7 @@ def test_a_radiator_system_is_left_exactly_where_it_was():
 
 
 def test_the_absolute_maximum_is_never_buffered():
-    """The aux limit is hardware, not a tuning knob. It is the same for every emitter."""
+    """The immersion limit is hardware, not a tuning knob. It is the same for every emitter."""
     concrete = _thresholds("concrete_ufh")["critical"]
     radiator = _thresholds("radiator")["critical"]
 

@@ -3,7 +3,7 @@
 Owner rule: "DHW wins, but never below safety." RULE 0 (two-lane scheduling) returns early, before
 the thermal-debt block (RULE 1) and space-heating emergency (RULE 2), so a scheduled window heats
 hot water through the debt block - but not below the MIN_TEMP_LIMIT indoor floor, and not at the
-DM_THRESHOLD_AUX_LIMIT degree-minute limit.
+DM_THRESHOLD_IMMERSION_LIMIT degree-minute limit.
 
 And if it may start, it may run: the scheduled path's abort conditions are the SAME two safety
 thresholds, so a cycle permitted to begin cannot be aborted by the state it began in (it once
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from custom_components.effektguard.const import DM_THRESHOLD_AUX_LIMIT, MIN_TEMP_LIMIT
+from custom_components.effektguard.const import DM_THRESHOLD_IMMERSION_LIMIT, MIN_TEMP_LIMIT
 from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
 from custom_components.effektguard.optimization.dhw_optimizer import (
     DHWDemandPeriod,
@@ -95,12 +95,12 @@ def test_a_scheduled_shower_does_not_beat_the_safety_floor():
 
 
 def test_a_scheduled_shower_does_not_beat_the_absolute_degree_minute_limit():
-    """At the aux limit the immersion heater is engaging. DHW must not compete with recovery."""
-    decision = _ask(_scheduler(), thermal_debt=DM_THRESHOLD_AUX_LIMIT - 50, indoor=21.0)
+    """At the immersion limit the immersion heater engages: DHW must not compete with recovery."""
+    decision = _ask(_scheduler(), thermal_debt=DM_THRESHOLD_IMMERSION_LIMIT - 50, indoor=21.0)
 
     assert not decision.should_heat, (
-        f"DHW was started at DM {DM_THRESHOLD_AUX_LIMIT - 50}, past the absolute limit "
-        f"{DM_THRESHOLD_AUX_LIMIT} where the emergency layer owns the pump."
+        f"DHW was started at DM {DM_THRESHOLD_IMMERSION_LIMIT - 50}, past the absolute limit "
+        f"{DM_THRESHOLD_IMMERSION_LIMIT} where the emergency layer owns the pump."
     )
 
 

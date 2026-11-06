@@ -75,7 +75,7 @@ SCENARIOS = {
         # Late May in southern Sweden, daytime +20 C and above. Space heating should be
         # OFF. This is the scenario that catches a controller heating in warm weather -
         # the failure the repo's own history records as "the emergency ladder fired in
-        # July". A warm month must produce near-zero heating energy and no aux at all.
+        # July". A warm month must produce near-zero heating energy and no immersion heat at all.
         "place": "Malmö",
         "lat": 55.60,
         "lon": 13.00,

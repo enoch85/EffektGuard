@@ -46,7 +46,7 @@ class TestModelThermalDebtIntegration:
         from custom_components.effektguard.models.registry import HeatPumpModelRegistry
         from custom_components.effektguard.const import (
             DM_THRESHOLD_START,
-            DM_THRESHOLD_AUX_LIMIT,
+            DM_THRESHOLD_IMMERSION_LIMIT,
         )
 
         # Get all models
@@ -60,7 +60,9 @@ class TestModelThermalDebtIntegration:
         print("=" * 80)
         print(f"Testing {len(nibe_models)} NIBE models")
         print(
-            f"Key thresholds: start {DM_THRESHOLD_START}, " f"absolute max {DM_THRESHOLD_AUX_LIMIT}"
+            f"Key thresholds: start {DM_THRESHOLD_START}, "
+            f"absolute max "
+            f"{DM_THRESHOLD_IMMERSION_LIMIT}"
         )
         print("=" * 80)
 
@@ -329,7 +331,7 @@ class TestModelDecisionEngineIntegration:
         scenarios = [
             ("Normal operation", 2.5, 0, 42, "info", "Continue"),
             ("High but OK", 5.0, -5, 48, "info", "Monitor"),
-            ("Suspiciously high", 6.0, 5, 50, "warning", "Check aux heat"),
+            ("Suspiciously high", 6.0, 5, 50, "warning", "Check immersion heater"),
             ("Very high power", 7.0, 0, 52, "warning", "Investigate"),
         ]
 

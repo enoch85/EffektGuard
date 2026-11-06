@@ -3,14 +3,14 @@
 The aggregator must select the emergency tier by reading the `tier` field, never by inferring it
 from layer weights or offset magnitudes. That inference broke in four ways, each letting cost win:
 
-  1. the aux-limit EMERGENCY tier fell through to the peak-aware compromise or the tie-break;
+  1. the immersion-limit EMERGENCY tier fell through to the peak-aware compromise or the tie-break;
   2. the tie-break `abs(max) > abs(min)` returns `min` on the exact +10/-10 tie -> max heat cut;
   3. the peak-aware gate hardcoded `weight >= 0.85`, but DM_CRITICAL_T2_WEIGHT is 0.81;
   4. the tier was inferred from the POST-damping offset, so a damped T3 was misread as T1.
 
-Also: past DM_THRESHOLD_AUX_LIMIT no cost layer may CUT heat (the tier is a floor at 0), enforced
-BEFORE the anti-windup early returns. A room above its band is the one exception: a deep DM there
-means our own target is too high, and lowering it is what recovers DM.
+Also: past DM_THRESHOLD_IMMERSION_LIMIT no cost layer may CUT heat (the tier is a floor at 0),
+enforced BEFORE the anti-windup early returns. A room above its band is the one exception: a deep DM
+there means our own target is too high, and lowering it is what recovers DM.
 """
 
 from datetime import datetime, timedelta
@@ -27,7 +27,7 @@ from custom_components.effektguard.const import (
     DM_CRITICAL_T3_OFFSET,
     DM_CRITICAL_T3_PEAK_AWARE_OFFSET,
     DM_CRITICAL_T3_WEIGHT,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     EFFECT_OFFSET_CRITICAL,
     EFFECT_WEIGHT_CRITICAL,
     LAYER_WEIGHT_SAFETY,
@@ -97,15 +97,15 @@ def build_layers(
     ]
 
 
-def emergency_at_aux_limit() -> EmergencyLayerDecision:
+def emergency_at_immersion_limit() -> EmergencyLayerDecision:
     """The EMERGENCY tier exactly as thermal_layer emits it at DM <= -1500."""
     return EmergencyLayerDecision(
         name="Thermal Debt",
         offset=0.0,
         weight=LAYER_WEIGHT_SAFETY,
-        reason="EMERGENCY: DM at aux limit",
+        reason="EMERGENCY: DM at immersion limit",
         tier="EMERGENCY",
-        degree_minutes=DM_THRESHOLD_AUX_LIMIT - 20,
+        degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 20,
     )
 
 
@@ -135,41 +135,41 @@ def price_peak() -> LayerDecision:
     )
 
 
-class TestAuxLimitIsAbsolute:
-    """Past DM_THRESHOLD_AUX_LIMIT no cost layer may cut heat."""
+class TestImmersionLimitIsAbsolute:
+    """Past DM_THRESHOLD_IMMERSION_LIMIT no cost layer may cut heat."""
 
-    def test_price_peak_cannot_override_aux_limit_emergency(self, engine):
-        """Price PEAK (-10.0 @ 1.0) must not cut heat past the aux limit.
+    def test_price_peak_cannot_override_immersion_limit_emergency(self, engine):
+        """Price PEAK (-10.0 @ 1.0) must not cut heat past the immersion limit.
 
         Pre-fix: the tie-break `abs(max) > abs(min)` was False on the exact 10.0/-10.0 tie,
-        so it returned -10.0 - MAXIMUM HEAT REDUCTION at the aux-heat limit.
+        so it returned -10.0 - MAXIMUM HEAT REDUCTION at the immersion limit.
         """
         offset = engine._aggregate_layers(
-            build_layers(emergency_at_aux_limit(), price=price_peak())
+            build_layers(emergency_at_immersion_limit(), price=price_peak())
         )
 
         assert offset == pytest.approx(0.0), (
             f"Cost overrode the absolute DM safety limit: got {offset:+.1f}. "
-            f"At DM <= {DM_THRESHOLD_AUX_LIMIT} the aux immersion heater engages; "
+            f"At DM <= {DM_THRESHOLD_IMMERSION_LIMIT} the immersion heater engages; "
             f"reducing heat here deepens the debt AND creates a larger peak."
         )
 
-    def test_critical_effect_peak_cannot_throttle_aux_limit_emergency(self, engine):
-        """A critical effect peak must not cut heat past the aux limit."""
+    def test_critical_effect_peak_cannot_throttle_immersion_limit_emergency(self, engine):
+        """A critical effect peak must not cut heat past the immersion limit."""
         offset = engine._aggregate_layers(
-            build_layers(emergency_at_aux_limit(), effect=critical_effect_peak())
+            build_layers(emergency_at_immersion_limit(), effect=critical_effect_peak())
         )
 
         assert offset == pytest.approx(0.0), (
-            f"Effect-tariff protection cut heat to {offset:+.1f} past the aux limit. "
+            f"Effect-tariff protection cut heat to {offset:+.1f} past the immersion limit. "
             "Peak protection must never deepen a shortfall the immersion heater is paying for."
         )
 
-    def test_both_cost_layers_together_cannot_override_aux_limit(self, engine):
+    def test_both_cost_layers_together_cannot_override_immersion_limit(self, engine):
         """Price PEAK and a critical effect peak together still must not win."""
         offset = engine._aggregate_layers(
             build_layers(
-                emergency_at_aux_limit(),
+                emergency_at_immersion_limit(),
                 effect=critical_effect_peak(),
                 price=price_peak(),
             )
@@ -201,7 +201,7 @@ class TestRecoveryTiersSurviveCostLayers:
 
         assert offset == pytest.approx(DM_CRITICAL_T2_PEAK_AWARE_OFFSET), (
             f"T2 thermal-debt recovery returned {offset:+.1f}. A negative offset here "
-            "actively deepens the debt toward the aux limit."
+            "actively deepens the debt toward the immersion limit."
         )
         assert offset > 0, "Recovery must never be negative while in thermal debt"
 
@@ -210,7 +210,7 @@ class TestRecoveryTiersSurviveCostLayers:
 
         Pre-fix: price_layer promotes itself to weight 1.0 on any PEAK quarter, entering
         the critical-override branch that emergency tiers (max 0.91) cannot reach.
-        Result: -10.0 while DM is ~50 from the aux limit.
+        Result: -10.0 while DM is ~50 from the immersion limit.
         """
         t3 = EmergencyLayerDecision(
             name="T3",
@@ -277,8 +277,8 @@ class TestAggregateOutputIsBounded:
         assert MIN_OFFSET <= offset <= MAX_OFFSET
 
 
-class TestAuxLimitEnforcedBeforeEarlyReturns:
-    """thermal_layer must check the aux limit BEFORE its early-return branches."""
+class TestImmersionLimitEnforcedBeforeEarlyReturns:
+    """thermal_layer must check the immersion limit BEFORE its early-return branches."""
 
     @staticmethod
     def _layer() -> EmergencyLayer:
@@ -301,15 +301,17 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
             timestamp=datetime(2026, 1, 15, 6, 0),
         )
 
-    def test_a_house_above_its_band_past_the_aux_limit_may_be_cut(self):
-        """Past the aux limit a room above its band is let cool: the tier stands down.
+    def test_a_house_above_its_band_past_the_immersion_limit_may_be_cut(self):
+        """Past the immersion limit a room above its band is let cool: the tier stands down.
 
         There the deep DM is our own doing - the target is too high for what the pump can make,
         the immersion heater is cooking the house - and lowering the curve is what recovers DM
         (the owner's 18 November 2025: +5 and DM -2642 with the room going 20.3 -> 23.0 C).
         """
         decision = self._layer().evaluate_layer(
-            nibe_state=self._state(degree_minutes=DM_THRESHOLD_AUX_LIMIT - 50, indoor_temp=21.3),
+            nibe_state=self._state(
+                degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 50, indoor_temp=21.3
+            ),
             weather_data=None,
             target_temp=21.0,
             tolerance_range=0.2,  # production default: tolerance 0.5 * 0.4
@@ -317,16 +319,17 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
         )
 
         assert decision.tier != "EMERGENCY", (
-            f"A room 0.3 C above its band past the aux limit still got tier={decision.tier!r}: "
-            "the floor would block the cut that lets the overheated house recover."
+            "A room 0.3 C above its band past the immersion limit still got "
+            f"tier={decision.tier!r}: the floor would block the cut that lets the "
+            "overheated house recover."
         )
         assert decision.weight == pytest.approx(0.0)
 
-    def test_aux_limit_enforced_during_anti_windup_cooldown(self):
-        """DM past the aux limit must fire EMERGENCY even inside the anti-windup cooldown.
+    def test_immersion_limit_enforced_during_anti_windup_cooldown(self):
+        """DM past the immersion limit must fire EMERGENCY even inside the anti-windup cooldown.
 
         Pre-fix: the cooldown branch returned early with weight 0.7 and the pump's current
-        offset, so for up to ANTI_WINDUP_COOLDOWN_MINUTES the aux limit was not enforced
+        offset, so for up to ANTI_WINDUP_COOLDOWN_MINUTES the immersion limit was not enforced
         at all.
         """
         layer = self._layer()
@@ -335,7 +338,7 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
 
         decision = layer.evaluate_layer(
             nibe_state=self._state(
-                degree_minutes=DM_THRESHOLD_AUX_LIMIT - 50,
+                degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 50,
                 indoor_temp=20.5,
                 current_offset=1.0,
             ),
@@ -346,7 +349,8 @@ class TestAuxLimitEnforcedBeforeEarlyReturns:
         )
 
         assert decision.tier == "EMERGENCY", (
-            f"Aux limit not enforced during anti-windup cooldown - got tier={decision.tier!r}, "
-            f"offset={decision.offset:+.1f}. The hard limit must outrank the cooldown."
+            "Immersion limit not enforced during anti-windup cooldown - got "
+            f"tier={decision.tier!r}, offset={decision.offset:+.1f}. The hard limit must "
+            "outrank the cooldown."
         )
         assert decision.offset == pytest.approx(0.0)

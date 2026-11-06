@@ -60,7 +60,7 @@ def test_below_the_floor_price_stops_being_a_reason_to_wait():
 
 
 def test_a_house_in_deep_thermal_debt_still_outranks_the_hot_water():
-    """NOT "always heat". Taking the compressor now is how a recoverable debt becomes aux heat."""
+    """NOT "always heat": taking the compressor now turns a recoverable debt into immersion heat."""
     decision = _decide(dhw=FREEZING_TANK, dm=-1400.0, indoor=21.0)
 
     assert decision.should_heat is False, (

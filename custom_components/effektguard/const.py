@@ -135,9 +135,9 @@ class OptimizationModeConfig:
 # set degree" (above is fine), balanced sits "like 0.2 degrees" below it to save more, and savings
 # "is allowed to cut below the set degree within reasonable limits" - the owner asked whether 1-2 C
 # is reasonable. A degree for savings, closed loop on the owner's F750 + slab, four plant fits, Oct
-# 18 - Apr 30, per season: the room 0.76 C above the 21 C target on average, 30.5 hours below 20.5 C,
-# at its coldest 19.6 C (the heater guard reading the start the pump has shown, THE HEATER START; on
-# the F750 profile's factory -700, 0.62 C, 103 hours and 18.7 C).
+# 18 - Apr 30, per season: the room 0.76 C above the 21 C target on average, 30.5 hours below 20.5
+# C, at its coldest 19.6 C (the immersion guard reading the start the pump has shown, THE IMMERSION
+# START; on the F750 profile's factory -700, 0.62 C, 103 hours and 18.7 C).
 MODE_CONFIGS: Final[dict[str, OptimizationModeConfig]] = {
     OPTIMIZATION_MODE_COMFORT: OptimizationModeConfig(
         dead_zone=0.1,  # Tighter: react faster to any deviation
@@ -345,7 +345,7 @@ CLIMATE_ZONE_STANDARD_WINTER_AVG: Final = 0.0  # SMHI Southern Sweden Jan-Feb: -
 # No hardcoded temperature bands - uses latitude-based climate zones with outdoor temp adjustment.
 #
 DM_THRESHOLD_START: Final = -60  # Normal compressor start (NIBE standard)
-DM_THRESHOLD_AUX_LIMIT: Final = -1500  # Auxiliary heat threshold (prevent expensive elpatron)
+DM_THRESHOLD_IMMERSION_LIMIT: Final = -1500  # Immersion limit (prevent expensive immersion heat)
 
 # How far the EXPECTED degree-minute band must stay clear of the absolute floor above: a house whose
 # "normal" range reached the emergency trigger would be normal and in danger at once (audit F-076).
@@ -394,7 +394,7 @@ DM_CRITICAL_T3_PEAK_AWARE_OFFSET: Final = 1.0  # T3 minimal: Aggressive recovery
 #     silently moved T2 below a hardcoded `weight >= 0.85` gate, which dropped T2
 #     recovery into the cost-layer override path and produced a -3.0 C heat REDUCTION
 #     at deep thermal debt.
-DM_TIER_EMERGENCY: Final = "EMERGENCY"  # DM <= DM_THRESHOLD_AUX_LIMIT (absolute priority)
+DM_TIER_EMERGENCY: Final = "EMERGENCY"  # DM <= DM_THRESHOLD_IMMERSION_LIMIT (absolute priority)
 DM_RECOVERY_TIERS: Final[frozenset[str]] = frozenset({"T1", "T2", "T3"})
 
 # Minimal offsets applied when a recovery tier coincides with a CRITICAL cost layer
@@ -679,7 +679,7 @@ PROACTIVE_ZONE5_THRESHOLD_PERCENT: Final = 0.875  # 87.5% - strictly BEFORE warn
 # T1: 4.0 × 0.65 = 2.60 (recovery mode, from the warning threshold down)
 # T2: 7.0 × 0.81 = 5.67 (strong recovery)
 # T3: 8.5 × 0.91 = 7.74 (emergency recovery)
-# EMERGENCY: past DM_THRESHOLD_AUX_LIMIT no cuts and no raise - the rest floored at 0 (F-124)
+# EMERGENCY: past DM_THRESHOLD_IMMERSION_LIMIT no cuts and no raise - the rest floored at 0 (F-124)
 #
 PROACTIVE_ZONE1_OFFSET: Final = 1.0  # Light boost (immediate NIBE effect)
 # Zone 1 weight uses LAYER_WEIGHT_PROACTIVE_MIN (0.3)
@@ -1136,7 +1136,7 @@ NATIVE_DAY_QUARTER_COUNTS: Final = (92, 96, 100)
 # fails. But `manifest.json` also lists mqtt and modbus, and an MQTT sensor holds its last retained
 # value indefinitely: if the bridge publishing degree minutes stops, the sensor goes on reporting
 # the number it was given hours ago and every other check passes. The pump keeps being driven on it,
-# and the real degree minutes could be anywhere - including past the auxiliary-heat limit.
+# and the real degree minutes could be anywhere - including past the immersion limit.
 #
 # 30 minutes is deliberately generous: the control loop runs every 5, so any NIBE source reporting
 # less often than this cannot support five-minute heat-pump control anyway. (Audit F-015.) It
@@ -1287,9 +1287,6 @@ DHW_READY_THRESHOLD: Final = (
 # values, measured on BT6 (the CONTROL sensor): F750 54 C, F730 53 C, F1155 53 C - all BELOW
 # the 55 C floor NIBE enforces for its Legionella function. Those setpoints are
 # installer-adjustable, so their true value is UNKNOWN to us at runtime. Never hard-code it.
-#
-# NOTE: the DHW immersion heater (elpatron) is separate from the space-heating auxiliary
-# heater. Different electrical systems, different purposes.
 DHW_LEGIONELLA_DETECT: Final = 55.0
 """°C on BT7 taken as evidence that a high-temperature cycle occurred.
 
@@ -1577,8 +1574,8 @@ INDOOR_SENSOR_PLAUSIBLE_MAX: Final = 30.0
 INDOOR_SENSOR_PLAUSIBLE_MIN: Final = INDOOR_SENSOR_PLAUSIBLE_MAX / NIBE_DECI_DEGREE_FACTOR
 
 # Outdoor air (BT1). Kiruna reaches -40 C; the band leaves room below it and well above any
-# habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes
-# the degree-minute warning threshold to -1450 - fifty short of the aux limit - so the immersion
+# habitable summer. A mis-scaled BT1 reading -105 C demands a 96.8 C flow temperature and pushes the
+# degree-minute warning threshold to -1450 - fifty short of the immersion limit - so the immersion
 # heater engages with no warning at all.
 NIBE_OUTDOOR_PLAUSIBLE_MIN: Final = -50.0
 NIBE_OUTDOOR_PLAUSIBLE_MAX: Final = 50.0
@@ -1662,7 +1659,7 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     # The immersion heater's power: MyUplink "Power internal add. heat", nibe_heatpump "Int. el.add.
     # Power" (43084, F-series) and "Power internal additional heat" (31028, S-series). Not "Max int
     # add. power" (47212) or "Immersion heater power, emergency mode" (43029): settings.
-    "heater_power": ["power_internal_add", "int_el_add_power", "43084", "31028"],
+    "immersion_power": ["power_internal_add", "int_el_add_power", "43084", "31028"],
 }
 
 # Entity-id substrings that must never be matched by discovery
@@ -1904,71 +1901,72 @@ COMPRESSOR_RISK_OK: Final = "OK"
 COMPRESSOR_SATURATION_MEMORY_HOURS: Final = 24  # how long a sustained ceiling is remembered
 COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts as at it
 
-# THE HEATER GUARD (DecisionEngine._limit_for_heater). While a measured room is at or above its
-# mode's floor it needs no heat, so the offset may not drive degree minutes to where the pump starts
-# its immersion heater: as the pump has shown it (THE HEATER START), until then the model profile's
-# factory aux_start_dm. From
-# HEATER_GUARD_ENGAGE_DM above that start DM may fall only toward the hold point
-# HEATER_GUARD_HOLD_DM above it, at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS per hour, and
-# must rise back from below it. The cap follows the supply both ways in whole offset steps of
-# DM_PER_HOUR_PER_OFFSET_STEP, judged on readings taken outside hot water at the register as it is
-# now, once they span HEATER_GUARD_MIN_SPAN_MINUTES; within HEATER_GUARD_FADE of the floor it hands
-# back to the layers. Closed loop on the owner's F750 + slab (slider 1.2, target 21 C), four plant
-# fits, Oct 18 2025 - Apr 30 2026, with the ladder's room floor and the capacity shortfall, per
-# season against PRICE_OFFSET_DEEPEST_CUT alone: heating cost comfort 4766 -> 4705 SEK, balanced
-# 4769 -> 4642, savings 4772 -> 4372, cheaper on every fit; immersion heat 274 -> 244, 276 -> 213,
-# 278 -> 43 kWh; offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143 - the guard reading the
-# F750 profile's -700 where the plant starts at the owner's -1450. ASSUMED the hold and engage depths
-# and the approach time.
-HEATER_GUARD_HOLD_DM: Final = 200.0  # DM above the heater start
-HEATER_GUARD_ENGAGE_DM: Final = 500.0  # DM above the heater start
-HEATER_GUARD_APPROACH_HOURS: Final = 2.0
-HEATER_GUARD_FADE: Final = 0.2  # °C above the room's floor
-HEATER_GUARD_MIN_SPAN_MINUTES: Final = 15
+# THE IMMERSION GUARD (DecisionEngine._limit_for_immersion). While a measured room is at or above
+# its mode's floor it needs no heat, so the offset may not drive degree minutes to where the pump
+# starts its immersion heater: as the pump has shown it (THE IMMERSION START), until then the model
+# profile's factory immersion_start_dm. From IMMERSION_GUARD_ENGAGE_DM above that start DM may fall
+# only toward the hold point IMMERSION_GUARD_HOLD_DM above it, at (DM - hold point) /
+# IMMERSION_GUARD_APPROACH_HOURS per hour, and must rise back from below it. The cap follows the
+# supply both ways in whole offset steps of DM_PER_HOUR_PER_OFFSET_STEP, judged on readings taken
+# outside hot water at the register as it is now, once they span IMMERSION_GUARD_MIN_SPAN_MINUTES;
+# within IMMERSION_GUARD_FADE of the floor it hands back to the layers. Closed loop on the owner's
+# F750 + slab (slider 1.2, target 21 C), four plant fits, Oct 18 2025 - Apr 30 2026, with the
+# ladder's room floor and the capacity shortfall, per season against PRICE_OFFSET_DEEPEST_CUT alone:
+# heating cost comfort 4766 -> 4705 SEK, balanced 4769 -> 4642, savings 4772 -> 4372, cheaper on
+# every fit; immersion heat 274 -> 244, 276 -> 213, 278 -> 43 kWh; offset reversals 1616 -> 1150,
+# 1678 -> 1160, 1684 -> 1143 - the guard reading the F750 profile's -700 where the plant starts at
+# the owner's -1450. ASSUMED the hold and engage depths and the approach time.
+IMMERSION_GUARD_HOLD_DM: Final = 200.0  # DM above the immersion start
+IMMERSION_GUARD_ENGAGE_DM: Final = 500.0  # DM above the immersion start
+IMMERSION_GUARD_APPROACH_HOURS: Final = 2.0
+IMMERSION_GUARD_FADE: Final = 0.2  # °C above the room's floor
+IMMERSION_GUARD_MIN_SPAN_MINUTES: Final = 15
 # Degree minutes per hour that one offset step moves while the supply holds: DM integrates the gap
 # between the supply and S1 every minute, and one step moves S1 by the curve sensitivity.
 DM_PER_HOUR_PER_OFFSET_STEP: Final = DEFAULT_CURVE_SENSITIVITY * 60
 
 # THE CAPACITY SHORTFALL (utils/capacity_shortfall.py). A pump short of capacity at its own curve
-# holds its degree minutes at its heater start; a pump with capacity to spare only reaches it after
-# a cut of ours. Repository simulator, undersized_coldsnap_jan2024: the undersized F1155, S1155 and
-# F2040 kept DM within SHORTFALL_NEAR_HEATER_START_DM of their heater starts 78 / 65 / 83 % of the
-# time; the closed loop on the owner's F750 model 0.9-2.2 % (told its true start, -1450). Counting
-# only DM strictly past the start never saw the F1155 short - its heater holds DM AT the start - and
-# it burned 2.3 kWh more immersion heat than recorded. SHORTFALL_DWELL_MINUTES, on the same closed
-# loop told the true start: an hour flagged 10 % of winter cycles and cost 60 SEK that winter on one
-# fit (F3a, balanced); two and three hours 3.3-3.4 %, and three hours no autumn flag. ASSUMED
-# SHORTFALL_AFTER_CUT_HOURS, SHORTFALL_MEMORY_DAYS and SHORTFALL_FORECAST_HOURS; in the undersized
-# cold snap (F2040 minutes below the band / F1155 immersion kWh: 890 / 175.0 as set) three hours
-# after a cut gave 900 / 168.0, seven days of memory 950 for the F2040, and six or 24 forecast hours
-# 915 / 177.3 and 890 / 174.4. Not measured on the owner's model.
-SHORTFALL_NEAR_HEATER_START_DM: Final = 50.0  # DM above the heater start
+# holds its degree minutes at its immersion start; a pump with capacity to spare only reaches it
+# after a cut of ours. Repository simulator, undersized_coldsnap_jan2024: the undersized F1155,
+# S1155 and F2040 kept DM within SHORTFALL_NEAR_IMMERSION_START_DM of their immersion starts 78 /
+# 65 / 83 % of the time; the closed loop on the owner's F750 model 0.9-2.2 % (told its true start,
+# -1450). Counting only DM strictly past the start never saw the F1155 short - its immersion
+# heater holds DM AT the start - and it burned 2.3 kWh more immersion heat than recorded.
+# SHORTFALL_DWELL_MINUTES, on the same closed loop told the true start: an hour flagged 10 % of
+# winter cycles and cost 60 SEK that winter on one fit (F3a, balanced); two and three hours
+# 3.3-3.4 %, and three hours no autumn flag. ASSUMED SHORTFALL_AFTER_CUT_HOURS,
+# SHORTFALL_MEMORY_DAYS and SHORTFALL_FORECAST_HOURS; in the undersized cold snap (F2040 minutes
+# below the band / F1155 immersion kWh: 890 / 175.0 as set) three hours after a cut gave 900 /
+# 168.0, seven days of memory 950 for the F2040, and six or 24 forecast hours 915 / 177.3 and 890
+# / 174.4. Not measured on the owner's model.
+SHORTFALL_NEAR_IMMERSION_START_DM: Final = 50.0  # DM above the immersion start
 SHORTFALL_DWELL_MINUTES: Final = 180
 SHORTFALL_AFTER_CUT_HOURS: Final = 6
 SHORTFALL_MEMORY_DAYS: Final = 30
 SHORTFALL_FORECAST_HOURS: Final = 12
 
-# THE HEATER START (utils/heater_start.py). Where the pump switches its immersion heater on while
-# the compressor heats the house, seen in the heater's power reading (43084 F-series, 31028
-# S-series), and before its first start the deepest DM it held for two readings with the heater
-# off: the heater guard and the capacity shortfall read it in place of the model profile's factory
-# aux_start_dm. The owner's F750 (start compressor -250, start diff additional heat 1200: -1450) in
-# Home Assistant's hourly statistics, 2025-10-28 to 2026-10-28: of the 351 hours in which its
-# heater switched on, the 25 without a hot-water charge (BT6 rising 1 C or more) all reached DM
-# -1441 or deeper, at its first steps (0.5-1.5 kW); the 326 with one began anywhere from DM +100 to
-# -1731. With its outdoor average (40067) above its "stop additional heat" (+1 C) the heater stayed
-# off and DM held between -1442 and -1450 (44 hours). The 25 came 2-7 a month, November to March,
-# so HEATER_START_MEMORY follows a start moved deeper within about a winter month, and one moved
-# shallower at the next start. ASSUMED HEATER_START_MAX_GAP_MINUTES: readings of consecutive
-# cycles, or with one failed read between. Closed loop on the owner's F750 + slab (the plant starts
-# at -1450), four plant fits, Oct 18 2025 - Apr 30 2026, learning from nothing on Oct 18: the start
-# in force ended the autumn at -1096 .. -1458 and every winter and spring at -1442 .. -1478, the depth
-# held off never past -1450. Per season against the factory -700: heating cost comfort 4705 -> 4684
-# SEK, balanced 4642 -> 4626, savings 4372 -> 4501; hours below 20.5 C 16.1 -> 6.3, 17.3 -> 7.2,
-# 102.8 -> 30.5; immersion heat 244 -> 211, 213 -> 169, 43 -> 83 kWh; savings mode's coldest moment
-# 18.7 -> 19.6 C. Told -1450 instead (a setting): 4706, 4628 and 4504 SEK.
-HEATER_START_MEMORY: Final = 5  # starts remembered
-HEATER_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
+# THE IMMERSION START (utils/immersion_start.py). Where the pump switches its immersion heater on
+# while the compressor heats the house, seen in the immersion heater's power reading (43084
+# F-series, 31028 S-series), and before its first start the deepest DM it held for two readings with
+# the immersion heater off: the immersion guard and the capacity shortfall read it in place of the
+# model profile's factory immersion_start_dm. The owner's F750 (start compressor -250, start diff
+# additional heat 1200: -1450) in Home Assistant's hourly statistics, 2025-10-28 to 2026-10-28: of
+# the 351 hours in which its immersion heater switched on, the 25 without a hot-water charge (BT6
+# rising 1 C or more) all reached DM -1441 or deeper, at its first steps (0.5-1.5 kW); the 326 with
+# one began anywhere from DM +100 to -1731. With its outdoor average (40067) above its "stop
+# additional heat" (+1 C) the immersion heater stayed off and DM held between -1442 and -1450 (44
+# hours). The 25 came 2-7 a month, November to March, so IMMERSION_START_MEMORY follows a start
+# moved deeper within about a winter month, and one moved shallower at the next start. ASSUMED
+# IMMERSION_START_MAX_GAP_MINUTES: readings of consecutive cycles, or with one failed read between.
+# Closed loop on the owner's F750 + slab (the plant starts at -1450), four plant fits, Oct 18 2025 -
+# Apr 30 2026, learning from nothing on Oct 18: the start in force ended the autumn at -1096 ..
+# -1458 and every winter and spring at -1442 .. -1478, the depth held off never past -1450. Per
+# season against the factory -700: heating cost comfort 4705 -> 4684 SEK, balanced 4642 -> 4626,
+# savings 4372 -> 4501; hours below 20.5 C 16.1 -> 6.3, 17.3 -> 7.2, 102.8 -> 30.5; immersion heat
+# 244 -> 211, 213 -> 169, 43 -> 83 kWh; savings mode's coldest moment 18.7 -> 19.6 C. Told -1450
+# instead (a setting): 4706, 4628 and 4504 SEK.
+IMMERSION_START_MEMORY: Final = 5  # starts remembered
+IMMERSION_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

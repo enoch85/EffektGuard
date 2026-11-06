@@ -38,7 +38,7 @@ falls to Standard with a warning in the log.
 
 **Degree-minute thresholds** (`get_expected_dm_range(outdoor_temp)`): the zone's normal range and
 warning threshold, shifted by (outdoor_temp − zone winter average) × 20 DM/°C, so colder than
-average is deeper. The shift is clamped: never within 50 DM of the -1500 aux limit, and never
+average is deeper. The shift is clamped: never within 50 DM of the -1500 immersion limit, and never
 shallower than -110 DM, where NIBE's compressor cycles anyway. `apply_thermal_mass_buffer`
 (`thermal_layer.py`) then divides the normal range and warning threshold by 1.3 for a concrete
 slab, 1.15 for timber underfloor heating, 1.0 for radiators, so a slow house starts recovering

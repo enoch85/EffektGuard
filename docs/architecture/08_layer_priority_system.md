@@ -30,7 +30,7 @@ climate-aware ones from [10](10_adaptive_climate_zones.md).
 
 | Tier | When | Offset | Weight |
 |---|---|---|---|
-| `EMERGENCY` | DM at or past -1500 (`DM_THRESHOLD_AUX_LIMIT`) and the room not more than 0.4 × tolerance above target | none of its own: the other layers decide, floored at 0 | 1.0 |
+| `EMERGENCY` | DM at or past -1500 (`DM_THRESHOLD_IMMERSION_LIMIT`) and the room not more than 0.4 × tolerance above target | none of its own: the other layers decide, floored at 0 | 1.0 |
 | `T3` / `T2` / `T1` | DM past the warning threshold by 400 / 200 / 0 (T3 capped at -1450) | 8.5 / 7.0 / 4.0, damped as the room recovers to no less than 2.0 / 1.5 / 1.0 | 0.91 / 0.81 / 0.65 |
 | `ANTI_WINDUP`, `COOLDOWN` | DM falling 50 DM/h or faster within 90 min of our own raise | holds the offset; cuts it by abs(rate)/100 °C when the fall is past 100 DM/h; no raise for 30 min | 0.7 |
 | `OK` | otherwise, including a measured room at or above its floor (the target less the mode's `room_floor_below_target`: comfort 0, balanced 0.2, savings 1.0 °C) | 0 | 0 |
@@ -86,32 +86,32 @@ Still inside `calculate_decision`, in this order:
   register moves only once the ask is a whole degree away). At the maximum frequency the pump
   publishes, before DM falls enough for the saturated verdict, a raise above the register gets
   only the room's share and nothing is withdrawn.
-- Heater guard (`_limit_for_heater`): while a measured room is at or above its floor, degree
-  minutes may not reach the pump's immersion heater start - as the pump has shown it
-  (`utils/heater_start.py`, read while the compressor heats the house: the heater's power switching
-  on, the shallowest of the last 5 such starts; before the first, the deepest DM held for two
-  readings with the heater off), never shallower than the model profile's `aux_start_dm`, its
-  factory setting (F750 -700, S1155 -460, F2040 + VVM -760), which stands until the pump has shown
-  more. From 500 DM above that start DM
-  may fall only toward a hold point 200 above it, at (DM - hold point) / 2 h per hour, and must rise
-  back from below. The cap is the register plus the whole steps that close the gap between the DM
-  rate and that allowance (a step moves 90 DM/h: 60 minutes × the 1.5 °C curve sensitivity), on
-  readings outside hot water at the register as it is now, once they span 15 minutes. It fades out
-  over the 0.2 °C above the floor. Below the floor the heat is the room's, and the heater with it.
+- Immersion guard (`_limit_for_immersion`): while a measured room is at or above its floor, degree
+  minutes may not reach the pump's immersion start - as the pump has shown it
+  (`utils/immersion_start.py`, read while the compressor heats the house: the immersion heater's
+  power switching on, the shallowest of the last 5 such starts; before the first, the deepest DM
+  held for two readings with the immersion heater off), never shallower than the model profile's
+  `immersion_start_dm`, its factory setting (F750 -700, S1155 -460, F2040 + VVM -760), which stands
+  until the pump has shown more. From 500 DM above that start DM may fall only toward a hold point
+  200 above it, at (DM - hold point) / 2 h per hour, and must rise back from below. The cap is the
+  register plus the whole steps that close the gap between the DM rate and that allowance (a step
+  moves 90 DM/h: 60 minutes × the 1.5 °C curve sensitivity), on readings outside hot water at the
+  register as it is now, once they span 15 minutes. It fades out over the 0.2 °C above the floor.
+  Below the floor the heat is the room's, and the immersion heater with it.
 - Capacity shortfall (`utils/capacity_shortfall.py`): a pump short of capacity at its own curve
-  holds its degree minutes at its heater start - one it has switched its heater on at, else the
-  factory value, and none while it has held deeper than that with the heater off but not yet
-  switched it on. Three hours within 50 DM of that start, outside hot
-  water, with the register at 0 or above, beginning 6 hours or more after the layers last asked
-  for a cut (and after start-up), record the outdoor temperature; the warmest of the last 30 days
-  is where the pump runs short. While the coldest of now and the next 12 forecast hours is at or
-  below it, nothing goes below 0 and the heater guard stands down: heat held back then comes back
-  only from the heater, or not at all. The coordinator stores it across restarts.
+  holds its degree minutes at its immersion start - one it has switched its immersion heater on at,
+  else the factory value, and none while it has held deeper than that with the immersion heater off
+  but not yet switched it on. Three hours within 50 DM of that start, outside hot water, with the
+  register at 0 or above, beginning 6 hours or more after the layers last asked for a cut (and after
+  start-up), record the outdoor temperature; the warmest of the last 30 days is where the pump runs
+  short. While the coldest of now and the next 12 forecast hours is at or below it, nothing goes
+  below 0 and the immersion guard stands down: heat held back then comes back only from the
+  immersion heater, or not at all. The coordinator stores it across restarts.
 - Clamp to -10..+10 (`_clamp_offset`).
 
 The coordinator then applies the offset volatility gate
 ([01](01_normal_optimization_cycle.md)) and writes whole degrees only (`utils/offset.py`). A wear
-guard withdrawal and a heater guard cut pass the gate at once.
+guard withdrawal and an immersion guard cut pass the gate at once.
 
 ## Worked example
 

@@ -218,7 +218,7 @@ class TestLayerPriority:
         the emergency case requires the temperature to be below target.)
         """
         # Set critical degree minutes close to absolute max
-        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_IMMERSION_LIMIT (-1500)
         mock_nibe_state.outdoor_temp = 5.0
         # Set indoor temp BELOW target to trigger real emergency (smart recovery bypass)
         mock_nibe_state.indoor_temp = 19.5  # 1.5°C below target triggers emergency
@@ -329,7 +329,7 @@ class TestOffsetAggregation:
     ):
         """Test critical emergency layer (weight DM_CRITICAL_T3_WEIGHT) dominates aggregation."""
         # Set critical degree minutes close to absolute max
-        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_AUX_LIMIT (-1500)
+        mock_nibe_state.degree_minutes = -1300.0  # Close to DM_THRESHOLD_IMMERSION_LIMIT (-1500)
         mock_nibe_state.outdoor_temp = 5.0
         # Ensure we are below target so Smart Debt Recovery doesn't suppress heating
         mock_nibe_state.indoor_temp = 20.5  # Target is 21.0

@@ -4,7 +4,7 @@
 safety layer, the emergency thermal-debt layer, and the anti-windup flag were computed, and
 the coordinator explicitly bypassed the offset-volatility blocker for manual decisions. So
 `force_offset(-10)` for 6 hours would hold maximum heat REDUCTION while the house fell below
-MIN_TEMP_LIMIT, or while DM sat past DM_THRESHOLD_AUX_LIMIT with the immersion heater running.
+MIN_TEMP_LIMIT, or while DM sat past DM_THRESHOLD_IMMERSION_LIMIT with the immersion heater running.
 
 The fix applies the floor as a FLOOR, not a replacement: a user asking for MORE heat than
 safety requires is passed through untouched (boost_heating(+10) still boosts); a command that
@@ -19,7 +19,7 @@ import pytest
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     MIN_OFFSET,
     MIN_TEMP_LIMIT,
     SAFETY_EMERGENCY_OFFSET,
@@ -39,11 +39,11 @@ from custom_components.effektguard.utils.volatile_helpers import (
 )
 
 STOCKHOLM_LATITUDE = 59.33
-# A PEAK-layer cut on the register, and the floor the engine lifts it to at the aux limit
+# A PEAK-layer cut on the register, and the floor the engine lifts it to at the immersion limit
 # (TestAbsoluteSafetyFloor): a reversal of 6 C toward zero, which the gate holds for 45 minutes
 # unless the decision is flagged.
 PEAK_CUT = -6.0
-SAFETY_FLOOR_AT_AUX_LIMIT = 0.0
+SAFETY_FLOOR_AT_IMMERSION_LIMIT = 0.0
 
 
 @pytest.fixture
@@ -102,15 +102,15 @@ class TestManualOverrideRespectsAbsoluteSafetyFloor:
         )
         assert decision.is_emergency is True
 
-    def test_force_offset_cannot_hold_dm_past_the_aux_limit(self, engine):
-        """force_offset(-10) while DM is past the aux limit is raised to the no-cut floor, 0."""
+    def test_force_offset_cannot_hold_dm_past_the_immersion_limit(self, engine):
+        """force_offset(-10) with DM past the immersion limit is raised to the no-cut floor, 0."""
         engine.set_manual_override(MIN_OFFSET, duration_minutes=360)
 
-        decision = decide(engine, state(degree_minutes=DM_THRESHOLD_AUX_LIMIT - 20))
+        decision = decide(engine, state(degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT - 20))
 
         assert decision.offset == pytest.approx(0.0), (
             f"Manual override held {decision.offset:+.1f}°C at DM "
-            f"{DM_THRESHOLD_AUX_LIMIT - 20}. Past the aux limit the immersion heater is "
+            f"{DM_THRESHOLD_IMMERSION_LIMIT - 20}. Past the immersion limit the immersion heater is "
             "running; reducing heat deepens the debt."
         )
         assert decision.is_emergency is True
@@ -144,8 +144,8 @@ class TestAbsoluteSafetyFloor:
         floor = engine._absolute_safety_floor(state(indoor_temp=MIN_TEMP_LIMIT - 0.1))
         assert floor == pytest.approx(SAFETY_EMERGENCY_OFFSET)
 
-    def test_floor_engages_at_the_aux_limit(self, engine):
-        floor = engine._absolute_safety_floor(state(degree_minutes=DM_THRESHOLD_AUX_LIMIT))
+    def test_floor_engages_at_the_immersion_limit(self, engine):
+        floor = engine._absolute_safety_floor(state(degree_minutes=DM_THRESHOLD_IMMERSION_LIMIT))
         assert floor == pytest.approx(0.0)
 
 
@@ -156,7 +156,7 @@ class TestVolatilityBlockerBypassesEmergency:
         """Regression guard for the offset-volatility blocker.
 
         Pre-fix the blocker bypassed only `is_manual_override` and `anti_windup_active`. An
-        aux-limit emergency sets neither, so lifting a -6.0 PEAK offset there was a "volatile
+        immersion-limit emergency sets neither, so lifting a -6.0 PEAK offset there was a "volatile
         reversal" and got deferred for up to 45 minutes while DM kept falling. The policy is
         `gate_offset`, which the coordinator and the simulator both run; the same lift without the
         flag is held, which is what makes the flag observable.
@@ -166,14 +166,14 @@ class TestVolatilityBlockerBypassesEmergency:
         tracker.record_change(PEAK_CUT, "peak")
         clock["now"] += UPDATE_INTERVAL_MINUTES * SECONDS_PER_MINUTE
 
-        lift = OptimizationDecision(offset=SAFETY_FLOOR_AT_AUX_LIMIT, reasoning="lift")
+        lift = OptimizationDecision(offset=SAFETY_FLOOR_AT_IMMERSION_LIMIT, reasoning="lift")
         assert gate_offset(tracker, lift).blocked, "precondition: an automatic lift is held"
         assert tracker.last_offset == PEAK_CUT
 
         gated = gate_offset(tracker, replace(lift, is_emergency=True))
 
-        assert not gated.blocked, "an aux-limit recovery was deferred behind a price cut"
-        assert gated.offset == pytest.approx(SAFETY_FLOOR_AT_AUX_LIMIT)
+        assert not gated.blocked, "an immersion-limit recovery was deferred behind a price cut"
+        assert gated.offset == pytest.approx(SAFETY_FLOOR_AT_IMMERSION_LIMIT)
         assert tracker.last_offset == pytest.approx(
-            SAFETY_FLOOR_AT_AUX_LIMIT
+            SAFETY_FLOOR_AT_IMMERSION_LIMIT
         ), "the recovery must become the tracker's baseline, or the next cycle re-fights it"

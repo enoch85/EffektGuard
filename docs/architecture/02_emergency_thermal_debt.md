@@ -11,9 +11,9 @@ tier: `normal_max` equals `warning` in every zone, so they could never fire.
 The ladder raises only for a room below its floor: the target less the mode's
 `room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it the room needs
 no heat, and a raise there only deepens DM toward the pump's immersion heater. Without a room
-sensor the ladder runs on DM alone. Near the heater start, the heater guard keeps such a room's
-DM off the heater, except while the pump is short of capacity; then nothing cuts below 0
-([08](08_layer_priority_system.md)).
+sensor the ladder runs on DM alone. Near the immersion start, the immersion guard keeps such a
+room's DM off the immersion heater, except while the pump is short of capacity; then nothing cuts
+below 0 ([08](08_layer_priority_system.md)).
 
 ## The rungs
 
@@ -27,7 +27,7 @@ DM off the heater, except while the pump is short of capacity; then nothing cuts
 | T1 | the warning (`DM_CRITICAL_T1_MARGIN` 0) | +4.0 | 0.65 |
 | T2 | warning - 200 | +7.0 | 0.81 |
 | T3 | warning - 400, never below -1450 (`DM_CRITICAL_T3_MAX`) | +8.5 | 0.91 |
-| EMERGENCY | `DM_THRESHOLD_AUX_LIMIT` -1500 | floor at 0 | 1.0 |
+| EMERGENCY | `DM_THRESHOLD_IMMERSION_LIMIT` -1500 | floor at 0 | 1.0 |
 
 Constants: `PROACTIVE_ZONE*_OFFSET`, `PROACTIVE_ZONE*_WEIGHT`, `DM_CRITICAL_T*_OFFSET`,
 `DM_CRITICAL_T*_WEIGHT`, `DM_CRITICAL_T*_MARGIN` in `const.py`.
@@ -92,8 +92,8 @@ During a price run shorter than 3 quarters (`VOLATILE_MIN_DURATION_QUARTERS`) th
 are skipped and their weight multiplied by 0.3 (`VOLATILE_WEIGHT_REDUCTION`). The EMERGENCY check
 comes first, so it is never suppressed.
 
-## The aux limit is not sourced
+## The immersion limit is not sourced
 
-The -1500 figure (`DM_THRESHOLD_AUX_LIMIT`) is not sourced in this repository. A real pump starts
-its immersion heater at its own "start addition" setting (menu 4.9.3), which differs per model and
-installation; see [docs/research/01_degree_minutes.md](../research/01_degree_minutes.md).
+The -1500 figure (`DM_THRESHOLD_IMMERSION_LIMIT`) is not sourced in this repository. A real pump
+starts its immersion heater at its own "start addition" setting (menu 4.9.3), which differs per
+model and installation; see [docs/research/01_degree_minutes.md](../research/01_degree_minutes.md).
