@@ -976,15 +976,16 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 34.0},
+                    houses={"airsource_f2040": 30.75},
                     why=(
                         "F-124 on the air-source F2040 only: aux above what its capacity deficit "
                         "forces. The wear guard caps raises while the compressor is saturated "
                         "(54.25 kWh before it had a trigger), but lets a share of them through for "
                         "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. 34.0 kWh against 17.8 forced since the ladder raises only "
-                        "for a room below its floor and the heater guard keeps such a room's DM "
-                        "off the heater; 39.75 against 19.8 before, since the bench runs the "
+                        "attributed yet. 30.75 kWh against 17.8 forced since the heat goes down an "
+                        "hour before a PEAK; 34.0 before, since the ladder raises only for a room "
+                        "below its floor and the heater guard keeps such a room's DM off the "
+                        "heater; 39.75 against 19.8 before that, since the bench runs the "
                         "coordinator's gate policy and hands the engine the projected period-mean "
                         "power; 35.75 against 20.4 while it gated every proposal on the "
                         "instantaneous draw (eaa3986). The projected power alone takes it to "
@@ -1012,10 +1013,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 175.01},
+                    houses={"concrete_f1155": 175.59},
                     why=(
-                        "F-124 on the undersized F1155: 175.0 kWh of immersion against 131.5 "
-                        "forced, where NIBE alone burns 146.4 - 179.7 against 126.7 before the "
+                        "F-124 on the undersized F1155: 175.6 kWh of immersion against 120.7 "
+                        "forced since the heat goes down an hour before a PEAK, 31.7 SEK cheaper "
+                        "and its top three quarters 6.82 -> 5.99 kW; 175.0 against 131.5 before. "
+                        "NIBE alone burns 146.4 - 179.7 against 126.7 before the "
                         "ladder's room floor, the heater guard and the capacity shortfall. The "
                         "floor and the guard without the shortfall burn 182.0: this pump's heater "
                         "holds its DM AT its start, which the shortfall must count to keep the "
@@ -1076,10 +1079,11 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 63.25},
+                    houses={"airsource_f2040": 60.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024: 63.25 kWh against 44.0 forced (68.75 against "
+                        "nordic_coldsnap_jan2024: 60.25 kWh against 44.0 forced since the heat "
+                        "goes down an hour before a PEAK (63.25 before; 68.75 against "
                         "46.5 before the ladder's room floor and the heater guard; 87.25 before "
                         "the wear guard had a trigger; 76.75 before the bench ran the "
                         "coordinator's gate policy - the bypasses alone give 66.5, the projected "
@@ -1180,7 +1184,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.67, "apartment_f730": 7.40, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.68, "apartment_f730": 7.41, "airsource_f2040": 7.49},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
@@ -1194,7 +1198,8 @@ SCENARIOS = {
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
                         "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
                         "and the heater guard moved the F750's from 5.66 and the F730's from 7.40, "
-                        "the overshoot coast's stop at -5 them from 5.68 and 7.43."
+                        "the overshoot coast's stop at -5 them from 5.68 and 7.43, the heat going "
+                        "down an hour before a PEAK back to 5.68 and 7.41."
                     ),
                 ),
             ),

@@ -928,10 +928,18 @@ PRICE_DAYTIME_MULTIPLIER: Final = 1.5  # Multiplier for EXPENSIVE during daytime
 PRICE_OFFSET_DEEPEST_CUT: Final = -2.0
 
 # Pre-PEAK offset (Dec 2, 2025, Updated Dec 3, 2025)
-# Start reducing heating 1 quarter BEFORE peak to allow pump slowdown
-# Pump needs time to reduce - acting at PEAK start is too late
+# Start reducing heating BEFORE a PEAK: acting at its start is too late for the pump to slow down.
 # Dec 3, 2025: Set to -6.0 for gradual decrease before PEAK (-10.0 was too aggressive)
 PRICE_PRE_PEAK_OFFSET: Final = -6.0  # °C - gradual reduction before PEAK arrives
+# How far ahead of a PEAK that reduction starts: an hour, so the degree minutes recover and the pump
+# can slow down when the PEAK arrives. Closed loop on the owner's F750 + slab, plant fitted to the
+# pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, slider 1.2, balanced), against one quarter,
+# Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026: the heat pump's electricity cost 887.0 -> 874.6 /
+# 1714.1 -> 1712.7 / 217.6 -> 217.3 SEK; hours at 60 Hz or more in the dearest tenth of the hours
+# 18.0 -> 13.7 / 53.6 -> 51.1 (Nov-Dec / Jan-Feb); immersion heat (Jan-Feb) 39.5 -> 41.4 kWh, the
+# pump's dearest quarter 6.15 kW both. Eight quarters cost 2787.1 SEK over the three periods against
+# 2804.6, but raised that quarter to 6.65 kW on the coldest morning (12 Jan).
+PRICE_PRE_PEAK_QUARTERS: Final = 4
 
 # Comfort layer constants (Oct 19, 2025)
 COMFORT_DEAD_ZONE: Final = 0.2  # ±0.2°C dead zone (no action)

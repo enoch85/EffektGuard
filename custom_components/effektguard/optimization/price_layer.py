@@ -38,6 +38,7 @@ from ..const import (
     PRICE_PERCENTILE_NORMAL,
     PRICE_PERCENTILE_VERY_CHEAP,
     PRICE_PRE_PEAK_OFFSET,
+    PRICE_PRE_PEAK_QUARTERS,
     PRICE_TOLERANCE_FACTOR_MAX,
     PRICE_TOLERANCE_FACTOR_MIN,
     PRICE_TOLERANCE_MAX,
@@ -1025,26 +1026,18 @@ class PriceAnalyzer:
             base_offset = PRICE_OFFSET_PEAK
             peak_cluster_reason = " | PEAK cluster: EXPENSIVE sandwiched between PEAKs"
 
-        # Pre-PEAK detection (Dec 2, 2025)
-        # Start reducing 1 quarter BEFORE peak to allow pump slowdown time
+        # Pre-PEAK: reduce PRICE_PRE_PEAK_QUARTERS ahead of a PEAK, so the degree minutes have
+        # time to recover and the pump can slow down when it arrives.
         pre_peak_reason = ""
-        next_quarter = current_quarter + 1
-        if next_quarter < len(price_data.today):
-            next_classification = self.get_current_classification(next_quarter)
-            if (
-                next_classification == QuarterClassification.PEAK
-                and classification != QuarterClassification.PEAK
-            ):
-                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
-                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
-        elif price_data.has_tomorrow:
-            next_classification = self.get_tomorrow_classification(0)
-            if (
-                next_classification == QuarterClassification.PEAK
-                and classification != QuarterClassification.PEAK
-            ):
-                base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
-                pre_peak_reason = " | Pre-PEAK: reducing 1Q early for pump slowdown"
+        upcoming = (price_data.today + (price_data.tomorrow if price_data.has_tomorrow else []))[
+            current_quarter + 1 : current_quarter + 1 + PRICE_PRE_PEAK_QUARTERS
+        ]
+        if classification != QuarterClassification.PEAK and any(
+            self.get_classification_for_period(period) == QuarterClassification.PEAK
+            for period in upcoming
+        ):
+            base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
+            pre_peak_reason = " | Pre-PEAK: reducing ahead of it for pump slowdown"
 
         # Skip heating boost for volatile periods or when favorable period ending soon
         if should_skip_volatile_boost(is_volatile, base_offset, is_ending_soon):

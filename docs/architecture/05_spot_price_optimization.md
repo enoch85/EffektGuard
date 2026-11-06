@@ -23,8 +23,8 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 ## From base offset to vote
 
 1. **PEAK cluster**: an EXPENSIVE quarter between PEAKs takes the PEAK offset.
-2. **Pre-PEAK**: the quarter before a PEAK is capped at -6.0 (`PRICE_PRE_PEAK_OFFSET`) so the pump
-   slows down in time.
+2. **Pre-PEAK**: the 4 quarters before a PEAK (`PRICE_PRE_PEAK_QUARTERS`) are capped at -6.0
+   (`PRICE_PRE_PEAK_OFFSET`), so the degree minutes recover and the pump slows down in time.
 3. **Volatile**: a run of the current class shorter than 3 quarters (45 min,
    `VOLATILE_MIN_DURATION_QUARTERS`), or a cheap run ending within 3 quarters, drops a positive
    offset to 0 (`should_skip_volatile_boost`).
