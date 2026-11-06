@@ -10,7 +10,7 @@ from custom_components.effektguard.const import (
     CLIMATE_ZONE_MODERATE_COLD_WINTER_AVG,
     CLIMATE_ZONE_STANDARD_WINTER_AVG,
     CLIMATE_ZONE_VERY_COLD_WINTER_AVG,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
 )
 from custom_components.effektguard.optimization.climate_zones import (
     ClimateZoneDetector,
@@ -96,7 +96,7 @@ class TestDMRangeCalculations:
         assert dm_range["normal_min"] == -800
         assert dm_range["normal_max"] == -1200
         assert dm_range["warning"] == -1200
-        assert dm_range["critical"] == DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["critical"] == DM_THRESHOLD_IMMERSION_LIMIT
 
     def test_cold_at_average(self):
         """Test Stockholm at winter average temperature."""
@@ -167,10 +167,10 @@ class TestDMRangeCalculations:
         dm_range = detector.get_expected_dm_range(CLIMATE_ZONE_EXTREME_COLD_WINTER_AVG - 30.0)
 
         # Should stay above absolute maximum (less negative)
-        assert dm_range["normal_min"] > DM_THRESHOLD_AUX_LIMIT
-        assert dm_range["normal_max"] > DM_THRESHOLD_AUX_LIMIT
-        assert dm_range["warning"] > DM_THRESHOLD_AUX_LIMIT
-        assert dm_range["critical"] == DM_THRESHOLD_AUX_LIMIT
+        assert dm_range["normal_min"] > DM_THRESHOLD_IMMERSION_LIMIT
+        assert dm_range["normal_max"] > DM_THRESHOLD_IMMERSION_LIMIT
+        assert dm_range["warning"] > DM_THRESHOLD_IMMERSION_LIMIT
+        assert dm_range["critical"] == DM_THRESHOLD_IMMERSION_LIMIT
 
 
 class TestSafetyMargins:
@@ -265,7 +265,7 @@ class TestConstants:
         constant, which is how the duplicate survived. What matters is that the threshold this
         module publishes as `critical` is the same one the emergency tier fires on (F-076).
         """
-        assert DM_THRESHOLD_AUX_LIMIT == -1500
+        assert DM_THRESHOLD_IMMERSION_LIMIT == -1500
 
     def test_zone_data_structure(self):
         """Test each zone has required fields."""

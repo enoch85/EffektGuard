@@ -53,7 +53,7 @@ from ..const import (
     DHW_TREND_DEFICIT_THRESHOLD,
     DHW_TREND_RATE_THRESHOLD,
     DM_CRITICAL_T2_MARGIN,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     MIN_TEMP_LIMIT,
     DM_DHW_ABORT_BUFFER,
     DM_DHW_ABORT_FALLBACK,
@@ -2107,10 +2107,11 @@ class IntelligentDHWScheduler:
                 f"the house needs the compressor more than the tank does"
             )
 
-        if thermal_debt_dm <= DM_THRESHOLD_AUX_LIMIT:
+        if thermal_debt_dm <= DM_THRESHOLD_IMMERSION_LIMIT:
             return (
-                f"DM {thermal_debt_dm:.0f} is at the absolute limit {DM_THRESHOLD_AUX_LIMIT:.0f} - "
-                f"auxiliary heat is engaging and DHW must not compete with recovery"
+                f"DM {thermal_debt_dm:.0f} is at the absolute limit "
+                f"{DM_THRESHOLD_IMMERSION_LIMIT:.0f} - the immersion heater is engaging and DHW "
+                "must not compete with recovery"
             )
 
         return None
@@ -2122,7 +2123,7 @@ class IntelligentDHWScheduler:
         permitted to start cannot be aborted by the state it started in.
         """
         return [
-            f"thermal_debt < {DM_THRESHOLD_AUX_LIMIT:.0f}",
+            f"thermal_debt < {DM_THRESHOLD_IMMERSION_LIMIT:.0f}",
             f"indoor_temp < {MIN_TEMP_LIMIT:.1f}",
         ]
 
@@ -2152,7 +2153,7 @@ class IntelligentDHWScheduler:
         # ITSELF (not limit + buffer, which would re-create the inversion: in the coldest zone the
         # block already sits near -1400, so clamping abort up to -1340 would put it shallower than
         # block again). Deep zones have less room between block and floor, which is fine.
-        abort = max(block - DM_DHW_ABORT_BUFFER, DM_THRESHOLD_AUX_LIMIT)
+        abort = max(block - DM_DHW_ABORT_BUFFER, DM_THRESHOLD_IMMERSION_LIMIT)
 
         return block, abort
 

@@ -1,4 +1,4 @@
-"""The volatility gate does not hold back the wear guard's cap, or the heater guard's cut.
+"""The volatility gate does not hold back the wear guard's cap, or the immersion guard's cut.
 
 The gate defers an offset reversal of 2 °C or more toward zero for 45 minutes, so that price-driven
 votes cannot flip the curve faster than the compressor can follow. A raise into a saturated
@@ -98,7 +98,7 @@ async def _registers(engine, register: int = 0, cycles: int = CYCLES) -> list[in
     ("guard", "taken_back_to"),
     [
         pytest.param("saturation_capped", 0.0, id="the-wear-guard-withdraws-the-raise"),
-        pytest.param("heater_capped", -2.0, id="the-heater-guard-cuts-past-zero"),
+        pytest.param("immersion_capped", -2.0, id="the-immersion-guard-cuts-past-zero"),
     ],
 )
 async def test_a_guard_taking_back_a_raise_reaches_the_register_at_once(guard, taken_back_to):

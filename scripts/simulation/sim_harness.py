@@ -21,7 +21,7 @@ Plant model (deliberately simple but honest):
   - DM integrates (flow_actual - flow_target) minutes, clamped to [-3000, 100]
   - Heat output Q = K_EMIT * (flow - Tin); K_EMIT sized for design point
   - Electrical power = Q / COP(Tout) from the pump profile curve
-  - Aux heat: engages at the pump's own factory start-addition DM (menu 4.9.3)
+  - Immersion heat: engages at the pump's own factory start-addition DM (menu 4.9.3)
 
 The engine's wall-clock reads (dt_util.now/utcnow) are monkeypatched to the
 simulation clock each step so price-quarter and forecast logic see sim time.
@@ -53,7 +53,7 @@ from custom_components.effektguard.const import (
     COMPRESSOR_HZ_MIN,
     COMPRESSOR_HZ_RANGE,
     CONF_GESPOT_ENTITY,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     INTERNAL_GAINS_W,
     MODE_CONFIGS,
     POWER_SOURCE_EXTERNAL_METER,
@@ -145,12 +145,13 @@ HEATING_SEASON_STOP_OUTDOOR_C = 17.0
 HEATING_SEASON_RESTART_OUTDOOR_C = 16.0
 # THE F2040 HAS NO IMMERSION HEATER. It is an outdoor monobloc; its electric addition lives in the
 # indoor module it is paired with (a VVM or SMO), which this package does not model. Every other
-# machine's heater is on its profile, from its datasheet. This is the fallback for the F2040 alone,
-# and it is an ASSUMPTION about that indoor module - not a NIBE figure - so it is named as one.
+# machine's immersion heater is on its profile, from its datasheet. This is the fallback for the
+# F2040 alone, and it is an ASSUMPTION about that indoor module - not a NIBE figure - so it is
+# named as one.
 #
 # It matters: the immersion burn is a headline number in the saturated-compressor finding, and the
 # simulator used to apply this one invented value to all five machines, matching none of them.
-ASSUMED_INDOOR_MODULE_HEATER_KW = 3.0
+ASSUMED_INDOOR_MODULE_IMMERSION_KW = 3.0
 STANDBY_KW = 0.1  # controller, pumps, standby losses
 J_PER_KWH = 3_600_000.0
 
@@ -172,7 +173,7 @@ WATER_LOOP_J_PER_K = 350_000.0  # ~0.10 kWh/K
 COMPRESSOR_RESPONSE_S = 900.0  # how briskly the compressor closes on its flow target
 
 # Bounds on the degree-minute integrator. Reaching the floor is not a normal operating state: it
-# means the deficit grew without limit despite the curve offset AND the auxiliary heater, so the
+# means the deficit grew without limit despite the curve offset AND the immersion heater, so the
 # recovery system failed. The harness treats it as such.
 DM_INTEGRATOR_FLOOR = -3000.0
 DM_INTEGRATOR_CEILING = 100.0
@@ -380,23 +381,23 @@ class HouseConfig:
         """This machine's immersion heater, from its datasheet. The F2040 has none.
 
         The plant used to give every house the same invented 3.0 kW, which is no machine's actual
-        setting. NIBE ships the F750 and F730 with a 6.5 kW heater set to 3.5 kW at delivery, and
-        the F1155-12/S1155-12 with a 7 kW heater in seven automatic steps.
+        setting. NIBE ships the F750 and F730 with a 6.5 kW immersion heater set to 3.5 kW at
+        delivery, and the F1155-12/S1155-12 with a 7 kW immersion heater in seven automatic steps.
         """
         published = float(getattr(self.profile, "immersion_heater_kw", 0.0))
-        return published if published > 0.0 else ASSUMED_INDOOR_MODULE_HEATER_KW
+        return published if published > 0.0 else ASSUMED_INDOOR_MODULE_IMMERSION_KW
 
     @property
-    def aux_start_dm(self) -> float:
+    def immersion_start_dm(self) -> float:
         """Where the PLANT's additive heat engages: the pump's own factory start-addition.
 
-        Not EffektGuard's -1500 emergency floor. A factory-default F750 fires its elpatron at
-        DM -700 and works the debt back up (menu 4.9.3; audit F-112) - waiting for the floor
-        under-fired the elpatron by hundreds of degree-minutes in exactly the runs meant to
-        measure what it costs, and the cold-snap headline was computed against a machine no
-        factory ships.
+        Not EffektGuard's -1500 emergency floor. A factory-default F750 fires its immersion
+        heater at DM -700 and works the debt back up (menu 4.9.3; audit F-112) - waiting for the
+        floor under-fired the immersion heater by hundreds of degree-minutes in exactly the runs
+        meant to measure what it costs, and the cold-snap headline was computed against a machine
+        no factory ships.
         """
-        return float(self.profile.aux_start_dm)
+        return float(self.profile.immersion_start_dm)
 
     def source_temp_c(self, outdoor_temp: float) -> float:
         """The temperature of the heat SOURCE the compressor is lifting from.
@@ -777,12 +778,12 @@ PROVENANCE: dict[str, str] = {
         "-0.0028/K), which publish W35 and W45 at the same source and load. The F750/F730 confound "
         "load with flow and cannot identify it, so they inherit the mean of the two."
     ),
-    "ASSUMED_INDOOR_MODULE_HEATER_KW": (
+    "ASSUMED_INDOOR_MODULE_IMMERSION_KW": (
         "ASSUMED. The F2040 has NO immersion heater - it is an outdoor monobloc and its electric "
         "addition lives in the paired indoor module (VVM/SMO), which this package does not model. "
-        "Every other machine's heater is on its profile, from its datasheet. Sensitivity: the F750's "
-        "cold-snap burn moved 38.1 -> 35.8 kWh when the heaters were sourced per machine, and the "
-        "saturation finding did not move."
+        "Every other machine's immersion heater is on its profile, from its datasheet. "
+        "Sensitivity: the F750's cold-snap burn moved 38.1 -> 35.8 kWh when the immersion heaters "
+        "were sourced per machine, and the saturation finding did not move."
     ),
     # ---- the plant, where NIBE publishes nothing ----
     "CONDENSER_APPROACH_K": (
@@ -899,7 +900,7 @@ HOUSES = [
 
 
 def apply_coldsnap(times, temps):
-    """Synthetic stress variant: shift Jan 12-18 by -12 C (tests DM/aux
+    """Synthetic stress variant: shift Jan 12-18 by -12 C (tests DM/immersion heat
     behavior in a deep cold spell; documented as synthetic).
 
     PREFER `--scenario nordic_coldsnap_jan2024`, which is the real January 2024 cold wave
@@ -971,28 +972,28 @@ SCENARIOS = {
                 "spike it caused two days later, peaking at 589 ore/kWh. Cold and price are "
                 "the same real event."
             ),
-            expect=("comfort_held", "no_dm_past_aux_limit"),
+            expect=("comfort_held", "no_dm_past_immersion_limit"),
             known_open=(
                 KnownRed(
                     fails_with="capacity deficit only forced",
-                    stat="aux_kwh",
+                    stat="immersion_kwh",
                     houses={"airsource_f2040": 31.25},
                     why=(
-                        "F-124 on the air-source F2040 only: aux above what its capacity deficit "
-                        "forces. The wear guard caps raises while the compressor is saturated "
-                        "(54.25 kWh before it had a trigger), but lets a share of them through for "
-                        "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. 31.25 kWh against 17.7 forced since pre-heat is bought in "
-                        "cheap quarters only; 30.75 against 17.8 since the heat goes down an hour "
-                        "before a PEAK; 34.0 before, since the ladder raises only for a room "
-                        "below its floor and the heater guard keeps such a room's DM off the "
-                        "heater; 39.75 against 19.8 before that, since the bench runs the "
-                        "coordinator's gate policy and hands the engine the projected period-mean "
-                        "power; 35.75 against 20.4 while it gated every proposal on the "
-                        "instantaneous draw (eaa3986). The projected power alone takes it to "
-                        "49.75, the three bypasses alone to 37.0, both to 39.75. The other four "
-                        "houses hold every invariant through Sweden's coldest wave since 1999 AND "
-                        "the 589 ore/kWh spike it caused."
+                        "F-124 on the air-source F2040 only: immersion heat above what its "
+                        "capacity deficit forces. The wear guard caps raises while the compressor "
+                        "is saturated (54.25 kWh before it had a trigger), but lets a share of "
+                        "them through for a room low in its band; what still burns above the "
+                        "forced share is not attributed yet. 31.25 kWh against 17.7 forced since "
+                        "pre-heat is bought in cheap quarters only; 30.75 against 17.8 since the "
+                        "heat goes down an hour before a PEAK; 34.0 before, since the ladder "
+                        "raises only for a room below its floor and the immersion guard keeps such "
+                        "a room's DM off the immersion heater; 39.75 against 19.8 before that, "
+                        "since the bench runs the coordinator's gate policy and hands the engine "
+                        "the projected period-mean power; 35.75 against 20.4 while it gated every "
+                        "proposal on the instantaneous draw (eaa3986). The projected power alone "
+                        "takes it to 49.75, the three bypasses alone to 37.0, both to 39.75. The "
+                        "other four houses hold every invariant through Sweden's coldest wave "
+                        "since 1999 AND the 589 ore/kWh spike it caused."
                     ),
                 ),
             ),
@@ -1007,34 +1008,34 @@ SCENARIOS = {
                 "maximum frequency: the saturation path a real F750 takes (#49), which no default "
                 "run reaches."
             ),
-            expect=("comfort_held", "no_dm_past_aux_limit"),
+            expect=("comfort_held", "no_dm_past_immersion_limit"),
             data="nordic_coldsnap_jan2024",
             undersized=True,
             known_open=(
                 KnownRed(
                     fails_with="capacity deficit only forced",
-                    stat="aux_kwh",
+                    stat="immersion_kwh",
                     houses={"concrete_f1155": 180.84},
                     why=(
                         "F-124 on the undersized F1155: 180.8 kWh of immersion against 120.4 "
-                        "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer and "
-                        "its top three quarters 5.99 -> 6.81 kW - the two halves together: the "
-                        "slab's normal-quarter price pre-heat gone alone gives 172.1, the weather "
-                        "pre-heat in cheap quarters alone 175.0. 175.6 against 120.7 since the heat "
-                        "goes down an hour before a PEAK, 31.7 SEK cheaper and its top three "
-                        "quarters 6.82 -> 5.99 kW; 175.0 against 131.5 before. "
-                        "NIBE alone burns 146.4 - 179.7 against 126.7 before the "
-                        "ladder's room floor, the heater guard and the capacity shortfall. The "
-                        "floor and the guard without the shortfall burn 182.0: this pump's heater "
-                        "holds its DM AT its start, which the shortfall must count to keep the "
-                        "guard off it. The wear guard judges it against the maximum the pump "
-                        "publishes. 188.4 before the register landed on the whole degree nearest "
-                        "to the guard's cap (191.3 recorded before that). 203.0 against 133.9 "
-                        "before the bench ran the coordinator's gate policy: the wear guard's "
-                        "withdrawals and anti-windup going past the tracker take it to 179.7 "
-                        "alone, the projected period-mean power alone to 201.8, both to 191.3. "
-                        "191.9 before #54: the slab's longer pre-heat lead votes on 22 % of cycles "
-                        "instead of 14 %, +11.1 kWh, 61 SEK cheaper."
+                        "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer "
+                        "and its top three quarters 5.99 -> 6.81 kW - the two halves together: "
+                        "the slab's normal-quarter price pre-heat gone alone gives 172.1, the "
+                        "weather pre-heat in cheap quarters alone 175.0. 175.6 against 120.7 "
+                        "since the heat goes down an hour before a PEAK, 31.7 SEK cheaper and its "
+                        "top three quarters 6.82 -> 5.99 kW; 175.0 against 131.5 before. NIBE "
+                        "alone burns 146.4 - 179.7 against 126.7 before the ladder's room floor, "
+                        "the immersion guard and the capacity shortfall. The floor and the guard "
+                        "without the shortfall burn 182.0: this pump's immersion heater holds its "
+                        "DM AT its start, which the shortfall must count to keep the guard off "
+                        "it. The wear guard judges it against the maximum the pump publishes. "
+                        "188.4 before the register landed on the whole degree nearest to the "
+                        "guard's cap (191.3 recorded before that). 203.0 against 133.9 before the "
+                        "bench ran the coordinator's gate policy: the wear guard's withdrawals "
+                        "and anti-windup going past the tracker take it to 179.7 alone, the "
+                        "projected period-mean power alone to 201.8, both to 191.3. 191.9 before "
+                        "#54: the slab's longer pre-heat lead votes on 22 % of cycles instead of "
+                        "14 %, +11.1 kWh, 61 SEK cheaper."
                     ),
                 ),
                 KnownRed(
@@ -1045,7 +1046,7 @@ SCENARIOS = {
                         "The undersized F2040 is colder under EffektGuard than alone: 890 minutes "
                         "below the band, where NIBE alone has 585 - 1450 before EffektGuard "
                         "learned where this pump runs short of capacity and stopped cutting below "
-                        "its curve there; the ladder's room floor and the heater guard without "
+                        "its curve there; the ladder's room floor and the immersion guard without "
                         "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
                         "policy. Each bypass measured alone, with the projected period-mean power: "
                         "anti-windup 1445, the wear guard's withdrawal 1385 (DM to the -3000 "
@@ -1055,12 +1056,13 @@ SCENARIOS = {
                     ),
                 ),
                 KnownRed(
-                    fails_with="past the -1500 auxiliary-heat limit",
+                    fails_with="past the -1500 immersion limit",
                     houses={"airsource_f2040": None},
                     why=(
                         "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
                         "shortfall, -2779 before the bench ran the coordinator's gate policy); "
-                        "NIBE alone reaches -1890 (F-124, F-112: its own heater starts at -760)."
+                        "NIBE alone reaches -1890 (F-124, F-112: its own immersion heater "
+                        "starts at -760)."
                     ),
                 ),
             ),
@@ -1073,23 +1075,23 @@ SCENARIOS = {
                 "no record and no price spike. Most of a heating season looks like this, and a "
                 "controller that only behaves well in a crisis is not a controller."
             ),
-            # NOT no_aux_at_all. This window reaches -18.4 C, and an air-source machine there
+            # NOT no_immersion_at_all. This window reaches -18.4 C, and an air-source machine there
             # legitimately needs resistive help - the plant measures how much of it the capacity
-            # deficit physically forces. Asserting zero aux here was my error:
-            # it is the SHOULDER scenario's expectation, not a cold month's. The aux that is
-            # NOT forced is already caught for every run by check_invariants, against
-            # AUX_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
-            expect=("comfort_held", "no_dm_past_aux_limit"),
+            # deficit physically forces. Asserting zero immersion heat here was my error: it is the
+            # SHOULDER scenario's expectation, not a cold month's. The immersion heat that is NOT
+            # forced is already caught for every run by check_invariants, against
+            # IMMERSION_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
+            expect=("comfort_held", "no_dm_past_immersion_limit"),
             known_open=(
                 KnownRed(
                     fails_with="capacity deficit only forced",
-                    stat="aux_kwh",
+                    stat="immersion_kwh",
                     houses={"airsource_f2040": 60.25},
                     why=(
                         "F-124 on the air-source F2040 only, the same saturation trap as "
                         "nordic_coldsnap_jan2024: 60.25 kWh against 44.0 forced since the heat "
                         "goes down an hour before a PEAK (63.25 before; 68.75 against "
-                        "46.5 before the ladder's room floor and the heater guard; 87.25 before "
+                        "46.5 before the ladder's room floor and the immersion guard; 87.25 before "
                         "the wear guard had a trigger; 76.75 before the bench ran the "
                         "coordinator's gate policy - the bypasses alone give 66.5, the projected "
                         "period-mean power alone 76.25, both 68.75). The other four houses hold "
@@ -1106,7 +1108,7 @@ SCENARIOS = {
                 "March, crossing 0 C almost every day: defrost territory, and where degree "
                 "minutes swing hardest. The case a DM-chasing controller oscillates in."
             ),
-            expect=("comfort_held", "offset_does_not_chatter", "no_dm_past_aux_limit"),
+            expect=("comfort_held", "offset_does_not_chatter", "no_dm_past_immersion_limit"),
             # F-142 is CLOSED, and it was never a controller defect: the harness was not
             # running the coordinator's own volatility gate, so it measured the engine's raw
             # proposals and reported them as what the pump does. With the real
@@ -1123,7 +1125,7 @@ SCENARIOS = {
                 "ITSELF off. The repo's own history records 'the emergency ladder fired in "
                 "July'; this is the window that would catch it again."
             ),
-            expect=("heating_tracks_demand", "no_aux_at_all", "no_emergency_tier"),
+            expect=("heating_tracks_demand", "no_immersion_at_all", "no_emergency_tier"),
             known_open=(
                 KnownRed(
                     fails_with="seasonal COP was",
@@ -1131,17 +1133,17 @@ SCENARIOS = {
                     houses={"wooden_f750": 6.45, "apartment_f730": 8.00, "airsource_f2040": 8.66},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
-                        "best published figure for each machine, so the harness's own Carnot/"
-                        "datasheet guard fails the run. The exergy COP fit is anchored on EN 14511 "
-                        "rating points taken at winter source temperatures and extrapolates above "
-                        "them when the source is mild. Every COST number in this scenario is "
-                        "therefore too low, and no saving may be quoted from it. The overshoot "
-                        "ramp moved them up from 6.17, 7.71 and 8.56; the projected period-mean "
-                        "power the bench now hands the engine moved the F2040's from 8.59 to 8.60 "
-                        "(the gate bypasses alone leave it at 8.59); the ladder's room floor, the "
-                        "heater guard and the capacity shortfall the F750's from 6.28 to 6.34 and "
-                        "the F2040's to 8.66; the overshoot coast's stop at -5 the F750's to 6.45 "
-                        "and the F730's to 8.00."
+                        "best published figure for each machine, so the harness's own "
+                        "Carnot/datasheet guard fails the run. The exergy COP fit is anchored on "
+                        "EN 14511 rating points taken at winter source temperatures and "
+                        "extrapolates above them when the source is mild. Every COST number in "
+                        "this scenario is therefore too low, and no saving may be quoted from it. "
+                        "The overshoot ramp moved them up from 6.17, 7.71 and 8.56; the projected "
+                        "period-mean power the bench now hands the engine moved the F2040's from "
+                        "8.59 to 8.60 (the gate bypasses alone leave it at 8.59); the ladder's "
+                        "room floor, the immersion guard and the capacity shortfall the F750's "
+                        "from 6.28 to 6.34 and the F2040's to 8.66; the overshoot coast's stop at "
+                        "-5 the F750's to 6.45 and the F730's to 8.00."
                     ),
                 ),
                 KnownRed(
@@ -1170,9 +1172,9 @@ SCENARIOS = {
                         "remove free heat. Overshoot protection is tuned for overshoot driven by "
                         "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
-                        "correction below it. The ladder's room floor and the heater guard moved "
-                        "them from 3405 and 11505; the overshoot coast's stop at -5 from 3305 and "
-                        "11390, the F730 0.10 C warmer on average."
+                        "correction below it. The ladder's room floor and the immersion guard "
+                        "moved them from 3405 and 11505; the overshoot coast's stop at -5 from "
+                        "3305 and 11390, the F730 0.10 C warmer on average."
                     ),
                 ),
             ),
@@ -1184,7 +1186,7 @@ SCENARIOS = {
                 "October in SE4: the largest price spread relative to heating load, so the "
                 "price layer has the most room to help and the most room to misfire."
             ),
-            expect=("comfort_held", "no_dm_past_aux_limit"),
+            expect=("comfort_held", "no_dm_past_immersion_limit"),
             known_open=(
                 KnownRed(
                     fails_with="seasonal COP was",
@@ -1202,9 +1204,9 @@ SCENARIOS = {
                         "clean: the 65-minute excursion this scenario used to fail on was 0.027 C "
                         "deep on average and 0.046 C at its worst, below what the room sensor can "
                         "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
-                        "and the heater guard moved the F750's from 5.66 and the F730's from 7.40, "
-                        "the overshoot coast's stop at -5 them from 5.68 and 7.43, the heat going "
-                        "down an hour before a PEAK back to 5.68 and 7.41."
+                        "and the immersion guard moved the F750's from 5.66 and the F730's from "
+                        "7.40, the overshoot coast's stop at -5 them from 5.68 and 7.43, the heat "
+                        "going down an hour before a PEAK back to 5.68 and 7.41."
                     ),
                 ),
             ),
@@ -1355,18 +1357,18 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
                 f"house go cold in real weather it will meet every winter"
             )
 
-    if "no_aux_at_all" in scenario.expect and stats.get("aux_kwh", 0.0) > 0.0:
+    if "no_immersion_at_all" in scenario.expect and stats.get("immersion_kwh", 0.0) > 0.0:
         failures.append(
-            f"the immersion heater burned {stats['aux_kwh']:.1f} kWh in weather this mild. "
+            f"the immersion heater burned {stats['immersion_kwh']:.1f} kWh in weather this mild. "
             f"Resistive heat at COP 1.0 has no business running here at all"
         )
 
-    if "no_dm_past_aux_limit" in scenario.expect:
-        if stats["dm_min"] <= DM_THRESHOLD_AUX_LIMIT:
+    if "no_dm_past_immersion_limit" in scenario.expect:
+        if stats["dm_min"] <= DM_THRESHOLD_IMMERSION_LIMIT:
             failures.append(
                 f"degree minutes reached {stats['dm_min']:.0f}, past the "
-                f"{DM_THRESHOLD_AUX_LIMIT:.0f} "
-                f"auxiliary-heat limit - the thermal-debt ladder did not hold"
+                f"{DM_THRESHOLD_IMMERSION_LIMIT:.0f} "
+                f"immersion limit - the thermal-debt ladder did not hold"
             )
 
     if "heating_tracks_demand" in scenario.expect:
@@ -1752,8 +1754,8 @@ def simulate(
         "dm_min": 0.0,
         "cost_sek": 0.0,
         "energy_kwh": 0.0,
-        "aux_kwh": 0.0,
-        "unavoidable_aux_kwh": 0.0,
+        "immersion_kwh": 0.0,
+        "unavoidable_immersion_kwh": 0.0,
         "writes": 0,
         "offset_min": 0,
         "offset_max": 0,
@@ -1904,24 +1906,27 @@ def simulate(
 
             # THE IMMERSION HEATER IS THERMOSTATIC, because every real one is.
             #
-            # It used to dump a flat 3 kW into the water node whenever degree minutes passed the aux
-            # limit - including when the node was already at its ceiling. In a five-minute step that is
-            # 900 kJ into a 350 kJ/K loop: 2.6 K of overshoot per step, which the clamp below then
-            # deleted. The heater was metered, paid for, and its heat thrown away, 183 kWh of it in the
-            # F2040 cold snap, while every energy "audit" in the harness reported 0.00 % error.
+            # It used to dump a flat 3 kW into the water node whenever degree minutes passed the
+            # immersion limit - including when the node was already at its ceiling. In a five-minute
+            # step that is 900 kJ into a 350 kJ/K loop: 2.6 K of overshoot per step, which the clamp
+            # below then deleted. The immersion heater was metered, paid for, and its heat thrown
+            # away, 183 kWh of it in the F2040 cold snap, while every energy "audit" in the harness
+            # reported 0.00 % error.
             #
             # A real immersion heater has a high-limit thermostat and cycles on the water temperature.
             # So it injects at most what fits under the ceiling: the heat the emitters are taking out,
             # less what the compressor is already putting in, plus whatever headroom the node has left.
-            aux_headroom_w = (
+            immersion_headroom_w = (
                 WATER_LOOP_J_PER_K * (max_flow - flow) / (STEP_MIN * 60.0) + q_emit_w - q_comp_w
             )
-            aux_w = 0.0
-            if dm <= house.aux_start_dm:
-                aux_w = min(house.immersion_heater_kw * 1000.0, max(0.0, aux_headroom_w))
+            immersion_w = 0.0
+            if dm <= house.immersion_start_dm:
+                immersion_w = min(
+                    house.immersion_heater_kw * 1000.0, max(0.0, immersion_headroom_w)
+                )
 
             flow_unclamped = (
-                flow + (q_comp_w + aux_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
+                flow + (q_comp_w + immersion_w - q_emit_w) * (STEP_MIN * 60.0) / WATER_LOOP_J_PER_K
             )
             flow = max(indoor, min(flow_unclamped, max_flow))
 
@@ -1951,7 +1956,7 @@ def simulate(
 
             q_w = q_emit_w
 
-            aux_kw = aux_w / 1000.0
+            immersion_kw = immersion_w / 1000.0
 
             # Indoor temperature ODE
             # INTERNAL GAINS. The simulated house used to have none: its only heat source was the
@@ -2024,7 +2029,7 @@ def simulate(
                     }
                 )
 
-            power_kw = (q_comp_w / 1000.0) / cop + aux_kw + STANDBY_KW
+            power_kw = (q_comp_w / 1000.0) / cop + immersion_kw + STANDBY_KW
             # The engine's saturation signal reads this, so it must move as a compressor does: with
             # its load, climbing while it has headroom and pinned at the top once capacity binds.
             hz = (
@@ -2088,8 +2093,9 @@ def simulate(
                     if house.profile.publishes_max_frequency
                     else None
                 ),
-                # The heater's power, as the pump publishes it: where it starts is learned from it.
-                heater_power_kw=round(aux_kw, 2),
+                # The immersion heater's power, as the pump publishes it: where it starts is
+                # learned from it.
+                immersion_power_kw=round(immersion_kw, 2),
                 power_kw=round(power_kw, 2),
             )
 
@@ -2237,15 +2243,16 @@ def simulate(
 
             # --- invariants & stats ---
             # A degree-minute deficit that reaches the integrator floor means the recovery system -
-            # the curve offset AND the auxiliary heater together - failed to arrest it. That is the
+            # the curve offset AND the immersion heater together - failed to arrest it. That is the
             # signal worth failing on.
             #
-            # The previous invariant here ("DM below the aux limit while aux is off") was a FALSE
-            # POSITIVE: aux is decided from the degree minutes at the START of the step and the check
-            # ran against the value at the END, so a deficit that crossed the limit mid-step tripped
-            # it even though aux engages on the very next step - which is simply what a controller
-            # sampling at an interval does. Worse, it could never catch a real defect, because aux
-            # engages exactly when DM crosses the limit. It was unfalsifiable in both directions.
+            # The previous invariant here ("DM below the immersion limit while immersion heat is
+            # off") was a FALSE POSITIVE: immersion heat is decided from the degree minutes at the
+            # START of the step and the check ran against the value at the END, so a deficit that
+            # crossed the limit mid-step tripped it even though immersion heat engages on the very
+            # next step - which is simply what a controller sampling at an interval does. Worse, it
+            # could never catch a real defect, because immersion heat engages exactly when DM
+            # crosses the limit. It was unfalsifiable in both directions.
             if dm <= DM_INTEGRATOR_FLOOR:
                 violations.append(
                     {
@@ -2255,10 +2262,10 @@ def simulate(
                     }
                 )
 
-            # Nothing here used to fail on OVERHEATING. The harness counted comfort_minutes_above and
-            # asserted nothing about it, so a run that cooked the house to 35 C reported "violations:
-            # 0". Overheating is a comfort failure, an efficiency failure, and - when it is auxiliary
-            # heat doing it - an expensive one.
+            # Nothing here used to fail on OVERHEATING. The harness counted comfort_minutes_above
+            # and asserted nothing about it, so a run that cooked the house to 35 C reported
+            # "violations: 0". Overheating is a comfort failure, an efficiency failure, and - when
+            # it is immersion heat doing it - an expensive one.
             if indoor > INDOOR_CEILING:
                 violations.append(
                     {
@@ -2318,7 +2325,7 @@ def simulate(
             stats["loss_kwh"] += (
                 (house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W) * STEP_MIN / 60.0 / 1000.0
             )
-            stats["aux_kwh"] += aux_kw * STEP_MIN / 60.0
+            stats["immersion_kwh"] += immersion_kw * STEP_MIN / 60.0
 
             # THE RESISTIVE HEAT PHYSICS FORCES, as opposed to the resistive heat the optimiser causes.
             #
@@ -2333,7 +2340,7 @@ def simulate(
             # demand at this instant, against what the compressor can physically deliver. Anything above
             # it is the controller's doing, not the weather's.
             demand_now_w = house.hlc_w_per_k * (indoor - tout) - INTERNAL_GAINS_W
-            stats["unavoidable_aux_kwh"] += (
+            stats["unavoidable_immersion_kwh"] += (
                 max(0.0, demand_now_w - capacity_w) / 1000.0 * STEP_MIN / 60.0
             )
             stats["cost_sek"] += energy * cur_price_ore / 100.0
@@ -2418,8 +2425,8 @@ def simulate(
 
     # AND SO WAS THE COMPRESSOR-SIDE "AUDIT" I ADDED TO REPLACE IT. It is deleted here.
     #
-    #     power_kw = q_comp/cop + aux + standby          (the plant)
-    #     metered  = power_kw - aux - standby            (the "meter")
+    #     power_kw = q_comp/cop + immersion + standby          (the plant)
+    #     metered  = power_kw - immersion - standby            (the "meter")
     #     owed     = q_comp/cop                          (the "independent" figure)
     #
     # Substitute the first into the second and you get the third, exactly: x - y + y = x. Two
@@ -2461,7 +2468,7 @@ FATAL_VIOLATIONS = frozenset(
         "indoor_above_ceiling",  # house cooked, usually by the immersion heater
         "offset_out_of_range",  # engine emitted an offset the register cannot hold
         "exception",  # engine raised while controlling a heat pump
-        "dm_runaway",  # the deficit outran the curve offset AND the aux heater
+        "dm_runaway",  # the deficit outran the curve offset AND the immersion heater
         "no_price_for_instant",  # adapter could not price a moment that exists
         "cop_beats_carnot",  # the PLANT broke the second law: every cost it reports is fiction
     }
@@ -2473,14 +2480,14 @@ FATAL_VIOLATIONS = frozenset(
 # Every mutation of a safety constant still printed "PASS: all safety invariants held":
 #
 #     MIN_TEMP_LIMIT        18.0 -> 5.0     PASS      <- the comfort floor, gutted
-#     DM_THRESHOLD_AUX_LIMIT -1500 -> -400  PASS      <- immersion heater at shallow debt
+#     DM_THRESHOLD_IMMERSION_LIMIT -1500 -> -400  PASS      <- immersion heater at shallow debt
 #     WEATHER_GENTLE_OFFSET  0.83 -> 2.0    PASS      <- the overheat bug, hand-tuned against
 #     INTERNAL_GAINS_W        600 -> 0      PASS
 #     comfort-layer abstention removed      PASS
 #
 # The reason was not the invariants themselves - it was that a mild January never brings the
 # house within reach of any of them, and three of the most telling numbers were COUNTED AND
-# NEVER ASSERTED. `aux_kwh` was tracked and ignored, so driving the pump into the immersion
+# NEVER ASSERTED. `immersion_kwh` was tracked and ignored, so driving the pump into the immersion
 # heater was free. `comfort_minutes_below` and `comfort_minutes_above` were tracked and ignored,
 # so the house could sit outside its comfort band for the entire month and still report zero
 # violations. The file's own comment complains about exactly this pattern ("The harness counted
@@ -2496,12 +2503,12 @@ FATAL_VIOLATIONS = frozenset(
 # How much MORE resistive heat than physics forces the optimiser may burn. Not an absolute budget:
 # a bivalent system is designed to use its immersion heater below Tbiv, and asserting otherwise is
 # asserting something about a machine NIBE does not sell.
-AUX_OVER_PHYSICS_TOLERANCE = 1.25
-AUX_SLACK_KWH = 5.0  # so a house that needs essentially none is not failed by rounding
+IMMERSION_OVER_PHYSICS_TOLERANCE = 1.25
+IMMERSION_SLACK_KWH = 5.0  # so a house that needs essentially none is not failed by rounding
 
-# Degree minutes must stay clear of the aux limit by a real margin. Skimming it means the ladder
-# is only just holding, and the next colder night tips into resistive heat.
-DM_AUX_MARGIN = 200.0
+# Degree minutes must stay clear of the immersion limit by a real margin. Skimming it means the
+# ladder is only just holding, and the next colder night tips into resistive heat.
+DM_IMMERSION_MARGIN = 200.0
 
 # Minutes outside the comfort band, per 31-day month. Not zero - the optimiser is ALLOWED to
 # coast into the band's edge to dodge a price peak, that is its job - but a house that spends
@@ -2578,16 +2585,16 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     # The physics-grounded question is the one worth asking, and the plant can answer it: at every
     # step, how much heat did the house need that the compressor could not physically deliver? Sum
     # that, and it is the resistive heat the WEATHER forces. Everything above it is the CONTROLLER's.
-    unavoidable = stats["unavoidable_aux_kwh"]
-    allowed = unavoidable * AUX_OVER_PHYSICS_TOLERANCE + AUX_SLACK_KWH
+    unavoidable = stats["unavoidable_immersion_kwh"]
+    allowed = unavoidable * IMMERSION_OVER_PHYSICS_TOLERANCE + IMMERSION_SLACK_KWH
 
-    if stats["aux_kwh"] > allowed:
+    if stats["immersion_kwh"] > allowed:
         failures.append(
-            f"the immersion heater burned {stats['aux_kwh']:.1f} kWh, but the pump's capacity "
+            f"the immersion heater burned {stats['immersion_kwh']:.1f} kWh, but the pump's capacity "
             f"deficit only forced {unavoidable:.1f} kWh of it "
-            f"({stats['aux_kwh'] / max(unavoidable, 1e-9):.1f}x). The rest is the controller's "
-            f"doing: resistive heat at COP 1.0, bought by raising the curve against a compressor "
-            f"that had nothing left to give"
+            f"({stats['immersion_kwh'] / max(unavoidable, 1e-9):.1f}x). The rest is the "
+            "controller's doing: resistive heat at COP 1.0, bought by raising the curve against a "
+            "compressor that had nothing left to give"
         )
 
     if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:

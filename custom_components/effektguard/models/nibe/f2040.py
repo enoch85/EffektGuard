@@ -90,7 +90,7 @@ class NibeF2040Profile(HeatPumpProfile):
     # SOURCED: the F2040 is an outdoor monobloc with no additive heat of its own; the indoor
     # controller owns it. VVM 320 (its standard pairing) ships "start diff additional heat" 700
     # below the compressor start (-60): additive heat engages at about -760.
-    aux_start_dm: float = -760.0
+    immersion_start_dm: float = -760.0
 
     datasheet_points: tuple[RatingPoint, ...] = F2040_8_DATASHEET
     datasheet_source: str = F2040_SOURCE
@@ -120,7 +120,7 @@ class NibeF2040Profile(HeatPumpProfile):
     # The published operating floor (module constant above, manual p.65). Below it the plant
     # model makes NO compressor heat: 28% of a real Kiruna January is below this line.
     min_operating_outdoor_c: float | None = MIN_AIR_TEMP_C
-    supports_aux_heating: bool = False
+    supports_immersion_heating: bool = False
     supports_modulation: bool = True
     supports_weather_compensation: bool = True
     max_flow_temp: float = 58.0  # "Min. / Max. HM temp continuous operation: 25 / 58 C"

@@ -223,7 +223,7 @@ class TestNibeF2040Profile:
         """
         assert f2040.cop_curve == {7: 4.65, 2: 3.76, -7: 2.68}
         assert f2040.max_flow_temp == 58.0, "the datasheet says 58, the profile used to say 63"
-        assert not f2040.supports_aux_heating, (
+        assert not f2040.supports_immersion_heating, (
             "The F2040 is an outdoor monobloc and has NO immersion heater - its technical "
             "specifications table has no such row. The profile claimed 'True # Larger immersion "
             "heaters'. The electric addition lives in the paired indoor module."
@@ -293,15 +293,15 @@ class TestModelComparisons:
             assert model.cop_curve is not None
 
             # Capabilities
-            assert isinstance(model.supports_aux_heating, bool)
+            assert isinstance(model.supports_immersion_heating, bool)
             assert isinstance(model.supports_modulation, bool)
             assert isinstance(model.supports_weather_compensation, bool)
 
             # Limits
             assert model.max_flow_temp > model.min_flow_temp
-            # The pump's own factory aux-start, per installer manual - the simulator's plant
-            # fires the elpatron here. Must sit above EffektGuard's -1500 emergency floor.
-            assert model.aux_start_dm > -1500
+            # The pump's own factory immersion-start, per installer manual - the simulator's plant
+            # fires the immersion heater here. Must sit above EffektGuard's -1500 emergency floor.
+            assert model.immersion_start_dm > -1500
 
 
 class TestValidationResults:

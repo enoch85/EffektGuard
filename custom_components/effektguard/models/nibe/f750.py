@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from ..base import HeatPumpProfile, RatingPoint, ValidationResult, seasonal_cop_proxy
 from ..registry import HeatPumpModelRegistry
-from ...const import DM_THRESHOLD_AUX_LIMIT
+from ...const import DM_THRESHOLD_IMMERSION_LIMIT
 
 # NIBE F750, "Output data according to EN 14 511", part no. 066 063 / 066 061. VERBATIM.
 # The only three performance figures NIBE publishes for this machine.
@@ -83,7 +83,7 @@ class NibeF750Profile(HeatPumpProfile):
     cop_curve: dict[float, float] = None  # Set in __post_init__
 
     # System capabilities
-    supports_aux_heating: bool = True  # 3-9kW immersion heater
+    supports_immersion_heating: bool = True  # 3-9kW immersion heater
     supports_modulation: bool = True  # Inverter compressor
     supports_weather_compensation: bool = True  # Built-in weather curve
     max_flow_temp: float = 60.0
@@ -91,10 +91,10 @@ class NibeF750Profile(HeatPumpProfile):
 
     # The simulator reads this so the plant model tracks what the integration believes.
     # It cannot do that while the profile restates the number, so it references it (F-076).
-    dm_threshold_aux_swedish: float = DM_THRESHOLD_AUX_LIMIT
+    dm_threshold_immersion_swedish: float = DM_THRESHOLD_IMMERSION_LIMIT
     # SOURCED: F750 Installer Manual IHB GB 1301-1 (231236), menu 4.9.3 "start addition",
-    # setting range -2000..-30, factory default -700. The pump's own elpatron fires here.
-    aux_start_dm: float = -700.0
+    # setting range -2000..-30, factory default -700. The pump's own immersion heater fires here.
+    immersion_start_dm: float = -700.0
     publishes_max_frequency: bool = True  # 43123
 
     # Exhaust air heat pump features
@@ -165,7 +165,7 @@ class NibeF750Profile(HeatPumpProfile):
                     severity="warning",
                     message=f"⚠️ High power: {current_power_kw:.1f}kW exceeds F750 typical max ({self.typical_electrical_range_kw[1]}kW)",
                     suggestions=[
-                        "Check if auxiliary heating is active (3-9kW immersion)",
+                        "Check if the immersion heater is active (3-9kW)",
                         f"Flow temp {flow_temp:.1f}°C may be too high for outdoor {outdoor_temp:.1f}°C",
                         "System may be undersized for house size/insulation",
                         "Verify heat loss coefficient (poor insulation?)",

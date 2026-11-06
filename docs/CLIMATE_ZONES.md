@@ -81,9 +81,9 @@ Stockholm, Cold zone, winter average -8°C, base warning -700:
 - at 0°C: (0 - (-8)) × 20 = +160, warning -540
 
 The warning threshold never goes shallower than -110 DM, where NIBE's compressor cycles on every
-normal run, and never deeper than -1450. Degree minutes at -1500 (`DM_THRESHOLD_AUX_LIMIT`) are the
-EMERGENCY tier in every zone. A concrete slab or timber floor then has its thresholds divided by
-1.3 or 1.15 so the slow house starts recovering sooner.
+normal run, and never deeper than -1450. Degree minutes at -1500 (`DM_THRESHOLD_IMMERSION_LIMIT`)
+are the EMERGENCY tier in every zone. A concrete slab or timber floor then has its thresholds
+divided by 1.3 or 1.15 so the slow house starts recovering sooner.
 
 ## Other facts
 

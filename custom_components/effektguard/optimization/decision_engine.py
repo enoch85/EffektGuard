@@ -37,15 +37,15 @@ from ..const import (
     DM_PER_HOUR_PER_OFFSET_STEP,
     DM_RATE_WINDOW_MINUTES,
     DM_RECOVERY_TIERS,
-    DM_THRESHOLD_AUX_LIMIT,
+    DM_THRESHOLD_IMMERSION_LIMIT,
     DM_TIER_EMERGENCY,
     THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     THERMAL_MASS_TIMBER_UFH_THRESHOLD,
-    HEATER_GUARD_APPROACH_HOURS,
-    HEATER_GUARD_ENGAGE_DM,
-    HEATER_GUARD_FADE,
-    HEATER_GUARD_HOLD_DM,
-    HEATER_GUARD_MIN_SPAN_MINUTES,
+    IMMERSION_GUARD_APPROACH_HOURS,
+    IMMERSION_GUARD_ENGAGE_DM,
+    IMMERSION_GUARD_FADE,
+    IMMERSION_GUARD_HOLD_DM,
+    IMMERSION_GUARD_MIN_SPAN_MINUTES,
     LAYER_WEIGHT_SAFETY,
     MAX_OFFSET,
     MIN_OFFSET,
@@ -65,7 +65,7 @@ from ..const import (
     REASONING_SEPARATOR,
 )
 from ..utils.capacity_shortfall import CapacityShortfall
-from ..utils.heater_start import HeaterStart
+from ..utils.immersion_start import ImmersionStart
 from ..utils.reasons import adjusted
 from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
@@ -157,9 +157,9 @@ class OptimizationDecision:
     anti_windup_active: bool = False  # True when anti-windup is driving the decision
     is_manual_override: bool = False  # True for user-commanded offsets (force_offset/boost)
     # True when an ABSOLUTE safety path produced this offset: indoor below MIN_TEMP_LIMIT,
-    # or degree minutes past DM_THRESHOLD_AUX_LIMIT. The coordinator's offset-volatility
+    # or degree minutes past DM_THRESHOLD_IMMERSION_LIMIT. The coordinator's offset-volatility
     # blocker must never defer such a decision - it exists to damp price-driven
-    # flip-flopping, and holding a cut for 45 minutes past the aux limit lets DM plunge
+    # flip-flopping, and holding a cut for 45 minutes past the immersion limit lets DM plunge
     # further while the immersion heater runs.
     is_emergency: bool = False
     # True when the wear guard lowered this offset because the compressor is saturated. The
@@ -167,10 +167,10 @@ class OptimizationDecision:
     # compressor cannot follow only deepens the DM deficit and brings the immersion heater in
     # sooner (F-124). The cap never goes below the pump's own curve, so no cut rides on it.
     saturation_capped: bool = False
-    # True when the heater guard lowered this offset: the room is at or above its floor and
-    # degree minutes are heading for the pump's immersion heater. Held for 45 minutes, the cut
-    # lets DM reach the heater's start, and the heater then buys heat the room does not need.
-    heater_capped: bool = False
+    # True when the immersion guard lowered this offset: the room is at or above its floor and
+    # degree minutes are heading for the pump's immersion heater. Held for 45 minutes, the cut lets
+    # DM reach the immersion start, and the immersion heater then buys heat the room does not need.
+    immersion_capped: bool = False
 
 
 def get_safe_default_decision() -> OptimizationDecision:
@@ -347,14 +347,14 @@ class DecisionEngine:
             target_temp=self.target_temp,
         )
 
-        # The heater guard's degree-minute readings (time, DM, register), outside hot water and at
-        # the register as it is now - see _limit_for_heater.
-        self._heater_readings: deque[tuple[datetime, float, float]] = deque()
+        # The immersion guard's degree-minute readings (time, DM, register), outside hot water and
+        # at the register as it is now - see _limit_for_immersion.
+        self._immersion_readings: deque[tuple[datetime, float, float]] = deque()
 
         # Where this pump runs short of capacity, and where it starts its immersion heater - both
         # stored across restarts by the coordinator.
         self.capacity_shortfall = CapacityShortfall()
-        self.heater_start = HeaterStart()
+        self.immersion_start = ImmersionStart()
 
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
@@ -444,8 +444,8 @@ class DecisionEngine:
 
         These are the two conditions the project treats as non-negotiable:
           - indoor below MIN_TEMP_LIMIT: the house is getting dangerously cold - maximum heat.
-          - degree minutes at or past DM_THRESHOLD_AUX_LIMIT: the compressor is flat out and the
-            immersion heater is running. A cut here deepens a real shortfall, so the offset may
+          - degree minutes at or past DM_THRESHOLD_IMMERSION_LIMIT: the compressor is flat out and
+            the immersion heater is running. A cut here deepens a real shortfall, so the offset may
             not go below 0 (a raise would only buy immersion heat, F-124).
 
         Applied as a FLOOR, not a replacement: a user asking for MORE heat than safety
@@ -463,7 +463,7 @@ class DecisionEngine:
             nibe_state.indoor_temp < MIN_TEMP_LIMIT
         ):
             return SAFETY_EMERGENCY_OFFSET
-        if nibe_state.degree_minutes <= DM_THRESHOLD_AUX_LIMIT:
+        if nibe_state.degree_minutes <= DM_THRESHOLD_IMMERSION_LIMIT:
             return 0.0
         return None
 
@@ -587,21 +587,22 @@ class DecisionEngine:
         """
         _LOGGER.debug("Calculating optimization decision")
 
-        # Where this pump starts its heater and where it runs short of capacity: read every cycle,
-        # a manual override included - one below the curve is a cut of ours as much as the layers'.
-        # A pump short of capacity is held by its heater, at a start it has switched the heater on at.
-        self.heater_start.update(nibe_state)
-        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        # Where this pump starts its immersion heater and where it runs short of capacity: read
+        # every cycle, a manual override included - one below the curve is a cut of ours as much as
+        # the layers'. A pump short of capacity is held by its immersion heater, at a start it has
+        # switched the immersion heater on at.
+        self.immersion_start.update(nibe_state)
+        factory = getattr(self.heat_pump_model, "immersion_start_dm", None)
         if factory is not None:
             self.capacity_shortfall.update(
-                nibe_state, self.heater_start.started_degree_minutes(float(factory))
+                nibe_state, self.immersion_start.started_degree_minutes(float(factory))
             )
 
         # Check for manual override first (Phase 5 service support).
         #
         # A user command is authoritative, but it is NOT permitted to hold the system
         # below the absolute safety floor. force_offset(-10) held for hours while the
-        # house drops below MIN_TEMP_LIMIT, or while DM sits past the aux limit, is not a
+        # house drops below MIN_TEMP_LIMIT, or while DM sits past the immersion limit, is not a
         # preference - it is a fault. The floor only ever raises the offset, so a user
         # asking for MORE heat (e.g. boost_heating) is passed through untouched.
         manual_override = self._check_manual_override()
@@ -687,9 +688,9 @@ class DecisionEngine:
         # and the pump's immersion heater both wait for a room below it.
         room_floor = self.target_temp - self.mode_config.room_floor_below_target
 
-        # Is it, or will it be within the forecast's next hours, as cold as where this pump has
-        # been seen short of capacity? Then heat held back comes back only from the immersion
-        # heater, or not at all: nothing below the pump's curve, and the heater guard stands down.
+        # Is it, or will it be within the forecast's next hours, as cold as where this pump has been
+        # seen short of capacity? Then heat held back comes back only from the immersion heater, or
+        # not at all: nothing below the pump's curve, and the immersion guard stands down.
         short = self.capacity_shortfall.is_short(nibe_state, weather_data)
 
         # 2. Emergency Layer
@@ -868,18 +869,18 @@ class DecisionEngine:
             asked_offset, nibe_state, compressor_saturated, trend_rate
         )
         self.capacity_shortfall.record_ask(nibe_state.timestamp, worn_offset)
-        final_offset, heater_note = self._limit_for_heater(
+        final_offset, immersion_note = self._limit_for_immersion(
             worn_offset, nibe_state, room_floor, short
         )
         if short and final_offset < 0:
-            heater_note = adjusted(
+            immersion_note = adjusted(
                 f"Pump short of capacity at or below {self.capacity_shortfall.temperature:.1f}°C",
                 final_offset,
                 0.0,
             )
             final_offset = 0.0
 
-        notes = [note for note in (trend_note, wear_note, heater_note) if note]
+        notes = [note for note in (trend_note, wear_note, immersion_note) if note]
         reasoning = self._generate_reasoning(layers, notes)
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
@@ -892,7 +893,7 @@ class DecisionEngine:
         anti_windup = getattr(emergency_decision, "anti_windup_active", False)
 
         # An ABSOLUTE safety path tells the coordinator's offset-volatility blocker not to defer this
-        # decision: that blocker damps price-driven flip-flopping, and deferring an aux-limit
+        # decision: that blocker damps price-driven flip-flopping, and deferring an immersion-limit
         # recovery for 45 minutes lets DM keep falling while the immersion heater runs.
         is_emergency = (
             safety_decision.weight >= LAYER_WEIGHT_SAFETY
@@ -906,7 +907,7 @@ class DecisionEngine:
             anti_windup_active=anti_windup,
             is_emergency=is_emergency,
             saturation_capped=worn_offset < asked_offset,
-            heater_capped=final_offset < worn_offset,
+            immersion_capped=final_offset < worn_offset,
         )
 
     def _safety_layer(self, nibe_state) -> LayerDecision:
@@ -1051,7 +1052,7 @@ class DecisionEngine:
             and hz >= nibe_state.compressor_hz_max - COMPRESSOR_SATURATION_BAND_HZ
         )
 
-    def _limit_for_heater(
+    def _limit_for_immersion(
         self, offset: float, nibe_state, room_floor: float, short: bool
     ) -> tuple[float, str]:
         """Keep degree minutes off the pump's immersion heater while the room needs no heat.
@@ -1063,31 +1064,33 @@ class DecisionEngine:
         a COP of 1 for a room at or above its floor - most of the immersion heat the closed loop on
         the owner's F750 + slab bought.
 
-        So while a measured room is at or above its floor, DM approaches the heater start slowly
-        and stops short of it. From HEATER_GUARD_ENGAGE_DM above the start it may fall toward a
-        hold point HEATER_GUARD_HOLD_DM above it at (DM - hold point) / HEATER_GUARD_APPROACH_HOURS
-        per hour, and must rise back from below. The cap is the register plus the whole steps that
-        close the gap between the rate measured and the rate allowed - a step moves
-        DM_PER_HOUR_PER_OFFSET_STEP - so it cuts while DM falls too fast and lets the offset back
-        up as the water warms. The compressor keeps its speed while DM falls; only the heater is
-        kept out. Within HEATER_GUARD_FADE of the floor the cap fades into the layers' ask; below
-        the floor the heat is the room's, and past DM_THRESHOLD_AUX_LIMIT the emergency tier's
-        floor at 0 is the room's too - above its floor the room overrides it here.
+        So while a measured room is at or above its floor, DM approaches the immersion start slowly
+        and stops short of it. From IMMERSION_GUARD_ENGAGE_DM above the start it may fall toward a
+        hold point IMMERSION_GUARD_HOLD_DM above it at (DM - hold point) /
+        IMMERSION_GUARD_APPROACH_HOURS per hour, and must rise back from below. The cap is the
+        register plus the whole steps that close the gap between the rate measured and the rate
+        allowed - a step moves DM_PER_HOUR_PER_OFFSET_STEP - so it cuts while DM falls too fast and
+        lets the offset back up as the water warms. The compressor keeps its speed while DM falls;
+        only the immersion heater is kept out. Within IMMERSION_GUARD_FADE of the floor the cap
+        fades into the layers' ask; below the floor the heat is the room's, and past
+        DM_THRESHOLD_IMMERSION_LIMIT the emergency tier's floor at 0 is the room's too - above its
+        floor the room overrides it here.
 
         The rate is judged on readings at the register as it is now and outside hot water (DM
-        falls while the compressor heats the tank), once they span HEATER_GUARD_MIN_SPAN_MINUTES;
-        until then the register holds. The heater start is as the pump has shown it
-        (heater_start_dm). Without a room sensor, or without a model profile, nothing is guarded.
+        falls while the compressor heats the tank), once they span
+        IMMERSION_GUARD_MIN_SPAN_MINUTES; until then the register holds. The immersion start is as
+        the pump has shown it (immersion_start_in_force). Without a room sensor, or without a
+        model profile, nothing is guarded.
 
-        While the pump is short of capacity (CapacityShortfall) the heater is the pump's own answer
-        to a cold it cannot cover, and nothing is guarded either: held off, the house only enters
-        the cold with less heat in it. The readings are kept all the same.
+        While the pump is short of capacity (CapacityShortfall) the immersion heater is the pump's
+        own answer to a cold it cannot cover, and nothing is guarded either: held off, the house
+        only enters the cold with less heat in it. The readings are kept all the same.
         """
-        heater_start = self.heater_start_dm()
-        if heater_start is None:
+        immersion_start = self.immersion_start_in_force()
+        if immersion_start is None:
             return offset, ""
         register = float(getattr(nibe_state, "current_offset", 0.0) or 0.0)
-        readings = self._heater_readings
+        readings = self._immersion_readings
         if nibe_state.is_hot_water or (readings and readings[-1][2] != register):
             readings.clear()
         if nibe_state.is_hot_water:
@@ -1102,16 +1105,16 @@ class DecisionEngine:
         if short or not getattr(nibe_state, "indoor_temp_valid", True):
             return offset, ""
         above_floor = nibe_state.indoor_temp - room_floor
-        if above_floor < 0 or degree_minutes > heater_start + HEATER_GUARD_ENGAGE_DM:
+        if above_floor < 0 or degree_minutes > immersion_start + IMMERSION_GUARD_ENGAGE_DM:
             return offset, ""
 
         span = seconds_between(readings[0][0], now)
-        if span < timedelta(minutes=HEATER_GUARD_MIN_SPAN_MINUTES).total_seconds():
+        if span < timedelta(minutes=IMMERSION_GUARD_MIN_SPAN_MINUTES).total_seconds():
             cap = register
         else:
             rate = (degree_minutes - readings[0][1]) / (span / timedelta(hours=1).total_seconds())
-            allowed = (heater_start + HEATER_GUARD_HOLD_DM - degree_minutes) / (
-                HEATER_GUARD_APPROACH_HOURS
+            allowed = (immersion_start + IMMERSION_GUARD_HOLD_DM - degree_minutes) / (
+                IMMERSION_GUARD_APPROACH_HOURS
             )
             # Whole steps only, toward zero: the register holds until a step is due either way.
             cap = register + float(int((rate - allowed) / DM_PER_HOUR_PER_OFFSET_STEP))
@@ -1119,41 +1122,40 @@ class DecisionEngine:
         if offset <= cap:
             return offset, ""
 
-        held = offset + (cap - offset) * min(above_floor / HEATER_GUARD_FADE, 1.0)
-        # DEBUG, not INFO: on a pump whose heater starts shallow (an S1155 at -460) the guard is
-        # engaged in all ordinary running, and the decision's own reasoning already carries it.
+        held = offset + (cap - offset) * min(above_floor / IMMERSION_GUARD_FADE, 1.0)
+        # DEBUG, not INFO: on a pump whose immersion heater starts shallow (an S1155 at -460)
+        # the guard is engaged in all ordinary running, and the decision's own reasoning
+        # already carries it.
         _LOGGER.debug(
-            "Heater guard: offset %.2f°C capped at %.2f°C. The room (%.1f°C) is at or above its "
+            "Immersion guard: offset %.2f°C capped at %.2f°C. The room (%.1f°C) is at or above its "
             "floor (%.1f°C) and DM %.0f is heading for the pump's immersion heater (%.0f).",
             offset,
             held,
             nibe_state.indoor_temp,
             room_floor,
             degree_minutes,
-            heater_start,
+            immersion_start,
         )
-        return held, (
-            adjusted(
-                "Heater guard",
-                offset,
-                held,
-                f"DM {degree_minutes:.0f}, heater starts at {heater_start:.0f}",
-            )
+        return held, adjusted(
+            "Immersion heat",
+            offset,
+            held,
+            f"DM {degree_minutes:.0f}, starts at {immersion_start:.0f}",
         )
 
-    def heater_start_dm(self) -> float | None:
+    def immersion_start_in_force(self) -> float | None:
         """Where this pump starts its immersion heater, or None without a model profile.
 
-        The model profile's aux_start_dm is the pump's factory setting, and an installer can move it:
-        the owner's F750 starts at -1450, its profile says -700, so the guard held its degree minutes
-        far short of a heater that was nowhere near. Once the pump has shown that its heater starts
-        deeper - switching it on there, or holding deeper with it off (HeaterStart) - what it has
-        shown is the start.
+        The model profile's immersion_start_dm is the pump's factory setting, and an installer can
+        move it: the owner's F750 starts at -1450, its profile says -700, so the guard held its
+        degree minutes far short of an immersion heater that was nowhere near. Once the pump has
+        shown that its immersion heater starts deeper - switching it on there, or holding deeper
+        with it off (ImmersionStart) - what it has shown is the start.
         """
-        factory = getattr(self.heat_pump_model, "aux_start_dm", None)
+        factory = getattr(self.heat_pump_model, "immersion_start_dm", None)
         if factory is None:
             return None
-        return self.heater_start.degree_minutes(float(factory))
+        return self.immersion_start.degree_minutes(float(factory))
 
     @staticmethod
     def _forecast_horizon_for(thermal_model) -> float:
@@ -1200,7 +1202,7 @@ class DecisionEngine:
 
         Priority order:
             1. Safety layer            - indoor below MIN_TEMP_LIMIT. Absolute.
-            2. EMERGENCY tier          - DM past DM_THRESHOLD_AUX_LIMIT: the rest, floored at 0.
+            2. EMERGENCY tier - DM past DM_THRESHOLD_IMMERSION_LIMIT: the rest, floored at 0.
             3. Recovery tiers T1/T2/T3 - cost layers may MODERATE the response down to
                                          the tier's peak-aware offset, never reverse it.
             4. Remaining critical      - weight >= LAYER_WEIGHT_SAFETY, safety-biased tie-break.
@@ -1226,16 +1228,16 @@ class DecisionEngine:
         if safety_layer is not None and safety_layer.weight >= LAYER_WEIGHT_SAFETY:
             return self._clamp_offset(safety_layer.offset)
 
-        # 2. EMERGENCY tier: DM past the auxiliary-heat limit. NO CUTS, and no raise of its own.
+        # 2. EMERGENCY tier: DM past the immersion limit. NO CUTS, and no raise of its own.
         # The compressor is flat out and the immersion heater is running: a cost or comfort cut
         # deepens a shortfall the pump is already paying for at COP 1, while a raise cannot add
-        # compressor heat - it only drives DM down faster and steps the heater up (F-124). So the
-        # other layers decide and their verdict is floored at 0.
+        # compressor heat - it only drives DM down faster and steps the immersion heater up (F-124).
+        # So the other layers decide and their verdict is floored at 0.
         if emergency_layer is not None and emergency_layer.tier == DM_TIER_EMERGENCY:
             others = [layer for layer in layers if layer is not emergency_layer]
             offset = max(self._aggregate_layers(others, starvation), 0.0)
             _LOGGER.warning(
-                "Aux-limit emergency: DM %.0f - no cuts, applying %.1f°C",
+                "Immersion-limit emergency: DM %.0f - no cuts, applying %.1f°C",
                 emergency_layer.degree_minutes,
                 offset,
             )
@@ -1271,7 +1273,7 @@ class DecisionEngine:
             max_offset = max(layer.offset for layer in critical_layers)
             min_offset = min(layer.offset for layer in critical_layers)
             # Safety-biased tie-break: on equal magnitude prefer the HEATING vote.
-            # (`>` here once returned the -10 price cut against the old +10 aux-limit vote.)
+            # (`>` here once returned the -10 price cut against the old +10 immersion-limit vote.)
             chosen = max_offset if abs(max_offset) >= abs(min_offset) else min_offset
 
             # A COST LAYER MAY COAST THE HOUSE WITHIN ITS COMFORT BAND. IT MAY NOT COAST IT OUT.
@@ -1419,7 +1421,7 @@ class DecisionEngine:
         min_power, max_power = self.heat_pump_model.typical_electrical_range_kw
 
         # The compressor range plus the machine's own immersion heater is the machine's
-        # plausible ceiling. Winter draw above the compressor range alone is the elpatron
+        # plausible ceiling. Winter draw above the compressor range alone is the immersion heater
         # doing its job - flagging that fired every five minutes all January, which teaches
         # the owner to ignore this channel. Only a reading the HARDWARE cannot produce is
         # worth a line, and a debug line: the configured power sensor is often the whole house

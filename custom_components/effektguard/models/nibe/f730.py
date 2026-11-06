@@ -60,7 +60,7 @@ class NibeF730Profile(HeatPumpProfile):
 
     # SOURCED: F730 Installer Manual, menu 4.9.3 "start addition" factory default -700,
     # same additive-heat control as the F750.
-    aux_start_dm: float = -700.0
+    immersion_start_dm: float = -700.0
 
     datasheet_points: tuple[RatingPoint, ...] = F730_DATASHEET
     datasheet_source: str = F730_SOURCE
@@ -81,7 +81,7 @@ class NibeF730Profile(HeatPumpProfile):
     optimal_flow_delta: float = 27.0
     cop_curve: dict[float, float] = None
 
-    supports_aux_heating: bool = True
+    supports_immersion_heating: bool = True
     supports_modulation: bool = True
     supports_weather_compensation: bool = True
     max_flow_temp: float = 58.0
@@ -121,7 +121,7 @@ class NibeF730Profile(HeatPumpProfile):
                 suggestions=[
                     "F730 may be undersized for this house",
                     "Consider upgrading to F750 or F1145",
-                    "Check auxiliary heating activation",
+                    "Check immersion heater activation",
                 ],
             )
 

@@ -128,7 +128,7 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
         OptimizationDecision,
     )
     from custom_components.effektguard.utils.compressor_monitor import CompressorSaturation
-    from custom_components.effektguard.utils.heater_start import HeaterStart
+    from custom_components.effektguard.utils.immersion_start import ImmersionStart
 
     nibe = NibeState(
         outdoor_temp=-5.0,
@@ -167,12 +167,12 @@ def _hass_and_entry() -> tuple[MagicMock, MagicMock]:
     # A real string, as the real EmergencyLayer carries: the dump reports the band AFTER the
     # thermal-mass adjustment, so it reads this. An auto-MagicMock here would be unserialisable.
     coordinator.engine.emergency_layer.heating_type = "radiator"
-    # Where the pump starts its heater: the engine's own memory and profile, a start seen.
+    # Where the pump starts its immersion heater: the engine's own memory and profile, a start seen.
     coordinator.engine.heat_pump_model = NibeF750Profile()
-    coordinator.engine.heater_start = HeaterStart()
-    coordinator.engine.heater_start.restore({"starts": [["2026-01-15T11:00:00+00:00", -1452.0]]})
-    coordinator.engine.heater_start_dm = MethodType(
-        DecisionEngine.heater_start_dm, coordinator.engine
+    coordinator.engine.immersion_start = ImmersionStart()
+    coordinator.engine.immersion_start.restore({"starts": [["2026-01-15T11:00:00+00:00", -1452.0]]})
+    coordinator.engine.immersion_start_in_force = MethodType(
+        DecisionEngine.immersion_start_in_force, coordinator.engine
     )
     coordinator.effect.get_monthly_peak_summary.return_value = {"highest": 4.2}
 

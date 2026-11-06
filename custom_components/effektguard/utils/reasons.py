@@ -11,7 +11,7 @@ SHORT_RUN = "short run"
 
 def adjusted(what: str, asked: float, got: float, why: str = "") -> str:
     """What changed the offset after the layers voted, said in words, because it never adds a vote
-    of its own: "Heater guard lowered +0.4 to +0.0 (DM -600, heater starts at -460)"."""
+    of its own: "Immersion heat lowered +0.4 to +0.0 (DM -600, starts at -460)"."""
     verb = "lowered" if got < asked else "raised"
     return f"{what} {verb} {asked:+.1f} to {got:+.1f}" + (f" ({why})" if why else "")
 
