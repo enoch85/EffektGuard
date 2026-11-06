@@ -504,10 +504,10 @@ class TestVolatileWeightReduction:
             price_layer.weight == 1.0
         ), f"EXPENSIVE in PEAK cluster should have weight 1.0, got {price_layer.weight}"
 
-        # Should mention PEAK cluster in reason
+        # Should say the quarter is between peaks
         assert (
-            "PEAK cluster" in price_layer.reason
-        ), f"Should mention PEAK cluster in reason: {price_layer.reason}"
+            "between peaks" in price_layer.reason
+        ), f"Should say the quarter is between peaks: {price_layer.reason}"
 
         # Offset should be scaled PEAK offset (tolerance factor applied)
         # In balanced mode: PEAK uses tolerance factor, so offset will be -3.0 or similar

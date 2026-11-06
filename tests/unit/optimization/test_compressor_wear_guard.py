@@ -590,7 +590,7 @@ class TestTheRegister:
         assert _offset(False, **{**top, "compressor_hz_max": None}) > 1.5, "precondition: a raise"
         decision = _decision(False, **top)
         assert decision.offset == 1.0
-        assert "at its published maximum" in decision.reasoning
+        assert "Compressor at max" in decision.reasoning
 
     def test_at_its_published_maximum_nothing_on_the_register_is_withdrawn(self):
         top = {"indoor_temp": TARGET + BAND, "current_offset": 5.0, "compressor_hz_max": CEILING_HZ}

@@ -124,16 +124,11 @@ class ComfortLayer:
             # Within comfort zone but drifting from target
             correction = -temp_deviation * COMFORT_CORRECTION_MULT
 
-            if temp_deviation > 0:
-                reason = f"Slightly warm (+{temp_deviation:.1f}°C), gentle reduce"
-            else:
-                reason = f"Slightly cool ({temp_deviation:.1f}°C), gentle boost"
-
             return ComfortLayerDecision(
                 name="Comfort",
                 offset=correction,
                 weight=in_band_weight,
-                reason=reason,
+                reason=_from_target(temp_deviation),
             )
 
         elif temp_deviation > 0:
@@ -153,10 +148,7 @@ class ComfortLayer:
                 name="Comfort",
                 offset=offset,
                 weight=weight,
-                reason=(
-                    f"Overshoot: {temp_deviation:.1f}°C above target, reducing heat "
-                    f"({offset:.1f}°C @ {weight:.2f})"
-                ),
+                reason=_from_target(temp_deviation),
             )
 
         else:
@@ -166,5 +158,10 @@ class ComfortLayer:
                 name="Comfort",
                 offset=correction,
                 weight=LAYER_WEIGHT_COMFORT_MAX,
-                reason=f"Too cold: {-temp_deviation:.1f}°C under",
+                reason=_from_target(temp_deviation),
             )
+
+
+def _from_target(deviation: float) -> str:
+    """How far the room is from its target, for the reason: the vote itself says how hard it pulls."""
+    return f"{abs(deviation):.1f}°C {'over' if deviation > 0 else 'under'} target"

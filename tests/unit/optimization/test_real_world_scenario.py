@@ -189,7 +189,7 @@ class TestRealWorldScenario:
             # Together -2.52°C, held at the deepest cut the price layer votes
 
             assert price_layer.offset == PRICE_OFFSET_DEEPEST_CUT
-            assert "Cut held" in price_layer.reason
+            assert "held at" in price_layer.reason
             # Note: Real-world data may trigger volatile detection (8/9 non-NORMAL in scan window)
             # Weight may be reduced based on VOLATILE_WEIGHT_REDUCTION constant
             min_expected_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
@@ -199,7 +199,7 @@ class TestRealWorldScenario:
                 f"{max_expected_weight} (normal), got {price_layer.weight}"
             )
             assert "EXPENSIVE" in price_layer.reason or "day" in price_layer.reason.lower()
-            assert "cheaper" in price_layer.reason.lower()  # Forecast message
+            assert "price -" in price_layer.reason  # Forecast message
 
     @pytest.mark.asyncio
     @freeze_time("2025-01-16 02:30:00")
@@ -283,7 +283,7 @@ class TestRealWorldScenario:
                 LAYER_WEIGHT_PRICE, abs=0.01
             ), f"Expected full weight ({LAYER_WEIGHT_PRICE}) in stable region, got {price_layer.weight}"
             # Check it's recognized as high-price period
-            assert "EXPENSIVE" in price_layer.reason or "PEAK" in price_layer.reason
+            assert "expensive" in price_layer.reason or "peak" in price_layer.reason
 
     @pytest.mark.asyncio
     @freeze_time("2025-01-16 08:00:00")
