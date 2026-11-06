@@ -33,7 +33,10 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 5. **Forecast**, not on PEAK: the look-ahead is 5 h times the thermal mass
    (`PRICE_FORECAST_BASE_HORIZON`, 2.5-10 h, running into tomorrow when published). A run at least
    3 quarters long and 3 quarters away under 50 % of the current price adds -1.5
-   (`PRICE_FORECAST_REDUCTION_OFFSET`); one over 150 % adds +2.0 (`PRICE_FORECAST_PREHEAT_OFFSET`).
+   (`PRICE_FORECAST_REDUCTION_OFFSET`); in a cheap or very cheap quarter, one over 150 % adds +2.0
+   (`PRICE_FORECAST_PREHEAT_OFFSET`). A house below thermal mass 1.5
+   (`THERMAL_MASS_CONCRETE_UFH_THRESHOLD`) adds it in a normal quarter too: it would lose heat
+   bought hours early.
    With DM below -400 a negative adjustment becomes +0.3 (`PRICE_FORECAST_DM_DEBT_OFFSET`).
 6. **Stored heat**: pre-heating into a room already above target by more than the mode allows
    (0.3 / 0.5 / 1.0 °C) is trimmed by the excess.

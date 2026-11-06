@@ -45,6 +45,7 @@ from ..const import (
     PRICE_TOLERANCE_MIN,
     QUARTERS_PER_DAY,
     QuarterClassification,
+    THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_WEIGHT_REDUCTION,
@@ -132,6 +133,7 @@ class PriceLayerDecision:
     offset: float  # Proposed heating curve offset (°C)
     weight: float  # Layer weight/priority (0.0-1.0)
     reason: str  # Human-readable explanation
+    classification: QuarterClassification | None = None  # the current quarter's; None: no prices
 
 
 class PriceAnalyzer:
@@ -919,7 +921,9 @@ class PriceAnalyzer:
                     )
 
         else:  # NORMAL - check both directions, take most significant sustained change
-            expensive_valid = (
+            # A slab holds heat for hours, so it buys heat for a dearer period ahead only in a cheap
+            # quarter, above. A lighter house would lose heat bought that early: it may buy it here.
+            expensive_valid = thermal_mass < THERMAL_MASS_CONCRETE_UFH_THRESHOLD and (
                 expensive_quarters_away is not None
                 and expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD
                 and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
@@ -1124,6 +1128,7 @@ class PriceAnalyzer:
             name="Spot Price",
             offset=final_offset,
             weight=price_weight,
+            classification=classification,
             reason=(
                 f"Q{current_quarter}: {classification.name} "
                 f"({'day' if current_period.is_daytime else 'night'}) | "

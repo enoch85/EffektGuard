@@ -85,10 +85,10 @@ Prediction. Off by default: Hot Water Optimization, Airflow Optimization.
 
 Every 5 minutes it sets the heat, in whole degrees, from:
 
-- Price: more heat when power is cheap, less when it is expensive. Extra before a price jump, less
-  before a drop, least at the most expensive times.
-- Colder weather: when a colder day is coming, it heats ahead, earlier in a heavy house. Mostly at
-  cheap times, never at the most expensive.
+- Price: more heat when power is cheap, less when it is expensive. Extra before a price jump (in a
+  heavy house only at cheap times), less before a drop, least at the most expensive times.
+- Colder weather: when a colder day is coming, it heats ahead, earlier in a heavy house. Only at
+  cheap times.
 - Monthly peak: less heat close to this month's highest power use. Needs peak protection, and a
   power meter or the pump's current readings.
 - Falling behind: when the pump can't keep up (NIBE's degree minutes drop) and the room is below

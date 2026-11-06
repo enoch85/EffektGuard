@@ -20,7 +20,9 @@ flowchart TD
   (`WEATHER_DAILY_MEAN_HOURS`), so a cold night cannot fire it.
 - The past day is the measured outdoor mean once the predictor's readings cover the last 24 hours
   with no gap over an hour (`DecisionEngine._outdoor_mean_past_day`); until then the next 24
-  forecast hours stand in.
+  forecast hours stand in. The measured day is moved into the forecast's terms first: by how much
+  warmer the forecast for the hour at hand has read than the pump's outdoor sensor, on average over
+  the last day. A forecast reading warm would otherwise hide a colder day.
 - The coldest day ahead is the lowest 24-hour mean starting within the horizon. A day the forecast
   covers only partly (at least 12 hours, `WEATHER_PARTIAL_DAY_MIN_HOURS`) is estimated from the day
   before it, shifted by how much the covered hours differ from the same clock hours a day earlier.
@@ -33,6 +35,8 @@ flowchart TD
   confidence above 0.4.
 - The vote is `WEATHER_GENTLE_OFFSET` (+2.0) at weight `LAYER_WEIGHT_WEATHER_PREDICTION` (0.85)
   times the thermal mass, capped at `WEATHER_WEIGHT_CAP` (0.99) so it stays below safety.
+- It is bought only in a cheap or very cheap price quarter (`BENEFICIAL_CLASSIFICATIONS`, the price
+  layer's own class for the quarter); in any other it waits. Without prices it votes as above.
 
 No forecast, or the Weather Prediction switch off: no vote.
 

@@ -16,13 +16,15 @@ correctly tuned the correction is near zero, and it is bounded either way.
 """
 
 import logging
+from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Protocol
 
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BENEFICIAL_CLASSIFICATIONS,
     DEFAULT_CURVE_SENSITIVITY,
     DEFAULT_DESIGN_FLOW_TEMP_RADIATOR,
     DEFAULT_DESIGN_FLOW_TEMP_UFH,
@@ -54,6 +56,7 @@ from ..const import (
     WEATHER_INDOOR_COOLING_CONFIRMATION,
     WEATHER_PARTIAL_DAY_MIN_HOURS,
     WEATHER_WEIGHT_CAP,
+    QuarterClassification,
 )
 from ..utils.emitter import en442_flow_temp
 from ..utils.time_utils import seconds_between
@@ -631,6 +634,21 @@ class WeatherPredictionLayer:
         """
         self.thermal_mass = thermal_mass
         self.forecast_horizon = forecast_horizon
+        # The forecast for the hour at hand less the pump's own outdoor reading, over the last day.
+        self._forecast_bias: deque[tuple[datetime, float]] = deque()
+
+    def _forecast_bias_past_day(self, nibe_state, forecast_now: float) -> float:
+        """How much warmer the forecast reads than the pump's outdoor sensor, over the last day.
+
+        The past day is MEASURED and the days ahead are FORECAST. A forecast that reads warmer than
+        the sensor hides a colder day behind the difference between two thermometers, so the
+        measured day is moved into the forecast's terms before the two are compared.
+        """
+        now = nibe_state.timestamp
+        self._forecast_bias.append((now, forecast_now - nibe_state.outdoor_temp))
+        while now - self._forecast_bias[0][0] > timedelta(hours=WEATHER_DAILY_MEAN_HOURS):
+            self._forecast_bias.popleft()
+        return sum(bias for _, bias in self._forecast_bias) / len(self._forecast_bias)
 
     @staticmethod
     def _day_mean(temps: list[float], start: int) -> float | None:
@@ -656,6 +674,7 @@ class WeatherPredictionLayer:
         thermal_trend: dict,
         enable_weather_prediction: bool = True,
         past_day_mean: float | None = None,
+        price_classification: QuarterClassification | None = None,
     ) -> WeatherLayerDecision:
         """Weather prediction layer: Proactive pre-heating based on forecast.
 
@@ -675,6 +694,8 @@ class WeatherPredictionLayer:
             thermal_trend: Trend data from predictor (rate_per_hour, confidence)
             enable_weather_prediction: Whether layer is enabled by user
             past_day_mean: Measured outdoor mean over the last 24 h, None until it is known
+            price_classification: The current quarter's price class, None without prices. The
+                pre-heat is bought only in a cheap or very cheap quarter.
 
         Returns:
             WeatherLayerDecision with gentle pre-heating recommendation
@@ -704,6 +725,8 @@ class WeatherPredictionLayer:
         first = 0 if past_day_mean is not None else 1
         if past_day_mean is None:
             past_day_mean = sum(temps[:day]) / day if len(temps) >= day else 0.0
+        else:
+            past_day_mean += self._forecast_bias_past_day(nibe_state, temps[0])
         last = min(int(self.forecast_horizon), len(temps) - WEATHER_PARTIAL_DAY_MIN_HOURS)
         days_ahead = [self._day_mean(temps, s) for s in range(first, last + 1)]
         coldest = min((mean for mean in days_ahead if mean is not None), default=past_day_mean)
@@ -756,6 +779,19 @@ class WeatherPredictionLayer:
                 )
             else:
                 trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
+
+            # Heat for the cold ahead is bought in a cheap or very cheap quarter only. It takes
+            # hours to reach a slab, so it is bought early, never at a normal or dearer price.
+            if (
+                price_classification is not None
+                and price_classification not in BENEFICIAL_CLASSIFICATIONS
+            ):
+                return WeatherLayerDecision(
+                    name="Weather Pre-heat",
+                    offset=0.0,
+                    weight=0.0,
+                    reason=f"{trigger}: waiting for a cheap quarter",
+                )
 
             return WeatherLayerDecision(
                 name="Weather Pre-heat",

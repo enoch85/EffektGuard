@@ -333,7 +333,7 @@ class TestSwitchDefaults:
         engine.effect.evaluate_layer.return_value = LayerDecision("Peak", 0.0, 0.0, "OK")
 
         # Mock PriceAnalyzer (engine.price)
-        engine.price.evaluate_layer.return_value = LayerDecision("Spot Price", 0.0, 0.0, "OK")
+        engine.price.evaluate_layer.return_value = PriceLayerDecision("Spot Price", 0.0, 0.0, "OK")
 
         # Mock predictor (Phase 6)
         engine.predictor = MagicMock()
