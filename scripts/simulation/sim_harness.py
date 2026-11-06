@@ -976,14 +976,15 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"airsource_f2040": 30.75},
+                    houses={"airsource_f2040": 31.25},
                     why=(
                         "F-124 on the air-source F2040 only: aux above what its capacity deficit "
                         "forces. The wear guard caps raises while the compressor is saturated "
                         "(54.25 kWh before it had a trigger), but lets a share of them through for "
                         "a room low in its band; what still burns above the forced share is not "
-                        "attributed yet. 30.75 kWh against 17.8 forced since the heat goes down an "
-                        "hour before a PEAK; 34.0 before, since the ladder raises only for a room "
+                        "attributed yet. 31.25 kWh against 17.7 forced since pre-heat is bought in "
+                        "cheap quarters only; 30.75 against 17.8 since the heat goes down an hour "
+                        "before a PEAK; 34.0 before, since the ladder raises only for a room "
                         "below its floor and the heater guard keeps such a room's DM off the "
                         "heater; 39.75 against 19.8 before that, since the bench runs the "
                         "coordinator's gate policy and hands the engine the projected period-mean "
@@ -1013,11 +1014,15 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="aux_kwh",
-                    houses={"concrete_f1155": 175.59},
+                    houses={"concrete_f1155": 180.84},
                     why=(
-                        "F-124 on the undersized F1155: 175.6 kWh of immersion against 120.7 "
-                        "forced since the heat goes down an hour before a PEAK, 31.7 SEK cheaper "
-                        "and its top three quarters 6.82 -> 5.99 kW; 175.0 against 131.5 before. "
+                        "F-124 on the undersized F1155: 180.8 kWh of immersion against 120.4 "
+                        "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer and "
+                        "its top three quarters 5.99 -> 6.81 kW - the two halves together: the "
+                        "slab's normal-quarter price pre-heat gone alone gives 172.1, the weather "
+                        "pre-heat in cheap quarters alone 175.0. 175.6 against 120.7 since the heat "
+                        "goes down an hour before a PEAK, 31.7 SEK cheaper and its top three "
+                        "quarters 6.82 -> 5.99 kW; 175.0 against 131.5 before. "
                         "NIBE alone burns 146.4 - 179.7 against 126.7 before the "
                         "ladder's room floor, the heater guard and the capacity shortfall. The "
                         "floor and the guard without the shortfall burn 182.0: this pump's heater "

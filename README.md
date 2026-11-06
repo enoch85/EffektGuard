@@ -31,7 +31,7 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 |---|---|
 | Heating | More heat when power is cheap, less when it is expensive |
 | Hot water | Heats the tank when power is cheap, and has it ready when you need it |
-| Weather | Heats ahead of a colder day, mostly while power is cheap |
+| Weather | Heats ahead of a colder day, while power is cheap |
 | Power peaks | Holds back to avoid a new monthly peak |
 | Ventilation | Turns it up when the extra heat pays off (NIBE F750, F730) |
 

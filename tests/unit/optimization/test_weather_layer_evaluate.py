@@ -50,6 +50,7 @@ def mock_nibe_state():
     state.indoor_temp = 21.0
     state.outdoor_temp = 0.0
     state.degree_minutes = -100.0
+    state.timestamp = datetime(2026, 1, 15, 0, 0, tzinfo=timezone.utc)
     return state
 
 
@@ -228,9 +229,27 @@ def test_a_slab_sees_a_colder_day_beyond_the_first_forecast_day(mock_nibe_state)
         MagicMock(temperature=(3.0 if 8 <= hour % 24 < 20 else -3.0) - (4.0 if hour >= 36 else 0.0))
         for hour in range(48)
     ]
+    mock_nibe_state.outdoor_temp = -3.0  # the night the forecast starts in, as the sensor reads it
 
     result = slab.evaluate_layer(
         nibe_state=mock_nibe_state,
+        weather_data=weather,
+        thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
+        enable_weather_prediction=True,
+        past_day_mean=0.0,
+    )
+
+    assert result.offset == WEATHER_GENTLE_OFFSET, result.reason
+
+
+def test_a_forecast_reading_warm_against_the_sensor_still_sees_a_colder_day(mock_nibe_state):
+    """The past day is measured, the days ahead are forecast. A forecast that reads 2 °C warmer
+    than the pump's sensor shows a day 4 °C colder as only 2 °C colder than the measured past."""
+    weather = MagicMock()
+    weather.forecast_hours = [MagicMock(temperature=t) for t in [2.0] * 3 + [-2.0] * 45]
+
+    result = WeatherPredictionLayer(thermal_mass=1.0).evaluate_layer(
+        nibe_state=mock_nibe_state,  # the sensor reads 0.0 now, and 0.0 was the past day's mean
         weather_data=weather,
         thermal_trend={"rate_per_hour": 0.0, "confidence": 0.8},
         enable_weather_prediction=True,

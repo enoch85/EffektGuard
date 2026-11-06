@@ -750,22 +750,8 @@ class DecisionEngine:
             reason=comp_result.reason,
         )
 
-        # 7. Weather Prediction Layer
-        weather_result = self.weather_prediction.evaluate_layer(
-            nibe_state=nibe_state,
-            weather_data=weather_data,
-            thermal_trend=self._get_thermal_trend(),
-            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
-            past_day_mean=self._outdoor_mean_past_day(nibe_state.timestamp),
-        )
-        weather_decision = LayerDecision(
-            name=weather_result.name,
-            offset=weather_result.offset,
-            weight=weather_result.weight,
-            reason=weather_result.reason,
-        )
-
-        # 8. Price Layer
+        # 8. Price Layer, ahead of 7: the weather pre-heat buys its heat in the price layer's cheap
+        # quarters.
         price_result = self.price.evaluate_layer(
             nibe_state=nibe_state,
             price_data=price_data,
@@ -782,6 +768,22 @@ class DecisionEngine:
             weight=price_result.weight,
             reason=price_result.reason,
             is_cost_layer=True,  # Spot price optimizes cost, not comfort or safety
+        )
+
+        # 7. Weather Prediction Layer
+        weather_result = self.weather_prediction.evaluate_layer(
+            nibe_state=nibe_state,
+            weather_data=weather_data,
+            thermal_trend=self._get_thermal_trend(),
+            enable_weather_prediction=self.config.get("enable_weather_prediction", True),
+            past_day_mean=self._outdoor_mean_past_day(nibe_state.timestamp),
+            price_classification=price_result.classification,
+        )
+        weather_decision = LayerDecision(
+            name=weather_result.name,
+            offset=weather_result.offset,
+            weight=weather_result.weight,
+            reason=weather_result.reason,
         )
 
         # 9. Comfort Layer
