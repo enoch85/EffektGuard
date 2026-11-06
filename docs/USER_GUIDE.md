@@ -62,7 +62,7 @@ To change something later, go to Settings → Devices & services → EffektGuard
 | Preset away | Savings, 3 °C below your target (never below 18.5 °C). The thermostat keeps showing your target, and hot water is unchanged |
 
 To see why it did something, look at `sensor.effektguard_optimization_reasoning`: each part's vote,
-how much it counts, and why. `Spot Price +3.5@0.80 (very cheap night +1.7, price +73% in 4h →
+how much it counts, and why. `Spot Price +3.5@0.80 (very cheap night → +1.7, price +71% in 2h →
 pre-heat +2.0, room 0.7°C over → -0.2)` asks for +3.5 °C and counts 0.80. Its details show one part
 per line. After a restart it waits a cycle or two before changing anything.
 

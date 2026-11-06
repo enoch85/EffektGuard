@@ -119,7 +119,7 @@ async def test_a_read_publishes_what_a_control_cycle_would_and_records_nothing()
     data = await coordinator._async_update_data()  # a read proposes 0: a reversal of 3
 
     assert data["decision"].offset == 3.0
-    assert "reversal blocked" in data["decision"].reasoning
+    assert "too soon" in data["decision"].reasoning
     assert tracker._last_change is recorded, "the read re-stamped the gate's 45-minute window"
     assert pump["offset"] == 3
 

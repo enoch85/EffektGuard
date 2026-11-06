@@ -34,6 +34,7 @@ from ..const import (
     BENEFICIAL_CLASSIFICATIONS,
     MINUTES_PER_QUARTER,
     QuarterClassification,
+    REASONING_SEPARATOR,
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_TIMING_TOLERANCE_SECONDS,
@@ -405,8 +406,8 @@ class OffsetVolatilityTracker:
         minutes_since = time_since_last / SECONDS_PER_MINUTE
 
         return (
-            f"Offset volatile: {self._last_change.offset:.1f}→{new_offset:.1f} "
-            f"reversal blocked ({minutes_since:.0f}min < {self._min_duration_minutes}min)"
+            f"Held at {self._last_change.offset:+.1f}, {new_offset:+.1f} too soon "
+            f"({minutes_since:.0f} of {self._min_duration_minutes} min)"
         )
 
 
@@ -506,7 +507,7 @@ def gate_offset(
         refusal = tracker.get_volatile_reason(decision.offset)
         return GatedOffset(
             tracker.last_offset or 0.0,
-            f"[{refusal}] {decision.reasoning}",
+            f"{refusal}{REASONING_SEPARATOR}{decision.reasoning}",
             blocked=True,
             bypass=None,
         )

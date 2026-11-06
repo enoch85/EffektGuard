@@ -476,7 +476,7 @@ class TestEvaluateLayer:
 
         assert decision.offset < 0  # Negative offset to reduce heating
         assert decision.weight > 0.5  # High weight for critical
-        assert "CRITICAL" in decision.reason
+        assert "kW peak" in decision.reason
 
     @pytest.mark.asyncio
     async def test_predictive_cooling_triggers_early_reduction(self, effect_manager):

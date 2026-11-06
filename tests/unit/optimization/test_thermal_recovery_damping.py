@@ -152,7 +152,7 @@ class TestDampingConditions:
             DM_CRITICAL_T2_OFFSET * THERMAL_RECOVERY_RAPID_FACTOR, THERMAL_RECOVERY_T2_MIN_OFFSET
         )
         assert decision.offset == pytest.approx(expected_offset, abs=0.01)
-        assert "rapid warming" in decision.reason.lower()
+        assert "room warming" in decision.reason
 
     def test_no_warming_no_damping(
         self, decision_engine, stable_outdoor_trend, stable_weather_forecast

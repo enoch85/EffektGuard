@@ -52,6 +52,7 @@ from ..const import (
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
+from ..utils.reasons import SHORT_RUN, change, explain
 from ..utils.time_utils import after, resolve_period_index, seconds_between
 from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
@@ -76,9 +77,9 @@ def _within(quarters: int) -> str:
     return f"{minutes} min" if minutes < MINUTES_PER_HOUR else f"{minutes // MINUTES_PER_HOUR}h"
 
 
-def _price_ahead(percent: int, quarters: int, action: str, offset: float) -> str:
-    """A price change ahead and what the vote does about it: "price +73% in 4h → pre-heat +2.0"."""
-    return f"price {percent:+d}% in {_within(quarters)} → {action} {offset:+.1f}"
+def _price_ahead(percent: int, quarters: int) -> str:
+    """A price change ahead, as the reason says it: "price +71% in 2h"."""
+    return f"price {percent:+d}% in {_within(quarters)}"
 
 
 @dataclass
@@ -846,7 +847,8 @@ class PriceAnalyzer:
 
         # Calculate forecast adjustment based on upcoming price periods
         forecast_adjustment = 0.0
-        forecast_reason = ""
+        forecast_reason = ""  # what the look-ahead saw
+        forecast_action = ""  # and what it does about it
 
         # Use forecast data to determine adjustments
         cheap_quarters_away = forecast.next_cheap_quarters_away
@@ -856,18 +858,22 @@ class PriceAnalyzer:
         expensive_duration = forecast.expensive_period_duration
         expensive_ratio = forecast.expensive_price_ratio
 
-        def pre_heat() -> tuple[float, str]:
+        def pre_heat() -> tuple[float, str, str]:
             """Heat now for the dearer period ahead."""
             percent = int((expensive_ratio - 1) * 100)
-            return PRICE_FORECAST_PREHEAT_OFFSET, _price_ahead(
-                percent, expensive_quarters_away, "pre-heat", PRICE_FORECAST_PREHEAT_OFFSET
+            return (
+                PRICE_FORECAST_PREHEAT_OFFSET,
+                _price_ahead(percent, expensive_quarters_away),
+                "pre-heat",
             )
 
-        def wait() -> tuple[float, str]:
+        def wait() -> tuple[float, str, str]:
             """Heat less now: the cheaper period ahead buys it."""
             percent = -int((1 - cheap_ratio) * 100)
-            return PRICE_FORECAST_REDUCTION_OFFSET, _price_ahead(
-                percent, cheap_quarters_away, "wait", PRICE_FORECAST_REDUCTION_OFFSET
+            return (
+                PRICE_FORECAST_REDUCTION_OFFSET,
+                _price_ahead(percent, cheap_quarters_away),
+                "wait",
             )
 
         if classification in BENEFICIAL_CLASSIFICATIONS:
@@ -878,7 +884,7 @@ class PriceAnalyzer:
                 and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
                 and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
-                forecast_adjustment, forecast_reason = pre_heat()
+                forecast_adjustment, forecast_reason, forecast_action = pre_heat()
             elif expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
                 # DEBUG: Log non-actionable expensive periods for troubleshooting
                 # Period meets price threshold but fails duration/lead-time requirements.
@@ -912,7 +918,7 @@ class PriceAnalyzer:
                 and cheap_duration >= VOLATILE_MIN_DURATION_QUARTERS
                 and cheap_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
-                forecast_adjustment, forecast_reason = wait()
+                forecast_adjustment, forecast_reason, forecast_action = wait()
             elif cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
                 # DEBUG: Log non-actionable cheap periods for troubleshooting
                 # Period meets price threshold but fails duration/lead-time requirements.
@@ -954,13 +960,13 @@ class PriceAnalyzer:
             if expensive_valid and cheap_valid:
                 # Both valid - choose larger magnitude
                 if (expensive_ratio - 1.0) > (1.0 - cheap_ratio):
-                    forecast_adjustment, forecast_reason = pre_heat()
+                    forecast_adjustment, forecast_reason, forecast_action = pre_heat()
                 else:
-                    forecast_adjustment, forecast_reason = wait()
+                    forecast_adjustment, forecast_reason, forecast_action = wait()
             elif expensive_valid:
-                forecast_adjustment, forecast_reason = pre_heat()
+                forecast_adjustment, forecast_reason, forecast_action = pre_heat()
             elif cheap_valid:
-                forecast_adjustment, forecast_reason = wait()
+                forecast_adjustment, forecast_reason, forecast_action = wait()
             else:
                 # DEBUG: Log non-actionable forecast periods for troubleshooting
                 # Periods meet price thresholds but fail duration/lead-time requirements.
@@ -1006,10 +1012,8 @@ class PriceAnalyzer:
         # Price layer was fighting thermal recovery by applying -1.5°C during critical DM debt.
         # When in debt, switch to gentle positive offset to aid recovery while respecting savings intent.
         if forecast_adjustment < 0 and nibe_state.degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
-            forecast_reason = (
-                f"{forecast_reason} but DM {nibe_state.degree_minutes:.0f} → "
-                f"{PRICE_FORECAST_DM_DEBT_OFFSET:+.1f}"
-            )
+            forecast_reason = f"{forecast_reason}, DM {nibe_state.degree_minutes:.0f}"
+            forecast_action = ""
             forecast_adjustment = PRICE_FORECAST_DM_DEBT_OFFSET
 
         # Get base offset for current classification
@@ -1018,13 +1022,13 @@ class PriceAnalyzer:
             classification,
             current_period.is_daytime,
         )
-        # What moved the class's own offset, for the reason
-        moved_by = []
+        class_offset = base_offset
+        moved = []  # what moved the class's own offset: (what, from, to)
 
         # PEAK cluster: EXPENSIVE quarters between PEAKs use PEAK offset
         if in_peak_cluster:
+            moved.append(("between peaks", base_offset, PRICE_OFFSET_PEAK))
             base_offset = PRICE_OFFSET_PEAK
-            moved_by.append("between peaks")
 
         # Pre-PEAK: reduce PRICE_PRE_PEAK_QUARTERS ahead of a PEAK, so the degree minutes have
         # time to recover and the pump can slow down when it arrives.
@@ -1036,13 +1040,14 @@ class PriceAnalyzer:
             for period in upcoming
         ):
             if PRICE_PRE_PEAK_OFFSET < base_offset:
-                moved_by.append(f"peak within {_within(PRICE_PRE_PEAK_QUARTERS)}")
+                what = f"peak within {_within(PRICE_PRE_PEAK_QUARTERS)}"
+                moved.append((what, base_offset, PRICE_PRE_PEAK_OFFSET))
             base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
 
         # Skip heating boost for volatile periods or when favorable period ending soon
         if should_skip_volatile_boost(is_volatile, base_offset, is_ending_soon):
+            moved.append((SHORT_RUN if is_volatile else "ending soon", base_offset, 0.0))
             base_offset = 0.0  # Treat as NORMAL
-            moved_by.append("short run" if is_volatile else "ending soon")
 
         # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)
         tolerance_range = PRICE_TOLERANCE_MAX - PRICE_TOLERANCE_MIN
@@ -1060,8 +1065,8 @@ class PriceAnalyzer:
             f"{classification.name.replace('_', ' ').lower()} "
             f"{'day' if current_period.is_daytime else 'night'}"
         )
-        adds = []  # what changed the class's offset after it, each with its amount
-        weight_note = ""
+        changes = [change(what, (to - was) * tolerance_factor) for what, was, to in moved]
+        weight_cut = False
 
         # Apply forecast adjustment (additive to base classification); PEAK takes none
         if classification == QuarterClassification.PEAK:
@@ -1069,7 +1074,7 @@ class PriceAnalyzer:
         else:
             final_offset = adjusted_offset + forecast_adjustment
             if forecast_reason:
-                adds.append(forecast_reason)
+                changes.append(change(forecast_reason, forecast_adjustment, forecast_action))
 
         # Past the mode's allowed overshoot the pre-heat is taken back, down to zero - a vote at or
         # below zero has none to take back. Applied to one, the zero floor RAISED it: in debt
@@ -1081,14 +1086,14 @@ class PriceAnalyzer:
             overshoot = nibe_state.indoor_temp - target_temp
             if overshoot > max_overshoot and final_offset > 0:
                 trimmed = max(final_offset - (overshoot - max_overshoot), 0)
-                adds.append(f"room {overshoot:.1f}°C over → {trimmed - final_offset:+.1f}")
+                changes.append(change(f"room {overshoot:.1f}°C over", trimmed - final_offset))
                 final_offset = trimmed
 
         # No deeper than PRICE_OFFSET_DEEPEST_CUT. Savings mode used to take PEAK's full -10, and
         # the owner's ±1.2 slider -4.2 in balanced: either stops the compressor, the slab drains,
         # and the heat the cut saved comes back from the immersion heater or not at all.
         if final_offset < PRICE_OFFSET_DEEPEST_CUT:
-            adds.append(f"held at {PRICE_OFFSET_DEEPEST_CUT:+.1f}")
+            changes.append(f"held at {PRICE_OFFSET_DEEPEST_CUT:+.1f}")
             final_offset = PRICE_OFFSET_DEEPEST_CUT
 
         # Apply weight based on classification and volatility
@@ -1100,16 +1105,11 @@ class PriceAnalyzer:
             # does not read that class, so it keeps its weight. On 15-minute prices the cut took
             # the night's pre-heat down to 30 % in 116 of 529 pre-heat quarters (SE4, 14-27 Oct 2026).
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
-            weight_note = "weight cut" if "short run" in moved_by else "short run → weight cut"
+            weight_cut = True
         else:
             price_weight = LAYER_WEIGHT_PRICE
 
-        # The class's own amount only where more parts follow, so the parts add up to the vote: alone,
-        # it is the vote and said once already.
-        head = ", ".join([quarter_name, *moved_by])
-        if adds:
-            head = f"{head} {'→ ' if moved_by else ''}{adjusted_offset:+.1f}"
-        reason = ", ".join([head, *adds, *([weight_note] if weight_note else [])])
+        reason = explain(quarter_name, class_offset * tolerance_factor, changes, weight_cut)
         _LOGGER.debug(
             "Price Q%d (%02d:%02d): %.2f, horizon %.1fh → %+.1f@%.2f: %s",
             current_quarter,

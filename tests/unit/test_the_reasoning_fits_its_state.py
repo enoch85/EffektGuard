@@ -19,10 +19,10 @@ from custom_components.effektguard.sensor import SENSORS, EffektGuardSensor
 ENTRIES = [
     "Heater guard +0.0 → -1.0 (DM -582, heater starts -700)",
     "Compressor at max +1.4 → +0.0",
-    "Spot Price +3.5@0.80 (very cheap night +1.7, price +73% in 4h → pre-heat +2.0, "
+    "Spot Price +3.5@0.80 (very cheap night → +1.7, price +73% in 4h → pre-heat +2.0, "
     "room 0.7°C over → -0.2)",
     "Comfort -2.1@0.36 (0.7°C over target)",
-    "Math WC -0.3@0.23 (flow 31.2°C, wants 30.7°C, degree-minute debt → weight cut)",
+    "Math WC -0.3@0.23 (flow 31.2°C, wants 30.7°C, DM debt → weight cut)",
 ]
 
 
@@ -50,7 +50,7 @@ def test_the_votes_are_listed_one_per_line_heaviest_first():
     layers = [
         LayerDecision(name="Safety", offset=0.0, weight=0.0, reason="OK"),
         LayerDecision(name="Math WC", offset=-0.3, weight=0.23, reason="flow 31.2°C"),
-        LayerDecision(name="Spot Price", offset=3.5, weight=0.8, reason="very cheap night +1.7"),
+        LayerDecision(name="Spot Price", offset=3.5, weight=0.8, reason="very cheap night"),
         LayerDecision(name="Comfort", offset=-2.1, weight=0.36, reason="0.7°C over target"),
     ]
 

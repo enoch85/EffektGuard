@@ -104,8 +104,8 @@ class TestPowerPrediction:
         # Margin: 5.0 - 4.5 = 0.5 kW (< 1.0 kW threshold)
         # Should trigger predictive avoidance
         assert decision.offset < 0  # Reduces heating
-        assert "predictive" in decision.reason.lower()
-        assert "cooling rapidly" in decision.reason.lower()
+        assert "heading for the" in decision.reason
+        assert "room cooling fast" in decision.reason
 
     def test_predicts_power_increase_gentle_cooling(self, engine, nibe_state):
         """Predict 0.5 kW increase when house cooling gently."""
@@ -130,9 +130,7 @@ class TestPowerPrediction:
         # Margin: 5.0 - 4.7 = 0.3 kW (< 1.0 kW threshold)
         # Should trigger predictive avoidance
         assert decision.offset < 0
-        assert (
-            "predictive" in decision.reason.lower() or "gentle cooling" in decision.reason.lower()
-        )
+        assert "heading for the" in decision.reason or "room cooling" in decision.reason
 
     def test_predicts_power_decrease_warming(self, engine, nibe_state):
         """Predict 0.5 kW decrease when house warming."""
@@ -222,7 +220,7 @@ class TestProactiveAvoidance:
         # Should act NOW (proactively) even though currently OK
         # Predicted margin: 5.0 - 5.0 = 0.0 < 1.0 threshold
         assert decision.offset < 0
-        assert "predictive" in decision.reason.lower()
+        assert "heading for the" in decision.reason
 
     def test_no_action_when_warming_prevents_spike(self, engine, nibe_state):
         """No action when warming trend prevents predicted spike."""
@@ -315,7 +313,7 @@ class TestCriticalPeakHandling:
         # Should apply maximum reduction regardless of trend
         assert decision.offset == -3.0
         assert decision.weight == 1.0
-        assert "critical" in decision.reason.lower()
+        assert "at the" in decision.reason
 
 
 class TestPhase4SuccessCriteria:
@@ -344,7 +342,7 @@ class TestPhase4SuccessCriteria:
         # Should predict increase and act proactively
         # Predicted: 3.5 + 1.5 = 5.0 (margin 0.0 < 1.0)
         assert decision.offset < 0
-        assert "predictive" in decision.reason.lower()
+        assert "heading for the" in decision.reason
 
     def test_predicts_power_decrease_when_warming(self, engine, nibe_state):
         """Verify power decrease predicted when warming."""
@@ -392,7 +390,7 @@ class TestPhase4SuccessCriteria:
 
         # Should act NOW before spike (predicted: 3.2 + 1.5 = 4.7, margin 0.3)
         assert decision.offset < 0
-        assert "predictive" in decision.reason.lower()
+        assert "heading for the" in decision.reason
 
 
 class TestComparisonReactiveVsPredictive:
@@ -425,7 +423,7 @@ class TestComparisonReactiveVsPredictive:
         # Phase 4 (predictive): Acts NOW
         # Phase 3 (reactive): Would wait until power reaches warning/critical
         assert decision.offset < 0  # Predictive acts
-        assert "predictive" in decision.reason.lower()
+        assert "heading for the" in decision.reason
 
         # This is the key benefit: acts ~15 minutes earlier than reactive
 

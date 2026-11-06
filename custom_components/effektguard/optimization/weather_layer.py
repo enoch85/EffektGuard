@@ -770,15 +770,16 @@ class WeatherPredictionLayer:
             )
 
             # Determine trigger reason
-            if forecast_triggered and indoor_cooling:
-                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
-            elif forecast_triggered:
-                trigger = (
-                    f"Forecast daily-mean drop {temp_drop:.1f}°C within {self.forecast_horizon:.0f}h "
-                    "(proactive)"
+            colder_day = f"colder day ahead {temp_drop:+.1f}°C within {self.forecast_horizon:.0f}h"
+            room_cooling = f"room cooling {abs(trend_rate):.2f}°C/h"
+            trigger = ", ".join(
+                part
+                for part, fired in (
+                    (colder_day, forecast_triggered),
+                    (room_cooling, indoor_cooling),
                 )
-            else:
-                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
+                if fired
+            )
 
             # Heat for the cold ahead is bought in a cheap or very cheap quarter only. It takes
             # hours to reach a slab, so it is bought early, never at a normal or dearer price.
@@ -790,7 +791,7 @@ class WeatherPredictionLayer:
                     name="Weather Pre-heat",
                     offset=0.0,
                     weight=0.0,
-                    reason=f"{trigger}: waiting for a cheap quarter",
+                    reason=f"{trigger}, waiting for a cheap quarter",
                 )
 
             return WeatherLayerDecision(
@@ -1017,7 +1018,7 @@ class WeatherCompensationLayer:
         if unusual_weather:
             reasoning_parts.append("unusual weather")
         if defer_factor < 1.0:
-            reasoning_parts.append("degree-minute debt → weight cut")
+            reasoning_parts.append("DM debt → weight cut")
         reasoning = ", ".join(reasoning_parts)
 
         _LOGGER.debug(

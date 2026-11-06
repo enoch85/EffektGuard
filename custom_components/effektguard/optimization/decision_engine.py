@@ -625,15 +625,14 @@ class DecisionEngine:
                             offset=safety_floor,
                             weight=LAYER_WEIGHT_SAFETY,
                             reason=(
-                                f"Safety floor overrides manual {manual_override:.1f}°C "
-                                f"(indoor {nibe_state.indoor_temp:.1f}°C, "
-                                f"DM {nibe_state.degree_minutes:.0f})"
+                                f"room {nibe_state.indoor_temp:.1f}°C, "
+                                f"DM {nibe_state.degree_minutes:.0f}"
                             ),
                         )
                     ],
                     reasoning=(
-                        f"Manual override {manual_override:.1f}°C raised to "
-                        f"{safety_floor:.1f}°C by absolute safety floor"
+                        f"Manual override {manual_override:+.1f} → {safety_floor:+.1f} "
+                        f"(safety floor)"
                     ),
                     is_manual_override=True,
                     is_emergency=True,
@@ -648,10 +647,10 @@ class DecisionEngine:
                         name="Manual Override",
                         offset=manual_override,
                         weight=1.0,
-                        reason=f"User-set offset: {manual_override:.1f}°C",
+                        reason="set by you",
                     )
                 ],
-                reasoning=f"Manual override active: {manual_override:.1f}°C",
+                reasoning=f"Manual override {manual_override:+.1f}",
                 is_manual_override=True,
             )
 
@@ -945,7 +944,7 @@ class DecisionEngine:
                 name=SAFETY_LAYER_NAME,
                 offset=offset,
                 weight=LAYER_WEIGHT_SAFETY,
-                reason=f"Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
+                reason=f"room {indoor_temp:.1f}°C under {MIN_TEMP_LIMIT:.1f}°C",
             )
         else:
             # Within safe limits (no fixed upper limit - comfort layer handles dynamically)

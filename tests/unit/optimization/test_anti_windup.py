@@ -109,11 +109,9 @@ class TestAntiWindupCheck:
         dm_rate = -150.0  # More negative than threshold
         current_offset = 2.0  # Positive offset (adding heat)
 
-        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
+        anti_windup = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is True
-        assert "anti-windup" in reason
-        assert "DM dropping" in reason
 
     def test_not_active_when_offset_zero(self, emergency_layer):
         """Anti-windup doesn't activate when offset is zero."""
@@ -122,7 +120,7 @@ class TestAntiWindupCheck:
         dm_rate = -150.0
         current_offset = 0.0  # No positive offset
 
-        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
+        anti_windup = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -133,7 +131,7 @@ class TestAntiWindupCheck:
         dm_rate = -10.0  # DM not dropping fast (above threshold)
         current_offset = 2.0
 
-        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
+        anti_windup = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -144,7 +142,7 @@ class TestAntiWindupCheck:
         dm_rate = 50.0  # DM improving (positive rate)
         current_offset = 2.0
 
-        anti_windup, reason = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
+        anti_windup = layer._check_anti_windup(current_offset, dm_rate, has_valid_rate=True)
 
         assert anti_windup is False
 
@@ -155,7 +153,7 @@ class TestAntiWindupCheck:
         dm_rate = -150.0
         current_offset = 2.0
 
-        anti_windup, reason = layer._check_anti_windup(
+        anti_windup = layer._check_anti_windup(
             current_offset, dm_rate, has_valid_rate=False  # No valid data
         )
 
@@ -172,7 +170,7 @@ class TestAntiWindupOffsetCapping:
         calculated_offset = 3.0  # Would escalate to +3°C
         current_offset = 2.0  # Already at +2°C
 
-        final_offset, reason = layer._apply_anti_windup_cap(
+        final_offset = layer._apply_anti_windup_cap(
             calculated_offset,
             current_offset,
             anti_windup_active=True,
@@ -190,7 +188,7 @@ class TestAntiWindupOffsetCapping:
         calculated_offset = 3.0
         current_offset = 2.0
 
-        final_offset, reason = layer._apply_anti_windup_cap(
+        final_offset = layer._apply_anti_windup_cap(
             calculated_offset,
             current_offset,
             anti_windup_active=False,  # Not active
@@ -199,7 +197,6 @@ class TestAntiWindupOffsetCapping:
 
         # Should use full calculated offset
         assert final_offset == calculated_offset
-        assert reason == ""
 
     def test_allows_maintaining_current_offset(self, emergency_layer):
         """Anti-windup allows maintaining (not reducing) current offset."""
@@ -208,7 +205,7 @@ class TestAntiWindupOffsetCapping:
         calculated_offset = 2.0  # Same as current
         current_offset = 2.0
 
-        final_offset, reason = layer._apply_anti_windup_cap(
+        final_offset = layer._apply_anti_windup_cap(
             calculated_offset,
             current_offset,
             anti_windup_active=True,
@@ -294,14 +291,7 @@ class TestAntiWindupIntegration:
             assert (
                 decision.offset <= 2.0
             ), f"Anti-windup should prevent raise, got {decision.offset}"
-            # New format options:
-            # - Mild: "DM dropping -XX/h while offset +X°C - not raising"
-            # - Severe: "DM dropping -XX/h - reducing offset by X°C..."
-            assert (
-                "not raising" in decision.reason
-                or "reducing offset" in decision.reason
-                or "anti-windup" in decision.reason.lower()
-            )
+            assert "falling" in decision.reason, decision.reason
 
 
 class TestAntiWindupRealScenario:
