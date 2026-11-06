@@ -20,6 +20,7 @@ from ..const import (
     OVERSHOOT_PROTECTION_DEEPEST,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
+    OVERSHOOT_PROTECTION_START,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,8 +72,8 @@ class ComfortLayer:
         """Evaluate comfort layer decision.
 
         Above the band the response is one continuous ramp, from the in-band correction at the band
-        edge to a full coast at OVERSHOOT_PROTECTION_FULL, no deeper than
-        OVERSHOOT_PROTECTION_DEEPEST. It reads no prices: a vote that changes with the look-ahead is
+        edge - on the warm side no later than OVERSHOOT_PROTECTION_START - to a full coast at
+        OVERSHOOT_PROTECTION_FULL, no deeper than OVERSHOOT_PROTECTION_DEEPEST. It reads no prices: a vote that changes with the look-ahead is
         a cliff of its own (see const.py).
 
         Args:
@@ -107,6 +108,9 @@ class ComfortLayer:
         tolerance = self.tolerance_range
         dead_zone = self.mode_config.dead_zone
         in_band_weight = LAYER_WEIGHT_COMFORT_MIN * self.mode_config.comfort_weight_multiplier
+        # Where the overshoot ramp starts: the band edge, no later than OVERSHOOT_PROTECTION_START. A
+        # dead zone wider than that (savings mode) moves the start out with it.
+        edge = max(min(tolerance, OVERSHOOT_PROTECTION_START), dead_zone)
 
         if abs(temp_deviation) < dead_zone:
             return ComfortLayerDecision(
@@ -116,7 +120,7 @@ class ComfortLayer:
                 reason="At target",
             )
 
-        elif abs(temp_deviation) < tolerance:
+        elif temp_deviation < edge and abs(temp_deviation) < tolerance:
             # Within comfort zone but drifting from target
             correction = -temp_deviation * COMFORT_CORRECTION_MULT
 
@@ -133,9 +137,7 @@ class ComfortLayer:
             )
 
         elif temp_deviation > 0:
-            # Overshoot: ramp from the in-band correction at the band edge to a full coast. A dead
-            # zone wider than the band (savings mode, small slider) moves the start out with it.
-            edge = max(tolerance, dead_zone)
+            # Overshoot: ramp from the in-band correction at the edge to a full coast.
             edge_offset = -edge * COMFORT_CORRECTION_MULT
             fraction = (
                 1.0
