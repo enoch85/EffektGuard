@@ -78,8 +78,8 @@ class TestWeatherPredictionLayer:
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
-        assert "forecast" in decision.reason.lower()
-        assert "drop" in decision.reason.lower()
+        assert "colder day" in decision.reason
+        assert "colder day ahead" in decision.reason
 
     def test_indoor_cooling_triggers_preheat(
         self, weather_layer, nibe_state_mock, weather_data_mock
@@ -96,7 +96,7 @@ class TestWeatherPredictionLayer:
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
-        assert "indoor cooling" in decision.reason.lower()
+        assert "room cooling" in decision.reason
 
     def test_combined_triggers_preheat(self, weather_layer, nibe_state_mock, weather_data_mock):
         """Both forecast drop and indoor cooling trigger pre-heating."""
@@ -112,7 +112,7 @@ class TestWeatherPredictionLayer:
 
         assert decision.offset == pytest.approx(WEATHER_GENTLE_OFFSET)
         assert decision.weight > 0.0
-        assert "confirmed" in decision.reason.lower()
+        assert "colder day ahead" in decision.reason and "room cooling" in decision.reason
 
     def test_thermal_mass_scaling_concrete(self, nibe_state_mock, weather_data_mock):
         """Test weight scaling for concrete slab (high thermal mass)."""

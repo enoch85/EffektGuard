@@ -92,9 +92,17 @@ from ..const import (
 )
 from .climate_zones import ClimateZoneDetector, keep_triggers_clear_of_the_compressor_band
 from ..utils.degree_minutes import dm_rate_per_hour
+from ..utils.reasons import SHORT_RUN, change, explain
 from ..utils.volatile_helpers import should_skip_volatile_boost
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _skip_short_run(offset: float, is_volatile: bool) -> tuple[float, list[str]]:
+    """A raise skipped for a short cheap price run: the offset left, and the change, if it was."""
+    if should_skip_volatile_boost(is_volatile, offset):
+        return 0.0, [change(SHORT_RUN, -offset)]
+    return offset, []
 
 
 def is_cooling_rapidly(thermal_trend: dict, threshold: float = RAPID_COOLING_THRESHOLD) -> bool:
@@ -540,7 +548,7 @@ class EmergencyLayer:
 
     def _check_anti_windup(
         self, current_offset: float, dm_rate: float, has_valid_rate: bool
-    ) -> tuple[bool, str]:
+    ) -> bool:
         """Check if anti-windup protection should be activated.
 
         Anti-windup prevents escalating offset when heat is "in transit" through
@@ -554,21 +562,13 @@ class EmergencyLayer:
             has_valid_rate: Whether we have enough data to trust the rate
 
         Returns:
-            (anti_windup_active, reason_string)
+            True while heat is in transit: the offset is already positive and DM still falls
         """
-        if not has_valid_rate:
-            return False, ""
-
-        # Check if we're already adding heat (positive offset)
-        if current_offset < ANTI_WINDUP_MIN_POSITIVE_OFFSET:
-            return False, ""
-
-        # Check if DM is dropping despite positive offset
-        if dm_rate > ANTI_WINDUP_DM_DROPPING_RATE:
-            return False, ""
-
-        # Anti-windup triggered: heat is in transit, don't escalate
-        return True, f"anti-windup: DM dropping {dm_rate:.0f}/h while offset +{current_offset:.0f}"
+        return (
+            has_valid_rate
+            and current_offset >= ANTI_WINDUP_MIN_POSITIVE_OFFSET
+            and dm_rate <= ANTI_WINDUP_DM_DROPPING_RATE
+        )
 
     def _apply_anti_windup_cap(
         self,
@@ -576,7 +576,7 @@ class EmergencyLayer:
         current_offset: float,
         anti_windup_active: bool,
         tier_name: str,
-    ) -> tuple[float, str]:
+    ) -> float:
         """Hold the offset at its current value while heat is in transit.
 
         Anti-windup fires when degree minutes are FALLING even though the offset is already
@@ -603,10 +603,10 @@ class EmergencyLayer:
             tier_name: Tier name for logging
 
         Returns:
-            (final_offset, cap_reason) - reason is empty if no cap applied
+            The offset, held at `current_offset` while anti-windup is active
         """
         if not anti_windup_active:
-            return calculated_offset, ""
+            return calculated_offset
 
         # Calculate capped offset: don't exceed current offset * cap multiplier
         # This prevents escalation while allowing gradual reduction
@@ -621,9 +621,9 @@ class EmergencyLayer:
                 max_offset,
                 calculated_offset,
             )
-            return max_offset, f"held at {max_offset:.1f}°C instead of {calculated_offset:.1f}°C"
+            return max_offset
 
-        return calculated_offset, ""
+        return calculated_offset
 
     def evaluate_layer(
         self,
@@ -669,9 +669,7 @@ class EmergencyLayer:
 
         # Calculate DM rate and check anti-windup
         dm_rate, has_valid_rate = self._calculate_dm_rate()
-        anti_windup_active, anti_windup_reason = self._check_anti_windup(
-            current_offset, dm_rate, has_valid_rate
-        )
+        anti_windup_active = self._check_anti_windup(current_offset, dm_rate, has_valid_rate)
 
         temp_deviation = indoor_temp - target_temp
         # Comfort reasoning needs a REAL indoor reading. Without a room sensor the adapter reports
@@ -697,10 +695,7 @@ class EmergencyLayer:
                 name="Thermal Debt",
                 offset=0.0,
                 weight=1.0,
-                reason=(
-                    f"EMERGENCY: DM {degree_minutes:.0f} past aux limit {DM_THRESHOLD_AUX_LIMIT}"
-                    " - no cuts"
-                ),
+                reason=f"DM {degree_minutes:.0f} past {DM_THRESHOLD_AUX_LIMIT} → no cuts",
                 tier="EMERGENCY",
                 degree_minutes=degree_minutes,
                 threshold_used=DM_THRESHOLD_AUX_LIMIT,
@@ -721,7 +716,7 @@ class EmergencyLayer:
                 name="Anti-windup Cooldown",
                 offset=current_offset,
                 weight=0.7,
-                reason=f"In cooldown ({remaining_min} min remaining) - not raising offset",
+                reason=f"{remaining_min} min left, register held",
                 tier="COOLDOWN",
                 degree_minutes=degree_minutes,
                 anti_windup_active=True,
@@ -756,9 +751,10 @@ class EmergencyLayer:
                         abs(dm_rate) / ANTI_WINDUP_REDUCTION_RATE_DIVISOR
                     ) * ANTI_WINDUP_REDUCTION_MULTIPLIER
                     new_offset = max(MIN_OFFSET, current_offset - reduction)
-                    reason = (
-                        f"DM dropping {dm_rate:.0f}/h - reducing offset by {reduction:.1f}°C "
-                        f"(from +{current_offset:.0f}°C to {new_offset:.1f}°C)"
+                    reason = explain(
+                        "offset now",
+                        current_offset,
+                        [change(f"DM falling {abs(dm_rate):.0f}/h after a raise", -reduction)],
                     )
                     _LOGGER.info(
                         "Anti-windup REDUCTION: dm_rate=%d/h, reduction=%.1f°C, "
@@ -771,10 +767,7 @@ class EmergencyLayer:
                 else:
                     # Mild spiral - just keep current offset, don't raise
                     new_offset = current_offset
-                    reason = (
-                        f"DM dropping {dm_rate:.0f}/h while offset +{current_offset:.0f}°C - "
-                        f"not raising"
-                    )
+                    reason = f"DM falling {abs(dm_rate):.0f}/h after a raise, register held"
 
                 return EmergencyLayerDecision(
                     name="Anti-windup",
@@ -813,9 +806,6 @@ class EmergencyLayer:
             "warning": adjusted_dm_range["warning"],
         }
 
-        # Distance from absolute maximum
-        margin_to_limit = degree_minutes - DM_THRESHOLD_AUX_LIMIT
-
         # Calculate climate-aware tier thresholds
         warning_threshold = expected_dm["warning"]
         t1_threshold = warning_threshold - DM_CRITICAL_T1_MARGIN
@@ -837,27 +827,20 @@ class EmergencyLayer:
             )
 
             # Apply anti-windup cap (T3 is critical, so we still apply but note it)
-            final_offset, cap_reason = self._apply_anti_windup_cap(
+            final_offset = self._apply_anti_windup_cap(
                 damped_offset, current_offset, anti_windup_active, "T3"
             )
 
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, final_offset):
-                final_offset = 0.0
-                volatile_suffix = "[volatile: skipped]"
-            else:
-                volatile_suffix = ""
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} near absolute max "
-                f"(threshold: {t3_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-            if anti_windup_active:
-                reason_parts.append(f"[{anti_windup_reason}]")
-            if volatile_suffix:
-                reason_parts.append(volatile_suffix.strip())
+            final_offset, reason = self._tier_vote(
+                degree_minutes,
+                t3_threshold,
+                base_offset,
+                damped_offset,
+                damping_reason,
+                final_offset,
+                dm_rate,
+                is_volatile,
+            )
 
             # Apply weight reduction during volatile cheap periods
             weight = DM_CRITICAL_T3_WEIGHT
@@ -868,7 +851,7 @@ class EmergencyLayer:
                 name="T3",
                 offset=final_offset,
                 weight=weight,
-                reason=" ".join(reason_parts),
+                reason=reason,
                 tier="T3",
                 degree_minutes=degree_minutes,
                 threshold_used=t3_threshold,
@@ -889,27 +872,20 @@ class EmergencyLayer:
             )
 
             # Apply anti-windup cap to prevent escalation
-            final_offset, cap_reason = self._apply_anti_windup_cap(
+            final_offset = self._apply_anti_windup_cap(
                 damped_offset, current_offset, anti_windup_active, "T2"
             )
 
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, final_offset):
-                final_offset = 0.0
-                volatile_suffix = "[volatile: skipped]"
-            else:
-                volatile_suffix = ""
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} approaching T3 "
-                f"(threshold: {t2_threshold:.0f}, margin: {margin_to_limit:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-            if anti_windup_active:
-                reason_parts.append(f"[{anti_windup_reason}]")
-            if volatile_suffix:
-                reason_parts.append(volatile_suffix.strip())
+            final_offset, reason = self._tier_vote(
+                degree_minutes,
+                t2_threshold,
+                base_offset,
+                damped_offset,
+                damping_reason,
+                final_offset,
+                dm_rate,
+                is_volatile,
+            )
 
             # Apply weight reduction during volatile cheap periods
             weight = DM_CRITICAL_T2_WEIGHT
@@ -920,7 +896,7 @@ class EmergencyLayer:
                 name="T2",
                 offset=final_offset,
                 weight=weight,
-                reason=" ".join(reason_parts),
+                reason=reason,
                 tier="T2",
                 degree_minutes=degree_minutes,
                 threshold_used=t2_threshold,
@@ -941,27 +917,20 @@ class EmergencyLayer:
             )
 
             # Apply anti-windup cap to prevent escalation
-            final_offset, cap_reason = self._apply_anti_windup_cap(
+            final_offset = self._apply_anti_windup_cap(
                 damped_offset, current_offset, anti_windup_active, "T1"
             )
 
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, final_offset):
-                final_offset = 0.0
-                volatile_suffix = "[volatile: skipped]"
-            else:
-                volatile_suffix = ""
-
-            reason_parts = [
-                f"DM {degree_minutes:.0f} beyond expected for {outdoor_temp:.1f}°C "
-                f"(threshold: {t1_threshold:.0f})"
-            ]
-            if damping_reason:
-                reason_parts.append(f"[{damping_reason}]")
-            if anti_windup_active:
-                reason_parts.append(f"[{anti_windup_reason}]")
-            if volatile_suffix:
-                reason_parts.append(volatile_suffix.strip())
+            final_offset, reason = self._tier_vote(
+                degree_minutes,
+                t1_threshold,
+                base_offset,
+                damped_offset,
+                damping_reason,
+                final_offset,
+                dm_rate,
+                is_volatile,
+            )
 
             # Apply weight reduction during volatile cheap periods
             weight = DM_CRITICAL_T1_WEIGHT
@@ -972,7 +941,7 @@ class EmergencyLayer:
                 name="T1",
                 offset=final_offset,
                 weight=weight,
-                reason=" ".join(reason_parts),
+                reason=reason,
                 tier="T1",
                 degree_minutes=degree_minutes,
                 threshold_used=t1_threshold,
@@ -1011,6 +980,36 @@ class EmergencyLayer:
             degree_minutes=degree_minutes,
             dm_rate=dm_rate,
         )
+
+    @staticmethod
+    def _tier_vote(
+        degree_minutes: float,
+        threshold: float,
+        base_offset: float,
+        damped_offset: float,
+        damping_reason: str,
+        held_offset: float,
+        dm_rate: float,
+        is_volatile: bool,
+    ) -> tuple[float, str]:
+        """A recovery tier's offset after a short price run, and the reason for all of it.
+
+        Each change the tier's own offset went through, with what it added: the room warming
+        (damping), heat still in transit (anti-windup), a short cheap run.
+        """
+        changes = []
+        if damped_offset != base_offset:
+            changes.append(change(damping_reason, damped_offset - base_offset))
+        if held_offset != damped_offset:
+            changes.append(change(f"falling {abs(dm_rate):.0f}/h", held_offset - damped_offset))
+        offset, skipped = _skip_short_run(held_offset, is_volatile)
+        reason = explain(
+            f"DM {degree_minutes:.0f} past {threshold:.0f}",
+            base_offset,
+            changes + skipped,
+            weight_cut=is_volatile,
+        )
+        return offset, reason
 
     def _get_thermal_mass_adjusted_thresholds(self, base_thresholds: dict) -> dict:
         """Thresholds moved to suit this house's thermal lag. See apply_thermal_mass_buffer."""
@@ -1081,12 +1080,12 @@ class EmergencyLayer:
             warming_rate >= THERMAL_RECOVERY_WARMING_THRESHOLD
             and outdoor_rate >= THERMAL_RECOVERY_OUTDOOR_DROPPING_THRESHOLD
         ):
-            if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD:
-                warming_factor = THERMAL_RECOVERY_RAPID_FACTOR
-                damping_reason = f"rapid warming {warming_rate:.2f}°C/h"
-            else:
-                warming_factor = THERMAL_RECOVERY_DAMPING_FACTOR
-                damping_reason = f"warming {warming_rate:.2f}°C/h"
+            warming_factor = (
+                THERMAL_RECOVERY_RAPID_FACTOR
+                if warming_rate >= THERMAL_RECOVERY_RAPID_THRESHOLD
+                else THERMAL_RECOVERY_DAMPING_FACTOR
+            )
+            damping_reason = f"room warming {warming_rate:.2f}°C/h"
 
             damped_offset = max(base_offset * warming_factor, min_damped_offset)
 
@@ -1245,21 +1244,19 @@ class ProactiveLayer:
         # Calculate current deficit
         deficit = target_temp - indoor_temp
 
-        # Predict deficit in 1 hour if trend continues
-        predicted_deficit_1h = deficit - trend_rate  # Negative rate increases deficit
-
         # ========================================
         # RAPID COOLING DETECTION (Predictive)
         # ========================================
         if is_cooling_rapidly(thermal_trend):
             if outdoor_temp < RAPID_COOLING_OUTDOOR_THRESHOLD and deficit > THERMAL_CHANGE_MODERATE:
-                boost = min(
+                base_boost = min(
                     abs(trend_rate) * RAPID_COOLING_BOOST_MULTIPLIER,
                     RAPID_COOLING_BOOST_MAX,
                 )
+                boost = base_boost
 
                 # Validate against weather forecast
-                forecast_reason = ""
+                changes = []
                 forecast_validated = False
                 if weather_data and weather_data.forecast_hours:
                     next_3h_temps = [h.temperature for h in weather_data.forecast_hours[:3]]
@@ -1269,18 +1266,13 @@ class ProactiveLayer:
 
                         if temp_will_drop:
                             boost *= MULTIPLIER_BOOST_30_PERCENT
-                            forecast_reason = " (forecast confirms cooling)"
+                            changes.append(change("forecast colder", boost - base_boost))
                             forecast_validated = True
                         else:
                             boost *= MULTIPLIER_REDUCTION_20_PERCENT
-                            forecast_reason = " (forecast stable, likely temporary)"
+                            changes.append(change("forecast steady", boost - base_boost))
 
-                # Skip boost during volatile cheap period (shared logic)
-                if should_skip_volatile_boost(is_volatile, boost):
-                    boost = 0.0
-                    volatile_suffix = " [volatile: skipped]"
-                else:
-                    volatile_suffix = ""
+                boost, skipped = _skip_short_run(boost, is_volatile)
 
                 weight = RAPID_COOLING_WEIGHT
 
@@ -1292,10 +1284,11 @@ class ProactiveLayer:
                     name="Proactive",
                     offset=boost,
                     weight=weight,
-                    reason=(
-                        f"Rapid cooling ({trend_rate:.2f}°C/h), "
-                        f"deficit {deficit:.1f}°C → {predicted_deficit_1h:.1f}°C in 1h"
-                        f"{forecast_reason}{volatile_suffix}"
+                    reason=explain(
+                        f"room cooling {abs(trend_rate):.2f}°C/h, {deficit:.1f}°C under target",
+                        base_boost,
+                        changes + skipped,
+                        weight_cut=is_volatile,
                     ),
                     zone="RAPID_COOLING",
                     degree_minutes=degree_minutes,
@@ -1316,19 +1309,17 @@ class ProactiveLayer:
         # PROACTIVE ZONE 1
         if zone2_threshold < degree_minutes <= zone1_threshold:
             offset = PROACTIVE_ZONE1_OFFSET
+            changes = []
 
             if trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
                 offset *= MULTIPLIER_BOOST_30_PERCENT
-                reason_suffix = f" (trend: {trend_rate:.2f}°C/h)"
-            else:
-                reason_suffix = ""
+                changes.append(
+                    change(
+                        f"room cooling {abs(trend_rate):.2f}°C/h", offset - PROACTIVE_ZONE1_OFFSET
+                    )
+                )
 
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, offset):
-                offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
+            offset, skipped = _skip_short_run(offset, is_volatile)
 
             weight = LAYER_WEIGHT_PROACTIVE_MIN
 
@@ -1340,7 +1331,12 @@ class ProactiveLayer:
                 name="Z1",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, gentle heating prevents debt{reason_suffix}{volatile_suffix}",
+                reason=explain(
+                    f"DM {degree_minutes:.0f}",
+                    PROACTIVE_ZONE1_OFFSET,
+                    changes + skipped,
+                    weight_cut=is_volatile,
+                ),
                 zone="Z1",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1348,14 +1344,7 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 2
         if zone3_threshold < degree_minutes <= zone2_threshold:
-            offset = PROACTIVE_ZONE2_OFFSET
-
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, offset):
-                offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
+            offset, skipped = _skip_short_run(PROACTIVE_ZONE2_OFFSET, is_volatile)
 
             weight = PROACTIVE_ZONE2_WEIGHT
 
@@ -1367,7 +1356,12 @@ class ProactiveLayer:
                 name="Z2",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, boost recovery speed{volatile_suffix}",
+                reason=explain(
+                    f"DM {degree_minutes:.0f}",
+                    PROACTIVE_ZONE2_OFFSET,
+                    skipped,
+                    weight_cut=is_volatile,
+                ),
                 zone="Z2",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1378,14 +1372,10 @@ class ProactiveLayer:
             deficit_severity = (zone3_threshold - degree_minutes) / (
                 zone3_threshold - zone4_threshold
             )
-            offset = PROACTIVE_ZONE3_OFFSET_MIN + (deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE)
-
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, offset):
-                offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
+            zone_offset = PROACTIVE_ZONE3_OFFSET_MIN + (
+                deficit_severity * PROACTIVE_ZONE3_OFFSET_RANGE
+            )
+            offset, skipped = _skip_short_run(zone_offset, is_volatile)
 
             weight = PROACTIVE_ZONE3_WEIGHT
 
@@ -1397,7 +1387,9 @@ class ProactiveLayer:
                 name="Z3",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, prevent deeper debt{volatile_suffix}",
+                reason=explain(
+                    f"DM {degree_minutes:.0f}", zone_offset, skipped, weight_cut=is_volatile
+                ),
                 zone="Z3",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1405,14 +1397,7 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 4
         if zone5_threshold < degree_minutes <= zone4_threshold:
-            offset = PROACTIVE_ZONE4_OFFSET
-
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, offset):
-                offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
+            offset, skipped = _skip_short_run(PROACTIVE_ZONE4_OFFSET, is_volatile)
 
             weight = PROACTIVE_ZONE4_WEIGHT
 
@@ -1424,7 +1409,12 @@ class ProactiveLayer:
                 name="Z4",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, strong prevention{volatile_suffix}",
+                reason=explain(
+                    f"DM {degree_minutes:.0f}",
+                    PROACTIVE_ZONE4_OFFSET,
+                    skipped,
+                    weight_cut=is_volatile,
+                ),
                 zone="Z4",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,
@@ -1432,14 +1422,7 @@ class ProactiveLayer:
 
         # PROACTIVE ZONE 5
         if expected_dm["warning"] < degree_minutes <= zone5_threshold:
-            offset = PROACTIVE_ZONE5_OFFSET
-
-            # Skip boost during volatile cheap period (shared logic)
-            if should_skip_volatile_boost(is_volatile, offset):
-                offset = 0.0
-                volatile_suffix = " [volatile: skipped]"
-            else:
-                volatile_suffix = ""
+            offset, skipped = _skip_short_run(PROACTIVE_ZONE5_OFFSET, is_volatile)
 
             # Apply weight reduction during volatile cheap periods
             weight = PROACTIVE_ZONE5_WEIGHT
@@ -1450,7 +1433,12 @@ class ProactiveLayer:
                 name="Z5",
                 offset=offset,
                 weight=weight,
-                reason=f"DM {degree_minutes:.0f}, approaching warning{volatile_suffix}",
+                reason=explain(
+                    f"DM {degree_minutes:.0f}",
+                    PROACTIVE_ZONE5_OFFSET,
+                    skipped,
+                    weight_cut=is_volatile,
+                ),
                 zone="Z5",
                 degree_minutes=degree_minutes,
                 trend_rate=trend_rate,

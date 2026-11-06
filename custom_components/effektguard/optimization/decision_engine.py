@@ -62,9 +62,11 @@ from ..const import (
     TREND_DAMPING_WARMING,
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
+    REASONING_SEPARATOR,
 )
 from ..utils.capacity_shortfall import CapacityShortfall
 from ..utils.heater_start import HeaterStart
+from ..utils.reasons import adjusted
 from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
@@ -130,6 +132,16 @@ class LayerDecision:
     # comfort, safety, or physics. Cost layers are barred from reducing heat while the
     # thermal-debt layer is recovering - see DecisionEngine._aggregate_layers.
     is_cost_layer: bool = False
+
+
+def describe_vote(layer: LayerDecision) -> str:
+    """A layer's vote as the reasoning shows it: offset, weight, and why."""
+    return f"{layer.offset:+.1f}@{layer.weight:.2f} ({layer.reason})"
+
+
+def voting_layers(layers: list[LayerDecision]) -> list[LayerDecision]:
+    """The layers that voted, heaviest first: the order the reasoning shows them in."""
+    return sorted((layer for layer in layers if layer.weight > 0), key=lambda layer: -layer.weight)
 
 
 @dataclass
@@ -614,15 +626,14 @@ class DecisionEngine:
                             offset=safety_floor,
                             weight=LAYER_WEIGHT_SAFETY,
                             reason=(
-                                f"Safety floor overrides manual {manual_override:.1f}°C "
-                                f"(indoor {nibe_state.indoor_temp:.1f}°C, "
-                                f"DM {nibe_state.degree_minutes:.0f})"
+                                f"room {nibe_state.indoor_temp:.1f}°C, "
+                                f"DM {nibe_state.degree_minutes:.0f}"
                             ),
                         )
                     ],
                     reasoning=(
-                        f"Manual override {manual_override:.1f}°C raised to "
-                        f"{safety_floor:.1f}°C by absolute safety floor"
+                        f"Manual override {manual_override:+.1f} → {safety_floor:+.1f} "
+                        f"(safety floor)"
                     ),
                     is_manual_override=True,
                     is_emergency=True,
@@ -637,10 +648,10 @@ class DecisionEngine:
                         name="Manual Override",
                         offset=manual_override,
                         weight=1.0,
-                        reason=f"User-set offset: {manual_override:.1f}°C",
+                        reason="set by you",
                     )
                 ],
-                reasoning=f"Manual override active: {manual_override:.1f}°C",
+                reasoning=f"Manual override {manual_override:+.1f}",
                 is_manual_override=True,
             )
 
@@ -759,7 +770,6 @@ class DecisionEngine:
             target_temp=self.target_temp,
             tolerance=self.tolerance,
             mode_config=self.mode_config,
-            gespot_entity=self.config.get("gespot_entity", "unknown"),
             enable_price_optimization=self.config.get("enable_price_optimization", True),
         )
         price_decision = LayerDecision(
@@ -824,12 +834,10 @@ class DecisionEngine:
             if raw_offset > 0:
                 # Heating + Warming -> Damp to prevent overshoot
                 damping_factor = TREND_DAMPING_WARMING
-                reason_suffix = f" (damped 25%: warming {trend_rate:.2f}°C/h)"
             else:
                 # Cooling + Warming -> Maintain full cooling (don't damp)
                 # If we are trying to cool and house is warming, we need full power!
                 damping_factor = TREND_DAMPING_NEUTRAL
-                reason_suffix = ""
 
         elif is_cooling_rapidly(thermal_trend):
             # House cooling rapidly
@@ -838,21 +846,23 @@ class DecisionEngine:
                 # But only if not already at high offset (safety limit)
                 if raw_offset < TREND_BOOST_OFFSET_LIMIT:
                     damping_factor = TREND_DAMPING_COOLING_BOOST
-                    reason_suffix = f" (boosted 15%: cooling {trend_rate:.2f}°C/h)"
                 else:
                     damping_factor = TREND_DAMPING_NEUTRAL
-                    reason_suffix = " (at safety limit, no boost)"
             else:
                 # Cooling + Cooling -> Damp to prevent undershoot (reduce cooling)
                 # If we are trying to cool and house is cooling fast, back off
                 damping_factor = TREND_DAMPING_WARMING  # Reuse 0.75 factor
-                reason_suffix = f" (damped 25%: cooling {trend_rate:.2f}°C/h)"
         else:
             # Normal rate of change
             damping_factor = TREND_DAMPING_NEUTRAL
-            reason_suffix = ""
 
         asked_offset = raw_offset * damping_factor
+        trend_note = ""
+        if damping_factor != TREND_DAMPING_NEUTRAL:
+            direction = "warming" if trend_rate > 0 else "cooling"
+            trend_note = adjusted(
+                f"Room {direction} {abs(trend_rate):.2f}°C/h", raw_offset, asked_offset
+            )
 
         worn_offset, wear_note = self._limit_for_compressor_wear(
             asked_offset, nibe_state, compressor_saturated, trend_rate
@@ -862,15 +872,15 @@ class DecisionEngine:
             worn_offset, nibe_state, room_floor, short
         )
         if short and final_offset < 0:
-            heater_note = (
-                f" | Pump short of capacity at or below "
-                f"{self.capacity_shortfall.temperature:.1f}°C: no cut below its curve "
-                f"(asked {final_offset:+.1f}°C)"
+            heater_note = adjusted(
+                f"Pump short of capacity at or below {self.capacity_shortfall.temperature:.1f}°C",
+                final_offset,
+                0.0,
             )
             final_offset = 0.0
 
-        # Generate human-readable reasoning
-        reasoning = self._generate_reasoning(layers) + reason_suffix + wear_note + heater_note
+        notes = [note for note in (trend_note, wear_note, heater_note) if note]
+        reasoning = self._generate_reasoning(layers, notes)
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
 
@@ -938,7 +948,7 @@ class DecisionEngine:
                 name=SAFETY_LAYER_NAME,
                 offset=offset,
                 weight=LAYER_WEIGHT_SAFETY,
-                reason=f"Too cold ({indoor_temp:.1f}°C < {MIN_TEMP_LIMIT}°C)",
+                reason=f"room {indoor_temp:.1f}°C under {MIN_TEMP_LIMIT:.1f}°C",
             )
         else:
             # Within safe limits (no fixed upper limit - comfort layer handles dynamically)
@@ -1015,7 +1025,7 @@ class DecisionEngine:
         if held >= offset or math.isclose(held, offset):
             return offset, ""
 
-        state = "at its published maximum" if at_max else "saturated"
+        state = "at max" if at_max else "saturated"
         _LOGGER.info(
             "Compressor %s: offset %.2f°C capped at %.2f°C. A higher setpoint buys no heat "
             "from a compressor with no frequency left - only a deeper DM deficit and immersion heat.",
@@ -1023,7 +1033,7 @@ class DecisionEngine:
             offset,
             held,
         )
-        return held, f" | Compressor {state}: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+        return held, adjusted(f"Compressor {state}", offset, held)
 
     @staticmethod
     def _publishes_maximum(nibe_state) -> bool:
@@ -1122,7 +1132,14 @@ class DecisionEngine:
             degree_minutes,
             heater_start,
         )
-        return held, f" | Heater guard: capped at {held:+.1f}°C (asked {offset:+.1f}°C)"
+        return held, (
+            adjusted(
+                "Heater guard",
+                offset,
+                held,
+                f"DM {degree_minutes:.0f}, heater starts at {heater_start:.0f}",
+            )
+        )
 
     def heater_start_dm(self) -> float | None:
         """Where this pump starts its immersion heater, or None without a model profile.
@@ -1361,48 +1378,26 @@ class DecisionEngine:
             return 0.0
         return sum(layer.offset * layer.weight for layer in layers) / total_weight
 
-    def _generate_reasoning(
-        self,
-        layers: list[LayerDecision],
-    ) -> str:
-        """Generate human-readable reasoning from layer decisions.
+    @staticmethod
+    def _generate_reasoning(layers: list[LayerDecision], notes: list[str]) -> str:
+        """The decision in words: what changed the offset after the vote, then the votes.
 
-        Prioritizes critical layers (weight >= 1.0) in the output to make it clear
-        which layer is driving the decision. Advisory layers shown separately.
+        The last note applied comes first, so the reasoning opens on what the pump gets; then each
+        voting layer, heaviest first. The reasoning sensor fits Home Assistant's state limit by
+        dropping whole entries from the end.
 
         Args:
-            layers: List of layer decisions
+            layers: The layers' decisions
+            notes: What changed the offset after the vote, in the order it was applied
 
         Returns:
-            Reasoning string with critical layers highlighted
+            The entries joined by REASONING_SEPARATOR
         """
-        # Separate critical from advisory layers
-        critical_layers = [layer for layer in layers if layer.weight >= 1.0]
-        advisory_layers = [layer for layer in layers if 0 < layer.weight < 1.0]
-
-        if not critical_layers and not advisory_layers:
-            return "No optimization active"
-
-        # Build reasoning string
-        reasons = []
-
-        if critical_layers:
-            # Critical layers drive the decision - show them prominently
-            critical_reasons = [f"[{layer.name}] {layer.reason}" for layer in critical_layers]
-            reasons.extend(critical_reasons)
-
-            # Show advisory layers as supplementary info (if any)
-            if advisory_layers and len(advisory_layers) <= 2:
-                # Only show a few advisory layers to avoid clutter
-                advisory_summary = ", ".join(
-                    f"[{layer.name}] {layer.reason}" for layer in advisory_layers[:2]
-                )
-                reasons.append(f"[Advisory: {advisory_summary}]")
-        else:
-            # No critical layers - all are advisory, show normally
-            reasons = [f"[{layer.name}] {layer.reason}" for layer in advisory_layers]
-
-        return " | ".join(reasons)
+        entries = [
+            *reversed(notes),
+            *(f"{layer.name} {describe_vote(layer)}" for layer in voting_layers(layers)),
+        ]
+        return REASONING_SEPARATOR.join(entries) if entries else "No optimization active"
 
     def _validate_power_consumption(
         self,

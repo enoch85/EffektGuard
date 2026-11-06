@@ -69,7 +69,6 @@ class TestEvaluateLayerDisabled:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=False,
         )
 
@@ -89,7 +88,6 @@ class TestEvaluateLayerDisabled:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=False,
         )
 
@@ -110,7 +108,6 @@ class TestEvaluateLayerEnabled:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=True,
         )
 
@@ -120,23 +117,6 @@ class TestEvaluateLayerEnabled:
         assert isinstance(result.offset, float)
         assert isinstance(result.weight, float)
         assert "Disabled by user" not in result.reason
-
-    def test_enabled_includes_adapter_in_reason(
-        self, price_analyzer, mock_nibe_state, mock_price_data_normal
-    ):
-        """Reason string includes adapter entity name."""
-        result = price_analyzer.evaluate_layer(
-            nibe_state=mock_nibe_state,
-            price_data=mock_price_data_normal,
-            thermal_mass=1.5,
-            target_temp=21.0,
-            tolerance=1.5,
-            mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
-            gespot_entity="sensor.gespot_se3_current",
-            enable_price_optimization=True,
-        )
-
-        assert "gespot_se3_current" in result.reason
 
 
 class TestEvaluateLayerModeConfigs:
@@ -153,7 +133,6 @@ class TestEvaluateLayerModeConfigs:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_COMFORT],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=True,
         )
 
@@ -164,7 +143,6 @@ class TestEvaluateLayerModeConfigs:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_SAVINGS],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=True,
         )
 
@@ -185,7 +163,6 @@ class TestEvaluateLayerNoPriceData:
             target_temp=21.0,
             tolerance=1.5,
             mode_config=MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED],
-            gespot_entity="sensor.test_price",
             enable_price_optimization=True,
         )
 
@@ -238,5 +215,5 @@ class TestTheDeepestCut:
                 mode_config=MODE_CONFIGS[mode],
             )
 
-        assert "PEAK" in result.reason
+        assert "peak" in result.reason
         assert result.offset == pytest.approx(expected)

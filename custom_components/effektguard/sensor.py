@@ -17,7 +17,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfPower, UnitOfTemperature
+from homeassistant.const import (
+    MAX_LENGTH_STATE_STATE,
+    EntityCategory,
+    UnitOfPower,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import UNDEFINED, UndefinedType
@@ -36,9 +41,11 @@ from .const import (
     POWER_SOURCE_NIBE_CURRENTS,
     POWER_SOURCE_NONE,
     PRICE_UNIT_FALLBACK,
+    REASONING_SEPARATOR,
     DOMAIN,
 )
 from .coordinator import EffektGuardCoordinator
+from .optimization.decision_engine import describe_vote, voting_layers
 from .optimization.effect_layer import effective_tariff_power_kw
 from .utils.time_utils import seconds_between
 
@@ -46,6 +53,25 @@ _LOGGER = logging.getLogger(__name__)
 
 # Read-only: every sensor serves the coordinator's last decision. Nothing here reaches the pump.
 PARALLEL_UPDATES = 0
+
+
+def fit_reasoning(reasoning: str) -> str:
+    """The reasoning as a state, within Home Assistant's limit on one.
+
+    Whole entries from the front - what the pump gets leads - then "…" for the rest, which the
+    `full_reasoning` attribute keeps. Cut mid-word at the limit, 86 % of production's decisions
+    from 27 Oct to 6 Nov 2026 lost their end. An entry longer than the limit on its own is cut.
+    """
+    if len(reasoning) <= MAX_LENGTH_STATE_STATE:
+        return reasoning
+    more = f"{REASONING_SEPARATOR}…"
+    kept = ""
+    for entry in reasoning.split(REASONING_SEPARATOR):
+        candidate = f"{kept}{REASONING_SEPARATOR}{entry}" if kept else entry
+        if len(candidate) + len(more) > MAX_LENGTH_STATE_STATE:
+            break
+        kept = candidate
+    return f"{kept}{more}" if kept else f"{reasoning[: MAX_LENGTH_STATE_STATE - 1]}…"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -237,17 +263,9 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         translation_key="optimization_reasoning",
         icon="mdi:brain",
         value_fn=lambda coordinator: (
-            # Truncate to 255 chars for Home Assistant state limit
-            # Full reasoning available in attributes
-            coordinator.data["decision"].reasoning[:252] + "..."
-            if coordinator.data
-            and coordinator.data.get("decision")
-            and len(coordinator.data["decision"].reasoning) > 255
-            else (
-                coordinator.data["decision"].reasoning
-                if coordinator.data and coordinator.data.get("decision")
-                else "No decision yet"
-            )
+            fit_reasoning(coordinator.data["decision"].reasoning)
+            if coordinator.data and coordinator.data.get("decision")
+            else "No decision yet"
         ),
     ),
     EffektGuardSensorEntityDescription(
@@ -1128,14 +1146,14 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         attrs["decision_timestamp"] = decision.timestamp.isoformat()
                     if hasattr(decision, "offset"):
                         attrs["applied_offset"] = decision.offset
-                    # Add layer breakdown - each layer as its own attribute
+                    # The votes one per line: Home Assistant shows a mapping's entries on lines of
+                    # their own, and a state or a string attribute on one. Every layer's numbers,
+                    # voting or not, are on the current offset sensor.
                     if hasattr(decision, "layers") and decision.layers:
-                        for layer in decision.layers:
-                            attrs[layer.name] = {
-                                "reason": layer.reason,
-                                "offset": layer.offset,
-                                "weight": layer.weight,
-                            }
+                        attrs["layers"] = {
+                            layer.name: describe_vote(layer)
+                            for layer in voting_layers(decision.layers)
+                        }
 
         elif key == "optional_features_status":
             # Show detailed status of all optional features

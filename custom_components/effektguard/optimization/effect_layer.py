@@ -708,22 +708,26 @@ class EffectManager:
         if trend_rate < EFFECT_PREDICTIVE_RAPID_COOLING_THRESHOLD:
             # Rapid cooling → Compressor will ramp up significantly
             predicted_power_increase = EFFECT_PREDICTIVE_RAPID_COOLING_INCREASE
-            prediction_reason = "cooling rapidly"
+            prediction_reason = "room cooling fast"
         elif trend_rate < THERMAL_CHANGE_MODERATE_COOLING:
             # Moderate cooling → Slight power increase expected
             predicted_power_increase = EFFECT_PREDICTIVE_MODERATE_COOLING_INCREASE
-            prediction_reason = "gentle cooling"
+            prediction_reason = "room cooling"
         elif trend_rate > THERMAL_CHANGE_MODERATE:
             # Rapid warming → Compressor may reduce
             predicted_power_increase = EFFECT_PREDICTIVE_WARMING_DECREASE
-            prediction_reason = "warming"
+            prediction_reason = "room warming"
         else:
             # Stable → No significant change expected
             predicted_power_increase = 0.0
-            prediction_reason = "stable"
+            prediction_reason = ""
 
         predicted_power = current_power + predicted_power_increase
         predicted_margin = current_peak - predicted_power
+        # Every vote below says where the period's power stands against the month's peak, and which
+        # way the room is going
+        trend = f", {prediction_reason}" if prediction_reason else ""
+        peak = f"{current_peak:.1f} kW peak"
 
         # Peak protection logic with predictive enhancement
         # Oct 19, 2025: All values now constants for test script reuse
@@ -734,7 +738,7 @@ class EffectManager:
                 name="Peak",
                 offset=EFFECT_OFFSET_CRITICAL,
                 weight=EFFECT_WEIGHT_CRITICAL,
-                reason=f"CRITICAL ({current_power:.1f}/{current_peak:.1f} kW)",
+                reason=f"{current_power:.1f} kW at the {peak}{trend}",
             )
         elif (
             current_peak > 0
@@ -751,7 +755,7 @@ class EffectManager:
                 name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,
                 weight=EFFECT_WEIGHT_PREDICTIVE,
-                reason=f"Predictive avoidance ({prediction_reason})",
+                reason=f"{current_power:.1f} kW heading for the {peak}{trend}",
             )
         elif limit_decision.severity == "WARNING":
             # Close to peak - check if trend shows increasing demand
@@ -761,7 +765,7 @@ class EffectManager:
                     name="Peak",
                     offset=EFFECT_OFFSET_WARNING_RISING,
                     weight=EFFECT_WEIGHT_WARNING_RISING,
-                    reason=f"WARNING + demand rising ({prediction_reason})",
+                    reason=f"{current_power:.1f} kW near the {peak}{trend}",
                 )
             else:
                 # Warning but demand stable/falling = gentle reduction
@@ -769,7 +773,7 @@ class EffectManager:
                     name="Peak",
                     offset=EFFECT_OFFSET_WARNING_STABLE,
                     weight=EFFECT_WEIGHT_WARNING_STABLE,
-                    reason=f"WARNING + demand {prediction_reason}",
+                    reason=f"{current_power:.1f} kW near the {peak}{trend}",
                 )
         else:
             # Safe margin - no action needed

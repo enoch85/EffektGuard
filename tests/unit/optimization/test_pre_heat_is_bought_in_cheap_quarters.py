@@ -15,6 +15,7 @@ from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
+    PRICE_FORECAST_PREHEAT_OFFSET,
     WEATHER_GENTLE_OFFSET,
     THERMAL_MASS_CONCRETE_UFH_THRESHOLD,
     QuarterClassification,
@@ -72,20 +73,20 @@ def test_a_slab_does_not_pre_heat_in_a_normal_quarter_for_a_dearer_one_ahead(fre
     vote = _price_vote(freezer, NORMAL_QUARTER)
 
     assert vote.classification == QuarterClassification.NORMAL, vote.reason
-    assert "pre-heat now" not in vote.reason, vote.reason
+    assert f"pre-heat {PRICE_FORECAST_PREHEAT_OFFSET:+.1f}" not in vote.reason, vote.reason
 
 
 def test_a_lighter_house_still_does(freezer):
     vote = _price_vote(freezer, NORMAL_QUARTER, thermal_mass=1.0)
 
-    assert "pre-heat now" in vote.reason, vote.reason
+    assert f"pre-heat {PRICE_FORECAST_PREHEAT_OFFSET:+.1f}" in vote.reason, vote.reason
 
 
 def test_a_cheap_quarter_does(freezer):
     vote = _price_vote(freezer, CHEAP_QUARTER)
 
     assert vote.classification == QuarterClassification.CHEAP, vote.reason
-    assert "pre-heat now" in vote.reason, vote.reason
+    assert f"pre-heat {PRICE_FORECAST_PREHEAT_OFFSET:+.1f}" in vote.reason, vote.reason
 
 
 @pytest.mark.parametrize(

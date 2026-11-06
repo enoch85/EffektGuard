@@ -56,7 +56,7 @@ def test_a_flickering_night_quarter_pre_heats_at_full_weight(freezer, quarter):
 
     vote = _vote(quarter)
 
-    assert "Price volatile" in vote.reason, f"the night must flicker for this test: {vote.reason}"
+    assert "short run" in vote.reason, f"the night must flicker for this test: {vote.reason}"
     assert vote.offset > 0, vote.reason
     assert vote.weight == pytest.approx(LAYER_WEIGHT_PRICE), (
         f"a pre-heat before a morning at 100 öre voted {vote.offset:+.2f} at weight "
