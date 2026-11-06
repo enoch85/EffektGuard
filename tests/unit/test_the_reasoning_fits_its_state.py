@@ -17,8 +17,8 @@ from custom_components.effektguard.sensor import SENSORS, EffektGuardSensor
 
 # Production's 03:45 decision on 6 Nov 2026, as the reasoning now reads
 ENTRIES = [
-    "Heater guard +0.0 → -1.0 (DM -582, heater starts -700)",
-    "Compressor at max +1.4 → +0.0",
+    "Heater guard lowered +0.0 to -1.0 (DM -582, heater starts at -700)",
+    "Compressor at max lowered +1.4 to +0.0",
     "Spot Price +3.5@0.80 (very cheap night → +1.7, price +73% in 4h → pre-heat +2.0, "
     "room 0.7°C over → -0.2)",
     "Comfort -2.1@0.36 (0.7°C over target)",

@@ -66,6 +66,7 @@ from ..const import (
 )
 from ..utils.capacity_shortfall import CapacityShortfall
 from ..utils.heater_start import HeaterStart
+from ..utils.reasons import adjusted
 from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
@@ -859,7 +860,9 @@ class DecisionEngine:
         trend_note = ""
         if damping_factor != TREND_DAMPING_NEUTRAL:
             direction = "warming" if trend_rate > 0 else "cooling"
-            trend_note = f"Room {direction} {abs(trend_rate):.2f}°C/h {raw_offset:+.1f} → {asked_offset:+.1f}"
+            trend_note = adjusted(
+                f"Room {direction} {abs(trend_rate):.2f}°C/h", raw_offset, asked_offset
+            )
 
         worn_offset, wear_note = self._limit_for_compressor_wear(
             asked_offset, nibe_state, compressor_saturated, trend_rate
@@ -869,9 +872,10 @@ class DecisionEngine:
             worn_offset, nibe_state, room_floor, short
         )
         if short and final_offset < 0:
-            heater_note = (
-                f"Pump short of capacity at or below {self.capacity_shortfall.temperature:.1f}°C "
-                f"{final_offset:+.1f} → {0.0:+.1f}"
+            heater_note = adjusted(
+                f"Pump short of capacity at or below {self.capacity_shortfall.temperature:.1f}°C",
+                final_offset,
+                0.0,
             )
             final_offset = 0.0
 
@@ -1029,7 +1033,7 @@ class DecisionEngine:
             offset,
             held,
         )
-        return held, f"Compressor {state} {offset:+.1f} → {held:+.1f}"
+        return held, adjusted(f"Compressor {state}", offset, held)
 
     @staticmethod
     def _publishes_maximum(nibe_state) -> bool:
@@ -1129,8 +1133,12 @@ class DecisionEngine:
             heater_start,
         )
         return held, (
-            f"Heater guard {offset:+.1f} → {held:+.1f} "
-            f"(DM {degree_minutes:.0f}, heater starts {heater_start:.0f})"
+            adjusted(
+                "Heater guard",
+                offset,
+                held,
+                f"DM {degree_minutes:.0f}, heater starts at {heater_start:.0f}",
+            )
         )
 
     def heater_start_dm(self) -> float | None:

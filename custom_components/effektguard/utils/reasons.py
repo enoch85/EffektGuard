@@ -9,6 +9,13 @@ weight, which the reasoning shows in front of the reason, are not said again.
 SHORT_RUN = "short run"
 
 
+def adjusted(what: str, asked: float, got: float, why: str = "") -> str:
+    """What changed the offset after the layers voted, said in words, because it never adds a vote
+    of its own: "Heater guard lowered +0.4 to +0.0 (DM -600, heater starts at -460)"."""
+    verb = "lowered" if got < asked else "raised"
+    return f"{what} {verb} {asked:+.1f} to {got:+.1f}" + (f" ({why})" if why else "")
+
+
 def change(what: str, amount: float, action: str = "") -> str:
     """One part that changed a vote, with what it added: "room warming 0.30°C/h → -0.6", or with
     what it did as well: "price +71% in 2h → pre-heat +2.0"."""

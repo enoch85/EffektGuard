@@ -4,11 +4,11 @@ Home Assistant caps a state at 255 characters. A longer state is logged as an er
 as `unknown`. It also shows a state on one line: a line break in it renders as a space.
 
 `sensor.effektguard_optimization_reasoning` carries the decision engine's reasoning: entries
-separated by ` · `. First what changed the offset after the layers voted, the last one first, as
-before → after:
+separated by ` · `. First what changed the offset after the layers voted, the last one first. These
+only lower or raise what the layers asked for; they add nothing of their own:
 
 ```
-Heater guard +0.0 → -1.0 (DM -582, heater starts -700) · Compressor at max +1.4 → +0.0
+Heater guard lowered +0.0 to -1.0 (DM -582, heater starts at -700) · Compressor at max lowered +1.4 to +0.0
 ```
 
 Then each layer that voted, heaviest first, as offset@weight (why). Where more than one thing made
