@@ -127,7 +127,6 @@ class TestProactiveLayerZones:
         assert result.zone == "Z1"
         assert result.offset == pytest.approx(PROACTIVE_ZONE1_OFFSET, rel=0.1)
         assert result.weight == LAYER_WEIGHT_PROACTIVE_MIN
-        assert "gentle heating" in result.reason
 
     def test_zone1_boundary_lower(self, layer):
         """Test Z1 at lower boundary (just above Z2).
@@ -164,7 +163,6 @@ class TestProactiveLayerZones:
         assert result.zone == "Z2"
         assert result.offset == PROACTIVE_ZONE2_OFFSET
         assert result.weight == PROACTIVE_ZONE2_WEIGHT
-        assert "boost recovery" in result.reason
 
     def test_zone2_boundary(self, layer):
         """Test Z2 at exact upper boundary (-162 should be in Z2)."""
@@ -197,7 +195,6 @@ class TestProactiveLayerZones:
         assert result.zone == "Z3"
         assert result.offset >= PROACTIVE_ZONE3_OFFSET_MIN
         assert result.weight == PROACTIVE_ZONE3_WEIGHT
-        assert "prevent deeper debt" in result.reason
 
     def test_zone3_boundary(self, layer):
         """Test Z3 at exact upper boundary (-270 should be in Z3)."""
@@ -230,7 +227,6 @@ class TestProactiveLayerZones:
         assert result.zone == "Z4"
         assert result.offset == PROACTIVE_ZONE4_OFFSET
         assert result.weight == PROACTIVE_ZONE4_WEIGHT
-        assert "strong prevention" in result.reason
 
     def test_zone4_boundary(self, layer):
         """Test Z4 at exact upper boundary (-405 should be in Z4)."""
@@ -350,8 +346,7 @@ class TestProactiveLayerRapidCooling:
         assert result.zone == "RAPID_COOLING"
         assert result.offset > 0.0
         assert result.weight == RAPID_COOLING_WEIGHT
-        assert "Rapid cooling" in result.reason
-        assert "-0.50" in result.reason or "-0.5" in result.reason
+        assert "room cooling 0.50°C/h" in result.reason
 
     def test_rapid_cooling_with_forecast_validation(self):
         """Test rapid cooling boost when forecast confirms cooling."""
@@ -389,7 +384,7 @@ class TestProactiveLayerRapidCooling:
 
         assert result.zone == "RAPID_COOLING"
         assert result.forecast_validated is True
-        assert "forecast confirms" in result.reason
+        assert "forecast colder" in result.reason
 
     def test_no_rapid_cooling_when_warm_outdoor(self):
         """Test rapid cooling ignored when outdoor is warm."""

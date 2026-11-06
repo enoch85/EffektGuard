@@ -169,7 +169,7 @@ class TestEvaluateLayerForecastTrigger:
 
         assert result.offset == WEATHER_GENTLE_OFFSET  # +0.5°C
         assert result.weight > 0
-        assert "proactive" in result.reason.lower() or "drop" in result.reason.lower()
+        assert "colder day" in result.reason
 
     def test_stable_weather_no_preheat(
         self, weather_layer, mock_nibe_state, mock_weather_data_stable

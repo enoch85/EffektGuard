@@ -67,10 +67,10 @@ def _vote(freezer, quarters_ahead: int):
 def test_a_peak_within_reach_turns_the_heat_down(freezer, quarters_ahead):
     vote = _vote(freezer, quarters_ahead)
 
-    assert vote.offset < 0 and "Pre-PEAK" in vote.reason, vote.reason
+    assert vote.offset < 0 and "peak within" in vote.reason, vote.reason
 
 
 def test_a_peak_further_away_does_not(freezer):
     vote = _vote(freezer, PRICE_PRE_PEAK_QUARTERS + 1)
 
-    assert "Pre-PEAK" not in vote.reason, vote.reason
+    assert "peak within" not in vote.reason, vote.reason

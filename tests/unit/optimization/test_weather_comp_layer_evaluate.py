@@ -258,7 +258,7 @@ class TestWeatherCompensationDeferral:
         )
 
         assert result.defer_factor == 1.0
-        assert "Deferred" not in result.reason
+        assert "weight cut" not in result.reason
 
     def test_light_deferral_at_light_threshold(self):
         """Test light deferral when DM crosses light threshold."""
@@ -279,7 +279,7 @@ class TestWeatherCompensationDeferral:
 
         # Should have light deferral
         assert result.defer_factor < 1.0
-        assert "Light debt" in result.reason
+        assert "weight cut" in result.reason
 
     def test_critical_deferral_at_critical_threshold(self):
         """Test critical deferral when DM crosses critical threshold."""
@@ -301,7 +301,7 @@ class TestWeatherCompensationDeferral:
         # Critical deferral should reduce weight significantly
         expected_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
         assert result.defer_factor == pytest.approx(expected_factor, rel=0.01)
-        assert "Critical debt" in result.reason
+        assert "weight cut" in result.reason
 
     def test_deferral_reduces_weight(self):
         """Test that deferral actually reduces the final weight."""
@@ -377,7 +377,7 @@ class TestWeatherCompensationUnusualWeather:
         # Should have detected unusual weather
         assert result.unusual_weather is True
         assert result.safety_margin > 0.0
-        assert "Unusual weather" in result.reason
+        assert "unusual weather" in result.reason
 
     def test_normal_weather_no_extra_margin(self):
         """Test that normal weather doesn't add unusual weather margin."""
@@ -416,7 +416,7 @@ class TestWeatherCompensationUnusualWeather:
         )
 
         assert result.unusual_weather is False
-        assert "Unusual weather" not in result.reason
+        assert "unusual weather" not in result.reason
 
 
 class TestWeatherCompensationUserWeight:

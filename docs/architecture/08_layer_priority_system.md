@@ -2,7 +2,8 @@
 
 How `DecisionEngine.calculate_decision` (`optimization/decision_engine.py`) turns nine layer votes
 into the one offset the coordinator writes. Each layer returns a `LayerDecision` with a name, an
-offset in °C, a weight and a reason; the name is the attribute the reasoning sensor publishes
+offset in °C, a weight and a reason; the name keys the vote in the reasoning sensor's `layers`
+attribute and the current offset sensor's attributes
 ([SENSOR_STATE_LIMITS.md](../SENSOR_STATE_LIMITS.md)). A manual override skips all of this
 ([07](07_manual_override_services.md)).
 

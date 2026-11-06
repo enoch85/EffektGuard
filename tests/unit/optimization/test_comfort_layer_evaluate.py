@@ -99,7 +99,7 @@ class TestComfortLayerWithinTolerance:
         assert result.offset < 0.0  # Should reduce heating
         expected_offset = -0.25 * COMFORT_CORRECTION_MULT
         assert result.offset == pytest.approx(expected_offset, rel=0.01)
-        assert "Slightly warm" in result.reason
+        assert "over target" in result.reason
 
     def test_slightly_cool_gentle_boost(self):
         """Test gentle boost when slightly cool."""
@@ -115,7 +115,7 @@ class TestComfortLayerWithinTolerance:
         assert result.offset > 0.0  # Should boost heating
         expected_offset = 0.3 * COMFORT_CORRECTION_MULT
         assert result.offset == pytest.approx(expected_offset, rel=0.01)
-        assert "Slightly cool" in result.reason
+        assert "under target" in result.reason
 
 
 class TestComfortLayerTooCold:
@@ -131,7 +131,7 @@ class TestComfortLayerTooCold:
 
         assert result.offset > 0.0  # Should increase heating
         assert result.weight == LAYER_WEIGHT_COMFORT_MAX
-        assert "Too cold" in result.reason
+        assert "under target" in result.reason
 
 
 class TestComfortLayerModeAdjustment:

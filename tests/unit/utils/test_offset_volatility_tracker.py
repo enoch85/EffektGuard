@@ -138,9 +138,7 @@ class TestOffsetVolatilityTrackerReasonString:
             mock_time.return_value = 20 * SECONDS_PER_MINUTE
             reason = tracker.get_volatile_reason(1.0)
 
-            assert "Offset volatile" in reason
-            assert "-5.0→1.0" in reason
-            assert "20min < 45min" in reason
+            assert reason == "Held at -5.0, +1.0 too soon (20 of 45 min)"
 
 
 class TestOffsetVolatilityTrackerEdgeCases:

@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from ..const import (
     BENEFICIAL_CLASSIFICATIONS,
     LAYER_WEIGHT_PRICE,
+    MINUTES_PER_HOUR,
     MINUTES_PER_QUARTER,
     OptimizationModeConfig,
     PRICE_DAYTIME_MULTIPLIER,
@@ -51,6 +52,7 @@ from ..const import (
     VOLATILE_WEIGHT_REDUCTION,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
+from ..utils.reasons import SHORT_RUN, change, explain
 from ..utils.time_utils import after, resolve_period_index, seconds_between
 from ..utils.volatile_helpers import get_volatile_info, should_skip_volatile_boost
 
@@ -67,6 +69,17 @@ __all__ = [
     "PriceLayerDecision",
     "QuarterPeriod",
 ]
+
+
+def _within(quarters: int) -> str:
+    """How far ahead `quarters` is, as the reasoning says it: minutes under an hour, else hours."""
+    minutes = quarters * MINUTES_PER_QUARTER
+    return f"{minutes} min" if minutes < MINUTES_PER_HOUR else f"{minutes // MINUTES_PER_HOUR}h"
+
+
+def _price_ahead(percent: int, quarters: int) -> str:
+    """A price change ahead, as the reason says it: "price +71% in 2h"."""
+    return f"price {percent:+d}% in {_within(quarters)}"
 
 
 @dataclass
@@ -764,7 +777,6 @@ class PriceAnalyzer:
         target_temp: float,
         tolerance: float,
         mode_config: OptimizationModeConfig,
-        gespot_entity: str = "unknown",
         enable_price_optimization: bool = True,
     ) -> PriceLayerDecision:
         """Spot price layer: Forward-looking optimization from native 15-minute spot price data.
@@ -784,11 +796,12 @@ class PriceAnalyzer:
             target_temp: Target indoor temperature
             tolerance: User tolerance setting (0.5-3.0)
             mode_config: Optimization mode configuration
-            gespot_entity: Name of the price entity for display
             enable_price_optimization: Whether price optimization is enabled
 
         Returns:
-            PriceLayerDecision with price-based offset
+            PriceLayerDecision with price-based offset. Its reason lists what the vote is made of,
+            each part with what it adds - the quarter's class, the forecast - and what then
+            trimmed or held it; a part that changed nothing is not listed.
         """
         # Check if price optimization is enabled
         if not enable_price_optimization:
@@ -831,11 +844,11 @@ class PriceAnalyzer:
         is_volatile = forecast.is_volatile
         is_ending_soon = forecast.is_ending_soon
         in_peak_cluster = forecast.in_peak_cluster
-        volatile_reason = f" | {forecast.volatile_reason}" if forecast.volatile_reason else ""
 
         # Calculate forecast adjustment based on upcoming price periods
         forecast_adjustment = 0.0
-        forecast_reason = ""
+        forecast_reason = ""  # what the look-ahead saw
+        forecast_action = ""  # and what it does about it
 
         # Use forecast data to determine adjustments
         cheap_quarters_away = forecast.next_cheap_quarters_away
@@ -845,6 +858,24 @@ class PriceAnalyzer:
         expensive_duration = forecast.expensive_period_duration
         expensive_ratio = forecast.expensive_price_ratio
 
+        def pre_heat() -> tuple[float, str, str]:
+            """Heat now for the dearer period ahead."""
+            percent = int((expensive_ratio - 1) * 100)
+            return (
+                PRICE_FORECAST_PREHEAT_OFFSET,
+                _price_ahead(percent, expensive_quarters_away),
+                "pre-heat",
+            )
+
+        def wait() -> tuple[float, str, str]:
+            """Heat less now: the cheaper period ahead buys it."""
+            percent = -int((1 - cheap_ratio) * 100)
+            return (
+                PRICE_FORECAST_REDUCTION_OFFSET,
+                _price_ahead(percent, cheap_quarters_away),
+                "wait",
+            )
+
         if classification in BENEFICIAL_CLASSIFICATIONS:
             # Pre-heat before upcoming expensive periods (if sustained AND far enough away)
             if (
@@ -853,12 +884,7 @@ class PriceAnalyzer:
                 and expensive_duration >= VOLATILE_MIN_DURATION_QUARTERS
                 and expensive_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
-                increase_percent = int((expensive_ratio - 1) * 100)
-                forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {increase_percent}% more expensive in "
-                    f"{expensive_quarters_away // 4}h - pre-heat now"
-                )
+                forecast_adjustment, forecast_reason, forecast_action = pre_heat()
             elif expensive_ratio > PRICE_FORECAST_EXPENSIVE_THRESHOLD:
                 # DEBUG: Log non-actionable expensive periods for troubleshooting
                 # Period meets price threshold but fails duration/lead-time requirements.
@@ -892,12 +918,7 @@ class PriceAnalyzer:
                 and cheap_duration >= VOLATILE_MIN_DURATION_QUARTERS
                 and cheap_quarters_away >= VOLATILE_MIN_DURATION_QUARTERS
             ):
-                savings_percent = int((1 - cheap_ratio) * 100)
-                forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {savings_percent}% cheaper in "
-                    f"{cheap_quarters_away // 4}h - reduce heating"
-                )
+                forecast_adjustment, forecast_reason, forecast_action = wait()
             elif cheap_ratio < PRICE_FORECAST_CHEAP_THRESHOLD:
                 # DEBUG: Log non-actionable cheap periods for troubleshooting
                 # Period meets price threshold but fails duration/lead-time requirements.
@@ -939,33 +960,13 @@ class PriceAnalyzer:
             if expensive_valid and cheap_valid:
                 # Both valid - choose larger magnitude
                 if (expensive_ratio - 1.0) > (1.0 - cheap_ratio):
-                    increase_percent = int((expensive_ratio - 1) * 100)
-                    forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {increase_percent}% more expensive in "
-                        f"{expensive_quarters_away // 4}h - pre-heat now"
-                    )
+                    forecast_adjustment, forecast_reason, forecast_action = pre_heat()
                 else:
-                    savings_percent = int((1 - cheap_ratio) * 100)
-                    forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                    forecast_reason = (
-                        f" | Forecast: {savings_percent}% cheaper in "
-                        f"{cheap_quarters_away // 4}h - reduce heating"
-                    )
+                    forecast_adjustment, forecast_reason, forecast_action = wait()
             elif expensive_valid:
-                increase_percent = int((expensive_ratio - 1) * 100)
-                forecast_adjustment = PRICE_FORECAST_PREHEAT_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {increase_percent}% more expensive in "
-                    f"{expensive_quarters_away // 4}h - pre-heat now"
-                )
+                forecast_adjustment, forecast_reason, forecast_action = pre_heat()
             elif cheap_valid:
-                savings_percent = int((1 - cheap_ratio) * 100)
-                forecast_adjustment = PRICE_FORECAST_REDUCTION_OFFSET
-                forecast_reason = (
-                    f" | Forecast: {savings_percent}% cheaper in "
-                    f"{cheap_quarters_away // 4}h - reduce heating"
-                )
+                forecast_adjustment, forecast_reason, forecast_action = wait()
             else:
                 # DEBUG: Log non-actionable forecast periods for troubleshooting
                 # Periods meet price thresholds but fail duration/lead-time requirements.
@@ -1011,10 +1012,8 @@ class PriceAnalyzer:
         # Price layer was fighting thermal recovery by applying -1.5°C during critical DM debt.
         # When in debt, switch to gentle positive offset to aid recovery while respecting savings intent.
         if forecast_adjustment < 0 and nibe_state.degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
-            forecast_reason = (
-                f" | DM debt ({nibe_state.degree_minutes:.0f}): "
-                f"forecast {forecast_adjustment:+.1f}→{PRICE_FORECAST_DM_DEBT_OFFSET:+.1f}°C"
-            )
+            forecast_reason = f"{forecast_reason}, DM {nibe_state.degree_minutes:.0f}"
+            forecast_action = ""
             forecast_adjustment = PRICE_FORECAST_DM_DEBT_OFFSET
 
         # Get base offset for current classification
@@ -1023,16 +1022,16 @@ class PriceAnalyzer:
             classification,
             current_period.is_daytime,
         )
+        class_offset = base_offset
+        moved = []  # what moved the class's own offset: (what, from, to)
 
         # PEAK cluster: EXPENSIVE quarters between PEAKs use PEAK offset
-        peak_cluster_reason = ""
         if in_peak_cluster:
+            moved.append(("between peaks", base_offset, PRICE_OFFSET_PEAK))
             base_offset = PRICE_OFFSET_PEAK
-            peak_cluster_reason = " | PEAK cluster: EXPENSIVE sandwiched between PEAKs"
 
         # Pre-PEAK: reduce PRICE_PRE_PEAK_QUARTERS ahead of a PEAK, so the degree minutes have
         # time to recover and the pump can slow down when it arrives.
-        pre_peak_reason = ""
         upcoming = (price_data.today + (price_data.tomorrow if price_data.has_tomorrow else []))[
             current_quarter + 1 : current_quarter + 1 + PRICE_PRE_PEAK_QUARTERS
         ]
@@ -1040,11 +1039,14 @@ class PriceAnalyzer:
             self.get_classification_for_period(period) == QuarterClassification.PEAK
             for period in upcoming
         ):
+            if PRICE_PRE_PEAK_OFFSET < base_offset:
+                what = f"peak within {_within(PRICE_PRE_PEAK_QUARTERS)}"
+                moved.append((what, base_offset, PRICE_PRE_PEAK_OFFSET))
             base_offset = min(base_offset, PRICE_PRE_PEAK_OFFSET)
-            pre_peak_reason = " | Pre-PEAK: reducing ahead of it for pump slowdown"
 
         # Skip heating boost for volatile periods or when favorable period ending soon
         if should_skip_volatile_boost(is_volatile, base_offset, is_ending_soon):
+            moved.append((SHORT_RUN if is_volatile else "ending soon", base_offset, 0.0))
             base_offset = 0.0  # Treat as NORMAL
 
         # Adjust for tolerance setting (0.5-3.0 scale → 0.2-1.0 factor)
@@ -1059,35 +1061,39 @@ class PriceAnalyzer:
         tolerance_factor *= mode_config.price_tolerance_multiplier
         adjusted_offset = base_offset * tolerance_factor
 
+        quarter_name = (
+            f"{classification.name.replace('_', ' ').lower()} "
+            f"{'day' if current_period.is_daytime else 'night'}"
+        )
+        changes = [change(what, (to - was) * tolerance_factor) for what, was, to in moved]
+        weight_cut = False
+
         # Apply forecast adjustment (additive to base classification); PEAK takes none
         if classification == QuarterClassification.PEAK:
             final_offset = adjusted_offset
         else:
             final_offset = adjusted_offset + forecast_adjustment
+            if forecast_reason:
+                changes.append(change(forecast_reason, forecast_adjustment, forecast_action))
 
-        # Check for strategic overshoot context when pre-heating. Past the mode's allowed overshoot
-        # the pre-heat is taken back, down to zero - a vote at or below zero has none to take back.
-        # Applied to one, the zero floor RAISED it: in debt (DM < -400) the gate above makes a
-        # PEAK quarter's forecast positive, and a warm house's -2 PEAK cut became 0 at weight 1.0,
-        # overriding the comfort layer's coast too, in the dearest quarter of the day.
-        strategic_context = ""
+        # Past the mode's allowed overshoot the pre-heat is taken back, down to zero - a vote at or
+        # below zero has none to take back. Applied to one, the zero floor RAISED it: in debt
+        # (DM < -400) the gate above makes a PEAK quarter's forecast positive, and a warm house's
+        # -2 PEAK cut became 0 at weight 1.0, overriding the comfort layer's coast too, in the
+        # dearest quarter of the day.
         max_overshoot = mode_config.preheat_overshoot_allowed
         if forecast_adjustment > 0 and nibe_state.indoor_temp > target_temp:
             overshoot = nibe_state.indoor_temp - target_temp
-            if overshoot <= max_overshoot:
-                strategic_context = (
-                    f" | Strategic storage: +{overshoot:.1f}°C overshoot OK "
-                    f"(≤{max_overshoot:.1f}°C)"
-                )
-            elif final_offset > 0:
-                final_offset = max(final_offset - (overshoot - max_overshoot), 0)
-                strategic_context = f" | Overshoot {overshoot:.1f}°C > {max_overshoot:.1f}°C limit"
+            if overshoot > max_overshoot and final_offset > 0:
+                trimmed = max(final_offset - (overshoot - max_overshoot), 0)
+                changes.append(change(f"room {overshoot:.1f}°C over", trimmed - final_offset))
+                final_offset = trimmed
 
         # No deeper than PRICE_OFFSET_DEEPEST_CUT. Savings mode used to take PEAK's full -10, and
         # the owner's ±1.2 slider -4.2 in balanced: either stops the compressor, the slab drains,
         # and the heat the cut saved comes back from the immersion heater or not at all.
         if final_offset < PRICE_OFFSET_DEEPEST_CUT:
-            strategic_context += f" | Cut held at {PRICE_OFFSET_DEEPEST_CUT:.1f}°C"
+            changes.append(f"held at {PRICE_OFFSET_DEEPEST_CUT:+.1f}")
             final_offset = PRICE_OFFSET_DEEPEST_CUT
 
         # Apply weight based on classification and volatility
@@ -1099,41 +1105,27 @@ class PriceAnalyzer:
             # does not read that class, so it keeps its weight. On 15-minute prices the cut took
             # the night's pre-heat down to 30 % in 116 of 529 pre-heat quarters (SE4, 14-27 Oct 2026).
             price_weight = LAYER_WEIGHT_PRICE * VOLATILE_WEIGHT_REDUCTION
+            weight_cut = True
         else:
             price_weight = LAYER_WEIGHT_PRICE
 
-        # DEBUG: Log price analysis
+        reason = explain(quarter_name, class_offset * tolerance_factor, changes, weight_cut)
         _LOGGER.debug(
-            "Price Q%d (%02d:%02d): %.2f öre → %s | Horizon: %.1fh | "
-            "Base: %.1f°C | Forecast adj: %.1f°C | Final: %.1f°C | Weight: %.2f%s%s%s%s",
+            "Price Q%d (%02d:%02d): %.2f, horizon %.1fh → %+.1f@%.2f: %s",
             current_quarter,
             now.hour,
             now.minute,
             current_price,
-            classification.name,
             forecast_hours,
-            adjusted_offset,
-            forecast_adjustment,
             final_offset,
             price_weight,
-            volatile_reason,
-            strategic_context,
-            pre_peak_reason,
-            peak_cluster_reason,
+            reason,
         )
-
-        adapter_name = gespot_entity.split(".")[-1] if gespot_entity else "unknown"
 
         return PriceLayerDecision(
             name="Spot Price",
             offset=final_offset,
             weight=price_weight,
             classification=classification,
-            reason=(
-                f"Q{current_quarter}: {classification.name} "
-                f"({'day' if current_period.is_daytime else 'night'}) | "
-                f"Adapter: {adapter_name} | Horizon: {forecast_hours:.1f}h"
-                f"{forecast_reason}{volatile_reason}{strategic_context}"
-                f"{pre_peak_reason}{peak_cluster_reason}"
-            ),
+            reason=reason,
         )

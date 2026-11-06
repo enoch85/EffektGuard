@@ -95,7 +95,7 @@ class TestEmergencyLayerEvaluate:
         assert result.offset == 0.0
         assert result.weight == 1.0
         assert result.tier == "EMERGENCY"
-        assert "EMERGENCY" in result.reason
+        assert "no cuts" in result.reason
 
     @pytest.mark.parametrize(
         ("indoor", "recovers"),

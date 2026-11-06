@@ -770,15 +770,16 @@ class WeatherPredictionLayer:
             )
 
             # Determine trigger reason
-            if forecast_triggered and indoor_cooling:
-                trigger = f"Forecast {temp_drop:.1f}°C drop + Indoor cooling {trend_rate:.2f}°C/h (confirmed)"
-            elif forecast_triggered:
-                trigger = (
-                    f"Forecast daily-mean drop {temp_drop:.1f}°C within {self.forecast_horizon:.0f}h "
-                    "(proactive)"
+            colder_day = f"colder day ahead {temp_drop:+.1f}°C within {self.forecast_horizon:.0f}h"
+            room_cooling = f"room cooling {abs(trend_rate):.2f}°C/h"
+            trigger = ", ".join(
+                part
+                for part, fired in (
+                    (colder_day, forecast_triggered),
+                    (room_cooling, indoor_cooling),
                 )
-            else:
-                trigger = f"Indoor cooling {trend_rate:.2f}°C/h (reactive confirmation)"
+                if fired
+            )
 
             # Heat for the cold ahead is bought in a cheap or very cheap quarter only. It takes
             # hours to reach a slab, so it is bought early, never at a normal or dearer price.
@@ -790,7 +791,7 @@ class WeatherPredictionLayer:
                     name="Weather Pre-heat",
                     offset=0.0,
                     weight=0.0,
-                    reason=f"{trigger}: waiting for a cheap quarter",
+                    reason=f"{trigger}, waiting for a cheap quarter",
                 )
 
             return WeatherLayerDecision(
@@ -995,7 +996,6 @@ class WeatherCompensationLayer:
         # Allow thermal reality (DM + comfort + proactive) to override outdoor temp optimization
         degree_minutes = nibe_state.degree_minutes
         defer_factor = 1.0
-        defer_reason = None
 
         # The retained FRACTION of whatever weight the owner configured - see the
         # WEATHER_COMP_DEFER_RETAIN_* block in const.py. These were previously spelled as an
@@ -1003,43 +1003,36 @@ class WeatherCompensationLayer:
         # reads as though it replaced the owner's setting.
         if degree_minutes < WEATHER_COMP_DEFER_DM_CRITICAL:
             defer_factor = WEATHER_COMP_DEFER_RETAIN_CRITICAL
-            defer_reason = f"Critical debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_SIGNIFICANT:
             defer_factor = WEATHER_COMP_DEFER_RETAIN_SIGNIFICANT
-            defer_reason = f"Significant debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_MODERATE:
             defer_factor = WEATHER_COMP_DEFER_RETAIN_MODERATE
-            defer_reason = f"Moderate debt (DM {degree_minutes:.0f})"
         elif degree_minutes < WEATHER_COMP_DEFER_DM_LIGHT:
             defer_factor = WEATHER_COMP_DEFER_RETAIN_LIGHT
-            defer_reason = f"Light debt (DM {degree_minutes:.0f})"
 
         final_weight = final_weight * defer_factor
 
-        # Build comprehensive reasoning
-        zone_info = self.climate_system.get_climate_info()
-        reasoning_parts = [
-            f"Math WC: {flow_calc.method}",
-            f"Zone: {zone_info['name']}",
-            f"Optimal: {flow_calc.flow_temp:.1f}°C",
-        ]
-
-        if safety_margin > 0:
-            reasoning_parts.append(f"Safety: +{safety_margin:.1f}°C")
-            reasoning_parts.append(f"Adjusted: {adjusted_flow_temp:.1f}°C")
-
+        # The flow the pump delivers against the flow this layer steers to, and what cut its
+        # weight; the vote itself carries the offset and the weight.
+        reasoning_parts = [f"flow {current_flow:.1f}°C, wants {adjusted_flow_temp:.1f}°C"]
         if unusual_weather:
-            reasoning_parts.append(f"Unusual weather (severity={unusual_severity:.1f})")
+            reasoning_parts.append("unusual weather")
+        if defer_factor < 1.0:
+            reasoning_parts.append("DM debt → weight cut")
+        reasoning = ", ".join(reasoning_parts)
 
-        reasoning_parts.append(f"Current: {current_flow:.1f}°C → offset: {required_offset:+.1f}°C")
-        reasoning_parts.append(f"Weight: {final_weight:.2f}")
-
-        if defer_reason:
-            reasoning_parts.append(f"Deferred: {defer_reason}")
-
-        reasoning = "; ".join(reasoning_parts)
-
-        _LOGGER.debug("Weather compensation layer: %s", reasoning)
+        _LOGGER.debug(
+            "Weather compensation layer: %s in zone %s needs %.1f°C, margin %.1f°C, "
+            "unusual severity %.1f -> %+.1f@%.2f (%s)",
+            flow_calc.method,
+            self.climate_system.get_climate_info()["name"],
+            flow_calc.flow_temp,
+            safety_margin,
+            unusual_severity,
+            required_offset,
+            final_weight,
+            reasoning,
+        )
 
         return WeatherCompensationLayerDecision(
             name="Math WC",

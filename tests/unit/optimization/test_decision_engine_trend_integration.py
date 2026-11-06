@@ -159,7 +159,7 @@ class TestRapidCoolingDetection:
         )
 
         assert decision.offset > 0
-        assert "Rapid cooling" in decision.reason
+        assert decision.zone == "RAPID_COOLING"
 
     def test_rapid_cooling_warm_outdoor_no_boost(self, hass_mock, nibe_state_mock):
         """Rapid cooling should NOT trigger boost if outdoor is warm."""
@@ -182,7 +182,7 @@ class TestRapidCoolingDetection:
         )
 
         assert decision.offset == 0.0
-        assert "Rapid cooling" not in decision.reason
+        assert decision.zone != "RAPID_COOLING"
 
     def test_cooling_below_target_with_cold_outdoor(self, hass_mock, nibe_state_mock):
         """Cooling below target with cold outdoor should trigger boost."""

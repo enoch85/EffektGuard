@@ -227,6 +227,11 @@ SERVICE_RATE_LIMIT_MINUTES: Final = 5  # General service call cooldown
 # Time-based is simpler and catches the immediate spike which is the main issue.
 DHW_WEATHER_COOLDOWN_MINUTES: Final = 30
 
+# Between the entries of the decision's reasoning. Home Assistant shows a state on one line: a line
+# break, even U+2028, renders as a space (bench, HA 2026.10), so the entries need a separator that
+# reads. The reasoning sensor's `layers` attribute lists the votes one per line.
+REASONING_SEPARATOR: Final = " · "
+
 # Decision engine layer weights
 # Source: User feedback and optimization tuning (Oct 2025)
 # Philosophy: "Charge heat when cheap, without peaking the peak"
@@ -837,6 +842,7 @@ COMPRESSOR_COOL_DOWN_MINUTES: Final = 15  # Minutes for thermal stabilization af
 # Based on compressor dynamics: 30 min ramp-up + 15 min cool-down = 45 min
 # Single source of truth - use MINUTES for offset tracking, QUARTERS for price logic
 MINUTES_PER_QUARTER: Final = 15  # 15-minute price quarters
+MINUTES_PER_HOUR: Final = 60
 VOLATILE_MIN_DURATION_MINUTES: Final = (
     COMPRESSOR_RAMP_UP_MINUTES + COMPRESSOR_COOL_DOWN_MINUTES
 )  # 45min total
