@@ -17,6 +17,7 @@ from ..const import (
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
     OptimizationModeConfig,
+    OVERSHOOT_PROTECTION_DEEPEST,
     OVERSHOOT_PROTECTION_FULL,
     OVERSHOOT_PROTECTION_OFFSET_MAX,
 )
@@ -70,8 +71,9 @@ class ComfortLayer:
         """Evaluate comfort layer decision.
 
         Above the band the response is one continuous ramp, from the in-band correction at the band
-        edge to a full coast at OVERSHOOT_PROTECTION_FULL. It reads no prices: a vote that changes
-        with the look-ahead is a cliff of its own (see const.py).
+        edge to a full coast at OVERSHOOT_PROTECTION_FULL, no deeper than
+        OVERSHOOT_PROTECTION_DEEPEST. It reads no prices: a vote that changes with the look-ahead is
+        a cliff of its own (see const.py).
 
         Args:
             nibe_state: Current NIBE state
@@ -140,7 +142,10 @@ class ComfortLayer:
                 if temp_deviation >= OVERSHOOT_PROTECTION_FULL
                 else (temp_deviation - edge) / (OVERSHOOT_PROTECTION_FULL - edge)
             )
-            offset = edge_offset + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - edge_offset)
+            offset = max(
+                edge_offset + fraction * (OVERSHOOT_PROTECTION_OFFSET_MAX - edge_offset),
+                OVERSHOOT_PROTECTION_DEEPEST,
+            )
             weight = in_band_weight + fraction * (LAYER_WEIGHT_COMFORT_CRITICAL - in_band_weight)
             return ComfortLayerDecision(
                 name="Comfort",
