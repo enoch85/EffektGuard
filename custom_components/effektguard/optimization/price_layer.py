@@ -40,6 +40,7 @@ from ..const import (
     PRICE_PERCENTILE_VERY_CHEAP,
     PRICE_PRE_PEAK_OFFSET,
     PRICE_PRE_PEAK_QUARTERS,
+    PRICE_RAISE_FADE_DM,
     PRICE_TOLERANCE_FACTOR_MAX,
     PRICE_TOLERANCE_FACTOR_MIN,
     PRICE_TOLERANCE_MAX,
@@ -806,6 +807,7 @@ class PriceAnalyzer:
         tolerance: float,
         mode_config: OptimizationModeConfig,
         enable_price_optimization: bool = True,
+        raises_fade: bool = False,
     ) -> PriceLayerDecision:
         """Spot price layer: Forward-looking optimization from native 15-minute spot price data.
 
@@ -825,6 +827,8 @@ class PriceAnalyzer:
             tolerance: User tolerance setting (0.5-3.0)
             mode_config: Optimization mode configuration
             enable_price_optimization: Whether price optimization is enabled
+            raises_fade: Heat bought for later fades as the pump speeds up - for a pump whose heat
+                source does not weaken with the weather (DecisionEngine)
 
         Returns:
             PriceLayerDecision with price-based offset. Its reason lists what the vote is made of,
@@ -1123,6 +1127,27 @@ class PriceAnalyzer:
         if final_offset < PRICE_OFFSET_DEEPEST_CUT:
             changes.append(f"held at {PRICE_OFFSET_DEEPEST_CUT:+.1f}")
             final_offset = PRICE_OFFSET_DEEPEST_CUT
+
+        # Heat bought for later - a cheap quarter's raise, the pre-heat for a dearer period - keeps
+        # the pump slow. A raise works by lowering degree minutes, and past
+        # WEATHER_COMP_DEFER_DM_CRITICAL the compressor races, where it makes the least heat per
+        # kWh. So the raise fades over the PRICE_RAISE_FADE_DM above that point and is gone at it.
+        # At a price of zero or below the energy costs nothing, and the raise stays whole. The debt
+        # gate's small raise in a quarter that buys nothing is not heat for later.
+        if (
+            raises_fade
+            and final_offset > 0
+            and (base_offset > 0 or forecast_action == "pre-heat")
+            and current_price > 0
+        ):
+            share = (
+                nibe_state.degree_minutes - WEATHER_COMP_DEFER_DM_CRITICAL
+            ) / PRICE_RAISE_FADE_DM
+            share = min(max(share, 0.0), 1.0)
+            if share < 1.0:
+                what = f"pump kept slow at DM {nibe_state.degree_minutes:.0f}"
+                changes.append(change(what, final_offset * (share - 1.0)))
+                final_offset *= share
 
         # Apply weight based on classification and volatility
         if classification == QuarterClassification.PEAK or in_peak_cluster:

@@ -43,6 +43,12 @@ A flat day, where P90 minus P10 is under 5 % of the day's price scale
 7. **No deeper than -2.0** (`PRICE_OFFSET_DEEPEST_CUT`), whatever the class, the slider and the
    mode. A deeper cut stops the compressor instead of slowing it: the slab drains, and the heat
    comes back from the immersion heater or not at all.
+8. **Heat for later keeps the pump slow**: a raise in a cheap or very cheap quarter, or a pre-heat,
+   fades out as the degree minutes fall from -200 to -400 (`PRICE_RAISE_FADE_DM` above
+   `WEATHER_COMP_DEFER_DM_CRITICAL`), where the compressor starts to race. At a price of zero or
+   below it stays whole. The debt gate's +0.3 is not heat for later and stays. Only on a pump whose
+   profile declares no bivalent temperature (exhaust-air, ground-source; `raises_fade`): an
+   outdoor-air pump cannot heat the house alone below that point and keeps what it banks.
 
 ## Weight
 
