@@ -915,6 +915,28 @@ PRICE_FORECAST_PREHEAT_OFFSET: Final = 2.0  # °C - pre-heat when expensive peri
 # Uses WEATHER_COMP_DEFER_DM_CRITICAL (-400) as threshold for consistent behavior across layers.
 PRICE_FORECAST_DM_DEBT_OFFSET: Final = 0.3  # °C - Gentle recovery offset when in debt
 
+# Heat bought for later stays gentle (PriceAnalyzer.evaluate_layer, raises_fade): a cheap quarter's
+# raise and the pre-heat for a dearer period fade over this many degree minutes above
+# WEATHER_COMP_DEFER_DM_CRITICAL and are gone at it. A raise makes heat by pulling degree minutes
+# down, and the owner's F750 races once they pass -400: median speed 20 Hz from 0 to -300, 38 Hz to
+# -400, 76 Hz to -500, 86 Hz beyond (2368 running polls without hot water, 17 Oct - 7 Nov 2026). Its
+# own meters gave 6.29 kWh of heat per kWh at about 20 Hz, 5.03 at 30, 3.46 at 59 and 2.98 at 80
+# (87 metered hours, 27 Oct - 7 Nov 2026), and with the register at +1 or more it ran a median
+# 79 Hz (143 polls, 25 Oct - 5 Nov 2026). Closed loop on the owner's F750 + slab, plant fitted to
+# the pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, tolerance 1.5, balanced, forecasts
+# as issued), against the raise left whole: Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026 / the 18-22 Feb
+# 2026 cold snap 868.9 -> 845.1 / 1664.2 -> 1636.3 / 190.8 -> 188.8 / 90.0 -> 86.5 SEK of heat pump
+# electricity, immersion heat 42.9 -> 38.3 kWh, offset writes 1423 -> 1101, hours with the room
+# under its floor (20.8 C) 1.6 -> 2.3; this autumn's real days (18 Oct - 4 Nov 2026) 203.5 -> 195.6
+# SEK. Jan-Feb started a day earlier / later / 12 h later: -26.5 / -14.8 / -21.3 SEK, under the
+# floor 0.0 -> 1.2 / 2.8 -> 4.8 / 1.7 -> 4.2 h. The four periods together: no raise at all -52.8
+# SEK (under the floor 3.8 h); the raise whole where the quarter costs at most 0.3 / 0.4 / 0.6 of
+# the next 12 hours' mean and gentle elsewhere -49.9 / -41.4 / -20.8, so a racing charge cost more
+# than it saved even in the cheapest quarters; gone at -300 / -350 / -500 instead of -400 -55.6 /
+# -49.0 / -45.7; fading over 100 / 300 DM -59.4 / -54.1 (under the floor 2.2 / 4.0 h); without the
+# zero-price exception -50.4.
+PRICE_RAISE_FADE_DM: Final = 200.0  # DM above WEATHER_COMP_DEFER_DM_CRITICAL
+
 # Volatile price detection - Current run-length approach (Dec 2, 2025)
 # A quarter is volatile if its own run is brief (< 3 quarters / 45 min).
 # Compressor needs ~45 min to ramp up - brief periods cause wear.

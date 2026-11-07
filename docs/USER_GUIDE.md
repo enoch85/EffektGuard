@@ -88,7 +88,10 @@ Prediction. Off by default: Hot Water Optimization, Airflow Optimization.
 Every 5 minutes it sets the heat, in whole degrees, from:
 
 - Price: more heat when power is cheap, less when it is expensive. Extra before a price jump (in a
-  heavy house only at cheap times), less before a drop, least at the most expensive times.
+  heavy house only at cheap times), less before a drop, least at the most expensive times. The
+  extra heat fades out before the pump has to run fast for it: a fast pump gets the least heat from
+  each kWh. When power costs nothing or less, it heats in full. An outdoor-air heat pump (F2040)
+  keeps its extra heat: it needs it for the colder hours.
 - A warm room at expensive times: when the room is 0.1 °C or more above your target, power is
   expensive, cheaper power comes within 4 hours, and the weather forecast warms 1 °C or more within
   6 hours, it turns the heat right down until the cheaper hours, or until the room has cooled to
