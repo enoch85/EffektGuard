@@ -66,7 +66,8 @@ from ..const import (
     QuarterClassification,
     REASONING_SEPARATOR,
     WAIT_CHEAPER_ROOM_OVER,
-    WEATHER_COMP_DEFER_DM_CRITICAL,
+    WAIT_CHEAPER_WARMING,
+    WAIT_CHEAPER_WARMING_HOURS,
 )
 from ..utils.capacity_shortfall import CapacityShortfall
 from ..utils.immersion_start import ImmersionStart
@@ -87,6 +88,7 @@ from .weather_layer import (
     WeatherCompensationCalculator,
     WeatherCompensationLayer,
     WeatherPredictionLayer,
+    forecast_rise,
 )
 
 if TYPE_CHECKING:
@@ -834,7 +836,12 @@ class DecisionEngine:
         # Aggregate layers with priority weighting
         raw_offset = self._aggregate_layers(layers, starvation=starvation)
         raw_offset, wait_note = self._wait_for_cheaper_hours(
-            raw_offset, nibe_state, price_data, price_result.classification, emergency_decision
+            raw_offset,
+            nibe_state,
+            price_data,
+            weather_data,
+            price_result.classification,
+            emergency_decision,
         )
 
         # NEW: Trend-aware damping to prevent overshoot/undershoot
@@ -976,18 +983,20 @@ class DecisionEngine:
         offset: float,
         nibe_state,
         price_data,
+        weather_data,
         classification: QuarterClassification | None,
         emergency_decision,
     ) -> tuple[float, str]:
         """In an expensive quarter, a warm room waits for the cheaper hours close ahead.
 
-        Degree minutes at or past WEATHER_COMP_DEFER_DM_CRITICAL have the pump running hard to repay
-        them, and a room WAIT_CHEAPER_ROOM_OVER or more over its target needs none of that heat yet.
-        So in an EXPENSIVE or PEAK quarter with cheaper hours close ahead
-        (PriceAnalyzer.cheaper_hours_ahead) the offset is held at OVERSHOOT_PROTECTION_DEEPEST. Once
-        the room waits it keeps waiting - the hold itself lifts the degree minutes - until the
-        expensive run, the warm room or the cheaper hours end; re-deciding on the degree minutes
-        each cycle switched it on and off. Never while the thermal-debt ladder recovers.
+        When the expensive morning starts, heat from the night is still on its way out of the slab,
+        and the day warms the house on its own. So in an EXPENSIVE or PEAK quarter, with cheaper
+        hours close ahead (PriceAnalyzer.cheaper_hours_ahead), a room WAIT_CHEAPER_ROOM_OVER or more
+        over its target holds the offset at OVERSHOOT_PROTECTION_DEEPEST on a day the forecast warms
+        WAIT_CHEAPER_WARMING or more within WAIT_CHEAPER_WARMING_HOURS. On a day that does not warm,
+        the heat held back came back at full speed. Once the room waits it keeps waiting until the
+        expensive run, the warm room or the cheaper hours end. Never while the thermal-debt ladder
+        recovers.
 
         Returns:
             (offset, note): the offset to carry on with, and the note for the reasoning
@@ -998,12 +1007,16 @@ class DecisionEngine:
         if (
             classification not in (QuarterClassification.EXPENSIVE, QuarterClassification.PEAK)
             or not getattr(nibe_state, "indoor_temp_valid", True)
-            or nibe_state.indoor_temp - self.target_temp < WAIT_CHEAPER_ROOM_OVER
+            # Rounded: a room read in 0.1 °C steps gives 21.4 - 21.0 = 0.3999...
+            or round(nibe_state.indoor_temp - self.target_temp, 2) < WAIT_CHEAPER_ROOM_OVER
             or tier == DM_TIER_EMERGENCY
             or tier in DM_RECOVERY_TIERS
-            or (nibe_state.degree_minutes > WEATHER_COMP_DEFER_DM_CRITICAL and not waiting)
         ):
             return offset, ""
+        if not waiting:
+            rise = forecast_rise(weather_data, WAIT_CHEAPER_WARMING_HOURS)
+            if rise is None or rise < WAIT_CHEAPER_WARMING:
+                return offset, ""
         cheaper = self.price.cheaper_hours_ahead(price_data, nibe_state.timestamp)
         if cheaper is None:
             return offset, ""

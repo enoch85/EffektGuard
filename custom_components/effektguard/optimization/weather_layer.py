@@ -65,6 +65,20 @@ from .climate_zones import ClimateZoneDetector
 _LOGGER = logging.getLogger(__name__)
 
 
+def forecast_rise(weather_data, hours: int) -> float | None:
+    """How much warmer the forecast gets within its next `hours` hours than its first, or None.
+
+    The forecast is read against itself, never against the pump's outdoor sensor: a forecast that
+    runs warmer than the sensor would otherwise read as a warming day.
+    """
+    if not weather_data or not weather_data.forecast_hours:
+        return None
+    temps = [hour.temperature for hour in weather_data.forecast_hours[: hours + 1]]
+    if len(temps) < 2:
+        return None
+    return max(temps[1:]) - temps[0]
+
+
 class WeatherLearnerProtocol(Protocol):
     """Protocol for weather learning interface."""
 
