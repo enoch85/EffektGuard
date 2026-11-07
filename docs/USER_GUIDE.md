@@ -90,7 +90,7 @@ Every 5 minutes it sets the heat, in whole degrees, from:
 - Price: more heat when power is cheap, less when it is expensive. Extra before a price jump (in a
   heavy house only at cheap times), less before a drop, least at the most expensive times.
 - A warm room at expensive times: when the room is 0.1 °C or more above your target, power is
-  expensive, cheaper power comes within 4 hours, and the weather forecast warms 2 °C or more within
+  expensive, cheaper power comes within 4 hours, and the weather forecast warms 1 °C or more within
   6 hours, it turns the heat right down until the cheaper hours, or until the room has cooled to
   that level. The heat already in the floor and the warmer day keep the room up meanwhile.
 - Colder weather: when a colder day is coming, it heats ahead, earlier in a heavy house. Only at

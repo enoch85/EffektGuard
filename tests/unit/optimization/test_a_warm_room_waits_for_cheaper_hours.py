@@ -94,25 +94,29 @@ WARMING_DAY = _warming(3.9)  # 5 Nov 2026 at 06:45, the forecast as issued (Open
 LEVEL_DAY = [OUTDOOR] * 24
 
 
-def _state(indoor: float, at: datetime = NOW) -> NibeState:
+def _state(
+    indoor: float, at: datetime = NOW, degree_minutes: float = SHALLOW, hz: int = 58
+) -> NibeState:
     return NibeState(
         outdoor_temp=OUTDOOR,
         indoor_temp=indoor,
         supply_temp=35.0,
         return_temp=30.0,
-        degree_minutes=SHALLOW,
+        degree_minutes=degree_minutes,
         current_offset=-1.0,
         is_heating=True,
         is_hot_water=False,
         timestamp=at,
-        compressor_hz=58,
+        compressor_hz=hz,
         power_kw=2.5,
     )
 
 
-def _decide(engine, indoor, forecast=WARMING_DAY, prices=None, at: datetime = NOW):
+def _decide(engine, indoor, forecast=WARMING_DAY, prices=None, at: datetime = NOW, **state):
     weather = None if forecast is None else _weather(forecast, at)
-    return engine.calculate_decision(_state(indoor, at), prices or _prices(), weather, 0.0, 0.0)
+    return engine.calculate_decision(
+        _state(indoor, at, **state), prices or _prices(), weather, 0.0, 0.0
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +130,18 @@ def test_a_warm_room_waits_in_an_expensive_quarter_on_a_warming_day():
     assert decision.offset == OVERSHOOT_PROTECTION_DEEPEST, decision.reasoning
     assert "Warm room waits for cheaper hours lowered" in decision.reasoning
     assert "price -" in decision.reasoning, "the note names the cheaper hours ahead"
+
+
+def test_a_racing_pump_is_stopped_for_a_room_a_tenth_over_its_target():
+    """After a cheap night the pump races at DM -600 and the room is 0.1 C over its target.
+
+    On the owner's F750 a cut that left the register at -1 or above barely moved the degree
+    minutes and the pump raced on; the hold goes to the coast's deepest at once.
+    """
+    decision = _decide(_engine(), TARGET + WAIT_CHEAPER_ROOM_OVER, degree_minutes=-600.0, hz=86)
+
+    assert decision.offset == OVERSHOOT_PROTECTION_DEEPEST, decision.reasoning
+    assert "Warm room waits for cheaper hours lowered" in decision.reasoning
 
 
 @pytest.mark.parametrize(

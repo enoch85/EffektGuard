@@ -36,7 +36,7 @@ weight, reason)`: safety, thermal debt (`EmergencyLayer`), proactive (`Proactive
 tariff, learned pre-heat, weather compensation ("Math WC"), weather pre-heat, spot price, comfort.
 `_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)).
 `_wait_for_cheaper_hours` holds it at -5 in an EXPENSIVE or PEAK quarter while the room is 0.1 °C
-or more over target and cheaper hours lie within 4 h, on a day the forecast warms 2 °C or more
+or more over target and cheaper hours lie within 4 h, on a day the forecast warms 1 °C or more
 within 6 h (once holding, until the expensive run, the warm room or the cheaper hours end; never
 while the debt ladder recovers). A trend
 step then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating

@@ -994,9 +994,11 @@ class DecisionEngine:
         hours close ahead (PriceAnalyzer.cheaper_hours_ahead), a room WAIT_CHEAPER_ROOM_OVER or more
         over its target holds the offset at OVERSHOOT_PROTECTION_DEEPEST on a day the forecast warms
         WAIT_CHEAPER_WARMING or more within WAIT_CHEAPER_WARMING_HOURS. On a day that does not warm,
-        the heat held back came back at full speed. Once the room waits it keeps waiting until the
-        expensive run, the warm room or the cheaper hours end. Never while the thermal-debt ladder
-        recovers.
+        the heat held back came back at full speed. The hold is deep, and it is not a vote among
+        the layers: a pump racing to repay degree minutes slows only once they rise, and a cut that
+        leaves the register at -1 or above barely moves them. Once the room waits it keeps waiting
+        until the expensive run, the warm room or the cheaper hours end. Never while the
+        thermal-debt ladder recovers.
 
         Returns:
             (offset, note): the offset to carry on with, and the note for the reasoning

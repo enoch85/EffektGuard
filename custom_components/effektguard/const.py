@@ -730,21 +730,30 @@ OVERSHOOT_PROTECTION_DEEPEST: Final = -5.0
 # close ahead, on a day the forecast warms WAIT_CHEAPER_WARMING or more within
 # WAIT_CHEAPER_WARMING_HOURS, the heat is held at OVERSHOOT_PROTECTION_DEEPEST until the expensive
 # run, the warm room or the cheaper hours end. The night's heat still leaving the slab and the
-# warming day carry the room: over the closed loop's 82 holds (107 h, 68 of them starting 05-10
-# local) its median change was 0.00 C, the largest fall 0.18 C. The owner's outdoor (BT1) rose 2 C or
-# more from 07:00 to midday on 12 of 15 logged days (18 Oct - 7 Nov 2026); the forecast as issued
-# (Open-Meteo) saw it on 9 of those. Closed loop on the owner's F750 + slab, plant fitted to the
-# pump's own readings of 17 Oct - 5 Nov 2026 (target 21 C, tolerance 1.5, balanced, the room read in
-# 0.1 C steps, forecasts as issued), against no wait: Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026 / the
-# 18-22 Feb 2026 cold snap 891.1 -> 871.4 / 1710.8 -> 1663.1 / 217.0 -> 190.0 / 95.6 -> 90.2 SEK of
-# heat pump electricity, immersion heat 43.4 -> 40.5 kWh; this autumn's real days (18 Oct - 4 Nov
-# 2026) 209.6 -> 205.3 SEK. Jan-Feb started a day earlier / later / 12 h later: -48.8 / -50.1 / -41.6
-# SEK. Starting instead on degree minutes at or past -400 (the pump about to race): -89.4 SEK, 0 this
-# autumn; with neither condition +108.5 SEK (the held heat came back at full speed). Warming 1 / 1.5
-# / 2.5 / 3 C: -100.6 / -104.9 / -82.4 / -76.9 SEK; within 4 / 8 h: -74.2 / -99.1; from 0.3 C over as
-# from 0.1, from 0.5 C -92.9; mild days instead (outdoor 0 / 3 / 5 C or above): +77.3 / +45.8 / +26.8.
+# warming day carry the room: over the closed loop's 132 holds (158 h, 94 of them starting 05-10
+# local) its median change was 0.00 C, the largest fall 0.51 C (an evening hold from 22.35 C), and
+# no hold ended below the target. The owner's outdoor (BT1) rose 1 C or more from 07:00 to its high
+# before 13:00 on 13 of 15 logged days (18 Oct - 7 Nov 2026), 2 C or more on 12; the forecast as
+# issued (Open-Meteo) at 07:00 saw the 1 C rise on all 13, the 2 C rise on 8. The hold is deep
+# because a racing pump slows only once its degree minutes rise: on the owner's F750 (17 Oct - 7 Nov
+# 2026, cuts of two steps or more at DM -250 or deeper and 35 Hz or more, no hot water) a cut to -2
+# or below raised DM a median 5.2 a minute over the next hour (5 cuts, DM -317 to -407), one that
+# left the register at -1 or above 0.7 (5 cuts, DM -335 to -1074); on 5 Nov 2026 at -2, DM -557 to
+# -512, it ran 82-90 Hz.
+# Closed loop on the owner's F750 + slab, plant fitted to the pump's own readings of 17 Oct - 5 Nov
+# 2026 (target 21 C, tolerance 1.5, balanced, the room read in 0.1 C steps, forecasts as issued),
+# against no wait: Nov-Dec 2025 / Jan-Feb 2026 / Mar 2026 / the 18-22 Feb 2026 cold snap
+# 891.1 -> 868.9 / 1710.8 -> 1664.2 / 217.0 -> 190.8 / 95.6 -> 90.0 SEK of heat pump electricity,
+# immersion heat 43.4 -> 42.9 kWh; this autumn's real days (18 Oct - 4 Nov 2026) 209.6 -> 203.5 SEK.
+# Jan-Feb started a day earlier / later / 12 h later: -43.0 / -53.4 / -44.2 SEK, immersion heat
+# 36.6 -> 33.3 / 37.0 -> 31.2 / 35.3 -> 33.4 kWh. The four periods together (this autumn's days):
+# warming 0.5 / 1.5 / 2 C -58.4 / -104.9 / -99.8 SEK (-2.1 / -1.7 / -4.3); within 4 / 8 h -100.8 /
+# -87.5; from 0.3 / 0.5 C over -99.8 / -88.1; held at -2 / -3 / -4 / -7 / -10 -2.2 / -42.8 / -80.9 /
+# -100.7 / -71.4 (-7 left the room under its floor 3.8 h instead of 1.6, -10 bought 55.9 kWh of
+# immersion heat); also on a day that does not warm once DM is at or past -400 -106.5, immersion
+# 47.3 kWh; with no forecast condition +108.5 (the held heat came back at full speed).
 WAIT_CHEAPER_ROOM_OVER: Final = 0.1  # °C over the target
-WAIT_CHEAPER_WARMING: Final = 2.0  # °C the forecast rises
+WAIT_CHEAPER_WARMING: Final = 1.0  # °C the forecast rises
 WAIT_CHEAPER_WARMING_HOURS: Final = 6  # within this many hours
 WAIT_CHEAPER_PRICE_RATIO: Final = 0.9  # a cheaper quarter costs at most this share of now
 WAIT_CHEAPER_LOOKAHEAD_QUARTERS: Final = 16  # 4 h
