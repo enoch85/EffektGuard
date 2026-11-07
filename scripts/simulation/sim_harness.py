@@ -1130,7 +1130,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.45, "apartment_f730": 8.00, "airsource_f2040": 8.66},
+                    houses={"wooden_f750": 6.29, "apartment_f730": 8.00, "airsource_f2040": 8.86},
                     why=(
                         "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
                         "best published figure for each machine, so the harness's own "
@@ -1143,7 +1143,8 @@ SCENARIOS = {
                         "8.59 to 8.60 (the gate bypasses alone leave it at 8.59); the ladder's "
                         "room floor, the immersion guard and the capacity shortfall the F750's "
                         "from 6.28 to 6.34 and the F2040's to 8.66; the overshoot coast's stop at "
-                        "-5 the F750's to 6.45 and the F730's to 8.00."
+                        "-5 the F750's to 6.45 and the F730's to 8.00; a warm room waiting for "
+                        "cheaper hours on a warming day the F750's to 6.29 and the F2040's to 8.86."
                     ),
                 ),
                 KnownRed(

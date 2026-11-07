@@ -34,9 +34,13 @@ flowchart LR
 `DecisionEngine.calculate_decision` runs in an executor. The layers, in order, each return `(offset,
 weight, reason)`: safety, thermal debt (`EmergencyLayer`), proactive (`ProactiveLayer`), effect
 tariff, learned pre-heat, weather compensation ("Math WC"), weather pre-heat, spot price, comfort.
-`_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)); a trend step
-then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating below
-+3 into a room cooling that fast), `_limit_for_compressor_wear` caps a raise the saturated
+`_aggregate_layers` turns them into one offset ([08](08_layer_priority_system.md)).
+`_wait_for_cheaper_hours` holds it at -5 in an EXPENSIVE or PEAK quarter while the room is 0.1 °C
+or more over target and cheaper hours lie within 4 h, on a day the forecast warms 1 °C or more
+within 6 h (once holding, until the expensive run, the warm room or the cheaper hours end; never
+while the debt ladder recovers). A trend
+step then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating
+below +3 into a room cooling that fast), `_limit_for_compressor_wear` caps a raise the saturated
 compressor cannot follow, and `_limit_for_immersion` keeps the degree minutes of a room at or above
 its floor off the pump's immersion heater. Where the pump has been seen short of capacity and it is,
 or within 12 forecast hours will be, as cold (`CapacityShortfall`), the guard stands down and

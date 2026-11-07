@@ -76,6 +76,13 @@ flowchart TD
 
 Still inside `calculate_decision`, in this order:
 
+- A warm room waits for cheaper hours (`_wait_for_cheaper_hours`): in an EXPENSIVE or PEAK quarter,
+  with the room at least `WAIT_CHEAPER_ROOM_OVER` (0.1 °C) over target, a run of 3 quarters at 90 %
+  of the price or less within 4 h (`PriceAnalyzer.cheaper_hours_ahead`) and a forecast that warms
+  `WAIT_CHEAPER_WARMING` (1 °C) or more within `WAIT_CHEAPER_WARMING_HOURS` (6 h) of its first hour
+  (`weather_layer.forecast_rise`), the offset is held at `OVERSHOOT_PROTECTION_DEEPEST` (-5). Once
+  holding it holds until the expensive run, the warm room or the cheaper hours end, whatever the
+  forecast does; never while a debt tier (T1-T3, EMERGENCY) is active.
 - Trend damping: a raise is × 0.75 while the room warms at 0.3 °C/h or more, and × 1.15 while it
   cools at 0.3 °C/h or more (only below +3 °C); a cut is × 0.75 while the room cools fast.
 - Compressor wear guard (`_limit_for_compressor_wear`): when the compressor is saturated, a raise
