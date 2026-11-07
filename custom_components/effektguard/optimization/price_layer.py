@@ -50,6 +50,8 @@ from ..const import (
     VOLATILE_MIN_DURATION_MINUTES,
     VOLATILE_MIN_DURATION_QUARTERS,
     VOLATILE_WEIGHT_REDUCTION,
+    WAIT_CHEAPER_LOOKAHEAD_QUARTERS,
+    WAIT_CHEAPER_PRICE_RATIO,
     WEATHER_COMP_DEFER_DM_CRITICAL,
 )
 from ..utils.reasons import SHORT_RUN, change, explain
@@ -390,6 +392,32 @@ class PriceAnalyzer:
             if self._classifications_tomorrow.get(quarter) in BENEFICIAL_CLASSIFICATIONS:
                 return len(self._quarterly_periods_today) + quarter
 
+        return None
+
+    def cheaper_hours_ahead(self, price_data: PriceData, now: datetime) -> str | None:
+        """Cheaper hours close ahead, as the reasoning says them ("price -15% in 2h"), or None.
+
+        Cheaper hours are a run of VOLATILE_MIN_DURATION_QUARTERS quarters or more, each priced at
+        most WAIT_CHEAPER_PRICE_RATIO of the current quarter, within the next
+        WAIT_CHEAPER_LOOKAHEAD_QUARTERS.
+        """
+        if not price_data or not price_data.today:
+            return None
+        current = resolve_period_index(price_data, now)
+        if current is None or price_data.today[current].price <= 0:
+            return None
+        price = price_data.today[current].price
+        periods = price_data.today + (price_data.tomorrow if price_data.has_tomorrow else [])
+        ahead = periods[current + 1 : current + 1 + WAIT_CHEAPER_LOOKAHEAD_QUARTERS]
+        run: list[float] = []
+        for index, period in enumerate(ahead):
+            if period.price > price * WAIT_CHEAPER_PRICE_RATIO:
+                run = []
+                continue
+            run.append(period.price)
+            if len(run) == VOLATILE_MIN_DURATION_QUARTERS:
+                percent = round((sum(run) / len(run) / price - 1) * 100)
+                return _price_ahead(percent, index + 2 - len(run))
         return None
 
     def get_next_expensive_period(self, current_quarter: int) -> int | None:

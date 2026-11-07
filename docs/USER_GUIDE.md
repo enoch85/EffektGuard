@@ -89,6 +89,10 @@ Every 5 minutes it sets the heat, in whole degrees, from:
 
 - Price: more heat when power is cheap, less when it is expensive. Extra before a price jump (in a
   heavy house only at cheap times), less before a drop, least at the most expensive times.
+- A warm room at expensive times: when the room is 0.5 °C or more above your target, power is
+  expensive, cheaper power comes within 4 hours, and the pump is running hard to catch up (NIBE's
+  degree minutes at -400 or lower), it turns the heat right down until the cheaper hours, or until
+  the room has cooled to that level.
 - Colder weather: when a colder day is coming, it heats ahead, earlier in a heavy house. Only at
   cheap times.
 - Monthly peak: less heat close to this month's highest power use. Needs peak protection, and a

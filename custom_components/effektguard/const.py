@@ -725,6 +725,28 @@ OVERSHOOT_PROTECTION_OFFSET_MAX: Final = MIN_OFFSET  # what the ramp aims at at 
 # and 191 hours of Jan-Feb, -5 for 132, -10 for 81.
 OVERSHOOT_PROTECTION_DEEPEST: Final = -5.0
 
+# A WARM ROOM WAITS FOR CHEAPER HOURS (DecisionEngine._wait_for_cheaper_hours). In an EXPENSIVE or
+# PEAK quarter, with the room WAIT_CHEAPER_ROOM_OVER or more over its target and degree minutes at
+# or past WEATHER_COMP_DEFER_DM_CRITICAL - the pump about to run hard repaying them - while cheaper
+# quarters lie close ahead, the heat is held at OVERSHOOT_PROTECTION_DEEPEST until the expensive
+# run, the warm room or the cheaper hours end, whatever the degree minutes do meanwhile. The owner's
+# production on 6 Nov 2026, 07:15-08:05 local: EXPENSIVE quarters at 381-383 ore, its room
+# 21.63-21.67 C (target 21), DM -412..-393 and the pump at 59-61 Hz, with 320 ore from 09:30.
+# Closed loop on the owner's F750 + slab, plant fitted to the pump's own readings of 17 Oct - 5 Nov
+# 2026 (target 21 C, tolerance 1.5, balanced, the room read in 0.1 C steps), Nov-Dec 2025 / Jan-Feb
+# 2026 / Mar 2026 / the 18-22 Feb 2026 cold snap, against no wait: the heat pump's electricity cost
+# 891.1 -> 868.4 / 1710.8 -> 1661.3 / 217.0 -> 205.2 / 95.6 -> 90.2 SEK; Jan-Feb's dearest quarter
+# 4.98 -> 4.48 kW, the mean of its months' three dearest 3.03 -> 2.55 kW; immersion heat 43.4 ->
+# 42.4 kWh. Waiting from 0.3 C over saved 23.5 SEK more but took that quarter to 5.48 kW (12 Jan: one
+# more immersion step); 0.4 C read as 0.5 in 0.1 C steps. With no degree-minute condition the wait
+# cost 109.0 SEK more than none (from 0.3 C): the heat it held back came back at full speed. Entering
+# at DM -300 / -350 / -400 / -500 (hold -4): -23.4 / -61.0 / -87.9 / -76.8 SEK; holding -3 / -4 / -5:
+# -65.0 / -87.9 / -89.4; looking 3 / 4 / 6 h ahead (hold -4): -86.8 / -87.9 / -88.7; cheaper at 80 %
+# of the price instead of 90 %: -73.2.
+WAIT_CHEAPER_ROOM_OVER: Final = 0.5  # °C over the target
+WAIT_CHEAPER_PRICE_RATIO: Final = 0.9  # a cheaper quarter costs at most this share of now
+WAIT_CHEAPER_LOOKAHEAD_QUARTERS: Final = 16  # 4 h
+
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
 RAPID_COOLING_THRESHOLD: Final = -0.3  # °C/hour for rapid cooling detection
