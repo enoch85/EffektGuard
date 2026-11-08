@@ -831,11 +831,10 @@ HOUSES = [
         # system now, so the capacity curve, the COP and the design load all describe one machine in
         # one application.
         #
-        # WHAT REMAINS UNKNOWN, and it bounds every conclusion drawn from this house: NIBE tabulates
-        # the F2040's maximum output only down to -7 C. Below that the manual gives a GRAPH and no
-        # numbers, so the model holds capacity at the -7 C figure. A Swedish January goes lower. The
-        # results for this house below -7 C therefore rest on an assumption, and are reported as a
-        # bound rather than a measurement. The F750 carries no such caveat - see the F-124 test.
+        # NIBE tabulates maximum output only down to -7 C in the grid used here. Below it the
+        # model holds capacity at the -7 C figure. That continuation is an assumption, not a
+        # validated cold-end map or an upper/lower performance bound. Exhaust-air profiles also
+        # need independent validation away from their stated rating conditions.
         thermal_mass=1.0,
         insulation_quality=0.9,
         hlc_w_per_k=218.0,  # F2040-8 Pdesignh 9.0 kW (COLD climate, 35 C application)
