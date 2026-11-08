@@ -4,25 +4,40 @@ float() parses both, and a NaN fails every comparison, so it passed each check o
 v0.9.0 the adapter handed the engine degree minutes and a tank temperature of NaN; one NaN power
 sample made its billing period NaN, recorded as a peak, and as the month's first peak or in place of
 the day's it made every later period read as safe ("Safe margin: nan kW below peak", a 30 kW one
-too); and an offset entity reading "inf" raised OverflowError out of the write path, which must
-never raise. Home Assistant refuses a non-finite value for a sensor entity that declares a unit, a
-device class or a state class, but not every state reaches it that way (a state set over the REST
-API or by another integration directly). Each reader refuses it as it refuses text.
+too); an offset entity reading "inf" raised OverflowError out of the write path, which must never
+raise, and out of setup on a restart with saved learning, so the integration did not load; and the
+tank history read back at start-up kept a NaN. Home Assistant refuses a non-finite value for a
+sensor entity that declares a unit, a device class or a state class, but not every state reaches it
+that way (a state set over the REST API or by another integration directly). Each reader refuses it
+as it refuses text.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import State
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.nibe_adapter import NibeAdapter
+from custom_components.effektguard.const import (
+    CONF_NIBE_ENTITY,
+    DOMAIN,
+    LEARNING_STORAGE_VERSION,
+    STORAGE_KEY_LEARNING,
+)
+from custom_components.effektguard.optimization.dhw_optimizer import IntelligentDHWScheduler
 from custom_components.effektguard.utils.power import power_kw_from_state
+from tests.conftest import create_mock_price_analyzer
 
 NOT_NUMBERS = ["nan", "inf", "-inf"]
+OFFSET = "number.offset"
+STORED_OFFSET = -2
 DM = "sensor.degree_minutes"
 BT7 = "sensor.bt7"
 
@@ -87,3 +102,43 @@ async def test_an_offset_entity_that_says_inf_does_not_break_the_write(value):
     adapter = NibeAdapter(hass, {"nibe_entity": "number.offset"})
 
     assert await adapter.set_curve_offset(3.0) == 3
+
+
+@pytest.mark.parametrize("value", NOT_NUMBERS)
+async def test_setup_survives_an_offset_entity_that_says_inf(hass, hass_storage, value):
+    """A restart with saved learning syncs the register's value from the offset entity at setup:
+    int() of "inf" raised OverflowError out of setup, and the integration did not load. Unread as
+    text is, the stored value stands in."""
+    hass_storage[STORAGE_KEY_LEARNING] = {
+        "version": LEARNING_STORAGE_VERSION,
+        "minor_version": 1,
+        "key": STORAGE_KEY_LEARNING,
+        "data": {"version": LEARNING_STORAGE_VERSION, "last_offset": {"value": STORED_OFFSET}},
+    }
+    hass.states.async_set(OFFSET, value)
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_NIBE_ENTITY: OFFSET}, options={})
+    entry.add_to_hass(hass)
+
+    coordinator = await _create_coordinator(hass, entry)
+
+    assert coordinator.last_applied_offset == STORED_OFFSET
+
+
+@pytest.mark.parametrize("value", NOT_NUMBERS)
+async def test_the_tank_history_read_at_start_up_skips_it(value):
+    """The recorder's BT7 history, read back at start-up for the hygiene-cycle detection, is a
+    tank temperature too."""
+    scheduler = IntelligentDHWScheduler(price_analyzer=create_mock_price_analyzer())
+    now = dt_util.utcnow()
+    history = [
+        State(BT7, reading, last_changed=now - timedelta(hours=hours))
+        for hours, reading in ((3, "48"), (2, value), (1, "47"))
+    ]
+    with (
+        patch("homeassistant.components.recorder.is_entity_recorded", return_value=True),
+        patch("homeassistant.components.recorder.get_instance") as recorder,
+    ):
+        recorder.return_value.async_add_executor_job = AsyncMock(return_value={BT7: history})
+        await scheduler.initialize_from_history(MagicMock(), BT7)
+
+    assert [temp for _, temp in scheduler.bt7_history] == [48.0, 47.0]
