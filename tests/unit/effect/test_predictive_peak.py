@@ -12,15 +12,41 @@ References:
     MASTER_IMPLEMENTATION_PLAN.md: Phase 4 - Predictive Peak Avoidance
 """
 
-import pytest
+from datetime import datetime
 from unittest.mock import MagicMock
+
+import pytest
+
+from custom_components.effektguard.const import DAYTIME_START_HOUR
 
 from custom_components.effektguard.optimization.decision_engine import (
     DecisionEngine,
 )
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
-from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.effect_layer import EffectManager, PeakEvent
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+
+DAYTIME_PERIOD = (DAYTIME_START_HOUR + 1) * 4  # 07:00 - billed in full
+A_DAY_THIS_MONTH = datetime(2026, 1, 15, 7, 0)
+
+
+@pytest.fixture(autouse=True)
+def daytime(monkeypatch):
+    """A daytime quarter: a night one bills half its draw, so the outcomes followed the clock."""
+    monkeypatch.setattr(
+        "custom_components.effektguard.optimization.effect_layer.get_current_billing_period",
+        lambda: DAYTIME_PERIOD,
+    )
+
+
+def _evaluate(engine, *, current_peak: float, **kwargs):
+    """The effect layer, holding the month's peak the test names: in Home Assistant current_peak is
+    that record's highest, never a number of its own."""
+    if not engine.effect._monthly_peaks:
+        engine.effect._monthly_peaks = [
+            PeakEvent(A_DAY_THIS_MONTH, DAYTIME_PERIOD, current_peak, current_peak, True)
+        ]
+    return engine.effect.evaluate_layer(current_peak=current_peak, **kwargs)
 
 
 @pytest.fixture
@@ -94,7 +120,8 @@ class TestPowerPrediction:
         nibe_state.power_kw = 3.0
         current_peak = 5.0
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.0,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -120,7 +147,8 @@ class TestPowerPrediction:
         nibe_state.power_kw = 4.2
         current_peak = 5.0
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=4.2,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -149,7 +177,8 @@ class TestPowerPrediction:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="WARNING")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.8,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -178,7 +207,8 @@ class TestPowerPrediction:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.0,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -211,7 +241,8 @@ class TestProactiveAvoidance:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.5,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -240,7 +271,8 @@ class TestProactiveAvoidance:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.5,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -270,7 +302,8 @@ class TestProactiveAvoidance:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="WARNING")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.8,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -304,7 +337,8 @@ class TestCriticalPeakHandling:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="CRITICAL")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=4.8,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -333,7 +367,8 @@ class TestPhase4SuccessCriteria:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.5,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -358,7 +393,8 @@ class TestPhase4SuccessCriteria:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="WARNING")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.8,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -382,7 +418,8 @@ class TestPhase4SuccessCriteria:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.2,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -414,7 +451,8 @@ class TestComparisonReactiveVsPredictive:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.5,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -442,7 +480,8 @@ class TestComparisonReactiveVsPredictive:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="WARNING")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=4.0,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -468,7 +507,8 @@ class TestEdgeCases:
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
         # Should not crash, fall back to non-predictive behavior
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.5,
             thermal_trend={},
@@ -488,7 +528,8 @@ class TestEdgeCases:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=4.5,
             thermal_trend=engine.predictor.get_current_trend.return_value,
@@ -512,7 +553,8 @@ class TestEdgeCases:
         engine.effect.should_limit_power = MagicMock()
         engine.effect.should_limit_power.return_value = MagicMock(severity="OK")
 
-        decision = engine.effect.evaluate_layer(
+        decision = _evaluate(
+            engine,
             current_peak=current_peak,
             current_power=3.0,
             thermal_trend=engine.predictor.get_current_trend.return_value,
