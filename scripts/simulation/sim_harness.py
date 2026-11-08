@@ -55,6 +55,7 @@ from custom_components.effektguard.const import (
     CONF_GESPOT_ENTITY,
     DM_THRESHOLD_IMMERSION_LIMIT,
     INTERNAL_GAINS_W,
+    LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MODE_CONFIGS,
     POWER_SOURCE_EXTERNAL_METER,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
@@ -87,6 +88,7 @@ from custom_components.effektguard.optimization.decision_engine import (
     OptimizationDecision,
     get_safe_default_decision,
 )
+from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
@@ -1670,6 +1672,13 @@ def build_engine(
         thermal_predictor=ThermalStatePredictor(),
         heat_pump_model=house.profile,
     )
+    # And as setup does next (custom_components/effektguard/__init__.py): the engine's thermal model
+    # becomes the adaptive one, set to the owner's building settings, which the learned pre-heat
+    # asks for its learned parameters. simulate() records its hourly observations.
+    adaptive = AdaptiveThermalModel()
+    adaptive.thermal_mass = thermal.thermal_mass
+    adaptive.insulation_quality = thermal.insulation_quality
+    engine.thermal = adaptive
     return engine, effect
 
 
@@ -1711,6 +1720,7 @@ def simulate(
     indoor_start = indoor
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
+    last_learning_observation: datetime | None = None
     compressor_on = True
     # Start inside the heating season; the first cold/mild reading settles it either way.
     heating_season = True
@@ -2221,6 +2231,17 @@ def simulate(
                     flow_temp=nibe.flow_temp,
                     degree_minutes=nibe.degree_minutes,
                 )
+            # ... and the adaptive model's observation, once an hour
+            if last_learning_observation is None or now - last_learning_observation >= timedelta(
+                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            ):
+                engine.thermal.record_observation(
+                    timestamp=now,
+                    indoor_temp=nibe.indoor_temp,
+                    outdoor_temp=nibe.outdoor_temp,
+                    heating_offset=float(offset_applied),
+                )
+                last_learning_observation = now
 
             # --- invariants & stats ---
             # A degree-minute deficit that reaches the integrator floor means the recovery system -
