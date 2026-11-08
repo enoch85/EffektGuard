@@ -45,3 +45,15 @@ def test_a_pump_cannot_modulate_below_its_declared_minimum_in_a_mild_house():
     assert stats["compressor_starts"] > 0, "the declared minimum requires cycling below 3 kW demand"
     assert stats["compressor_below_declared_minimum_minutes"] == 0
     assert abs(stats["energy_balance_residual_kwh"]) < 0.1
+
+
+def test_the_f2040_cannot_run_continuously_below_its_minimum_output():
+    start = datetime(2026, 1, 15, tzinfo=sim.TZ)
+    times, temperatures, raw, unit = sim._synthetic_days(start, 2)
+    stats, violations, _ = sim.simulate(
+        F2040, times, [15.0] * len(temperatures), sim.PriceSource(raw, unit), 2, baseline=True
+    )
+    assert not violations
+    # NIBE's A7/W35 minimum is 2.5 kW; holding it at other conditions is a model assumption.
+    assert stats["minimum_positive_compressor_heat_kw"] >= 2.5
+    assert stats["compressor_starts"] > 0
