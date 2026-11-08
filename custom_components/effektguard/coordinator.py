@@ -317,8 +317,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
         # Instantaneous whole-house power (kW), refreshed every cycle by
-        # _update_peak_tracking. None until the first successful measurement, in which
-        # case peak protection stays disabled rather than acting on a guess.
+        # _update_peak_tracking. None in a cycle without a measurement - an estimate is not
+        # one - and peak protection then stands down rather than acting on a guess.
         self.current_power_kw: float | None = None
         # What the effect tariff bills: the time-weighted mean power over one billing period,
         # BILLING_PERIOD_MINUTES long. That is a quarter-hour for the owner's tariff; an hourly
@@ -1305,9 +1305,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # the effect layer to CRITICAL - weight 1.0, offset -3.0 - for the rest of
                 # the day, even with the compressor idle.
                 if self.current_power_kw is None or self.current_power_kw < 0:
-                    # None while a configured meter has not answered since start-up, or the read
-                    # failed.
-                    _LOGGER.warning(
+                    # None without a measurement this cycle: a configured meter that has not
+                    # answered since start-up or has gone silent, an install with only the
+                    # compressor-Hz estimate, or a failed read. Each is reported where it arises
+                    # (_update_peak_tracking); here it would repeat every cycle.
+                    _LOGGER.debug(
                         "No valid power measurement (%s) - disabling peak protection this "
                         "cycle rather than acting on a guess.",
                         self.current_power_kw,
@@ -2293,11 +2295,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     return  # Exit early, event listener will trigger refresh when ready
                 else:
                     # It has answered before and is not answering now. Everything below still runs -
-                    # the decision layers need SOME power figure - but the source stays unbillable,
-                    # so nothing invented here reaches the tariff record, and an outage longer than
-                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole period rather than
-                    # billing a stale reading stretched across it. Reported when the outage begins
-                    # and when it ends, not on every cycle it lasts.
+                    # the day's peak still shows a figure - but the source is not a measurement, so
+                    # nothing invented here reaches the tariff record or peak protection, and an
+                    # outage longer than MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole
+                    # period rather than billing a stale reading stretched across it. Reported when
+                    # the outage begins and when it ends, not on every cycle it lasts.
                     (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
                         "External power meter %s is not reporting (state %s). This cycle is not "
                         "billable, and an outage longer than %d minutes refuses the whole billing "
@@ -2373,8 +2375,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # effect tariff bills the top three quarters, so it would stand for weeks.
 
             # Publish the instantaneous reading for the effect layer (see the decision site for why
-            # it must be current power and never peak_today). This runs before the decision.
-            self.current_power_kw = current_power
+            # it must be current power and never peak_today). This runs before the decision. Only a
+            # measurement: an estimate never reaches the peaks it would be compared against
+            # (PEAK_CONTROL_POWER_SOURCES), and it does not drive peak protection either. Published,
+            # a meter that dropped out mid-month had the compressor-Hz estimate (5.5 kW at 90 Hz)
+            # cut the curve to -3 at weight 1.0 against the meter's own peaks.
+            self.current_power_kw = (
+                current_power if power_source in PEAK_CONTROL_POWER_SOURCES else None
+            )
 
             # The source is recorded where the value was produced, never reconstructed here from the
             # config entry and the number's magnitude - which once filed a compressor estimate as
