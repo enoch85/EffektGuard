@@ -11,10 +11,10 @@ What the datasheets say, and what this file checks the model against:
 
     NIBE F750, "Output data according to EN 14 511", part no. 066 063:
         4.994 kW / COP 2.43   A20(12)W45, 252 m3/h, MAX compressor frequency
-    F2040 (air source): capacity RISES as it cools - 3.86 -> 6.60 kW from +7 to -7 C - because an
-        inverter throttles back at its mild rating point; the COP falls instead, 4.65 -> 2.68 at W35.
+    F2040 (air source): nominal COP test loads are separate from peak capacity. The output sheet
+        gives 9.2 kW at A7/W35, compared with its nominal COP test load of 3.86 kW.
 
-The old curve gave the F750 an 8 kW compressor (it makes 4.994), derated the F2040 the wrong way,
+The old curve gave the F750 an 8 kW compressor (it makes 4.994),
 and dropped a ground-source F1155's COP because the outdoor AIR got cold - though its heat source is
 0 C borehole brine. Each profile now carries its EN 14511 rating points VERBATIM, and the
 simulator's COP is
@@ -271,18 +271,12 @@ class TestCapacityComesFromTheDatasheetToo:
                 f"the house's own ventilation air at 20 C, and its output is set by the airflow."
             )
 
-    def test_the_air_source_pumps_capacity_rises_as_it_gets_colder(self):
-        """It does not derate. It ramps up - an inverter throttled back at its mild rating point."""
+    def test_nominal_cop_loads_do_not_limit_maximum_capacity(self):
         house = next(h for h in sim.HOUSES if h.profile.model_name == "F2040")
-
-        mild, cold = house.capacity_kw_at(7.0), house.capacity_kw_at(-7.0)
-
-        assert cold > mild, (
-            f"The F2040 is modelled as making {cold:.2f} kW at -7 C and {mild:.2f} kW at +7 C. "
-            f"NIBE publishes 6.60 and 3.86: an inverter is throttled back at its mild rating point "
-            f"and ramps UP as the weather cools. The old model derated it 2.5 %/C and blamed the "
-            f"EN 14511 rating points, which say the opposite."
-        )
+        for point in house.profile.datasheet_points:
+            assert (
+                house.capacity_kw_at(point.source_temp_c, point.flow_temp_c) > point.heat_output_kw
+            )
 
 
 class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
