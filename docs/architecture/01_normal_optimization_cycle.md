@@ -72,12 +72,14 @@ A 120-second lockout (`STARTUP_GRACE_MIN_INTERVAL`), then one observation cycle
 
 ## After the write
 
-- Learning: the thermal predictor records every cycle; the `AdaptiveThermalModel` once an hour
-  (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); the weather pattern once a day.
+- Learning and the savings figure, on the scheduled cycle only: the thermal predictor records every
+  cycle; the `AdaptiveThermalModel` once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); the
+  weather pattern once a day.
 - Persistence: the effect peaks every cycle, learned data at most hourly.
 - Hot-water control runs when its switch is on, airflow control when its switch is on
   (F750/F730); both are skipped during start-up observation and on read-only refreshes.
 - The returned data updates the climate entity, the sensors and the switches.
 
 A read-only refresh (a reload, an options change, a bookkeeping service) runs the same reads and
-decision but writes nothing.
+decision but writes nothing. Neither it nor a command's cycle between the scheduled ones adds to
+the savings figure or the learning.

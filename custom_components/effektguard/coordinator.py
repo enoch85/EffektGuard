@@ -526,7 +526,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
             # lock, so a service commanding the pump at the same moment waits its turn.
-            data = await self._drive_the_pump()
+            data = await self._drive_the_pump(scheduled=True)
         except HeatPumpUnreadable as err:
             if retry:
                 self.async_set_update_error(err)
@@ -962,7 +962,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.data = await self._drive_the_pump(explicit_command=explicit_command)
         self.async_set_updated_data(self.data)
 
-    async def _drive_the_pump(self, *, explicit_command: bool = False) -> dict[str, object]:
+    async def _drive_the_pump(
+        self, *, explicit_command: bool = False, scheduled: bool = False
+    ) -> dict[str, object]:
         """The write path. Its sole owner, and the only place `apply=True` is passed.
 
         The aligned control loop and an explicit-command service both reach the pump, and both
@@ -971,11 +973,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         read-then-write rate limiting). Reads are NOT serialised - they touch no hardware.
 
         tests/unit/coordinator/test_one_writer_at_a_time.py
+
+        Args:
+            explicit_command: A user command - see _read_and_decide.
+            scheduled: The aligned control loop's own cycle, which keeps the books.
         """
         async with self._control_lock:
             return await self._read_and_decide(
                 apply=True,
                 explicit_command=explicit_command,
+                scheduled=scheduled,
             )
 
     def _report_no_price_source(self, reason: str) -> None:
@@ -1047,6 +1054,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self,
         apply: bool,
         explicit_command: bool = False,
+        scheduled: bool = False,
     ) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
 
@@ -1055,6 +1063,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 loop and the services that explicitly command the pump may pass True.
             explicit_command: A user command that bypasses startup observation and ordinary write
                 cooldown. The decision engine's absolute safety floor still applies.
+            scheduled: The aligned control loop's own cycle: the only one that books an interval
+                of savings and a learning observation.
 
         This method:
         1. Gathers data from all sources (with graceful degradation)
@@ -1514,10 +1524,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if not self.nibe.holds(decision.offset):
                     self._offset_volatility_tracker.last_change = previous_change
 
-        self._accumulate_spot_savings(nibe_data, price_data)
-
-        # Record observations for learning (Phase 6)
-        await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
+        # The books are the scheduled cycle's: one cycle, one interval. A read - anything may refresh
+        # one - and a command or a switch-on between cycles each added another five minutes of
+        # savings and another learning snapshot: two reads at one instant doubled the savings figure,
+        # and the learned pre-heat's "day of history" counted snapshots, not time.
+        if scheduled:
+            self._accumulate_spot_savings(nibe_data, price_data)
+            await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
 
         # Save state periodically
         await self.effect.async_save()

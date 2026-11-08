@@ -19,6 +19,7 @@ from freezegun import freeze_time
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
 from custom_components.effektguard.adapters.nibe_adapter import NibeAdapter, NibeState
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.decision_engine import OptimizationDecision
@@ -26,7 +27,9 @@ from custom_components.effektguard.utils.volatile_helpers import OffsetVolatilit
 
 from tests.conftest import create_mock_hass
 
-START = datetime(2026, 1, 15, 10, 0, 10, tzinfo=timezone.utc)
+START = datetime(2026, 1, 15, 10, 0, 10, tzinfo=timezone.utc)  # quarter 40
+DEAR_SEK, CHEAP_SEK = 2.0, 1.0  # quarter 40 is the cheap one: a cycle there saves
+POWER_KW = 4.0
 
 
 def _coordinator(proposals: list[float], *, past_startup: bool = True):
@@ -122,6 +125,45 @@ async def test_a_read_publishes_what_a_control_cycle_would_and_records_nothing()
     assert "too soon" in data["decision"].reasoning
     assert tracker._last_change is recorded, "the read re-stamped the gate's 45-minute window"
     assert pump["offset"] == 3
+
+
+@pytest.mark.asyncio
+async def test_only_the_scheduled_cycle_keeps_the_books():
+    """Each read, and each cycle run out of schedule, booked another five minutes of savings and
+    another learning snapshot: two reads at one instant doubled the savings figure."""
+    coordinator, pump, clock = _coordinator([0.0] * 4)
+    midnight = START.replace(hour=0, minute=0, second=0)
+    coordinator.gespot.get_prices = AsyncMock(
+        return_value=PriceData(
+            today=[
+                QuarterPeriod(midnight + timedelta(minutes=15 * quarter), price)
+                for quarter, price in enumerate([DEAR_SEK] * 40 + [CHEAP_SEK] + [DEAR_SEK] * 55)
+            ],
+            tomorrow=[],
+            has_tomorrow=False,
+        )
+    )
+    coordinator.gespot.price_unit = "SEK/kWh"
+    unmetered = coordinator.nibe.get_current_state.side_effect
+
+    async def metered():
+        state = await unmetered()
+        state.power_kw, state.power_is_estimated = POWER_KW, False
+        return state
+
+    coordinator.nibe.get_current_state = AsyncMock(side_effect=metered)
+
+    with freeze_time(clock["now"]):
+        await coordinator._async_update_data()
+        await coordinator._async_update_data()
+        await coordinator._drive_the_pump()  # out of schedule, as a switch-on runs one
+        assert coordinator._daily_spot_savings == 0.0
+        coordinator._record_learning_observations.assert_not_awaited()
+
+        await coordinator._do_aligned_refresh()
+
+    assert coordinator._daily_spot_savings > 0.0
+    coordinator._record_learning_observations.assert_awaited_once()
 
 
 @pytest.mark.asyncio

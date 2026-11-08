@@ -66,6 +66,7 @@ async def test_the_control_loop_and_a_service_never_write_together(monkeypatch):
     async def slow_cycle(
         apply: bool,
         explicit_command: bool = False,
+        scheduled: bool = False,
     ) -> dict[str, object]:
         """Stand-in for the real read-decide-write cycle, which awaits at every step."""
         nonlocal in_flight, overlapped
@@ -104,6 +105,7 @@ async def test_reads_are_still_free_to_overlap(monkeypatch):
     async def blocking_cycle(
         apply: bool,
         explicit_command: bool = False,
+        scheduled: bool = False,
     ) -> dict[str, object]:
         started.set()
         await release.wait()
