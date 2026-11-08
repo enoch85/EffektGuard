@@ -10,6 +10,7 @@ elsewhere.
 
 from dataclasses import dataclass
 
+from ...const import F2040_CAPACITY_FLOW_TEMPS_C, F2040_MIN_HEAT_OUTPUT_KW, F2040_PEAK_CAPACITY_KW
 from ..base import HeatPumpProfile, RatingPoint, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -60,12 +61,8 @@ F2040_SOURCE = (
     "F2040-IHB-231846-8.pdf"
 )
 
-# CAPACITY RISES AS IT GETS COLDER; it does not fall. This is an INVERTER: at +7/W35 it is throttled
-# back to part load and ramps the compressor UP as the weather cools (3.86 -> 5.11 -> 6.60 kW from +7
-# to -7 C). What collapses with the cold is the COP (4.65 -> 3.76 -> 2.68), not the capacity - there
-# is no derating table in the datasheet. NIBE tabulates no capacity below -7 C (only a "Max specified
-# output" graph), so the model holds capacity flat at the -7 C figure below that point. Operating
-# limits, same manual: "Min. / Max. air temp: -20 / 43 C".
+# The nominal COP test loads above are not maximum compressor capacities.
+# The separate peak-output grid is sourced in const.py. Operating limits are unchanged.
 MIN_AIR_TEMP_C = -20.0
 MAX_AIR_TEMP_C = 43.0
 
@@ -75,7 +72,8 @@ MAX_AIR_TEMP_C = 43.0
 class NibeF2040Profile(HeatPumpProfile):
     """NIBE F2040-8 air/water heat pump.
 
-    Datasheet: makes 3.86 kW at A7/W35 and 6.60 kW at -7/W35; supplies at most 58 C ("Min. / Max. HM
+    Nominal COP tests use 3.86 kW at A7/W35 and 6.60 kW at -7/W35. The separate peak-output sheet
+    gives 9.2 and 7.7 kW at those conditions. Supplies at most 58 C ("Min. / Max. HM
     temp continuous operation: 25 / 58 C"); has NO immersion heater - it is an outdoor monobloc, and
     the electric backup lives in the paired indoor module (VVM/SMO), which this package does not
     model.
@@ -84,6 +82,8 @@ class NibeF2040Profile(HeatPumpProfile):
     """
 
     model_name: str = "F2040"
+    capacity_flow_temps_c: tuple[float, ...] = F2040_CAPACITY_FLOW_TEMPS_C
+    peak_capacity_kw: tuple[tuple[float, tuple[float, ...]], ...] = F2040_PEAK_CAPACITY_KW
     manufacturer: str = "NIBE"
     model_type: str = "F-series air/water"
 
@@ -125,6 +125,15 @@ class NibeF2040Profile(HeatPumpProfile):
     supports_weather_compensation: bool = True
     max_flow_temp: float = 58.0  # "Min. / Max. HM temp continuous operation: 25 / 58 C"
     min_flow_temp: float = 25.0
+
+    @property
+    def min_heat_output_kw(self) -> float:
+        """A7/W35 minimum from NIBE's catalogue, not a nominal test load.
+
+        Holding this floor at other conditions is a simulator assumption, stated in const.py.
+        The separate peak grid and nominal COP points keep their own normalization.
+        """
+        return F2040_MIN_HEAT_OUTPUT_KW
 
     def __post_init__(self):
         """The outdoor-keyed COP curve, and for THIS machine it is a real measurement.

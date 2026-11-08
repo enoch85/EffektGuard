@@ -65,6 +65,7 @@ from ..const import (
     OVERSHOOT_PROTECTION_DEEPEST,
     QuarterClassification,
     REASONING_SEPARATOR,
+    WARM_WEATHER_COAST_FLOOR_MARGIN,
     WAIT_CHEAPER_ROOM_OVER,
     WAIT_CHEAPER_WARMING,
     WAIT_CHEAPER_WARMING_HOURS,
@@ -76,6 +77,7 @@ from ..utils.time_utils import seconds_between
 from ..utils.volatile_helpers import get_volatile_info
 from .climate_zones import ClimateZoneDetector
 from .comfort_layer import ComfortLayer
+from .prediction_layer import ThermalStatePredictor
 from .thermal_layer import (
     EmergencyLayer,
     EmergencyLayerDecision,
@@ -857,6 +859,10 @@ class DecisionEngine:
             emergency_decision,
         )
 
+        raw_offset, warm_weather_note = self._coast_for_warmer_weather(
+            raw_offset, nibe_state, weather_data, room_floor, emergency_decision
+        )
+
         # NEW: Trend-aware damping to prevent overshoot/undershoot
         thermal_trend = self._get_thermal_trend()
         trend_rate = thermal_trend.get("rate_per_hour", 0.0)
@@ -911,7 +917,11 @@ class DecisionEngine:
             )
             final_offset = 0.0
 
-        notes = [note for note in (wait_note, trend_note, wear_note, immersion_note) if note]
+        notes = [
+            note
+            for note in (wait_note, warm_weather_note, trend_note, wear_note, immersion_note)
+            if note
+        ]
         reasoning = self._generate_reasoning(layers, notes)
 
         _LOGGER.info("Decision: offset %.2f°C - %s", final_offset, reasoning)
@@ -1041,6 +1051,40 @@ class DecisionEngine:
         return OVERSHOOT_PROTECTION_DEEPEST, adjusted(
             "Warm room waits for cheaper hours", offset, OVERSHOOT_PROTECTION_DEEPEST, cheaper
         )
+
+    def _coast_for_warmer_weather(
+        self, offset: float, nibe_state, weather_data, room_floor: float, emergency_decision
+    ) -> tuple[float, str]:
+        """Withhold heat before a warm afternoon while the measured room has headroom.
+
+        A heating-only pump cannot remove the heat stored before the outdoor temperature reaches
+        the house's balance point. The existing hourly forecast window can reveal that warmth
+        before the room itself overheats. Recovery tiers abstain; the downstream control and
+        register guards still decide what reaches the pump. The early full cut is limited to
+        radiators: extending it to underfloor heating increased cold time in the May replays.
+        No learned room model is required.
+        """
+        tier = getattr(emergency_decision, "tier", "")
+        if (
+            not self.config.get("enable_weather_prediction", True)
+            or self.weather_comp.is_underfloor
+            or not getattr(nibe_state, "indoor_temp_valid", True)
+            or not math.isfinite(nibe_state.indoor_temp)
+            or self._absolute_safety_floor(nibe_state) is not None
+            or round(nibe_state.indoor_temp - room_floor, 2) < WARM_WEATHER_COAST_FLOOR_MARGIN
+            or tier in DM_RECOVERY_TIERS
+            or tier == DM_TIER_EMERGENCY
+            or not weather_data
+        ):
+            return offset, ""
+        future = ThermalStatePredictor.forecast_temperatures(
+            weather_data, int(WEATHER_FORECAST_HORIZON)
+        )
+        if not future or max(future) < self.weather_comp.balance_point_temp(self.target_temp):
+            return offset, ""
+        if offset <= MIN_OFFSET:
+            return offset, ""
+        return MIN_OFFSET, adjusted("Room coasts before warmer weather", offset, MIN_OFFSET)
 
     def _limit_for_compressor_wear(
         self, offset: float, nibe_state, saturated: bool, trend_rate: float
