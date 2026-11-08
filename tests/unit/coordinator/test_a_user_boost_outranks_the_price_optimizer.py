@@ -56,6 +56,11 @@ def _coordinator(lux_state: str = "off") -> EffektGuardCoordinator:
     coordinator.entry.data = {"target_indoor_temp": 21.0}
     coordinator.entry.options = {}
     coordinator.data = {}
+    coordinator.nibe = MagicMock(
+        get_current_state=AsyncMock(
+            return_value=SimpleNamespace(degree_minutes=-200.0, indoor_temp=21.0)
+        )
+    )
     coordinator.last_update_success = True
     coordinator.temp_lux_entity = LUX
     coordinator._shutdown_requested = False
@@ -63,7 +68,7 @@ def _coordinator(lux_state: str = "off") -> EffektGuardCoordinator:
     coordinator._service_boost_until = None
     coordinator._last_dhw_control_time = NOW - timedelta(hours=2)
     coordinator._control_lock = asyncio.Lock()
-    coordinator.dhw_optimizer = MagicMock()
+    coordinator.dhw_optimizer = IntelligentDHWScheduler()
     coordinator._raise_dhw_control_issue = MagicMock()
     coordinator._clear_dhw_control_issue = MagicMock()
     return coordinator
@@ -347,9 +352,9 @@ async def test_a_user_boost_is_refused_where_the_safety_gate_would_stop_it():
     """One rule both ends: a boost started below the floor would be stopped five minutes later."""
     coordinator = _coordinator(lux_state="off")
     coordinator.dhw_optimizer = IntelligentDHWScheduler()
-    coordinator.data = {
-        "nibe": SimpleNamespace(degree_minutes=-200.0, indoor_temp=MIN_TEMP_LIMIT - 0.5)
-    }
+    coordinator.nibe.get_current_state.return_value = SimpleNamespace(
+        degree_minutes=-200.0, indoor_temp=MIN_TEMP_LIMIT - 0.5
+    )
 
     with pytest.raises(HomeAssistantError):
         await coordinator.async_start_dhw_boost(duration_minutes=60, now_time=NOW)
@@ -393,3 +398,31 @@ def test_the_service_no_longer_advertises_a_temperature_it_cannot_set():
     fields = services["boost_dhw"].get("fields", {})
     assert "target_temp" not in fields
     assert "duration" in fields
+
+
+@pytest.mark.parametrize("failure", ["room", "debt", "unreadable"])
+async def test_a_cached_safe_cycle_cannot_authorize_an_unsafe_boost(failure):
+    """Safety is judged when the service runs, including before the first control cycle."""
+    with freeze_time(NOW):
+        house = _House(hot_water_optimisation=False, tank=45.0)
+        await house.cycle()
+        if failure == "room":
+            house.indoor = MIN_TEMP_LIMIT - 0.5
+        elif failure == "debt":
+            house.dm = DM_THRESHOLD_IMMERSION_LIMIT
+        else:
+            house.coordinator.nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("BT1"))
+        with pytest.raises(HomeAssistantError):
+            await house.boost()
+        assert house.switch_calls == []
+        assert house.coordinator._service_boost_until is None
+
+
+async def test_a_fresh_safe_read_can_replace_an_old_unsafe_cycle():
+    with freeze_time(NOW):
+        house = _House(hot_water_optimisation=False, tank=45.0)
+        house.indoor = MIN_TEMP_LIMIT - 0.5
+        await house.cycle()
+        house.indoor = 21.0
+        await house.boost()
+        assert house.switch_calls == ["turn_on"]

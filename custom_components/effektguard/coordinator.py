@@ -2646,7 +2646,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Start a user-commanded hot-water boost that price optimization may not cancel.
 
         Only safety outranks the user: `hot_water_unsafe_reason` refuses the boost here, on the
-        last reading, and stops it on any later cycle (_end_user_dhw_boost_when_due); so does
+        fresh reading, and stops it on any later cycle (_end_user_dhw_boost_when_due); so does
         unload. The duration is real - EffektGuard turns the switch back off when it expires,
         through the same owned door the cleanup uses - so the service argument means what it
         says instead of being validated and discarded. NIBE's own lux timeout still applies
@@ -2662,13 +2662,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "EffektGuard is OFF. Turn optimization on before boosting hot water."
                 )
 
-            # Refused by the rule that would stop it on the next cycle, or it is a five-minute
-            # pulse. No reading yet (start-up): the first cycle with one judges it.
-            nibe = self.data.get("nibe") if self.data else None
-            unsafe = (
-                self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
-                if nibe is not None
-                else None
+            # Read through the adapter's freshness checks while holding the same lock as OFF.
+            # A previous safe cycle cannot authorize diverting heat from a house now in danger.
+            try:
+                nibe = await self.nibe.get_current_state()
+            except UpdateFailed as err:
+                raise HomeAssistantError(
+                    f"Hot water boost refused: the heat pump cannot be read: {err}"
+                ) from err
+            unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
+                nibe.degree_minutes, nibe.indoor_temp
             )
             if unsafe:
                 raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")

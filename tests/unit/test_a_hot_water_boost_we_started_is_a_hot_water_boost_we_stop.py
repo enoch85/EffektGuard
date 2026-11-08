@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 import pytest
 from homeassistant.const import STATE_OFF, STATE_ON
@@ -44,6 +45,9 @@ def _hass_and_coordinator() -> tuple[MagicMock, EffektGuardCoordinator, dict]:
 
     coordinator = EffektGuardCoordinator(
         hass, MagicMock(), MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
+    )
+    coordinator.nibe.get_current_state = AsyncMock(
+        return_value=SimpleNamespace(degree_minutes=-200.0, indoor_temp=21.0)
     )
     coordinator.data = {}
     coordinator.temp_lux_entity = LUX
