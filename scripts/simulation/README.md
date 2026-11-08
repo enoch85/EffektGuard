@@ -86,6 +86,10 @@ Per house, `output/summary-<tag>.json` holds the stats, failures and violations,
   example, two one-hour intervals with demand 10/10 kW, capacity 8/12 kW and 2 kWh initially stored
   can finish with the same stored heat and no immersion, despite a 2 kWh instantaneous deficit.
   Subtracting this diagnostic from immersion consumption cannot identify the controller's effect.
+- `heat_kwh` and `loss_kwh` differ by the change in stored room heat (and integration error).
+  A fixed heat-to-loss ratio can reject even minimum floor-maintaining heat when free warmth
+  charges the room near the end. It is not a controller-overdelivery test. The raw quantities,
+  room-balance diagnostic and actual comfort, immersion and safety checks remain.
 - `datasheet_cop` is a nominal-rating reference, not a universal COP ceiling. Different source,
   water and load conditions require independent validation. The Carnot check and rating-point
   reproduction/hold-out tests remain. `mean_cop` is delivered emitter heat divided by modeled

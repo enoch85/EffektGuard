@@ -26,9 +26,13 @@ def _decide(engine, state, weather):
     return engine.calculate_decision(state, None, weather, 0.0, 0.0)
 
 
-def test_a_room_above_its_mode_floor_coasts_without_needing_an_expensive_price(freezer):
+@pytest.mark.parametrize("mode,room", [("balanced", 21.9), ("comfort", 22.1), ("savings", 21.1)])
+def test_a_room_above_its_mode_floor_coasts_without_needing_an_expensive_price(freezer, mode, room):
     freezer.move_to(NOW)
     engine, state, weather = _inputs()
+    engine.config["optimization_mode"] = mode
+    engine.update_mode_config()
+    state = replace(state, indoor_temp=room)
     assert engine.predictor is None, "weather coasting does not need learned room history"
     decision = _decide(engine, state, weather)
     assert decision.offset == MIN_OFFSET, decision.reasoning
@@ -40,6 +44,8 @@ def test_a_room_above_its_mode_floor_coasts_without_needing_an_expensive_price(f
         "disabled",
         "sensor_missing",
         "at_floor",
+        "comfort_floor",
+        "savings_floor",
         "cool_day",
         "missing",
         "past",
@@ -55,8 +61,15 @@ def test_coasting_requires_a_measured_warm_room_and_complete_future_weather(free
         engine.config["enable_weather_prediction"] = False
     elif case == "sensor_missing":
         state = replace(state, indoor_temp_valid=False)
-    elif case == "at_floor":
-        state = replace(state, indoor_temp=21.8)
+    elif case in ("at_floor", "comfort_floor", "savings_floor"):
+        mode, room = {
+            "at_floor": ("balanced", 21.8),
+            "comfort_floor": ("comfort", 22.0),
+            "savings_floor": ("savings", 21.0),
+        }[case]
+        engine.config["optimization_mode"] = mode
+        engine.update_mode_config()
+        state = replace(state, indoor_temp=room)
     elif case == "cool_day":
         weather = _weather([12.0] * 24)
     elif case == "missing":

@@ -205,10 +205,6 @@ SCENARIO_COMFORT_BREACH_MIN_DEPTH_C = 0.1
 # itself, not tracking the house - and every reversal is a Modbus write and a compressor
 # disturbance. One per hour, in the coordinator's own cycle units.
 SCENARIO_OFFSET_REVERSALS_PER_DAY_BUDGET = 24.0  # one per hour
-# Mild weather: how far delivered heat may exceed the house's own computed heat loss before
-# it is over-delivery rather than demand-following. 1.10 leaves room for the thermal mass
-# being charged at the start of the window and for the integration step, and no more.
-SHOULDER_OVER_DELIVERY_BUDGET = 1.10
 KIRUNA_LATITUDE = 67.86  # 25 hours x 4 quarter-periods
 
 # CAPACITY AND COP NOW COME FROM THE DATASHEET. See HouseConfig.capacity_kw_at / cop_at.
@@ -974,17 +970,17 @@ SCENARIOS = {
                 "ITSELF off. The repo's own history records 'the emergency ladder fired in "
                 "July'; this is the window that would catch it again."
             ),
-            expect=("heating_tracks_demand", "no_immersion_at_all", "no_emergency_tier"),
+            expect=("no_immersion_at_all", "no_emergency_tier"),
             known_open=(
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3515, "apartment_f730": 12675},
+                    houses={"apartment_f730": 8155},
                     why=(
-                        "Fresh 21-day May replay: F750 3515 and F730 12675 above-band minutes. "
-                        "Their zero-heat references give 350 and 7175; the latter already exceeds "
-                        "the 720-minute budget. These are model/scenario failures, not established "
-                        "effects on the owner's home or bill. Raw failures stay visible."
+                        "The 21-day May replay with forecast coasting gives F730 8155 above-band "
+                        "minutes; zero supplied heat already gives 7175 against the 720-minute "
+                        "budget. F750 now passes at 630. The apartment's remaining failure is "
+                        "visible, not a finding about the owner's home or bill."
                     ),
                 ),
             ),
@@ -1157,27 +1153,6 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
                 f"{DM_THRESHOLD_IMMERSION_LIMIT:.0f} "
                 f"scenario immersion limit"
             )
-
-    if "heating_tracks_demand" in scenario.expect:
-        # Measured against the house's OWN computed heat loss for the same weather, not
-        # against a fixed kWh budget.
-        #
-        # My first version of this check used `hlc_w_per_k * a constant`, on the assumption
-        # that a scenario named for its +20 C afternoons has no heating demand. It has
-        # plenty: the window runs 9.8-22.9 C and averages nearer 15, so a 286 W/K house at a
-        # 22 C setpoint genuinely needs hundreds of kWh over three weeks, and the check
-        # failed every house for being physically correct. Over-DELIVERY against demand is
-        # the real question, and the plant already computes the denominator.
-        loss = stats.get("loss_kwh", 0.0)
-        if loss > 1.0:
-            ratio = stats["heat_kwh"] / loss
-            if ratio > SHOULDER_OVER_DELIVERY_BUDGET:
-                failures.append(
-                    f"delivered {stats['heat_kwh']:.0f} kWh against {loss:.0f} kWh of heat "
-                    f"loss ({ratio:.2f}x, budget {SHOULDER_OVER_DELIVERY_BUDGET}x) - it is "
-                    f"putting in materially more heat than the house is losing, which in "
-                    f"mild weather ends up in the comfort band rather than the bill"
-                )
 
     if "no_emergency_tier" in scenario.expect:
         votes = stats.get("layer_votes", {})

@@ -64,9 +64,9 @@ solved a problem. If you do fix one, the note must turn false in the same commit
 | F-112 | Ladder rescale against the pump's real immersion-start DM; 68 tests encode the −1500 world | parked in a git stash |
 | F-124 | The former immersion-minus-instantaneous-deficit calculation does not establish unavoidable backup heat or attribute consumption to the controller. Those causal bounds and their known-red exceptions were withdrawn. Cold-end capacity, COP away from rating conditions, matched comfort and initial/final stored heat still need independent validation before attributing savings or avoidable immersion. | simulator diagnostics and validation scope; no causal closure claimed |
 | ~~F-132b~~ | Replaced the rate-consistency ceiling and dead dictionary gate with held-out temperature-forecast skill. The engagement regression is enforced. Each control horizon still needs its own validated model; unsupported forecasts abstain. | closed by the forecast validation repair |
-| — | A power meter that freezes while Home Assistant still shows it available is read as live: its last value is billed and defended. Home Assistant has no heartbeat for an unchanged value (template and MQTT sensors do not rewrite one, so `last_reported` stops too), and the owner's meter sits unchanged at 0 W import for hours under solar, so a meter is out only when it is unavailable | open with the owner |
+| — | A power meter that freezes while Home Assistant still shows it available can still be billed at its held value. Home Assistant has no heartbeat for an unchanged value (template and MQTT sensors do not rewrite one, so `last_reported` stops too), and the owner's meter sits unchanged at 0 W import for hours under solar, so a meter is out only when it is unavailable | open with the owner |
 | ~~F-142~~ | **Withdrawn 2026-10-03, and it was mine.** I reported the offset limit-cycling from a bench that never ran `OffsetVolatilityTracker`, so it measured the engine's raw proposals as writes. With the real gate: 8-16 reversals/day against a 24 budget, scenario passes. Kept here because the guard is load-bearing - weaken it and `thaw_freeze` goes red | closed in `eaa3986` |
-| — | The native pump owns its heating-season cutoff. The F2040 May recovery-vote flag disappears when its minimum compressor output is modeled; the recovery assertion remains enforced. May upper-temperature failures in the F750 and F730 remain visible separately. | corrected minimum-output model; temperature findings remain open |
+| — | The native pump owns its heating-season cutoff. The F2040 May recovery-vote flag disappears when its minimum compressor output is modeled; the recovery assertion remains enforced. Forecast coasting brings the F750 May upper temperature within its unchanged budget. The F730 upper-temperature failure remains: even zero supplied heat exceeds its budget. | corrected minimum-output model; temperature findings remain open |
 | — | COP outside the published rating conditions is unvalidated. Thermodynamic consistency and nominal-point reproduction do not validate shoulder-season costs, cycling losses or field savings. | independent operating-map and measured-home evidence still required |
 
 The WARNING and CAUTION tiers were **removed**, not fixed: no degree-minute value could reach
@@ -87,6 +87,11 @@ deliberate design fact, not a typo - do not "fix" a table to hide it.
 - **Verify against the released tag, not the PR body.** An intermediate change that was reverted
   before shipping is not a fix. Hourly effect-tariff billing existed only on an unreleased branch;
   calling it a bug fix put a false statement in a published release note.
+
+- **Delivered heat divided by net loss is not an overdelivery test.** Their difference includes
+  the change in stored room heat. A warm finish can fail a fixed ratio even with the minimum
+  nonnegative heat that holds the room floor. Keep those quantities as diagnostics and enforce
+  actual comfort and safety; do not turn the ratio into controller attribution.
 
 - **A guard test must fail without its guard.** Delete the guard, watch it go red, restore. Two
   mutation attempts once "passed" because the mutation never applied - one regex named a method
