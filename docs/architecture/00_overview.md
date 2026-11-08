@@ -29,7 +29,7 @@ Each returns an offset, a weight and a reason. The engine runs them in this orde
 | Thermal debt | `EmergencyLayer` | T1-T3: raises while the room is below target or power is cheap. Past DM -1500 (EMERGENCY): floors the offset at 0 unless the room is above its band, and raises nothing itself. Anti-windup |
 | Proactive | `ProactiveLayer` | Z1-Z5: smaller, earlier raises as degree minutes start to fall |
 | Peak | `EffectManager` | Lowers the offset near a new monthly power peak |
-| Learned pre-heat | `ThermalStatePredictor` | Pre-heats from the learned house response, after 24 hours of history, at weight 0.65 |
+| Learned pre-heat | `ThermalStatePredictor` | Inactive while the indoor temperature trajectory is unvalidated; measured trends still reach control |
 | Weather compensation | `WeatherCompensationLayer` | Supply temperature from the outdoor temperature (EN 442 emitter law) |
 | Weather pre-heat | `WeatherPredictionLayer` | Heats ahead of a colder day, earlier for a heavy house |
 | Price | `PriceAnalyzer` | Classifies the 15-minute prices: up when cheap, down when expensive, extra before a jump |
@@ -81,8 +81,8 @@ All paths under `custom_components/effektguard/`.
   tier.
 - A layer at weight 1.0 wins outright; otherwise the weighted average, with the thermal-debt
   special cases in [08](08_layer_priority_system.md).
-- Learning observes hourly into a 28-day window; the learned pre-heat layer votes (weight 0.65)
-  once the predictor holds 24 hours of history.
+- Learning observes hourly into a 28-day window. Learned pre-heating is inactive pending forecast
+  validation; measured indoor and outdoor trends still reach control.
 - Airflow optimization exists for the F750/F730 only and is off by default; see
   [11](11_airflow_optimization.md).
 
