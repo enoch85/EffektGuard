@@ -130,8 +130,9 @@ flip-flopping, it holds back a reversal of 2 °C or more within 45 minutes. Safe
 
 Off by default. Turn on Hot Water Optimization and pick the boost switch in setup. Then EffektGuard
 heats the tank when power is cheap and has hot water ready at your hot-water times. Each boost runs
-at least 15 minutes, unless the house needs the heat or the tank can't be read. A boost you start
-yourself is left alone, and the pump still heats a cold tank by itself.
+at least 15 minutes, unless the house needs the heat or the tank or the pump can't be read. Turning
+Hot Water Optimization off stops its boost. A boost you start yourself is left alone, and the pump
+still heats a cold tank by itself.
 [Hot water in detail](DHW_OPTIMIZATION.md).
 
 ## Safety

@@ -518,7 +518,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         A cycle that cannot read the heat pump runs once more, HEAT_PUMP_READ_RETRY_SECONDS later,
         before that failure is shown: the pump's source is often back by then, and the cycle's work
         is done late rather than not at all. Until then the entities show the last cycle, as they
-        do between any two cycles.
+        do between any two cycles. A failure shown also ends the hot-water boosts it leaves
+        unsupervised (_hot_water_without_a_reading).
 
         Args:
             retry: This run is that second try, so a failed read is shown.
@@ -530,6 +531,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         except HeatPumpUnreadable as err:
             if retry:
                 self.async_set_update_error(err)
+                await self._hot_water_without_a_reading()
             else:
                 _LOGGER.info(
                     "Could not read the heat pump, trying again in %d s: %s",
@@ -841,7 +843,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         The stop is the predicate that refuses the start (async_start_dhw_boost) and gates the
         scheduled window: price never ends a user boost, the ordinary thermal-debt block does not
-        either, the safety gate does.
+        either, the safety gate does. Without a reading (nibe_data None: the pump cannot be read)
+        safety cannot be judged, as at the start, and the window still closes on time.
         """
         if self._service_boost_until is None:
             return
@@ -855,8 +858,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Missing, unavailable or unknown is not an end: the boost may well be running.
             return
 
-        unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
-            nibe_data.degree_minutes, nibe_data.indoor_temp
+        unsafe = (
+            self.dhw_optimizer.hot_water_unsafe_reason(
+                nibe_data.degree_minutes, nibe_data.indoor_temp
+            )
+            if nibe_data is not None
+            else None
         )
         if unsafe is None and now_time < self._service_boost_until:
             return
@@ -870,6 +877,40 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("User DHW boost stopped for safety: %s", unsafe)
         else:
             _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+
+    async def _stop_our_unsupervised_boost(self, now_time: datetime, why: str) -> None:
+        """Stop the optimiser's own boost when nothing supervises it any more.
+
+        The optimiser's boost runs while the optimiser decides on it (_apply_dhw_control). With
+        hot-water optimisation switched off, or the pump unreadable, nothing does, and the boost ran
+        on to NIBE's own lux timeout. Inside its minimum run too: nothing then tells whether the
+        house needs the compressor. A boost_dhw window is the user's, and ends by its own rule.
+        """
+        if self._service_boost_until is not None or not (
+            self._lux_boost_is_ours and self.temp_lux_entity
+        ):
+            return
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is not None and state.state == STATE_OFF:
+            self._lux_turned_off()
+            return
+        if state is None or state.state != STATE_ON:
+            # Unavailable or unknown says nothing about the boost: the next reading decides.
+            return
+        _LOGGER.warning("Stopping the hot-water boost EffektGuard started: %s", why)
+        if await self._set_temporary_lux(False):
+            self._last_dhw_control_time = now_time
+
+    async def _hot_water_without_a_reading(self) -> None:
+        """The heat pump cannot be read: a boost_dhw window still closes on time, and ours stops.
+
+        The failed cycle ends before its hot-water control, so neither ran: a user boost stayed on
+        past its window and the optimiser's boost ran on to NIBE's lux timeout.
+        """
+        now_time = dt_util.now()
+        async with self._control_lock:
+            await self._end_user_dhw_boost_when_due(None, now_time)
+            await self._stop_our_unsupervised_boost(now_time, "the heat pump cannot be read")
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
@@ -1715,6 +1756,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Skipping DHW control during startup grace period")
             else:
                 await self._apply_dhw_control(dhw_decision, current_dhw_temp, now_time)
+        elif apply:
+            # Hot-water optimisation switched off: nothing decides on the optimiser's boost any more.
+            await self._stop_our_unsupervised_boost(now_time, "hot-water optimisation is off")
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
@@ -2607,28 +2651,33 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         through the same owned door the cleanup uses - so the service argument means what it
         says instead of being validated and discarded. NIBE's own lux timeout still applies
         underneath; whichever ends first wins.
+
+        Under the control lock, as OFF and the control cycle are: switched OFF while the switch call
+        was in flight, the boost used to start after OFF's cleanup had found nothing to cancel, and
+        ran on while EffektGuard was OFF.
         """
-        if not self.optimization_enabled:
-            raise HomeAssistantError(
-                "EffektGuard is OFF. Turn optimization on before boosting hot water."
-            )
+        async with self._control_lock:
+            if not self.optimization_enabled:
+                raise HomeAssistantError(
+                    "EffektGuard is OFF. Turn optimization on before boosting hot water."
+                )
 
-        # Refused by the rule that would stop it on the next cycle, or it is a five-minute pulse.
-        # No reading yet (start-up): the first cycle with one judges it.
-        nibe = self.data.get("nibe") if self.data else None
-        unsafe = (
-            self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
-            if nibe is not None
-            else None
-        )
-        if unsafe:
-            raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
-
-        if not await self._set_temporary_lux(True):
-            raise HomeAssistantError(
-                f"Could not start the hot-water boost on {self.temp_lux_entity}"
+            # Refused by the rule that would stop it on the next cycle, or it is a five-minute
+            # pulse. No reading yet (start-up): the first cycle with one judges it.
+            nibe = self.data.get("nibe") if self.data else None
+            unsafe = (
+                self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
+                if nibe is not None
+                else None
             )
-        self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
+            if unsafe:
+                raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
+
+            if not await self._set_temporary_lux(True):
+                raise HomeAssistantError(
+                    f"Could not start the hot-water boost on {self.temp_lux_entity}"
+                )
+            self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
 
     async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
         """Apply one explicit user heating command through the locked control path."""
