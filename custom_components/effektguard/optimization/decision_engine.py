@@ -293,8 +293,6 @@ class DecisionEngine:
         # Heat loss coefficient from learned values or config, fallback to default
         heat_loss_coeff = config.get("heat_loss_coefficient", DEFAULT_HEAT_LOSS_COEFFICIENT)
         radiator_output = config.get("radiator_rated_output", None)
-        # Infer heating_type from thermal_mass if not explicitly set
-        # Uses THERMAL_MASS_*_THRESHOLD constants from const.py
         thermal_mass_value = DEFAULT_THERMAL_MASS  # Fallback to default (1.0)
         if thermal_model is not None:
             try:
@@ -303,15 +301,7 @@ class DecisionEngine:
                     thermal_mass_value = float(tm_attr)
             except (TypeError, AttributeError):
                 pass  # Use default if thermal_model is mocked or has no thermal_mass
-
-        if "heating_type" in config:
-            heating_type = config["heating_type"]
-        elif thermal_mass_value >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
-            heating_type = "concrete_ufh"
-        elif thermal_mass_value >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
-            heating_type = "timber"
-        else:
-            heating_type = "radiator"
+        heating_type = self._heating_type_for(thermal_mass_value)
 
         self.weather_comp = WeatherCompensationCalculator(
             heat_loss_coefficient=heat_loss_coeff,
@@ -379,6 +369,32 @@ class DecisionEngine:
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
         self._manual_override_one_shot = False
+
+    def _heating_type_for(self, thermal_mass: float) -> str:
+        """The heating type from the configuration, or inferred from the owner's thermal mass."""
+        if "heating_type" in self.config:
+            return self.config["heating_type"]
+        if thermal_mass >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+            return "concrete_ufh"
+        if thermal_mass >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+            return "timber"
+        return "radiator"
+
+    def set_thermal_mass(self, thermal_mass: float) -> None:
+        """The owner's thermal mass, and everything the engine derives from it, as setup does.
+
+        Setup derives the heating type, the degree-minute ladder's buffer, the emitter law and the
+        weather pre-heat's horizon from it. Changed in the options, only the thermal model took the
+        new value: a slab set from 1.0 to 1.8 kept the radiator ladder and a 12-hour horizon where a
+        restart builds the slab's and 48 hours.
+        """
+        self.thermal.thermal_mass = thermal_mass
+        heating_type = self._heating_type_for(thermal_mass)
+        self.weather_comp.set_heating_type(heating_type)
+        self.emergency_layer.set_heating_type(heating_type)
+        self.proactive_layer.heating_type = heating_type
+        self.weather_prediction.thermal_mass = thermal_mass
+        self.weather_prediction.forecast_horizon = self._forecast_horizon_for(self.thermal)
 
     def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.

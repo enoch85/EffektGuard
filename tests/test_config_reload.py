@@ -235,7 +235,12 @@ class TestCoordinatorConfigUpdate:
 
     @pytest.mark.asyncio
     async def test_updates_thermal_model_parameters(self, mock_coordinator):
-        """Verify async_update_config updates thermal model parameters."""
+        """Verify async_update_config updates the insulation quality.
+
+        The thermal mass reaches more than the thermal model; a live change is held to what a
+        restart builds on the real engine in
+        tests/unit/learning/test_the_building_settings_reach_the_engine_at_setup.py.
+        """
         from custom_components.effektguard.coordinator import EffektGuardCoordinator
 
         coordinator = mock_coordinator
@@ -244,18 +249,12 @@ class TestCoordinatorConfigUpdate:
         )
 
         # Initial state
-        assert coordinator.engine.thermal.thermal_mass == 1.0
         assert coordinator.engine.thermal.insulation_quality == 1.0
 
         # Update config
-        new_options = {
-            CONF_THERMAL_MASS: 1.5,
-            CONF_INSULATION_QUALITY: 0.8,
-        }
-        await coordinator.async_update_config(new_options)
+        await coordinator.async_update_config({CONF_INSULATION_QUALITY: 0.8})
 
         # Should update thermal model
-        assert coordinator.engine.thermal.thermal_mass == 1.5
         assert coordinator.engine.thermal.insulation_quality == 0.8
 
     @pytest.mark.asyncio

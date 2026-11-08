@@ -2677,9 +2677,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.engine.tolerance_range,
             )
 
-        # Update thermal model parameters
+        # Update thermal model parameters: the thermal mass with all the engine derives from it
         if "thermal_mass" in options:
-            self.engine.thermal.thermal_mass = options["thermal_mass"]
+            self.engine.set_thermal_mass(options["thermal_mass"])
             _LOGGER.debug("Updated thermal mass: %.2f", options["thermal_mass"])
 
         if "insulation_quality" in options:

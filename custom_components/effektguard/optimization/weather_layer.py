@@ -186,23 +186,10 @@ class WeatherCompensationCalculator:
         self.heat_loss_coefficient = heat_loss_coefficient
         self.radiator_rated_output = radiator_rated_output
         self.internal_gains_w = internal_gains_w
-        self.heating_type = heating_type
         self.design_outdoor_temp = design_outdoor_temp
         self.design_spread = design_spread
-
-        # Underfloor heating has its own emitter exponent (EN 1264, n ~ 1.1) and a far lower
-        # design flow temperature. Its lower temperatures belong HERE, in the curve itself - not
-        # as a fixed subtraction applied to a radiator curve afterwards.
-        self.is_underfloor = heating_type in ("concrete_ufh", "timber_ufh", "timber")
-        self.emitter_exponent = (
-            UFH_POWER_COEFFICIENT if self.is_underfloor else RADIATOR_POWER_COEFFICIENT
-        )
-        if design_flow_temp is not None:
-            self.design_flow_temp = design_flow_temp
-        elif self.is_underfloor:
-            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_UFH
-        else:
-            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
+        self._given_design_flow_temp = design_flow_temp
+        self.set_heating_type(heating_type)
 
         _LOGGER.debug(
             "WeatherCompensationCalculator initialized: type=%s, design %.1f°C @ %.1f°C outdoor, "
@@ -215,6 +202,26 @@ class WeatherCompensationCalculator:
             heat_loss_coefficient,
             radiator_rated_output,
         )
+
+    def set_heating_type(self, heating_type: str) -> None:
+        """The emitters, and what follows from them: at construction and when the owner changes it.
+
+        Underfloor heating has its own emitter exponent (EN 1264, n ~ 1.1) and a far lower design
+        flow temperature. Its lower temperatures belong HERE, in the curve itself - not as a fixed
+        subtraction applied to a radiator curve afterwards. A design flow temperature given at
+        construction stays.
+        """
+        self.heating_type = heating_type
+        self.is_underfloor = heating_type in ("concrete_ufh", "timber_ufh", "timber")
+        self.emitter_exponent = (
+            UFH_POWER_COEFFICIENT if self.is_underfloor else RADIATOR_POWER_COEFFICIENT
+        )
+        if self._given_design_flow_temp is not None:
+            self.design_flow_temp = self._given_design_flow_temp
+        elif self.is_underfloor:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_UFH
+        else:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
 
     def balance_point_temp(self, indoor_setpoint: float) -> float:
         """Outdoor temperature at which this house needs no heat at all.
