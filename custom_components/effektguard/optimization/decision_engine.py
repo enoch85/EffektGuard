@@ -746,24 +746,19 @@ class DecisionEngine:
             is_cost_layer=True,  # Effect tariff optimizes cost, not comfort or safety
         )
 
-        # 5. Prediction Layer
-        if self.predictor:
-            pred_result = self.predictor.evaluate_layer(
-                nibe_state=nibe_state,
-                weather_data=weather_data,
-                target_temp=self.target_temp,
-                thermal_model=self.thermal,
-            )
-            prediction_decision = LayerDecision(
-                name=pred_result.name,
-                offset=pred_result.offset,
-                weight=pred_result.weight,
-                reason=pred_result.reason,
-            )
-        else:
-            prediction_decision = LayerDecision(
-                name="Learned Pre-heat", offset=0.0, weight=0.0, reason="Predictor not initialized"
-            )
+        # The room trajectory treats offset zero as zero heat, omitting the native curve.
+        # Its confidence measures history coverage, not forecast skill. Until that model is
+        # validated, it cannot request heat. The predictor still supplies measured trends.
+        prediction_decision = LayerDecision(
+            name="Learned Pre-heat",
+            offset=0.0,
+            weight=0.0,
+            reason=(
+                "Room trajectory is not validated"
+                if self.predictor
+                else "Predictor not initialized"
+            ),
+        )
 
         # 6. Weather Compensation Layer
         comp_result = self.weather_comp_layer.evaluate_layer(
