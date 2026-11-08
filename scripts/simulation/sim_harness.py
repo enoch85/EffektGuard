@@ -1229,8 +1229,8 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
         fired = [name for name in ("T1", "T2", "T3", "EMERGENCY") if votes.get(name)]
         if fired:
             failures.append(
-                f"the thermal-debt recovery ladder proposed ({', '.join(fired)}) in +20 C "
-                f"weather. This records proposed votes, not an applied offset, delivered heat "
+                f"the thermal-debt recovery ladder proposed ({', '.join(fired)}) in {scenario.slug}. "
+                f"This records proposed votes, not an applied offset, delivered heat "
                 f"or a causal effect on cost."
             )
 
