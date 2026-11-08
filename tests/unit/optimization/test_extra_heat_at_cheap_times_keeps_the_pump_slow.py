@@ -10,24 +10,26 @@ source does not weaken with the weather: an outdoor-air pump needs what it banks
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
+    CONF_HEAT_PUMP_MODEL,
+    CONF_OPTIMIZATION_MODE,
+    CONF_TARGET_INDOOR_TEMP,
+    CONF_TOLERANCE,
+    DOMAIN,
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
     PRICE_FORECAST_DM_DEBT_OFFSET,
     WEATHER_COMP_DEFER_DM_CRITICAL,
     QuarterClassification,
 )
-from custom_components.effektguard.models.nibe import NibeF2040Profile, NibeF750Profile
-from custom_components.effektguard.optimization.decision_engine import DecisionEngine
-from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
-from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 MIDNIGHT = datetime(2026, 1, 15, 0, 0, tzinfo=timezone.utc)
 CHEAP_FROM, CHEAP_TO = 48, 64  # 12:00-16:00 at 20 ore
@@ -147,29 +149,32 @@ def test_the_debt_gate_s_small_raise_is_not_heat_for_later(freezer):
 
 
 @pytest.mark.parametrize(
-    ("profile", "fades"),
+    ("model", "fades"),
     [
-        pytest.param(NibeF750Profile(), True, id="exhaust-air"),
-        pytest.param(NibeF2040Profile(), False, id="outdoor-air"),
+        pytest.param("nibe_f750", True, id="exhaust-air"),
+        pytest.param("nibe_f2040", False, id="outdoor-air"),
     ],
 )
-def test_only_a_heat_source_that_holds_in_the_cold_fades(freezer, profile, fades):
-    """The F2040 declares a bivalent temperature: below it, it cannot heat the house alone."""
+async def test_only_a_heat_source_that_holds_in_the_cold_fades(hass, freezer, model, fades):
+    """The F2040 declares a bivalent temperature: below it, it cannot heat the house alone.
+
+    The engine as Home Assistant builds it. Setup attaches the model after the engine, and a flag
+    stored at construction kept every install from fading while the simulator, which builds the
+    engine with the model, faded.
+    """
     now = MIDNIGHT + timedelta(minutes=15 * IN_THE_CHEAP_RUN + 5)
     freezer.move_to(now)
-    engine = DecisionEngine(
-        price_analyzer=PriceAnalyzer(),
-        effect_manager=EffectManager(MagicMock()),
-        thermal_model=ThermalModel(1.0, 1.0),
-        config={
-            "target_indoor_temp": 21.0,
-            "tolerance": 1.5,
-            "optimization_mode": "balanced",
-            "latitude": 59.33,
-            "heating_type": "radiator",
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_HEAT_PUMP_MODEL: model},
+        options={
+            CONF_TARGET_INDOOR_TEMP: 21.0,
+            CONF_TOLERANCE: 1.5,
+            CONF_OPTIMIZATION_MODE: OPTIMIZATION_MODE_BALANCED,
         },
-        heat_pump_model=profile,
     )
+    entry.add_to_hass(hass)
+    engine = (await _create_coordinator(hass, entry)).engine
     racing = WEATHER_COMP_DEFER_DM_CRITICAL - 100.0
     decision = engine.calculate_decision(_state(now, racing), _prices(), None, 0.0, 0.0)
     price = next(layer for layer in decision.layers if layer.name == "Spot Price")

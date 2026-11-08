@@ -246,15 +246,6 @@ class DecisionEngine:
         self.predictor = thermal_predictor  # Phase 6
         self.weather_learner = weather_learner  # Phase 6
         self.heat_pump_model = heat_pump_model  # Model profile
-        # Heat bought for later fades as the pump speeds up (PriceAnalyzer.evaluate_layer) where the
-        # heat source does not weaken with the weather: a profile with no declared bivalent
-        # temperature, an exhaust-air or ground-source machine. An outdoor-air pump cannot heat the
-        # house alone below its bivalent point, and needs what it banks in a cheap hour for a colder
-        # one: faded, the simulator's F2040 left its room 190 minutes under the band in a cold snap
-        # and burned more immersion heat (sim_harness nordic_coldsnap_jan2024, steady_winter_feb2024).
-        self._raises_fade = heat_pump_model is not None and not getattr(
-            heat_pump_model, "bivalent_temp_c", 0.0
-        )
 
         # Configuration with defaults
         self.target_temp = config.get("target_indoor_temp", DEFAULT_TARGET_TEMP)
@@ -535,6 +526,23 @@ class DecisionEngine:
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
 
     @property
+    def raises_fade(self) -> bool:
+        """Heat bought for later fades as the pump speeds up (PriceAnalyzer.evaluate_layer).
+
+        Where the heat source does not weaken with the weather: a profile with no declared bivalent
+        temperature, an exhaust-air or ground-source machine. An outdoor-air pump cannot heat the
+        house alone below its bivalent point, and needs what it banks in a cheap hour for a colder
+        one: faded, the simulator's F2040 left its room 190 minutes under the band in a cold snap
+        and burned more immersion heat (sim_harness nordic_coldsnap_jan2024, steady_winter_feb2024).
+
+        Read from the model the engine runs with, at every decision: setup attaches the model after
+        building the engine (_create_coordinator), and a flag stored at construction stayed off on
+        every Home Assistant install while the simulator, built with the model, ran it.
+        """
+        model = self.heat_pump_model
+        return model is not None and not getattr(model, "bivalent_temp_c", 0.0)
+
+    @property
     def target_temp(self) -> float:
         """The indoor temperature being aimed for."""
         return self._target_temp
@@ -791,7 +799,7 @@ class DecisionEngine:
             tolerance=self.tolerance,
             mode_config=self.mode_config,
             enable_price_optimization=self.config.get("enable_price_optimization", True),
-            raises_fade=self._raises_fade,
+            raises_fade=self.raises_fade,
         )
         price_decision = LayerDecision(
             name=price_result.name,
