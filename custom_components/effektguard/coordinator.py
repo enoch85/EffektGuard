@@ -597,7 +597,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # owner's setting (_create_coordinator), which a stored value must not outrank.
                 if "thermal_model" in learned_data:
                     thermal_data = learned_data["thermal_model"]
-                    self.adaptive_learning.ufh_type = thermal_data.get("ufh_type", "unknown")
+                    self.adaptive_learning = AdaptiveThermalModel.from_dict(thermal_data)
+                    if self.adaptive_learning.observations:
+                        self._last_learning_observation = self.adaptive_learning.observations[
+                            -1
+                        ].timestamp
                     _LOGGER.info("Restored thermal model: UFH=%s", self.adaptive_learning.ufh_type)
 
                 # Restore thermal predictor (temperature trends)
@@ -2944,13 +2948,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             # Save thermal model parameters
             if adaptive_learning:
-                learned_params = adaptive_learning.learned_parameters
-                learned_data["thermal_model"] = {
-                    "thermal_mass": adaptive_learning.thermal_mass,
-                    "ufh_type": adaptive_learning.ufh_type,
-                    "learned_parameters": learned_params,
-                    "observation_count": len(adaptive_learning.observations),
-                }
+                learned_data["thermal_model"] = adaptive_learning.to_dict()
 
             # Save thermal predictor state (full state_history for trend analysis)
             if thermal_predictor:

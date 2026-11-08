@@ -34,16 +34,6 @@ from .thermal_layer import prediction_horizon_for
 _LOGGER = logging.getLogger(__name__)
 
 
-class LearnedParamsDict(TypedDict):
-    """Dictionary representation of learned thermal parameters."""
-
-    thermal_mass: float
-    heat_loss_coefficient: float
-    heating_efficiency: float
-    thermal_decay_rate: float
-    confidence: float
-
-
 class ThermalCharacteristicsDict(TypedDict):
     """Current thermal model characteristics for display."""
 
@@ -73,7 +63,7 @@ class AdaptiveModelStateDict(TypedDict):
     ufh_type: str
     last_update: str | None
     observation_count: int
-    learned_parameters: LearnedParamsDict | None
+    learned_parameters: dict[str, float] | None
     observations: list[ObservationDict]
 
 
@@ -652,7 +642,7 @@ class AdaptiveThermalModel:
             Dictionary with all model state
         """
         # Get current learned parameters
-        params = self.update_learned_parameters()
+        self.update_learned_parameters()
 
         return {
             "thermal_mass": self.thermal_mass,
@@ -663,17 +653,8 @@ class AdaptiveThermalModel:
             ),
             "last_update": self._last_update.isoformat() if self._last_update else None,
             "observation_count": len(self.observations),
-            "learned_parameters": (
-                {
-                    "thermal_mass": params.thermal_mass if params else self.thermal_mass,
-                    "heat_loss_coefficient": params.heat_loss_coefficient if params else 180.0,
-                    "heating_efficiency": params.heating_efficiency if params else 0.42,
-                    "thermal_decay_rate": params.thermal_decay_rate if params else -0.08,
-                    "confidence": params.confidence if params else 0.0,
-                }
-                if params
-                else None
-            ),
+            # Keep the configured calibration separate from estimates recomputed from history.
+            "learned_parameters": dict(self.learned_parameters or {}),
             "observations": [
                 {
                     "timestamp": obs.timestamp.isoformat(),
@@ -683,7 +664,7 @@ class AdaptiveThermalModel:
                     "temp_change": obs.temp_change,
                     "time_delta_hours": obs.time_delta_hours,
                 }
-                for obs in list(self.observations)[-100:]  # Keep last 100 for storage
+                for obs in self.observations
             ],
         }
 
@@ -717,7 +698,7 @@ class AdaptiveThermalModel:
         if data.get("learned_parameters"):
             model.learned_parameters = data["learned_parameters"]
 
-        # Restore observations (limited set)
+        # Restore the same bounded observation window used for learning.
         if data.get("observations"):
             for obs_data in data["observations"]:
                 try:
