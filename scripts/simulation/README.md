@@ -33,12 +33,13 @@ water temperatures; nominal COP rating loads are not capacity limits. The grid c
 `independent_plant_validation` remains false: rated pins, physical consistency and a scenario
 pass do not establish performance across the operating envelope or in the owner's home.
 
-A 21-day May sensitivity run on the combined audit candidate (2026-11-08) used constant minimums
-of 1.25, 2.5 and 3.75 kW: respectively 310, 135 and 45 minutes below the comfort band, and 35,
-152 and 186 compressor starts. The lower probe breaches the 240-minute global budget; none shows
+A 21-day May sensitivity run on the combined audit candidate with forecast coasting (2026-11-08)
+used constant minimums of 1.25, 2.5 and 3.75 kW: respectively 295, 220 and 230 minutes below the
+comfort band, and 37, 146 and 183 compressor starts. The lower probe breaches the 240-minute global budget; none shows
 a recovery-tier vote. These probes expose sensitivity, not a calibrated uncertainty interval.
 The former F2040 May known-red entry is removed because the unchanged recovery assertion now
-passes at the sourced minimum. The F750 and F730 upper-temperature failures remain visible.
+passes at the sourced minimum. Forecast coasting also brings the F750 upper temperature within
+its unchanged budget; the F730 upper-temperature failure remains visible.
 
 
 The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run at `ad88d4f`
@@ -71,6 +72,10 @@ different experiment: known reds are not applied and every red is news.
 
 Per house, `output/summary-<tag>.json` holds the stats, failures and violations, and
 `output/trace-<tag>.json` the trace.
+
+Forecast temperatures use recorded future weather within the input coverage and hold its last
+value beyond it. This gives hindsight within that coverage; it does not validate performance
+with real forecast errors.
 
 ## Reading a result
 
