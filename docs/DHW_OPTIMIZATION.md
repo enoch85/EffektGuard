@@ -103,8 +103,9 @@ on, a lux entity is configured, and not during the start-up grace period.
   is open or the boost is inside its minimum run.
 - **A `boost_dhw` boost** ends at its duration or at the safety gate (indoor below 18 °C, DM at or
   below −1500) on every control cycle, whether hot-water optimisation is on or not; the same gate
-  refuses to start it. Price and the ordinary thermal-debt block do not end it. While the heat pump
-  cannot be read the duration still ends it. Switching EffektGuard OFF ends it, also while it is
+  refuses to start it, on the pump as it reads at that moment, and so does a pump that cannot be
+  read. Price and the ordinary thermal-debt block do not end it. While the heat pump cannot be read
+  the duration still ends it. Switching EffektGuard OFF ends it, also while it is
   starting.
 - **Starts are rate-limited**: at most one start per 60 min (`DHW_CONTROL_MIN_INTERVAL_MINUTES`)
   after the last start or stop. Stops are never delayed.

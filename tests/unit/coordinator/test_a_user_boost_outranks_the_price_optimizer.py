@@ -42,6 +42,8 @@ from tests.conftest import create_mock_hass
 NOW = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)
 LUX = "switch.temporary_lux_50004"
 BOOST_MINUTES = 60
+# The pump as a boost reads it when it starts: a house that may have one
+SAFE_READING = SimpleNamespace(degree_minutes=-200.0, indoor_temp=21.0)
 CYCLE = timedelta(minutes=5)
 
 
@@ -63,7 +65,10 @@ def _coordinator(lux_state: str = "off") -> EffektGuardCoordinator:
     coordinator._service_boost_until = None
     coordinator._last_dhw_control_time = NOW - timedelta(hours=2)
     coordinator._control_lock = asyncio.Lock()
+    coordinator.nibe = MagicMock()
+    coordinator.nibe.get_current_state = AsyncMock(return_value=SAFE_READING)
     coordinator.dhw_optimizer = MagicMock()
+    coordinator.dhw_optimizer.hot_water_unsafe_reason = MagicMock(return_value=None)
     coordinator._raise_dhw_control_issue = MagicMock()
     coordinator._clear_dhw_control_issue = MagicMock()
     return coordinator
@@ -347,11 +352,46 @@ async def test_a_user_boost_is_refused_where_the_safety_gate_would_stop_it():
     """One rule both ends: a boost started below the floor would be stopped five minutes later."""
     coordinator = _coordinator(lux_state="off")
     coordinator.dhw_optimizer = IntelligentDHWScheduler()
-    coordinator.data = {
-        "nibe": SimpleNamespace(degree_minutes=-200.0, indoor_temp=MIN_TEMP_LIMIT - 0.5)
-    }
+    coordinator.nibe.get_current_state = AsyncMock(
+        return_value=SimpleNamespace(degree_minutes=-200.0, indoor_temp=MIN_TEMP_LIMIT - 0.5)
+    )
 
     with pytest.raises(HomeAssistantError):
+        await coordinator.async_start_dhw_boost(duration_minutes=60, now_time=NOW)
+
+    coordinator.hass.services.async_call.assert_not_awaited()
+    assert coordinator._service_boost_until is None
+
+
+@pytest.mark.asyncio
+async def test_a_boost_is_judged_on_the_pump_as_it_reads_now():
+    """The last cycle read a house that may have a boost; the pump now reads 17 C and -2000 DM. On
+    the last reading the boost started, and ran until the next cycle stopped it - and once reads
+    have failed, that reading is hours old."""
+    coordinator = _coordinator(lux_state="off")
+    coordinator.dhw_optimizer = IntelligentDHWScheduler()
+    coordinator.data = {"nibe": SAFE_READING}
+    coordinator.nibe.get_current_state = AsyncMock(
+        return_value=SimpleNamespace(degree_minutes=-2000.0, indoor_temp=17.0)
+    )
+
+    with pytest.raises(HomeAssistantError, match="safety"):
+        await coordinator.async_start_dhw_boost(duration_minutes=60, now_time=NOW)
+
+    coordinator.hass.services.async_call.assert_not_awaited()
+    assert coordinator._service_boost_until is None
+
+
+@pytest.mark.asyncio
+async def test_a_boost_is_refused_while_the_pump_cannot_be_read():
+    """A boost nobody can supervise is stopped (test_a_boost_we_cannot_supervise_is_stopped.py);
+    one is not started either."""
+    coordinator = _coordinator(lux_state="off")
+    coordinator.dhw_optimizer = IntelligentDHWScheduler()
+    coordinator.data = {"nibe": SAFE_READING}
+    coordinator.nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("no degree minutes"))
+
+    with pytest.raises(HomeAssistantError, match="cannot be read"):
         await coordinator.async_start_dhw_boost(duration_minutes=60, now_time=NOW)
 
     coordinator.hass.services.async_call.assert_not_awaited()

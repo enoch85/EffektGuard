@@ -13,6 +13,7 @@ through `_set_temporary_lux`, the only place that records who started the boost.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +25,8 @@ from custom_components.effektguard.coordinator import EffektGuardCoordinator
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
 LUX = "switch.temporary_lux_50004"
+# The pump as a boost reads it when it starts: a house that may have one
+SAFE_READING = SimpleNamespace(degree_minutes=-200.0, indoor_temp=21.0)
 
 
 def _hass_and_coordinator() -> tuple[MagicMock, EffektGuardCoordinator, dict]:
@@ -42,8 +45,10 @@ def _hass_and_coordinator() -> tuple[MagicMock, EffektGuardCoordinator, dict]:
     entry.data = {CONF_NIBE_TEMP_LUX_ENTITY: LUX}
     entry.options = {}
 
+    nibe = MagicMock()
+    nibe.get_current_state = AsyncMock(return_value=SAFE_READING)
     coordinator = EffektGuardCoordinator(
-        hass, MagicMock(), MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
+        hass, nibe, MagicMock(), MagicMock(), MagicMock(), EffectManager(hass), entry
     )
     coordinator.data = {}
     coordinator.temp_lux_entity = LUX

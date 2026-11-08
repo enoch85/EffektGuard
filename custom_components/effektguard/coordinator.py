@@ -2646,8 +2646,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Start a user-commanded hot-water boost that price optimization may not cancel.
 
         Only safety outranks the user: `hot_water_unsafe_reason` refuses the boost here, on the
-        last reading, and stops it on any later cycle (_end_user_dhw_boost_when_due); so does
-        unload. The duration is real - EffektGuard turns the switch back off when it expires,
+        pump as it reads now, and stops it on any later cycle (_end_user_dhw_boost_when_due); so
+        does unload. A pump that cannot be read refuses it too. The duration is real - EffektGuard turns the switch back off when it expires,
         through the same owned door the cleanup uses - so the service argument means what it
         says instead of being validated and discarded. NIBE's own lux timeout still applies
         underneath; whichever ends first wins.
@@ -2663,12 +2663,17 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
 
             # Refused by the rule that would stop it on the next cycle, or it is a five-minute
-            # pulse. No reading yet (start-up): the first cycle with one judges it.
-            nibe = self.data.get("nibe") if self.data else None
-            unsafe = (
-                self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
-                if nibe is not None
-                else None
+            # pulse - judged on a reading taken now. The last cycle's is up to a cycle old, and
+            # hours old once reads have failed: a house at 17 C and -2000 DM started a boost on
+            # the safe reading before it. A pump that cannot be read cannot supervise one either.
+            try:
+                nibe = await self.nibe.get_current_state()
+            except (UpdateFailed, AttributeError, KeyError, ValueError, TypeError) as err:
+                raise HomeAssistantError(
+                    f"Hot water boost refused: the heat pump cannot be read ({err})"
+                ) from err
+            unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
+                nibe.degree_minutes, nibe.indoor_temp
             )
             if unsafe:
                 raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
