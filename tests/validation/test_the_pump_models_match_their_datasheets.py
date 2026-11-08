@@ -58,9 +58,8 @@ PROFILES = [
 # The model must reproduce every point it was fitted on to within this. Measured: 0.82 % worst.
 DATASHEET_TOLERANCE_PCT = 2.0
 
-# And it must predict points it was NEVER fitted on to within this. Measured 2026-11-08: 3.19 %
-# worst, on the F2040's W45 rows when the fit only ever saw W35. That is the number that makes this
-# a model rather than a curve-fit, and it is why the tolerance here is looser and still meaningful.
+# Leave one W45 condition out at a time. Four training points identify the three parameters
+# without importing the fallback flow prior. Measured 2026-11-08: 1.25 % worst error.
 HELD_OUT_TOLERANCE_PCT = 8.0
 
 
@@ -142,36 +141,50 @@ class TestTheModelReproducesTheDatasheet:
                 f"this machine."
             )
 
-    def test_it_predicts_the_points_it_never_saw(self):
-        """THE REAL TEST. Fit the F2040 on its W35 rows only, then predict its W45 rows.
+    def test_it_predicts_the_points_it_never_saw(self, monkeypatch):
+        """Leave one rating condition out, with neither its label nor the fallback prior in the fit.
 
-        The F2040 is the only machine whose datasheet is rich enough to hold points back: five
-        rating points, three at 35 C flow and two at 45 C. A curve can be drawn through anything.
-        A model has to work on data it has not seen.
-
-        The simulator's own house is fitted on all five, so the fit here is made from the W35 rows
-        alone: read from the simulator's house, this "predicted" points it was trained on.
+        Holding both W45 rows out left only three W35 rows, which cannot identify a flow slope.
+        That exercised an assumed fixed prior. Each fold here instead trains on four points,
+        including the other W45 condition. It validates interpolation across these nominal
+        conditions, not extrapolation to unseen flow temperatures or the full operating envelope.
         """
-        f2040 = NibeF2040Profile()
-        house = _house_for(f2040)
+        profile = NibeF2040Profile()
+        house = _house_for(profile)
+        held_indices = [i for i, p in enumerate(profile.datasheet_points) if p.flow_temp_c == 45.0]
+        assert len(held_indices) == 2
 
-        held_out = [p for p in f2040.datasheet_points if p.flow_temp_c == 45.0]
-        assert len(held_out) == 2, "precondition: the F2040 must publish W45 rows to hold back"
-        seen = tuple(p for p in f2040.datasheet_points if p not in held_out)
-        fitted = replace(house, profile=replace(f2040, datasheet_points=seen))
-        assert fitted.exergy_fit != house.exergy_fit, "precondition: the W45 rows were left out"
+        def fit_without(candidate, held_index):
+            seen = tuple(p for i, p in enumerate(candidate.datasheet_points) if i != held_index)
+            return replace(house, profile=replace(candidate, datasheet_points=seen))
 
-        for point in held_out:
-            load = point.heat_output_kw / f2040.max_heat_output_kw
-            eta = fitted.exergy_efficiency(load, point.flow_temp_c)
-            modelled = eta * fitted.carnot_at(point.source_temp_c, point.flow_temp_c)
+        for index in held_indices:
+            point = profile.datasheet_points[index]
+            fitted = fit_without(profile, index)
+            assert len(fitted.profile.datasheet_points) == 4
+            assert all(p.condition != point.condition for p in fitted.profile.datasheet_points)
+            coefficients = fitted.exergy_fit
+            # Changing the held-out label must not affect the training fit.
+            poisoned = replace(
+                profile,
+                datasheet_points=tuple(
+                    replace(p, cop=p.cop * 2.0) if i == index else p
+                    for i, p in enumerate(profile.datasheet_points)
+                ),
+            )
+            assert fit_without(poisoned, index).exergy_fit == pytest.approx(coefficients)
+            # Four training points must identify flow response without the assumed prior.
+            monkeypatch.setattr(sim, "FLOW_EXERGY_PENALTY_PER_K", 1.0)
+            assert fit_without(profile, index).exergy_fit == pytest.approx(coefficients)
+
+            load = point.heat_output_kw / fitted.profile.max_heat_output_kw
+            modelled = fitted.exergy_efficiency(load, point.flow_temp_c) * fitted.carnot_at(
+                point.source_temp_c, point.flow_temp_c
+            )
             error = abs(modelled - point.cop) / point.cop * 100
-
             assert error < HELD_OUT_TOLERANCE_PCT, (
-                f"F2040 at '{point.condition}': NIBE measured COP {point.cop:.2f}, the model "
-                f"predicts {modelled:.2f} ({error:.1f}% out) from a fit that only ever saw 35 C "
-                f"flow temperatures. Predicting held-out data is the only thing that separates "
-                f"this from the invented curve it replaced."
+                f"F2040 at '{point.condition}': measured COP {point.cop:.2f}, predicted "
+                f"{modelled:.2f} ({error:.1f}% out) using only the other rating conditions"
             )
 
 
