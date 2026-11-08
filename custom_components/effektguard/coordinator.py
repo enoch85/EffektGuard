@@ -2383,6 +2383,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             self.current_power_kw = (
                 current_power if power_source in PEAK_CONTROL_POWER_SOURCES else None
             )
+            if power_source == POWER_SOURCE_EXTERNAL_METER:
+                # A held state can remain available for billing without confirming a new draw.
+                self.current_power_kw = power_kw_from_state(power_state, require_recent=True)
 
             # The source is recorded where the value was produced, never reconstructed here from the
             # config entry and the number's magnitude - which once filed a compressor estimate as
