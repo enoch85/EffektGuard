@@ -9,6 +9,7 @@ billing peak. An unrecognised unit is refused, and the caller withdraws whatever
 """
 
 import logging
+import math
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
 from homeassistant.core import State
@@ -69,9 +70,15 @@ def power_kw_from_state(state: State | None) -> float | None:
         return None
 
     try:
-        return float(state.state) * factor
+        value = float(state.state)
     except (ValueError, TypeError):
+        value = math.nan
+    # float() reads "nan" and "inf" too. Not a reading: a NaN fails every comparison, so it passed
+    # each check into a billing period and was recorded as a peak; as the month's first peak, or in
+    # place of the day's, it made every later period "safe" against it.
+    if not math.isfinite(value):
         _LOGGER.warning(
             "Power sensor %s reports %r, which is not a number", state.entity_id, state.state
         )
         return None
+    return value * factor

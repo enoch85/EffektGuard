@@ -24,6 +24,7 @@ Data read includes:
 """
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -515,7 +516,7 @@ class NibeAdapter:
         entity_offset: int | None = None
         try:
             entity_offset = int(float(state.state))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):  # OverflowError: int() of "inf"
             pass
 
         resync_window_passed = self._last_write is None or now - self._last_write >= timedelta(
@@ -998,6 +999,10 @@ class NibeAdapter:
         try:
             value = float(state.state)
         except (ValueError, TypeError):
+            value = math.nan
+        # float() reads "nan" and "inf" too, and a NaN fails every comparison: degree minutes of NaN
+        # passed each threshold check unread.
+        if not math.isfinite(value):
             _LOGGER.warning("Cannot parse float from %s: %s", entity_id, state.state)
             return default
 
@@ -1097,6 +1102,9 @@ class NibeAdapter:
         try:
             value = float(state.state)
         except (ValueError, TypeError):
+            value = math.nan
+        # float() reads "nan" and "inf" too: not a temperature (see _read_entity_float)
+        if not math.isfinite(value):
             _LOGGER.warning("Cannot parse temperature from %s: %s", entity_id, state.state)
             return default
 
