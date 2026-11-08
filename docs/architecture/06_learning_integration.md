@@ -82,10 +82,10 @@ The heat-loss index never reaches control: `calculate_preheating_target` uses
 
 `Store(hass, 1, "effektguard_learned_data")`: saved at most hourly when something changed, the
 predictor every 5 minutes, and on shutdown. Keys: `version`, `last_updated`, `last_offset`,
-`thermal_model` (`thermal_mass`, `ufh_type`, `learned_parameters`, `observation_count`),
+`thermal_model` (the configured calibration and full bounded hourly observation window),
 `thermal_predictor`, `weather_patterns`, `weather_summary`, `dhw_state`.
 
-A restart restores `ufh_type`, the predictor's snapshots and the weather patterns; the thermal mass
-starts again from the owner's setting.
-The hourly observations themselves are not saved: the window starts empty, and the model does not
-re-learn until it has run another 4 days.
+A restart restores the adaptive history and its observation timestamp, the predictor's snapshots
+and the weather patterns. Learned parameters and confidence are recomputed from the same evidence;
+the owner's current thermal mass and insulation settings still take precedence. Old summary-only
+stores remain readable, but cannot restore observations that were never saved.
