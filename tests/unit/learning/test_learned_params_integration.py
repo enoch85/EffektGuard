@@ -9,11 +9,12 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.util import dt as dt_util
+from custom_components.effektguard.adapters.weather_adapter import WeatherForecastHour
 
 from custom_components.effektguard.const import (
     LEARNING_CONFIDENCE_THRESHOLD,
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
-    PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
     SAMPLES_PER_HOUR,
     UFHType,
     UPDATE_INTERVAL_MINUTES,
@@ -81,10 +82,10 @@ def low_confidence_learned_params():
 class TestPredictTemperatureWithLearnedParams:
     """Test predict_temperature uses learned parameters when appropriate."""
 
-    def test_uses_learned_heating_efficiency_when_high_confidence(
+    def test_unvalidated_parameter_confidence_cannot_invent_heat(
         self, predictor_with_history, high_confidence_learned_params
     ):
-        """Verify learned heating_efficiency is used when confidence is high."""
+        """A confidence label supplies no validated horizon or native heating equation."""
         # Predict with learned params
         result = predictor_with_history.predict_temperature(
             hours_ahead=4,
@@ -98,7 +99,8 @@ class TestPredictTemperatureWithLearnedParams:
         # Should complete without error
         assert result is not None
         assert len(result.predicted_temps) == 4
-        assert result.confidence > 0
+        assert result.confidence == 0.0
+        assert result.predicted_temps == [21.0] * 4
 
     def test_falls_back_when_low_confidence(
         self, predictor_with_history, low_confidence_learned_params
@@ -255,7 +257,8 @@ class TestCalculatePreHeatDecisionIntegration:
         # Create mock weather data
         mock_weather_data = MagicMock()
         mock_weather_data.forecast_hours = [
-            MagicMock(temperature=-5.0 - i * 0.5) for i in range(24)
+            WeatherForecastHour(dt_util.utcnow() + timedelta(hours=i + 1), -5.0 - i * 0.5)
+            for i in range(24)
         ]
 
         result = predictor_with_history.evaluate_layer(
@@ -265,8 +268,8 @@ class TestCalculatePreHeatDecisionIntegration:
             thermal_model=mock_thermal_model,
         )
 
-        # Should have called get_parameters
-        mock_thermal_model.get_parameters.assert_called_once()
+        # A confidence label without a validated horizon cannot request heat.
+        assert result.offset == 0.0 and result.weight == 0.0
 
         # Result should be valid
         assert result is not None
@@ -290,7 +293,10 @@ class TestCalculatePreHeatDecisionIntegration:
 
         # Create mock weather data
         mock_weather_data = MagicMock()
-        mock_weather_data.forecast_hours = [MagicMock(temperature=0.0 - i * 0.3) for i in range(24)]
+        mock_weather_data.forecast_hours = [
+            WeatherForecastHour(dt_util.utcnow() + timedelta(hours=i + 1), 0.0 - i * 0.3)
+            for i in range(24)
+        ]
 
         result = predictor_with_history.evaluate_layer(
             nibe_state=mock_nibe_state,

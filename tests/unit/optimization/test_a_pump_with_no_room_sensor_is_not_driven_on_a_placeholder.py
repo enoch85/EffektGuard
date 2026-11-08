@@ -37,7 +37,7 @@ from custom_components.effektguard.const import (
 )
 from custom_components.effektguard.optimization.comfort_layer import ComfortLayer
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
-from custom_components.effektguard.optimization.thermal_layer import ThermalModel
+from tests.unit.optimization.test_learning_can_actually_learn import _observe_a_real_house
 
 # Targets a real owner can set. All of them sit BELOW the placeholder, which is the whole problem.
 COOL_TARGETS = [20.5, 20.0, 19.0, 18.5]
@@ -130,25 +130,33 @@ async def test_a_day_without_a_room_sensor_teaches_the_learning_no_room(hass, fr
 def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured, freezer):
     """A day of a measured room 1 C under its target gives the learned layer a vote; the moment the
     reading becomes the placeholder, the vote is gone - its overshoot would be the placeholder's."""
+    model = _observe_a_real_house(
+        60, start=START + timedelta(hours=24) - timedelta(hours=30 * 24 - 1)
+    )
+    model.thermal_mass = 1.3
+    room = model.observations[-1].indoor_temp
     predictor = ThermalStatePredictor()
     for cycle in range(PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1):
         predictor.record_state(
             START + cycle * timedelta(minutes=UPDATE_INTERVAL_MINUTES),
-            WARM_TARGET - 1.0,
+            room,
             0.0,
             0.0,
             35.0,
             -100.0,
         )
     freezer.move_to(predictor.state_history[-1].timestamp)
-    state = _pump_with_a_real_sensor(WARM_TARGET - 1.0)
+    state = _pump_with_a_real_sensor(room)
     state.indoor_temp_valid = measured
     forecast = WeatherData(
         current_temp=0.0,
-        forecast_hours=[WeatherForecastHour(START + timedelta(hours=h), 0.0) for h in range(1, 25)],
+        forecast_hours=[
+            WeatherForecastHour(predictor.state_history[-1].timestamp + timedelta(hours=h), 0.0)
+            for h in range(1, 25)
+        ],
     )
 
-    vote = predictor.evaluate_layer(state, forecast, WARM_TARGET, ThermalModel(CONCRETE_SLAB))
+    vote = predictor.evaluate_layer(state, forecast, room + 1.0, model)
 
     assert (vote.weight > 0.0) == measured, f"{vote.offset:+.1f}@{vote.weight} ({vote.reason})"
 

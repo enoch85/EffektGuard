@@ -66,7 +66,7 @@ from custom_components.effektguard.utils.volatile_helpers import (
     OffsetVolatilityTracker,
     gate_offset,
 )
-from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
+from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR, after, seconds_between
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
@@ -1533,9 +1533,9 @@ def load_data(selftest: bool, live_se4: bool = False, dst: bool = False, arctic:
 
 def outdoor_at(times, temps, when: datetime) -> float:
     """Linear interpolation of hourly outdoor temperature."""
-    idx = int((when - times[0]).total_seconds() // 3600)
+    idx = int(seconds_between(times[0], when) // 3600)
     idx = max(0, min(idx, len(temps) - 2))
-    frac = ((when - times[idx]).total_seconds() / 3600.0) if idx < len(times) else 0.0
+    frac = (seconds_between(times[idx], when) / 3600.0) if idx < len(times) else 0.0
     frac = max(0.0, min(frac, 1.0))
     return temps[idx] * (1 - frac) + temps[idx + 1] * frac
 
@@ -2053,12 +2053,12 @@ def simulate(
             else:
                 cur_price_ore = cur_period.price
 
+            # Forecast lead times and hourly weather indices share the absolute timeline.
+            # Local timedelta arithmetic duplicates the spring hour and skips the autumn fold.
+            forecast_instants = [after(now, timedelta(hours=h)) for h in range(1, 49)]
             fc = [
-                WeatherForecastHour(
-                    datetime=now + timedelta(hours=h),
-                    temperature=outdoor_at(times, temps, now + timedelta(hours=h)),
-                )
-                for h in range(1, 49)
+                WeatherForecastHour(datetime=instant, temperature=outdoor_at(times, temps, instant))
+                for instant in forecast_instants
             ]
             # A weather entity is vol.Optional in the config flow, and with none configured
             # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no

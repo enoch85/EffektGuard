@@ -83,8 +83,9 @@ Under the gear icon:
 Switches on by default: Enable Optimization, Price Optimization, Peak Protection, Weather
 Prediction. Off by default: Hot Water Optimization, Airflow Optimization.
 
-Learned indoor-temperature pre-heating is inactive while its forecasts are being validated.
-Measured temperature trends and weather-based control continue to operate.
+Learned room forecasts can add heat after they demonstrate accuracy on later measurements.
+They stay inactive when there is too little useful history or the forecast is outside what was
+learned. Temperature trends and weather-based control work while learning continues.
 
 ## How it decides
 
