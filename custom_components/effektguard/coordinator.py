@@ -2862,8 +2862,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if self._last_learning_observation is None
                 else now - self._last_learning_observation
             )
-            if since_last is None or since_last >= timedelta(
-                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            # Without a room sensor the indoor reading is the adapter's placeholder, not the room:
+            # learning observes only a measured room, and the predictor is told which one it got.
+            room_measured = getattr(nibe_data, "indoor_temp_valid", True)
+            if room_measured and (
+                since_last is None
+                or since_last >= timedelta(minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES)
             ):
                 self.adaptive_learning.record_observation(
                     timestamp=now,
@@ -2881,6 +2885,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 heating_offset=current_offset,
                 flow_temp=nibe_data.flow_temp,
                 degree_minutes=nibe_data.degree_minutes,
+                indoor_measured=room_measured,
             )
 
             # Save thermal predictor state immediately (throttled to UPDATE_INTERVAL_MINUTES)
