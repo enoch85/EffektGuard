@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.util import dt as dt_util
+from custom_components.effektguard.adapters.weather_adapter import WeatherForecastHour
 
 from custom_components.effektguard.const import (
     LEARNING_CONFIDENCE_THRESHOLD,
@@ -255,7 +257,8 @@ class TestCalculatePreHeatDecisionIntegration:
         # Create mock weather data
         mock_weather_data = MagicMock()
         mock_weather_data.forecast_hours = [
-            MagicMock(temperature=-5.0 - i * 0.5) for i in range(24)
+            WeatherForecastHour(dt_util.utcnow() + timedelta(hours=i + 1), -5.0 - i * 0.5)
+            for i in range(24)
         ]
 
         result = predictor_with_history.evaluate_layer(
@@ -265,8 +268,8 @@ class TestCalculatePreHeatDecisionIntegration:
             thermal_model=mock_thermal_model,
         )
 
-        # Should have called get_parameters
-        mock_thermal_model.get_parameters.assert_called_once()
+        # A confidence label without a validated horizon cannot request heat.
+        assert result.offset == 0.0 and result.weight == 0.0
 
         # Result should be valid
         assert result is not None
@@ -290,7 +293,10 @@ class TestCalculatePreHeatDecisionIntegration:
 
         # Create mock weather data
         mock_weather_data = MagicMock()
-        mock_weather_data.forecast_hours = [MagicMock(temperature=0.0 - i * 0.3) for i in range(24)]
+        mock_weather_data.forecast_hours = [
+            WeatherForecastHour(dt_util.utcnow() + timedelta(hours=i + 1), 0.0 - i * 0.3)
+            for i in range(24)
+        ]
 
         result = predictor_with_history.evaluate_layer(
             nibe_state=mock_nibe_state,

@@ -53,7 +53,6 @@ def _observe_a_real_house(
         equilibrium = 21.0 + 0.15 * (outdoor + 5.0) + 0.8 * offset
         tau_hours = 12.0
         dt_hours = cadence_minutes / 60.0
-        indoor_true += (equilibrium - indoor_true) * (dt_hours / tau_hours)
 
         # The sensor can only say what a sensor can say.
         model.record_observation(
@@ -62,6 +61,7 @@ def _observe_a_real_house(
             outdoor_temp=outdoor,
             heating_offset=offset,
         )
+        indoor_true += (equilibrium - indoor_true) * (dt_hours / tau_hours)
 
     model.update_learned_parameters()
     return model
@@ -243,7 +243,12 @@ def test_a_validated_horizon_can_recommend_heat_without_trusting_other_horizons(
         predictor.record_state(
             end - timedelta(minutes=cycle * UPDATE_INTERVAL_MINUTES), room, -5.0, 0.0, 35.0, -100.0
         )
-    weather = SimpleNamespace(forecast_hours=[SimpleNamespace(temperature=-5.0)] * 12)
+    weather = SimpleNamespace(
+        forecast_hours=[
+            SimpleNamespace(temperature=-5.0, datetime=end + timedelta(hours=h))
+            for h in range(1, 13)
+        ]
+    )
     state = SimpleNamespace(indoor_temp_valid=True, indoor_temp=room, outdoor_temp=-5.0)
     proposal = predictor.evaluate_layer(state, weather, room + 1.0, model)
     assert (proposal.weight > 0.0) == (model_age_hours == 0)

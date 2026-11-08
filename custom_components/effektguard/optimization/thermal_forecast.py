@@ -73,7 +73,10 @@ def fit_forecast(
     # used as an input. Training origins end before their targets can reach the validation split.
     sums = np.vstack((np.zeros(values.shape[1]), np.cumsum(values, axis=0)))
     means = (sums[hours : hours + count] - sums[:count]) / hours
-    features = np.column_stack((np.ones(count), values[:count, 0], means[:, 1:]))
+    # Weather is supplied at future hour endpoints 1..h; the offset written at the origin
+    # acts during [0,1), so planned offsets instead cover 0..h-1. Keep those clocks distinct.
+    future_weather = (sums[hours + 1 : hours + count + 1, 1] - sums[1 : count + 1, 1]) / hours
+    features = np.column_stack((np.ones(count), values[:count, 0], future_weather, means[:, 2]))
     targets = values[hours:, 0] - values[:count, 0]
     training = split - hours
     center = features[:training, 1:].mean(axis=0)

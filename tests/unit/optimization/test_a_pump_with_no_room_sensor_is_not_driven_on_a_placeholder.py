@@ -150,7 +150,10 @@ def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured, freezer)
     state.indoor_temp_valid = measured
     forecast = WeatherData(
         current_temp=0.0,
-        forecast_hours=[WeatherForecastHour(START + timedelta(hours=h), 0.0) for h in range(1, 25)],
+        forecast_hours=[
+            WeatherForecastHour(predictor.state_history[-1].timestamp + timedelta(hours=h), 0.0)
+            for h in range(1, 25)
+        ],
     )
 
     vote = predictor.evaluate_layer(state, forecast, room + 1.0, model)

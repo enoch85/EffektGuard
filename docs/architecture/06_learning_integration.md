@@ -1,14 +1,15 @@
 # Learning
 
 The coordinator records measured room and outdoor conditions and the curve offset. Learning can
-contribute heat only when a forecast at the requested horizon has passed independent validation.
+contribute heat only when a forecast at the requested horizon has passed validation on later observations.
 The measured temperature trends remain available without a learned forecast.
 
 ## Room forecasts
 
 `AdaptiveThermalModel` keeps hourly observations. `thermal_forecast.py` fits a separate model for
 each supported horizon. It predicts the change in room temperature from the current room, the
-mean forecast outdoor temperature and the planned mean curve offset. The fitted intercept
+mean forecast outdoor temperature and the planned mean curve offset. Weather inputs are the
+future hour endpoints 1..h; applied offsets cover the intervals starting at 0..h-1. The fitted intercept
 includes the pump's native heating and unobserved gains: offset zero does not mean zero heat.
 These coefficients are empirical temperature responses, not measurements of heat loss or capacity.
 
@@ -20,14 +21,21 @@ The earlier half of the observations trains the model; the later half evaluates 
 origins whose target crosses the split are excluded. Each horizon needs a full day of later
 validation origins. The score is the improvement in mean squared error over holding the current
 room temperature. A persistence error below the sensor's resolution supplies no evidence of
-useful forecast skill. The model is not refitted using its validation targets.
+useful forecast skill. The model is not refitted using its validation targets. This is conditional validation using
+observed future weather and applied offsets; it does not measure the weather provider's forecast
+error or establish a causal heating response under every unobserved control policy.
 
 ## When a learned forecast may request heat
 
 `ThermalStatePredictor` needs a fresh continuous day of measured room history and a recent learned
 model. The requested horizon must score at least `LEARNING_CONFIDENCE_THRESHOLD`. A high score at
 another horizon does not authorize the request. The current room, forecast temperatures and
-planned offsets must all stay inside the training ranges. Missing forecast hours abstain.
+planned offsets must all stay inside the training ranges. Forecast timestamps must cover the actual future hours: aware absolute instants, interpolated
+only between adjacent hourly points. Missing coverage, large gaps, duplicates and naive timestamps
+abstain, including across clock changes. The simulator also indexes hourly weather and builds
+future forecast timestamps on the absolute timeline. Its look-ahead uses recorded weather within
+the available input window and holds the last value beyond it; that is a scenario assumption,
+not measured weather-provider accuracy.
 
 Without that evidence the diagnostic trajectory holds the current measured room temperature and
 reports zero forecast confidence. It does not invent cooling from an unmeasured heat loss or a

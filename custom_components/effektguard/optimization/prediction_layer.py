@@ -1,18 +1,15 @@
-"""Thermal state prediction for proactive heating control.
+"""Measured thermal trends and conditional room forecasts for gated preheating.
 
-Predicts future indoor temperature and makes pre-heating decisions:
-- Tracks 24-hour thermal state history
-- Projects temperature trajectory hours ahead
-- Identifies need for pre-heating
-- Swedish climate-aware thresholds
-
-Based on POST_PHASE_5_ROADMAP.md Phase 6.2 and Forum_Summary.md research.
+Horizon models must beat persistence on later observations. Runtime inputs use real future
+weather instants; unsupported, stale or ambiguous trajectories abstain.
 """
 
 import logging
+from bisect import bisect_left
+from math import isfinite
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TypedDict
 
 import numpy as np
@@ -398,6 +395,43 @@ class ThermalStatePredictor:
                 target_temp=target_temp,
             )
 
+    def _weather_for_hours(self, weather_data, hours: int) -> list[float]:
+        """Sample actual future instants; missing hourly coverage cannot become a trusted input.
+
+        Forecast timestamps are absolute instants, including both occurrences of a repeated local
+        hour. Linear interpolation is allowed between adjacent hourly points, never across a gap
+        or beyond coverage. A naive, duplicate or non-finite point makes the trajectory ambiguous.
+        """
+        points = []
+        for hour in weather_data.forecast_hours:
+            if hour.datetime.tzinfo is None or not isfinite(hour.temperature):
+                return []
+            points.append((hour.datetime.timestamp(), hour.temperature))
+        points.sort()
+        times = [instant for instant, _ in points]
+        if not times or any(right <= left for left, right in zip(times, times[1:])):
+            return []
+        now = dt_util.utcnow()
+        maximum_gap = (
+            LEARNING_OBSERVATION_INTERVAL_MINUTES + PREDICTION_MAX_SAMPLE_GAP_MINUTES
+        ) * 60
+        temperatures = []
+        for h in range(1, hours + 1):
+            instant = (now + timedelta(hours=h)).timestamp()
+            index = bisect_left(times, instant)
+            if index < len(times) and times[index] == instant:
+                temperatures.append(points[index][1])
+                continue
+            if index == 0 or index == len(times):
+                return []
+            before, after = points[index - 1], points[index]
+            elapsed = after[0] - before[0]
+            if elapsed > maximum_gap:
+                return []
+            fraction = (instant - before[0]) / elapsed
+            temperatures.append(before[1] + fraction * (after[1] - before[1]))
+        return temperatures
+
     def evaluate_layer(
         self,
         nibe_state,
@@ -410,10 +444,8 @@ class ThermalStatePredictor:
         Uses learned building thermal characteristics to make intelligent
         pre-heating decisions based on predicted temperature evolution.
 
-        This layer uses actual learned thermal response rather than generic
-        thermal mass assumptions, providing more accurate pre-heating.
-
-        Phase 6 - Self-learning capability
+        Each requested horizon needs validated conditional skill, recent measurements and
+        complete timestamped weather coverage before contributing a bounded heating request.
 
         Args:
             nibe_state: Current NIBE state
@@ -458,9 +490,9 @@ class ThermalStatePredictor:
         try:
             # The horizon of the owner's thermal mass setting (prediction_horizon_for)
             prediction_horizon = int(thermal_model.get_prediction_horizon())
-            forecast_temps = [
-                hour.temperature for hour in weather_data.forecast_hours[:prediction_horizon]
-            ]
+            # Half of the configured horizon, measured in real elapsed hours.
+            hours_ahead = prediction_horizon // 2
+            forecast_temps = self._weather_for_hours(weather_data, hours_ahead)
 
             if not forecast_temps:
                 return PredictionLayerDecision(
@@ -469,10 +501,6 @@ class ThermalStatePredictor:
                     weight=0.0,
                     reason="Empty weather forecast",
                 )
-
-            # Check if pre-heating is recommended
-            # Use half of prediction horizon as lookahead (balance between early and late)
-            hours_ahead = prediction_horizon // 2
 
             # Get learned parameters from AdaptiveThermalModel if available
             learned_params = None
