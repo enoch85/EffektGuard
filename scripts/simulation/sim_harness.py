@@ -936,36 +936,7 @@ SCENARIOS = {
             expect=("comfort_held", "no_dm_past_immersion_limit"),
             data="nordic_coldsnap_jan2024",
             undersized=True,
-            known_open=(
-                KnownRed(
-                    fails_with="minutes below the comfort band",
-                    stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 910},
-                    why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 910 minutes "
-                        "below the band since the bench runs the predictor production runs "
-                        "(2026-11-08), 890 before, where NIBE alone has 585 - 1450 before EffektGuard "
-                        "learned where this pump runs short of capacity and stopped cutting below "
-                        "its curve there; the ladder's room floor and the immersion guard without "
-                        "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
-                        "policy. Each bypass measured alone, with the projected period-mean power: "
-                        "anti-windup 1445, the wear guard's withdrawal 1385 (DM to the -3000 "
-                        "integrator floor), emergency 1085 - the same as the projected power "
-                        "alone, so it changes nothing here - and all three 1450. Not attributed "
-                        "below that (F-124)."
-                    ),
-                ),
-                KnownRed(
-                    fails_with="past the -1500 immersion limit",
-                    houses={"airsource_f2040": None},
-                    why=(
-                        "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
-                        "shortfall, -2779 before the bench ran the coordinator's gate policy); "
-                        "NIBE alone reaches -1890 (F-124, F-112: its own immersion heater "
-                        "starts at -760)."
-                    ),
-                ),
-            ),
+            known_open=(),
         ),
         Scenario(
             slug="steady_winter_feb2024",
@@ -1008,7 +979,7 @@ SCENARIOS = {
             known_open=(
                 KnownRed(
                     fails_with="recovery ladder proposed",
-                    houses={"concrete_f1155": None, "villa_s1155": None, "airsource_f2040": None},
+                    houses={"airsource_f2040": None},
                     why=(
                         "A recovery tier appears among proposed votes. This policy check does not "
                         "establish that a positive register value was applied, that the pump was "
@@ -1018,18 +989,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3310, "apartment_f730": 12690},
+                    houses={"wooden_f750": 3515, "apartment_f730": 12675},
                     why=(
-                        "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
-                        "days above their band. The plant models no solar gain: its constant "
-                        "internal gains (INTERNAL_GAINS_W) carry these houses above the band once "
-                        "the outdoor air passes their balance point, and no curve offset can "
-                        "remove free heat. Overshoot protection is tuned for overshoot driven by "
-                        "heating. The overshoot ramp moved them from 3125 and 13725: it pulls "
-                        "softer than the old -7 C coast above 0.6 C and harder than the old mild "
-                        "correction below it. The ladder's room floor and the immersion guard "
-                        "moved them from 3405 and 11505; the overshoot coast's stop at -5 from "
-                        "3305 and 11390, the F730 0.10 C warmer on average."
+                        "Fresh 21-day May replay: F750 3515 and F730 12675 above-band minutes. "
+                        "Their zero-heat references give 350 and 7175; the latter already exceeds "
+                        "the 720-minute budget. These are model/scenario failures, not established "
+                        "effects on the owner's home or bill. Raw failures stay visible."
                     ),
                 ),
             ),
