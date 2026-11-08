@@ -1754,6 +1754,7 @@ def simulate(
     violations = []
     trace = []
     stats = {
+        "control_steps": steps,
         "indoor_min": 99.0,
         "indoor_max": -99.0,
         "indoor_sum": 0.0,
@@ -2792,7 +2793,7 @@ def main() -> int:
         print(f"[{tag}] {json.dumps(stats)}")
         if votes:
             ranked = sorted(votes.items(), key=lambda kv: -kv[1])
-            total = max(days * 24 * 60 // STEP_MIN, 1)
+            total = max(stats["control_steps"], 1)
             share = ", ".join(f"{n} {100 * h / total:.0f}%" for n, h in ranked)
             print(f"[{tag}] layers that voted: {share}")
         if violations:
