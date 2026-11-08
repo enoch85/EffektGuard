@@ -91,6 +91,17 @@ def is_daytime_period(period: int) -> bool:
     return DAYTIME_START_HOUR <= hour < DAYTIME_END_HOUR
 
 
+def in_billing_month(timestamp: datetime) -> bool:
+    """Whether a period belongs to the calendar month being billed now, on the local clock.
+
+    The one definition of "this month": the month's rollover prunes by it, and the coordinator
+    records a closed period only by it.
+    """
+    now = dt_util.now()
+    local = dt_util.as_local(timestamp)
+    return (local.year, local.month) == (now.year, now.month)
+
+
 def effective_tariff_power_kw(power_kw: float, period: int) -> float:
     """What the effect tariff will BILL this period's mean power as. Night periods count half.
 
@@ -522,13 +533,8 @@ class EffectManager:
 
     def _clean_old_peaks(self) -> None:
         """Remove peaks from previous months."""
-        now = dt_util.now()
-        current_month = (now.year, now.month)
-
         self._monthly_peaks = [
-            peak
-            for peak in self._monthly_peaks
-            if (peak.timestamp.year, peak.timestamp.month) == current_month
+            peak for peak in self._monthly_peaks if in_billing_month(peak.timestamp)
         ]
 
     def reset_monthly_peaks(self) -> None:

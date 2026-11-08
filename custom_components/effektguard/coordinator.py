@@ -88,6 +88,7 @@ from .optimization.dhw_optimizer import (
     DHWRecommendation,
     IntelligentDHWScheduler,
 )
+from .optimization.effect_layer import in_billing_month
 from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
@@ -2422,7 +2423,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             completed = self._billing_period.add(now, current_power, power_source)
 
             peak_event = None
-            if completed is not None:
+            # This month's peaks only. A month's last quarter closes at the first reading of the
+            # next, after the rollover in _read_and_decide has pruned the old month: recorded then,
+            # October's 23:45 quarter became November's highest peak until the next restart.
+            if completed is not None and in_billing_month(completed.started_at):
                 peak_event = await self.effect.record_period_measurement(
                     power_kw=completed.mean_power_kw,
                     period=completed.billing_period,
