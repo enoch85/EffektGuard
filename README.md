@@ -7,7 +7,7 @@
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
-Heat your house when electricity is cheap, and save when it is expensive.
+Shift your heating toward cheaper electricity.
 
 EffektGuard turns your house into a heat battery. It stores heat in the cheap hours, lets the house
 coast through the expensive ones, and helps you avoid a new monthly power peak. Safety and the

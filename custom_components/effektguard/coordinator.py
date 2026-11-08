@@ -239,7 +239,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
         self._bt7_history_read = False  # the recorder's BT7 history, read once BT7 is bound
 
-        # Savings calculator
+        # Descriptive cost comparisons (legacy storage/API names retained)
         self.savings_calculator = SavingsCalculator()
 
         # Airflow optimizer for exhaust air heat pumps (F750/F730)
@@ -370,6 +370,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         # Spot price savings tracking (per-cycle accumulation)
         self._daily_spot_savings: float = 0.0  # Accumulates during day, recorded at midnight
+        self._daily_spot_comparison_observed = False
 
         # Startup tracking - gracefully handle missing entities during HA startup
         # MyUplink integration can take 45-50 seconds to initialize entities
@@ -1260,14 +1261,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.yesterday_peak,
             )
 
-            # Record yesterday's spot savings to the calculator
-            if self._daily_spot_savings != 0.0:
+            # A valid zero day belongs in the average too. Missing inputs do not.
+            if self._daily_spot_comparison_observed:
                 self.savings_calculator.record_spot_savings(self._daily_spot_savings)
                 _LOGGER.info(
-                    "Recorded daily spot savings: %.2f SEK",
+                    "Recorded daily price-timing comparison: %.2f SEK",
                     self._daily_spot_savings,
                 )
             self._daily_spot_savings = 0.0  # Reset for new day
+            self._daily_spot_comparison_observed = False
 
             # A new day may also be a new MONTH. The effect tariff bills a monthly peak, so
             # last month's peaks must not carry over into this one - an instance that stays up
@@ -1575,7 +1577,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         )
 
         _LOGGER.debug(
-            "Estimated savings: %.0f SEK/month (effect: %.0f SEK, spot: %.0f SEK)",
+            "Price-timing projection: %.0f SEK/month; separate peak reference: %.0f SEK; "
+            "spot comparison: %.0f SEK/month (no savings attribution)",
             savings_estimate.monthly_estimate,
             savings_estimate.effect_savings,
             savings_estimate.spot_savings,
@@ -1793,7 +1796,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             "peak_this_month": self.peak_this_month,
             "current_quarter": current_quarter,
             "current_classification": current_classification,
-            "savings": savings_estimate,  # Estimated monthly savings
+            "savings": savings_estimate,  # Legacy key: separate descriptive cost comparisons
             "compressor_stats": self.compressor_stats,  # Compressor Hz monitoring (Oct 19, 2025)
             "dhw_status": dhw_status,
             "dhw_next_boost": dhw_next_boost,
@@ -2205,12 +2208,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             )
 
     def _accumulate_spot_savings(self, nibe_data, price_data) -> None:
-        """Add this cycle's spot-price savings to the running daily total.
+        """Accumulate the same-energy price reference from measured scheduled observations.
 
-        Savings are reported to the owner as money, so they may only be computed from power that was
-        MEASURED. Without a power sensor, `power_kw` holds a curve fit floored at 1.0 kW even with
-        the compressor off, and it arrives in the same field as a real reading - so an estimate here
-        turns into kronor indistinguishable from earned ones. Same rule as the peak: never bill a guess.
+        This is a cost comparison, not money saved by EffektGuard. Keep the measurement guard:
+        the adapter's temperature-based power estimate cannot become a monetary observation.
         """
         if (
             not price_data
@@ -2237,11 +2238,15 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             cycle_minutes=UPDATE_INTERVAL_MINUTES,
         )
 
-        if self.savings_calculator.is_sek_price_unit:
+        if (
+            self.savings_calculator.is_sek_price_unit
+            and self.savings_calculator.price_to_main_unit_factor() is not None
+        ):
             self._daily_spot_savings += cycle_savings
+            self._daily_spot_comparison_observed = True
         else:
             _LOGGER.debug(
-                "Skipping non-SEK spot-savings aggregation for price unit %s",
+                "Skipping price-comparison aggregation for unsupported monetary unit %s",
                 self.savings_calculator.price_unit,
             )
 
@@ -2449,13 +2454,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 and not self.entry.data.get("enable_optimization", True)
                 and peak_event.is_billable
             ):
-                # The unoptimised baseline, MEASURED: with optimization off the offset is held at
-                # 0.0 and the pump runs its own curve, so this is what the house does without
-                # EffektGuard. Nothing else calls update_baseline_peak; without it the savings
-                # calculator assumes baseline = peak * 1.176 and can never read zero. Must be
-                # `effective_power` (tariff-weighted, like the peak_this_month it is compared
-                # against) and billable - an unweighted or NIBE-only baseline reports weighting or
-                # unseen load as savings.
+                # Historical OFF-period peak reference only: a real, tariff-weighted whole-house
+                # reading. Weather, comfort, other loads and stored heat differ across periods;
+                # this is not a counterfactual bill or savings attributed to EffektGuard.
                 self.savings_calculator.update_baseline_peak(peak_event.effective_power)
 
             if peak_event:

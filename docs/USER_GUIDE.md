@@ -158,6 +158,21 @@ yourself is left alone, and the pump still heats a cold tank by itself.
 
 The first three need EffektGuard on, and act at once.
 
+## Cost comparisons
+
+The monthly price-timing comparison shows what the same metered energy would cost at each day's
+average spot price, projected over 30 days. Positive means cheaper than that reference; negative
+means dearer. It can be positive with EffektGuard off and does not measure energy saved or money
+saved by EffektGuard. Its entity ID still contains `savings_estimate` for existing dashboards.
+Earlier recorded values used a different formula and are not verified savings either. The
+projection uses completed-day observations since this restart; missing readings and partial days
+limit how representative it is.
+
+An observed OFF-period peak is a separate reference in the attributes. Switching off for a while
+alone does not establish savings: weather, room comfort, other loads, efficiency and stored heat
+also change. A savings measurement needs a comparable baseline with those changes accounted for.
+See the [measurement and verification guidance](https://www.energy.gov/cmei/femp/measurement-and-verification-activities-required-energy-savings-performance-contract).
+
 ## Dashboard charts
 
 The README's chart on your own dashboard, plus the hot-water chart:

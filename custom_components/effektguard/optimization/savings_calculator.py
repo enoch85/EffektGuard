@@ -1,10 +1,9 @@
-"""Savings calculator for EffektGuard.
+"""Metered cost comparisons, without attributing savings to the optimizer.
 
-Estimates monthly cost savings from optimization:
-1. Effect tariff savings (reducing monthly peak)
-2. Spot price savings (heating during cheaper periods)
-
-Calculations based on typical Swedish electricity costs and user's system.
+Same-energy spending at the daily average price is a price-timing reference, not a no-EffektGuard
+counterfactual. OFF-period peaks also differ in weather, occupancy, other loads and stored heat.
+Neither establishes what this house would have spent under comparable conditions without control.
+Legacy Python names remain for stored-data and coordinator compatibility; the UI labels comparisons.
 """
 
 import logging
@@ -26,27 +25,24 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class SavingsEstimate:
-    """Estimated savings breakdown."""
+    """Legacy fields carrying separate descriptive comparisons, never measured savings.
 
-    monthly_estimate: float  # Total estimated monthly savings (SEK)
-    effect_savings: float  # Savings from peak reduction (SEK)
-    spot_savings: float  # Savings from spot price optimization (SEK)
-    baseline_cost: float  # Estimated cost without optimization (SEK)
-    optimized_cost: float  # Estimated cost with optimization (SEK)
-    # False when no unoptimized baseline peak has ever been observed, so the effect-tariff half of
-    # this estimate is not a measurement and is reported as zero rather than guessed. See
-    # estimate_monthly_savings.
+    monthly_estimate and spot_savings: daily price-timing comparison projected over DAYS_PER_MONTH.
+    effect_savings: signed OFF-period peak difference valued at the configured illustrative tariff.
+    baseline_cost/optimized_cost: those separate peak references, not complete electricity bills.
+    effect_baseline_measured: an OFF-period peak was observed, not a matched counterfactual.
+    """
+
+    monthly_estimate: float
+    effect_savings: float
+    spot_savings: float
+    baseline_cost: float
+    optimized_cost: float
     effect_baseline_measured: bool = False
 
 
 class SavingsCalculator:
-    """Calculate estimated savings from EffektGuard optimization.
-
-    Conservative estimates based on:
-    - Swedish electricity market (15-minute effect tariff)
-    - Typical spot price variations
-    - Observed peak reductions and price avoidance
-    """
+    """Compute descriptive price and peak comparisons using the existing persistence interface."""
 
     def price_to_main_unit_factor(self) -> float | None:
         """Factor converting the configured price unit to the main currency, or None.
@@ -74,7 +70,7 @@ class SavingsCalculator:
         if not self._unknown_unit_logged:
             self._unknown_unit_logged = True
             _LOGGER.warning(
-                "Price unit %r not recognised - skipping monetary savings for this cycle "
+                "Price unit %r not recognised - skipping monetary comparison for this cycle "
                 "rather than guessing. Price-based OPTIMIZATION is unaffected (it ranks "
                 "prices and does not need the unit).",
                 self.price_unit,
@@ -85,9 +81,8 @@ class SavingsCalculator:
     def is_sek_price_unit(self) -> bool:
         """Return whether spot savings are denominated in SEK.
 
-        Effect-tariff savings are always SEK. A price feed in another currency
-        may still guide ranking, but its monetary spot result must never be
-        combined with a SEK tariff result without an explicit FX conversion.
+        The legacy money gauge is denominated in SEK. Another currency may guide ranking,
+        but its numerical result cannot be labelled SEK without an explicit FX conversion.
         """
         unit = (self.price_unit or "").lower().replace(" ", "")
         return not unit or unit.startswith(("sek", "öre", "ore"))
@@ -96,12 +91,7 @@ class SavingsCalculator:
         """Initialize savings calculator."""
         self.price_unit: str | None = None
         self._unknown_unit_logged: bool = False
-        # Swedish effect tariff typical costs (SEK/kW/month)
-        # Based on common Swedish grid operators:
-        # - Ellevio: ~55 SEK/kW/month
-        # - Vattenfall Eldistribution: ~50 SEK/kW/month
-        # - E.ON: ~50 SEK/kW/month
-        # Using conservative average from const.py
+        # Illustrative configured tariff for the separate historical peak reference.
         self.effect_tariff_sek_per_kw_month = SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH
 
         # Track baseline data for comparison
@@ -115,55 +105,33 @@ class SavingsCalculator:
         baseline_peak_kw: Optional[float] = None,
         average_spot_savings_per_day: float = 0.0,
     ) -> SavingsEstimate:
-        """Estimate total monthly savings from optimization.
+        """Return independent price-timing and historical peak comparisons.
 
-        Args:
-            current_peak_kw: Current monthly peak with optimization (kW)
-            baseline_peak_kw: Estimated baseline peak without optimization (kW)
-                             If None, assumes +15% higher baseline
-            average_spot_savings_per_day: Average daily savings from spot optimization (SEK)
-
-        Returns:
-            SavingsEstimate with breakdown
+        An observed OFF-period peak is not weather/comfort matched and is not the tariff's
+        top-three daily-peak counterfactual. It must never inflate the price-timing projection.
+        Keep its sign so a worse peak is visible; neither sign attributes cause to EffektGuard.
         """
-        # THE EFFECT-TARIFF SAVING WAS FABRICATED, AND IT COULD NOT READ ZERO.
-        #
-        # With no observed baseline the code assumed one:
-        #
-        #     baseline_peak_kw = current_peak_kw * BASELINE_PEAK_MULTIPLIER   # 1.176
-        #
-        # and `update_baseline_peak` - the only thing that could ever set a real baseline - had NO
-        # production caller, so the assumption fired every single time. The arithmetic then reduces
-        # to `effect_savings = 0.176 * current_peak * tariff`: a number computed from the peak
-        # itself, which means a HIGHER peak reported MORE "savings", and the sensor could never
-        # read zero however badly the optimiser was doing. It was unfalsifiable.
-        #
-        # This module already refuses to guess a price unit for exactly this reason. The same rule
-        # applies here: with no baseline there is no measured saving, and zero is the honest number.
-        # The coordinator now feeds `update_baseline_peak` from the quarters recorded while the
-        # optimisation switch is OFF - the offset is held at 0.0 then, so those peaks genuinely are
-        # what the house does unoptimised.
         effect_baseline_measured = baseline_peak_kw is not None
 
         if not effect_baseline_measured:
             baseline_peak_kw = current_peak_kw
 
         peak_reduction_kw = baseline_peak_kw - current_peak_kw
-        effect_savings = max(0.0, peak_reduction_kw * self.effect_tariff_sek_per_kw_month)
+        effect_savings = peak_reduction_kw * self.effect_tariff_sek_per_kw_month
 
         # Calculate spot price savings (30 days)
         spot_savings = average_spot_savings_per_day * DAYS_PER_MONTH
 
-        # Total savings
-        monthly_estimate = effect_savings + spot_savings
+        # The gauge is the price-timing projection alone. The peak comparison stays separate.
+        monthly_estimate = spot_savings
 
         # Calculate baseline and optimized costs
         baseline_cost = baseline_peak_kw * self.effect_tariff_sek_per_kw_month
         optimized_cost = current_peak_kw * self.effect_tariff_sek_per_kw_month
 
         _LOGGER.debug(
-            "Savings estimate: Peak %.2f→%.2f kW (%.2f kW reduction), "
-            "Effect: %.0f SEK, Spot: %.0f SEK/month, Total: %.0f SEK/month",
+            "Cost comparisons (no savings attribution): Peak %.2f→%.2f kW (%.2f kW difference), "
+            "Peak reference: %.0f SEK, Price timing: %.0f SEK/month, Projection: %.0f SEK/month",
             baseline_peak_kw,
             current_peak_kw,
             peak_reduction_kw,
@@ -188,29 +156,12 @@ class SavingsCalculator:
         average_price_today: float,
         cycle_minutes: float = 5.0,
     ) -> float:
-        """Calculate actual spot savings for this cycle using real power data.
+        """Compare the same metered energy at current price and the day's average price.
 
-        This uses the ACTUAL power consumption from NIBE to calculate real savings.
-        Savings = what it would cost at average price - what it actually cost.
-
-        If current_price < average_price: positive savings (we used power during cheap time)
-        If current_price > average_price: negative savings (we used power during expensive time)
-
-        Args:
-            actual_power_kw: Actual NIBE power consumption this cycle (kW)
-            current_price: Current spot price (öre/kWh)
-            average_price_today: Average spot price today (öre/kWh)
-            cycle_minutes: Duration of this cycle in minutes (default 5)
-
-        Returns:
-            Savings for this cycle (SEK), positive = saved money, negative = cost more
-
-        Example:
-            Power: 2.5 kW for 5 minutes = 0.208 kWh
-            Current price: 50 öre, Average: 100 öre
-            Actual cost: 0.208 × 50 / 100 = 0.104 SEK
-            Baseline cost: 0.208 × 100 / 100 = 0.208 SEK
-            Savings: 0.208 - 0.104 = 0.104 SEK (we saved by using power when cheap!)
+        Positive means below the price reference, negative above it. The same result can occur
+        with optimization switched off. It measures neither energy saved nor incremental benefit:
+        weather, comfort, efficiency, rebound and initial/final stored heat are not controlled.
+        The configured price unit converts the result to its main currency.
         """
         if actual_power_kw is None or actual_power_kw <= 0:
             return 0.0
@@ -234,8 +185,8 @@ class SavingsCalculator:
         cycle_savings = baseline_cost - actual_cost
 
         _LOGGER.debug(
-            "Spot savings: %.2f kW × %.2f min = %.3f kWh, "
-            "price %.1f öre (avg %.1f), savings: %.4f SEK",
+            "Price-timing comparison: %.2f kW × %.2f min = %.3f kWh, "
+            "price %.1f (avg %.1f), difference: %.4f main currency",
             actual_power_kw,
             cycle_minutes,
             energy_kwh,
@@ -249,8 +200,8 @@ class SavingsCalculator:
     def update_baseline_peak(self, observed_peak_kw: float) -> None:
         """Update baseline peak estimate from observation.
 
-        Call this when you observe what the peak would have been
-        without optimization (e.g., from manual mode periods).
+        An OFF-period peak is only a historical reference. Weather, occupancy and other
+        loads are not matched; this observation does not establish avoided tariff charges.
 
         Args:
             observed_peak_kw: Observed peak without optimization (kW)
@@ -267,15 +218,15 @@ class SavingsCalculator:
             _LOGGER.debug("Baseline monthly peak updated: %.2f kW", self._baseline_monthly_peak)
 
     def record_spot_savings(self, daily_savings: float) -> None:
-        """Record actual spot price savings observed.
+        """Record a completed day's price-timing comparison.
 
         Args:
-            daily_savings: Savings observed today (SEK)
+            daily_savings: Price-reference difference today (SEK)
         """
         self._total_spot_savings += daily_savings
         self._optimization_days += 1
         _LOGGER.debug(
-            "Spot savings recorded: %.2f SEK today, %.2f SEK total over %d days",
+            "Price-timing comparison recorded: %.2f SEK today, %.2f SEK total over %d days",
             daily_savings,
             self._total_spot_savings,
             self._optimization_days,
