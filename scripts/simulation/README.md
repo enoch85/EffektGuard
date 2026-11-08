@@ -26,8 +26,8 @@ Outside it the nearest edge is held, and `capacity_outside_published_minutes` co
 extrapolation. Cold-end capacity is unvalidated. Profiles without a declared minimum still have
 an unknown minimum output; their cycling results require further data.
 
-The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run with this
-envelope and the adaptive simulator in #136, scaling only extrapolated capacity to 70%, 100%
+The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run at `ad88d4f`
+(the envelope patch on the adaptive simulator in #136), scaling only extrapolated capacity to 70%, 100%
 and 130% produced respectively 395, 0 and 0 minutes below the comfort band, and 274.25, 1.25
 and 0 kWh of immersion heat. These are sensitivity probes, not uncertainty bounds. A cold-weather
 pass therefore cannot establish real-world comfort or backup consumption without a cold-end map.
@@ -59,12 +59,24 @@ Per house, `output/summary-<tag>.json` holds the stats, failures and violations,
 
 ## Reading a result
 
-- `PASS: all safety invariants held` is a healthy run. `FAIL*` means every failure is a recorded
+- `PASS: configured simulation checks held` means those checks passed under the plant's assumptions.
+  It does not validate a real home, the entire COP surface or a savings claim. `FAIL*` means every failure is a recorded
   known red (exit code 3 for a single `--scenario` run). The sweep fails only on news: a red no
   known red covers, one worse than recorded, or one that stopped failing. A known red that gets
   worse is re-recorded with its cause, never silenced.
-- Compare against `--baseline` before concluding anything about savings: part of a lower `cost_sek`
-  can be under-heating rather than efficiency.
+- Compare against `--baseline`, with comparable comfort and initial/final thermal storage, before
+  interpreting a cost difference. This is a modeled scenario comparison, not measured bill savings.
+- `instantaneous_capacity_deficit_kwh` integrates demand above the compressor's available output.
+  It ignores heat carried between intervals and does not bound unavoidable immersion use. For
+  example, two one-hour intervals with demand 10/10 kW, capacity 8/12 kW and 2 kWh initially stored
+  can finish with the same stored heat and no immersion, despite a 2 kWh instantaneous deficit.
+  Subtracting this diagnostic from immersion consumption cannot identify the controller's effect.
+- `datasheet_cop` is a nominal-rating reference, not a universal COP ceiling. Different source,
+  water and load conditions require independent validation. The Carnot check and rating-point
+  reproduction/hold-out tests remain. `mean_cop` is delivered emitter heat divided by modeled
+  electricity excluding standby; storage changes and immersion affect that diagnostic too.
+- `layer_votes` counts proposed votes before aggregation, gating and register conversion. A
+  recovery vote in May does not by itself establish applied heat or extra cost.
 - `comfort_minutes_below` counts minutes at least `SCENARIO_COMFORT_BREACH_MIN_DEPTH_C` below
   the band the mode keeps, `comfort_band_low_c`: the target minus the configured tolerance, or
   minus the mode's `room_floor_below_target` where that is wider (savings: a degree). Shallower

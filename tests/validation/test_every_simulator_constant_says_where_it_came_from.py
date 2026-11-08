@@ -42,9 +42,6 @@ NOT_A_PHYSICAL_CLAIM = frozenset(
         # The harness's own pass/fail budgets. They are what the SIMULATION demands of the
         # controller, not claims about hardware, and each is argued where it is defined.
         "WATER_NODE_LEAK_BUDGET_KWH",
-        "COP_ENVELOPE_TOLERANCE",
-        "IMMERSION_OVER_PHYSICS_TOLERANCE",
-        "IMMERSION_SLACK_KWH",
         "DM_IMMERSION_MARGIN",
         "MAX_COMFORT_MINUTES_BELOW",
         "MAX_COMFORT_MINUTES_ABOVE",
