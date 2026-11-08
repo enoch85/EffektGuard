@@ -1,35 +1,28 @@
-"""Adaptive thermal learning for building characteristics.
+"""Hourly room observations, descriptive thermal indicators and validated room forecasts.
 
-Automatically learns building thermal characteristics without manual configuration:
-- Thermal mass (heat capacity)
-- Heat loss coefficient (insulation quality)
-- Heating efficiency (temperature rise per offset)
-- UFH type detection (concrete slab, timber, radiator)
-- Thermal decay rate (natural cooling speed)
-
-Based on POST_PHASE_5_ROADMAP.md Phase 6.1 and Swedish NIBE research.
+Empirical forecasts include native heating and are scored on later targets excluded from fitting.
+Diagnostic mass, cooling and response estimates never replace configured physical parameters.
 """
 
 import logging
 from collections import deque
 from datetime import datetime
+from math import isfinite
 from typing import TypedDict
 
 import numpy as np
 from homeassistant.util import dt as dt_util
 
 from ..const import (
-    DEFAULT_HEAT_LOSS_COEFFICIENT,
-    DEFAULT_THERMAL_DECAY_RATE,
     LEARNING_CONFIDENCE_THRESHOLD,
-    LEARNING_MIN_HEATING_RATE,
-    LEARNING_MIN_HEATING_SAMPLES,
     LEARNING_MIN_OBSERVATIONS,
     LEARNING_OBSERVATION_WINDOW,
+    THERMAL_FORECAST_MAX_HOURS,
     UFHType,
 )
-from .learning_types import AdaptiveThermalObservation, LearnedThermalParameters
+from .learning_types import AdaptiveThermalObservation, LearnedThermalParameters, ThermalForecast
 from .thermal_layer import prediction_horizon_for
+from .thermal_forecast import fit_forecast
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,7 +91,6 @@ class AdaptiveThermalModel:
 
         Methods:
         - get_prediction_horizon() -> float
-        - calculate_preheating_target(...) -> float
         - get_thermal_characteristics() -> dict
 
         Learning-specific API:
@@ -132,6 +124,8 @@ class AdaptiveThermalModel:
         self.learned_parameters: dict[str, float] = {}
         self.ufh_type: UFHType = UFHType.UNKNOWN
         self._last_update: datetime | None = None
+        self._forecast_cache: dict[int, ThermalForecast] | None = None
+        self._parameters_cache: LearnedThermalParameters | None = None
 
     def record_observation(
         self,
@@ -148,6 +142,13 @@ class AdaptiveThermalModel:
             outdoor_temp: Current outdoor temperature (°C)
             heating_offset: Current heating curve offset (°C)
         """
+        if not all(isfinite(value) for value in (indoor_temp, outdoor_temp, heating_offset)):
+            return
+        if (
+            self.observations
+            and timestamp.timestamp() <= self.observations[-1].timestamp.timestamp()
+        ):
+            return
         # Calculate change from previous observation
         temp_change = 0.0
         time_delta_hours = 0.0
@@ -155,7 +156,7 @@ class AdaptiveThermalModel:
         if len(self.observations) > 0:
             prev = self.observations[-1]
             temp_change = indoor_temp - prev.indoor_temp
-            time_delta_hours = (timestamp - prev.timestamp).total_seconds() / 3600
+            time_delta_hours = (timestamp.timestamp() - prev.timestamp.timestamp()) / 3600
 
         observation = AdaptiveThermalObservation(
             timestamp=timestamp,
@@ -167,6 +168,8 @@ class AdaptiveThermalModel:
         )
 
         self.observations.append(observation)
+        self._forecast_cache = None
+        self._parameters_cache = None
 
         _LOGGER.debug(
             "Recorded observation: indoor=%.1f°C, outdoor=%.1f°C, "
@@ -199,6 +202,9 @@ class AdaptiveThermalModel:
             )
             return None
 
+        if self._parameters_cache is not None:
+            return self._parameters_cache
+
         try:
             # Detect UFH type first (affects other calculations)
             ufh_type = self._detect_ufh_type()
@@ -209,7 +215,7 @@ class AdaptiveThermalModel:
             heating_efficiency = self._calculate_heating_efficiency()
             thermal_decay_rate = self._calculate_thermal_decay_rate()
 
-            # Calculate confidence based on data quality
+            # Report the best held-out horizon; control checks its own individual forecast.
             confidence = self._calculate_confidence()
 
             learned = LearnedThermalParameters(
@@ -221,6 +227,8 @@ class AdaptiveThermalModel:
                 last_updated=dt_util.now(),
                 confidence=confidence,
                 observation_count=len(self.observations),
+                forecasts=self._learned_forecasts(),
+                observations_end=self.observations[-1].timestamp,
             )
 
             # The detected type is kept for display. The thermal mass is the owner's setting and is
@@ -240,6 +248,7 @@ class AdaptiveThermalModel:
                 confidence * 100,
             )
 
+            self._parameters_cache = learned
             return learned
 
         except (AttributeError, KeyError, ValueError, TypeError, ZeroDivisionError) as e:
@@ -458,56 +467,20 @@ class AdaptiveThermalModel:
 
         return np.clip(np.mean(decay_rates), -0.2, -0.02)
 
+    def _learned_forecasts(self) -> dict[int, ThermalForecast]:
+        """Models fitted on earlier data and scored on untouched later targets, cached hourly."""
+        if self._forecast_cache is None:
+            history = list(self.observations)
+            self._forecast_cache = {}
+            for hours in range(1, THERMAL_FORECAST_MAX_HOURS + 1):
+                forecast = fit_forecast(history, hours)
+                if forecast is not None:
+                    self._forecast_cache[hours] = forecast
+        return self._forecast_cache
+
     def _calculate_confidence(self) -> float:
-        """Calculate confidence in learned parameters.
-
-        Based on:
-        - Number of observations
-        - Data consistency (low variance)
-        - Time span covered
-
-        Returns:
-            Confidence score 0-1
-        """
-        if len(self.observations) < LEARNING_MIN_OBSERVATIONS:
-            return 0.0
-
-        # Base confidence from observation count
-        obs_confidence = min(len(self.observations) / LEARNING_OBSERVATION_WINDOW, 1.0)
-
-        # Data consistency (low variance in rates = higher confidence)
-        heating_rates = []
-        for obs in self.observations:
-            if obs.heating_offset > 0.5 and obs.time_delta_hours > 0:
-                rate = obs.temp_change / obs.time_delta_hours
-                heating_rates.append(rate)
-
-        # The std/mean consistency ratio LIES when there is no signal: an identical (flatlined)
-        # reading collapses std to 0 and scores perfect consistency 1.0, above a house genuinely
-        # heating (F-132). So the weak cases are answered before the ratio is taken - both give
-        # ZERO, the honest answer to "how well do we know this building".
-        mean_rate = float(np.mean(heating_rates)) if heating_rates else 0.0
-
-        if len(heating_rates) <= LEARNING_MIN_HEATING_SAMPLES:
-            consistency = 0.0  # too little evidence is not half the evidence
-        elif mean_rate < LEARNING_MIN_HEATING_RATE:
-            consistency = 0.0  # the house moved less than one sensor tick per hour while heating
-        else:
-            consistency = 1.0 - min(float(np.std(heating_rates)) / mean_rate, 1.0)
-
-        # Time span (prefer observations over longer period)
-        if len(self.observations) > 1:
-            time_span_hours = (
-                self.observations[-1].timestamp - self.observations[0].timestamp
-            ).total_seconds() / 3600
-            time_confidence = min(time_span_hours / (24 * 7), 1.0)  # 1 week = full confidence
-        else:
-            time_confidence = 0.0
-
-        # Weighted combination
-        confidence = obs_confidence * 0.4 + consistency * 0.4 + time_confidence * 0.2
-
-        return confidence
+        """Best validated horizon for learning status; actuation checks its exact horizon."""
+        return max((forecast.skill for forecast in self._learned_forecasts().values()), default=0.0)
 
     def get_prediction_horizon(self) -> float:
         """How far ahead the learned pre-heat looks: from the owner's thermal mass setting.
@@ -529,11 +502,7 @@ class AdaptiveThermalModel:
         Returns:
             True if confidence exceeds threshold
         """
-        if not self.learned_parameters:
-            return False
-
-        confidence = self.learned_parameters.get("confidence", 0.0)
-        return confidence >= LEARNING_CONFIDENCE_THRESHOLD
+        return self._calculate_confidence() >= LEARNING_CONFIDENCE_THRESHOLD
 
     def get_thermal_characteristics(self) -> ThermalCharacteristicsDict:
         """Get current thermal model characteristics.
@@ -563,77 +532,6 @@ class AdaptiveThermalModel:
             Current learned parameters or None if insufficient data
         """
         return self.update_learned_parameters()
-
-    def calculate_preheating_target(
-        self,
-        current_temp: float,
-        desired_temp: float,
-        hours_until_peak: int,
-        outdoor_temp: float,
-        forecast_min_temp: float,
-    ) -> float:
-        """Calculate target temperature for pre-heating before expensive/cold period.
-
-        Uses learned thermal characteristics if available, falls back to conservative
-        defaults. Accounts for thermal decay during no-heating period.
-
-        Args:
-            current_temp: Current indoor temperature (°C)
-            desired_temp: Target indoor temperature during expensive hours (°C)
-            hours_until_peak: Hours until expensive period begins
-            outdoor_temp: Current outdoor temperature (°C)
-            forecast_min_temp: Minimum outdoor temperature in forecast period (°C)
-
-        Returns:
-            Target indoor temperature for pre-heating phase (°C)
-
-        References:
-            docs/research/01_degree_minutes.md - the forum case studies this method's tuning
-            descends from are marked UNSOURCED there (anecdote, not documents in this repository).
-        """
-        # THE HEAT-LOSS COEFFICIENT IS NEVER TAKEN FROM LEARNING: the learning estimator produces a
-        # RELATIVE cooling index, not a physical W/°C value, and this is the control path. The old
-        # code carried that index and a literal 180.0 W/°C on the two branches of one variable (two
-        # units), both fed into `/ 1000.0` as if watts per kelvin. It never fired only because the
-        # gate is dead (should_use_learned_parameters reads a "confidence" key never stored), so
-        # repairing that gate would have silently armed the unit error. See
-        # test_learning_can_actually_learn.py; enabling learning is the owner's call (F-132b), making
-        # it SAFE to enable is this.
-        params = self.update_learned_parameters()
-
-        heat_loss_coef = DEFAULT_HEAT_LOSS_COEFFICIENT
-
-        if params and self.should_use_learned_parameters():
-            decay_rate = params.thermal_decay_rate
-        else:
-            decay_rate = DEFAULT_THERMAL_DECAY_RATE
-
-        # Account for thermal decay during forecast period
-        temp_diff = current_temp - forecast_min_temp
-        heat_loss_rate = (heat_loss_coef / 1000.0) * decay_rate * temp_diff / 10
-
-        # Calculate expected temperature at end of forecast if no heating
-        expected_temp_end = current_temp - (heat_loss_rate * hours_until_peak)
-
-        # Calculate deficit that needs to be compensated
-        temp_deficit = max(0, desired_temp - expected_temp_end)
-
-        # Pre-heating target: add conservative margin
-        # Use UFH-specific factor if available
-        if self.ufh_type == UFHType.SLOW_RESPONSE:
-            preheat_factor = 1.5  # More thermal mass (6+ hours lag), more pre-heating
-        elif self.ufh_type == UFHType.MEDIUM_RESPONSE:
-            preheat_factor = 1.2  # Medium thermal mass (2-3 hours lag)
-        elif self.ufh_type == UFHType.FAST_RESPONSE:
-            preheat_factor = 1.1  # Fast response (<1 hour lag)
-        else:
-            preheat_factor = 1.3  # Conservative default for unknown
-
-        preheat_target = desired_temp + (temp_deficit * preheat_factor * 0.5)
-
-        # Safety limits: never suggest extreme pre-heating
-        max_preheat = desired_temp + 2.0
-        return min(preheat_target, max_preheat)
 
     def to_dict(self) -> AdaptiveModelStateDict:
         """Serialize model state to dictionary for storage.

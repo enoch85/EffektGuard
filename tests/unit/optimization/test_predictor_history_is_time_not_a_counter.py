@@ -13,14 +13,14 @@ from custom_components.effektguard.const import (
     UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
-from custom_components.effektguard.optimization.thermal_layer import ThermalModel
+from tests.unit.optimization.test_learning_can_actually_learn import _observe_a_real_house
 
 NOW = datetime(2026, 1, 15, tzinfo=timezone.utc)
 SAMPLES = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
 CADENCE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
 
 
-def _record(predictor, timestamp, indoor=21.0):
+def _record(predictor, timestamp, indoor=21.8):
     predictor.record_state(timestamp, indoor, 0.0, 0.0, 35.0, -100.0)
 
 
@@ -28,11 +28,13 @@ def _vote(predictor):
     weather = WeatherData(
         0.0, [WeatherForecastHour(NOW + timedelta(hours=h), 0.0) for h in range(1, 49)]
     )
+    model = _observe_a_real_house(60, start=NOW - timedelta(hours=30 * 24 - 1))
+    model.thermal_mass = 1.3
     return predictor.evaluate_layer(
-        SimpleNamespace(indoor_temp=21.0, outdoor_temp=0.0, indoor_temp_valid=True),
+        SimpleNamespace(indoor_temp=21.8, outdoor_temp=0.0, indoor_temp_valid=True),
         weather,
-        22.0,
-        ThermalModel(1.8),
+        22.8,
+        model,
     )
 
 

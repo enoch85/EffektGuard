@@ -14,14 +14,11 @@ from custom_components.effektguard.const import (
     CONF_THERMAL_MASS,
     DOMAIN,
     LEARNING_CONFIDENCE_THRESHOLD,
-    LEARNING_OBSERVATION_WINDOW,
 )
 
 NOW = datetime(2026, 1, 15, tzinfo=timezone.utc)
 MASS = 1.8
 INSULATION = 0.7
-HEATING_CYCLE_HOURS = 13
-ROOM_STEP = 0.12
 
 
 async def test_a_restart_keeps_the_parameters_and_their_confidence(hass, hass_storage, freezer):
@@ -30,13 +27,15 @@ async def test_a_restart_keeps_the_parameters_and_their_confidence(hass, hass_st
     entry = MockConfigEntry(domain=DOMAIN, data={}, options=options)
     entry.add_to_hass(hass)
     source = await _create_coordinator(hass, entry)
-    for i in range(LEARNING_OBSERVATION_WINDOW):
-        phase = i % HEATING_CYCLE_HOURS
+    from tests.unit.optimization.test_learning_can_actually_learn import _observe_a_real_house
+
+    calibration = _observe_a_real_house(60, start=NOW - timedelta(hours=30 * 24 - 1))
+    for observation in calibration.observations:
         source.adaptive_learning.record_observation(
-            NOW - timedelta(hours=LEARNING_OBSERVATION_WINDOW - i - 1),
-            21.0 + ROOM_STEP * phase,
-            -5.0,
-            1.0 if phase else 0.0,
+            observation.timestamp,
+            observation.indoor_temp,
+            observation.outdoor_temp,
+            observation.heating_offset,
         )
     before = source.adaptive_learning.get_parameters()
     assert before.confidence >= LEARNING_CONFIDENCE_THRESHOLD

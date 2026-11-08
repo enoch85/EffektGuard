@@ -4,8 +4,12 @@ Dataclasses used across adaptive learning, thermal prediction, and weather learn
 Keeps type definitions centralized and consistent.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from datetime import datetime
+from collections.abc import Sequence
+from math import isfinite
 
 from ..const import UFHType
 
@@ -26,18 +30,53 @@ class AdaptiveThermalObservation:
     time_delta_hours: float  # Hours since last observation
 
 
+@dataclass(frozen=True)
+class ThermalForecast:
+    """A direct-horizon delta model and its untouched later-block validation."""
+
+    hours: int
+    coefficients: tuple[float, ...]
+    skill: float
+    validation_mae: float
+    persistence_mae: float
+    max_validation_error: float
+    room_range: tuple[float, float]
+    outdoor_range: tuple[float, float]
+    offset_range: tuple[float, float]
+
+    def predict(
+        self, room: float, outdoor: Sequence[float], offsets: Sequence[float]
+    ) -> float | None:
+        """Refuse extrapolation of inputs or an incomplete conditional trajectory."""
+        if len(outdoor) < self.hours or len(offsets) < self.hours:
+            return None
+        outside = outdoor[: self.hours]
+        heating = offsets[: self.hours]
+        domains = [(room, self.room_range)]
+        domains += [(value, self.outdoor_range) for value in outside]
+        domains += [(value, self.offset_range) for value in heating]
+        for value, (lower, upper) in domains:
+            if not isfinite(value) or not lower <= value <= upper:
+                return None
+        features = [1.0, room, sum(outside) / self.hours, sum(heating) / self.hours]
+        prediction = room + sum(c * x for c, x in zip(self.coefficients, features, strict=True))
+        return prediction if isfinite(prediction) else None
+
+
 @dataclass
 class LearnedThermalParameters:
     """Thermal parameters learned from observations."""
 
     thermal_mass: float  # Relative scale (1.0 = normal)
-    heat_loss_coefficient: float  # W/°C
+    heat_loss_coefficient: float  # Diagnostic relative index; never a physical control coefficient
     heating_efficiency: float  # °C per offset per hour
     thermal_decay_rate: float  # °C/hour natural cooling
     ufh_type: UFHType  # Detected UFH type
     last_updated: datetime
-    confidence: float  # 0-1 based on data quality
+    confidence: float  # Best held-out horizon skill; forecasts carry the individual scores
     observation_count: int
+    forecasts: dict[int, ThermalForecast] = field(default_factory=dict)
+    observations_end: datetime | None = None
 
 
 @dataclass
@@ -62,6 +101,7 @@ class TempPrediction:
     hours_ahead: int
     confidence: float  # 0-1 based on model accuracy
     trajectory_trend: str  # "rising", "falling", "stable"
+    hourly_confidence: list[float] = field(default_factory=list)
 
 
 @dataclass

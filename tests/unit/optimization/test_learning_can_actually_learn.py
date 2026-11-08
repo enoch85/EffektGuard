@@ -1,20 +1,15 @@
-"""Learning must be able to engage on a real house - and today it cannot, for two reasons.
+"""Learning is earned by held-out forecast error, with exact-horizon control gates.
 
-Learning observes hourly (LEARNING_OBSERVATION_INTERVAL_MINUTES), not at the 5-minute control
-cadence: a 0.1 C sensor sampled every five minutes reports quantisation, not the house. The
-672-entry deque is therefore a 28-day memory. The window/cadence tests hold that.
-
-Even so, learning never engages (F-132b, the strict xfail below): the confidence metric caps at
-0.600 on any real house, and - independently - the confidence gate reads a dict key that nothing
-writes, so it is False forever. The remaining tests hold that the pre-heat never sizes itself from
-the quarantined heat-loss index. Enabling learning is the owner's call.
+Hourly observations can identify a useful model without allowing a flat sensor, a burst of
+five-minute samples, or a configured confidence number to authorize heating. Estimates of
+physical heat loss remain quarantined from temperature prediction and control.
 """
 
 from __future__ import annotations
 
 import inspect
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -30,7 +25,9 @@ from custom_components.effektguard.optimization.adaptive_learning import Adaptiv
 SENSOR_QUANTUM = 0.1  # °C - what a NIBE BT1 can actually report
 
 
-def _observe_a_real_house(cadence_minutes: int, days: int = 30) -> AdaptiveThermalModel:
+def _observe_a_real_house(
+    cadence_minutes: int, days: int = 30, start: datetime | None = None
+) -> AdaptiveThermalModel:
     """A house with an honest thermal response, watched at `cadence_minutes`.
 
     Indoor temperature follows the outdoor swing with lag and is nudged by the heating offset. The
@@ -39,7 +36,7 @@ def _observe_a_real_house(cadence_minutes: int, days: int = 30) -> AdaptiveTherm
     """
     model = AdaptiveThermalModel(initial_thermal_mass=1.0)
 
-    start = datetime(2026, 1, 1, 0, 0)
+    start = start or datetime(2026, 1, 1, tzinfo=timezone.utc)
     indoor_true = 21.0
 
     for step in range(int(days * 24 * 60 / cadence_minutes)):
@@ -97,23 +94,6 @@ def test_the_observation_cadence_is_slower_than_the_control_cadence():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "F-132b: learning cannot engage on ANY house, at ANY cadence, and the cadence was only half "
-        "the story. `consistency = 1 - std/mean` is computed over EVERY heating observation, and a "
-        "house at equilibrium contributes a rate of exactly zero - so the mean is dragged under the "
-        "0.1 C/h floor by the samples where the house was doing nothing, and consistency is pinned "
-        "to 0.0. Confidence then caps at obs(0.4) + time(0.2) = 0.600, under a 0.7 gate, forever. "
-        "Measured: wooden 0.415, brick 0.415, concrete 0.415 - every house, every cadence. "
-        "The metric is not repairable by tuning: filtering to the samples that DO move makes the "
-        "5-minute cadence score a PERFECT 1.000, because at that cadence the only rates above the "
-        "floor are exactly one sensor quantum and therefore all identical - std collapses to zero "
-        "and the quantisation artefact reads as certainty. std/mean rewards data for being "
-        "degenerate. Confidence has to be measured by PREDICTION ERROR against held-out "
-        "observations, which is a redesign of a control-path metric at weight 0.65. OWNER DECISION."
-    ),
-)
 def test_learning_engages_on_a_house_that_behaves_like_a_house():
     """The whole point. A real building, watched properly, must become knowable."""
     model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
@@ -195,71 +175,111 @@ def test_the_heat_loss_coefficient_is_never_used_as_a_control_input():
     )
 
 
-class TestTwoDefectsWereCancellingEachOther:
-    """A second, independent reason learning is inert - and the trap disarming it revealed.
+def test_the_gate_reads_validated_forecasts_instead_of_the_config_dictionary():
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    model.learned_parameters["confidence"] = 0.0
+    assert model.should_use_learned_parameters()
+    model.observations.clear()
+    model._forecast_cache = None
+    model.learned_parameters["confidence"] = 1.0
+    assert not model.should_use_learned_parameters()
 
-    The gate `should_use_learned_parameters()` reads `learned_parameters["confidence"]`, a key
-    only the `insulation_quality` setter ever writes (and it writes `heat_loss_coefficient`, not
-    confidence), so the gate is False forever. That dead gate once masked a unit error:
-    `calculate_preheating_target` would have fed the learned relative index into
-    `heat_loss_coef / 1000.0` as if it were W/K. Production now always uses the configured
-    coefficient; these two tests hold the gate closed and the pre-heat off the learned index.
-    """
 
-    def test_the_gate_can_never_open_however_much_the_model_learns(self):
-        """The second, independent reason. Recorded, not fixed - opening it is F-132b."""
-        model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
-        params = model.update_learned_parameters()
+def test_the_room_forecast_never_uses_the_quarantined_heat_loss_index():
+    from dataclasses import replace
 
-        assert params is not None, "precondition: the model must have learned something at all"
-        assert "confidence" not in model.learned_parameters, (
-            f"`learned_parameters` now holds {sorted(model.learned_parameters)}. If a confidence "
-            f"has appeared there, someone has repaired the gate - check first that "
-            f"calculate_preheating_target still takes its heat-loss coefficient from CONFIGURATION "
-            f"and not from the quarantined relative index, or the pre-heat is now sized with a "
-            f"dimensionless number divided by 1000 as if it were watts."
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    params = model.get_parameters()
+    forecast = params.forecasts[6]
+    room = model.observations[-1].indoor_temp
+    baseline = forecast.predict(room, [-5.0] * 6, [0.0] * 6)
+    assert baseline is not None
+    changed = replace(params, heat_loss_coefficient=3000.0, heating_efficiency=100.0)
+    assert changed.forecasts[6].predict(room, [-5.0] * 6, [0.0] * 6) == baseline
+
+
+def test_validation_targets_cannot_change_the_fitted_coefficients():
+    from dataclasses import replace
+    from custom_components.effektguard.optimization.thermal_forecast import fit_forecast
+
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    history = list(model.observations)
+    original = fit_forecast(history, 6)
+    assert original is not None and original.skill >= LEARNING_CONFIDENCE_THRESHOLD
+    split = len(history) // 2
+    altered = history[:split] + [
+        replace(o, indoor_temp=o.indoor_temp + 2.0) for o in history[split:]
+    ]
+    failed = fit_forecast(altered, 6)
+    assert failed is not None
+    assert failed.coefficients == pytest.approx(original.coefficients)
+    assert failed.skill < LEARNING_CONFIDENCE_THRESHOLD
+
+
+def test_validated_forecasts_refuse_inputs_outside_their_training_domain():
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    forecast = model.get_parameters().forecasts[6]
+    room = model.observations[-1].indoor_temp
+    assert forecast.predict(room, [-5.0] * 6, [0.0] * 6) is not None
+    assert forecast.predict(room, [-50.0] * 6, [0.0] * 6) is None
+    assert forecast.predict(room, [-5.0] * 6, [10.0] * 6) is None
+    assert forecast.predict(room, [-5.0] * 6, [0.0]) is None
+
+
+@pytest.mark.parametrize("model_age_hours", [0, 2])
+def test_a_validated_horizon_can_recommend_heat_without_trusting_other_horizons(
+    freezer, model_age_hours
+):
+    from types import SimpleNamespace
+    from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    model.thermal_mass = 1.3  # The configured timber horizon looks six hours ahead.
+    end = model.observations[-1].timestamp + timedelta(hours=model_age_hours)
+    freezer.move_to(end)
+    room = model.observations[-1].indoor_temp
+    predictor = ThermalStatePredictor()
+    for cycle in reversed(range(24 * 60 // UPDATE_INTERVAL_MINUTES + 1)):
+        predictor.record_state(
+            end - timedelta(minutes=cycle * UPDATE_INTERVAL_MINUTES), room, -5.0, 0.0, 35.0, -100.0
         )
-        assert not model.should_use_learned_parameters(), (
-            "the gate reads a confidence that nothing writes, so it is False forever - a SECOND "
-            "reason learning never engages, independent of the confidence metric that the xfail "
-            "above records"
+    weather = SimpleNamespace(forecast_hours=[SimpleNamespace(temperature=-5.0)] * 12)
+    state = SimpleNamespace(indoor_temp_valid=True, indoor_temp=room, outdoor_temp=-5.0)
+    proposal = predictor.evaluate_layer(state, weather, room + 1.0, model)
+    assert (proposal.weight > 0.0) == (model_age_hours == 0)
+    assert 0.0 <= proposal.offset <= 2.0
+    params = model.get_parameters()
+    projection = predictor.predict_temperature(6, [-5.0] * 6, [0.0] * 6, learned_params=params)
+    assert (projection.hourly_confidence[-1] >= LEARNING_CONFIDENCE_THRESHOLD) == (
+        model_age_hours == 0
+    )
+    assert projection.hourly_confidence[0] == 0.0
+    if model_age_hours == 0:
+        current_room = round(room - SENSOR_QUANTUM, 1)
+        changed = predictor.predict_temperature(
+            6, [-5.0] * 6, [0.0] * 6, learned_params=params, current_indoor_temp=current_room
         )
+        expected = params.forecasts[6].predict(current_room, [-5.0] * 6, [0.0] * 6)
+        assert expected is not None
+        assert changed.predicted_temps[-1] == pytest.approx(expected)
+        assert changed.predicted_temps[-1] != pytest.approx(projection.predicted_temps[-1])
+        from dataclasses import replace
 
-    def test_the_preheat_never_sizes_itself_with_the_quarantined_index(self):
-        """The control path must not touch the learned coefficient at all.
-
-        The pre-heat must size identically whether the learned index reads 180 or 3000, because
-        production takes the coefficient from configuration. Decay is pinned to a positive value
-        so the deficit is non-zero and a re-armed trap could actually move the answer.
-        """
-        model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
-        model.learned_parameters = {"confidence": 1.0}  # force the gate wide open
-        model._calculate_thermal_decay_rate = lambda: 0.15  # a house that actually cools
-
-        call = dict(
-            current_temp=21.0,
-            desired_temp=21.0,
-            hours_until_peak=6,
-            outdoor_temp=-5.0,
-            forecast_min_temp=-10.0,
+        below = replace(
+            params,
+            forecasts={
+                6: replace(
+                    params.forecasts[6], skill=LEARNING_CONFIDENCE_THRESHOLD - SENSOR_QUANTUM
+                )
+            },
         )
+        untrusted = predictor.predict_temperature(6, [-5.0] * 6, [0.0] * 6, learned_params=below)
+        assert untrusted.predicted_temps == [room] * 6
+        assert untrusted.hourly_confidence == [0.0] * 6
 
-        model._calculate_heat_loss_coefficient = lambda: 180.0
-        baseline = model.calculate_preheating_target(**call)
 
-        assert baseline > call["desired_temp"], (
-            f"PRECONDITION: the pre-heat must actually be sizing something ({baseline:.2f} C vs a "
-            f"target of {call['desired_temp']:.2f}), or a change in the coefficient could not move "
-            f"it and this test would prove nothing."
-        )
-
-        model._calculate_heat_loss_coefficient = lambda: 3000.0  # an absurd relative index
-        with_absurd_index = model.calculate_preheating_target(**call)
-
-        assert with_absurd_index == pytest.approx(baseline), (
-            f"Multiplying the QUARANTINED relative cooling index by 17 moved the pre-heat target "
-            f"from {baseline:.2f} C to {with_absurd_index:.2f} C. That index is dimensionless - "
-            f"its own estimator says it 'MUST NOT be used as an absolute W/°C coefficient anywhere "
-            f"in the control path' - and this is the control path, dividing it by 1000 as if it "
-            f"were watts."
-        )
+def test_a_new_hourly_observation_refreshes_the_cached_forecast_state():
+    model = _observe_a_real_house(LEARNING_OBSERVATION_INTERVAL_MINUTES, days=30)
+    previous = model.get_parameters().observations_end
+    model.record_observation(previous + timedelta(hours=1), 21.9, -5.0, 0.0)
+    assert model.get_parameters().observations_end == previous + timedelta(hours=1)

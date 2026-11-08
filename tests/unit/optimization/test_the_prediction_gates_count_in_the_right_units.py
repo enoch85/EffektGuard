@@ -13,7 +13,6 @@ from __future__ import annotations
 from custom_components.effektguard.const import (
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_MIN_HISTORY_HOURS,
-    PREDICTION_RESPONSIVENESS_MIN_HOURS,
     SAMPLES_PER_HOUR,
     UPDATE_INTERVAL_MINUTES,
 )
@@ -75,10 +74,9 @@ def test_the_learning_progress_message_counts_in_the_same_units_as_the_gate():
 
 
 def test_every_gate_is_expressed_in_hours_not_in_a_remembered_sample_count():
-    """All three, so the next one to be added cannot quietly reintroduce the belief."""
+    """Coverage gates use elapsed hours; model skill is checked independently."""
     for hours in (
         PREDICTION_MIN_HISTORY_HOURS,
-        PREDICTION_RESPONSIVENESS_MIN_HOURS,
         PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     ):
         samples = hours * SAMPLES_PER_HOUR

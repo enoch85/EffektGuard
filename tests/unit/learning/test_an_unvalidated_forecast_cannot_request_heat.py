@@ -35,7 +35,7 @@ async def test_a_fresh_stationary_day_cannot_request_heat_from_the_unvalidated_t
                 0.0,
                 0.0 if i % 13 == 0 else 1.0,
             )
-        assert coordinator.adaptive_learning.get_parameters().confidence > 0.9
+        assert coordinator.adaptive_learning.get_parameters().confidence == 0.0
     for i in range(24 * SAMPLES_PER_HOUR + 1):
         predictor.record_state(
             NOW - timedelta(minutes=UPDATE_INTERVAL_MINUTES * (24 * SAMPLES_PER_HOUR - i)),
@@ -59,9 +59,9 @@ async def test_a_fresh_stationary_day_cannot_request_heat_from_the_unvalidated_t
     weather = WeatherData(
         0.0, [WeatherForecastHour(NOW + timedelta(hours=h), 0.0) for h in range(1, 49)]
     )
-    # The flawed diagnostic trajectory sees cooling even though native heat held the room steady.
+    # Native heat holds the stationary room; no empirical evidence can turn it into a heat request.
     proposal = predictor.evaluate_layer(state, weather, 22.0, coordinator.adaptive_learning)
-    assert proposal.offset > 0.0 and proposal.weight > 0.0
+    assert proposal.offset == 0.0 and proposal.weight == 0.0
     decision = coordinator.engine.calculate_decision(state, None, weather, 0.0, 0.0)
     vote = next(layer for layer in decision.layers if layer.name == "Learned Pre-heat")
     assert vote.weight == 0.0 and vote.offset == 0.0
@@ -72,3 +72,57 @@ async def test_a_fresh_stationary_day_cannot_request_heat_from_the_unvalidated_t
     )
     assert cold.is_emergency
     assert cold.offset > 0.0
+
+
+async def test_the_engine_uses_a_validated_horizon_and_keeps_room_safety(hass, freezer):
+    from tests.unit.optimization.test_learning_can_actually_learn import _observe_a_real_house
+
+    freezer.move_to(NOW)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"enable_price_optimization": False},
+        options={"target_indoor_temp": 22.8, "thermal_mass": 1.3},
+    )
+    entry.add_to_hass(hass)
+    coordinator = await _create_coordinator(hass, entry)
+    model = _observe_a_real_house(60, start=NOW - timedelta(hours=30 * 24 - 1))
+    model.thermal_mass = 1.3
+    coordinator.adaptive_learning = model
+    coordinator.engine.thermal = model
+    room = model.observations[-1].indoor_temp
+    predictor = coordinator.thermal_predictor
+    for cycle in reversed(range(24 * SAMPLES_PER_HOUR + 1)):
+        predictor.record_state(
+            NOW - timedelta(minutes=cycle * UPDATE_INTERVAL_MINUTES), room, -5.0, 0.0, 35.0, -100.0
+        )
+    state = NibeState(
+        outdoor_temp=-5.0,
+        indoor_temp=room,
+        supply_temp=35.0,
+        return_temp=30.0,
+        degree_minutes=-100.0,
+        current_offset=0.0,
+        is_heating=True,
+        is_hot_water=False,
+        timestamp=NOW,
+    )
+    weather = WeatherData(
+        -5.0, [WeatherForecastHour(NOW + timedelta(hours=h), -5.0) for h in range(1, 13)]
+    )
+    decision = coordinator.engine.calculate_decision(state, None, weather, 0.0, 0.0)
+    vote = next(layer for layer in decision.layers if layer.name == "Learned Pre-heat")
+    assert vote.weight > 0.0 and 0.0 < vote.offset <= 2.0
+    coordinator.engine.config["enable_weather_prediction"] = False
+    disabled = coordinator.engine.calculate_decision(state, None, weather, 0.0, 0.0)
+    assert (
+        next(layer for layer in disabled.layers if layer.name == "Learned Pre-heat").weight == 0.0
+    )
+    coordinator.engine.config["enable_weather_prediction"] = True
+    missing = coordinator.engine.calculate_decision(
+        replace(state, indoor_temp_valid=False), None, weather, 0.0, 0.0
+    )
+    assert next(layer for layer in missing.layers if layer.name == "Learned Pre-heat").weight == 0.0
+    cold = coordinator.engine.calculate_decision(
+        replace(state, indoor_temp=17.0), None, weather, 0.0, 0.0
+    )
+    assert cold.is_emergency and cold.offset > 0.0

@@ -1020,11 +1020,6 @@ EFFECT_PEAK_OFFSET_WARNING: Final = -1.0  # Moderate reduction within 1.0 kW
 # Temperature trend detection thresholds
 PREDICTION_TREND_RISING_THRESHOLD: Final = 0.3  # °C delta to classify as "rising"
 PREDICTION_TREND_FALLING_THRESHOLD: Final = -0.3  # °C delta to classify as "falling"
-# Default thermal responsiveness (learned or fallback)
-PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT: Final = 0.5  # Default if not learned
-PREDICTION_THERMAL_RESPONSIVENESS_MIN: Final = 0.0  # Minimum valid responsiveness
-PREDICTION_THERMAL_RESPONSIVENESS_MAX: Final = 1.0  # Maximum valid responsiveness
-PREDICTION_MIN_HEATING_OFFSET: Final = 0.5  # Minimum offset for responsiveness learning
 # Climate-aware pre-heating comfort thresholds (°C deficit before pre-heating)
 PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD: Final = 1.0  # Allow 1.0°C deficit at <-15°C
 PREDICTION_COMFORT_THRESHOLD_COLD: Final = 0.7  # Allow 0.7°C deficit at -15°C to -5°C
@@ -1032,17 +1027,10 @@ PREDICTION_COMFORT_THRESHOLD_MILD: Final = 0.5  # Allow 0.5°C deficit at >-5°C
 # Outdoor temperature boundaries for comfort threshold selection
 PREDICTION_OUTDOOR_EXTREME_COLD: Final = -15.0  # °C threshold for extreme cold
 PREDICTION_OUTDOOR_COLD: Final = -5.0  # °C threshold for cold
-# Pre-heating offset multipliers by climate
-PREDICTION_PREHEAT_MULT_EXTREME_COLD: Final = 1.2  # Conservative in extreme cold
-PREDICTION_PREHEAT_MULT_COLD: Final = 1.5  # Moderate in cold
-PREDICTION_PREHEAT_MULT_MILD: Final = 2.0  # Normal in mild
+# Pre-heating offset caps by climate
 PREDICTION_PREHEAT_MAX_EXTREME_COLD: Final = 2.0  # Max offset in extreme cold
 PREDICTION_PREHEAT_MAX_COLD: Final = 2.5  # Max offset in cold
 PREDICTION_PREHEAT_MAX_MILD: Final = 3.0  # Max offset in mild
-# Fallback heat loss model (when learned params unavailable)
-# Reference: Well-insulated Swedish house loses ~0.1-0.2°C/hour at 20°C indoor/outdoor diff
-PREDICTION_FALLBACK_HEAT_LOSS_RATE: Final = 0.15  # °C/hour at reference temp diff
-PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF: Final = 20.0  # Reference indoor/outdoor temp diff
 # Current overshoot threshold for logging thermal storage strategy
 PREDICTION_OVERSHOOT_LOG_THRESHOLD: Final = 0.1  # °C overshoot to log storage strategy
 
@@ -1125,11 +1113,6 @@ WEATHER_COMP_MAX_OFFSET: Final = 3.0  # °C, absolute cap on the compensation of
 
 # Heat loss coefficient defaults (W/°C)
 DEFAULT_HEAT_LOSS_COEFFICIENT: Final = 180.0  # W/°C typical value
-
-# Fallback decay rate for the pre-heat sizing, used until learning is trusted. It was a bare 0.15
-# in adaptive_learning next to a bare 180.0 - and the 180.0 was a second copy of the constant
-# directly above this line.
-DEFAULT_THERMAL_DECAY_RATE: Final = 0.15  # °C per hour, per °C of indoor-outdoor difference
 
 # Power estimation defaults (kW)
 # Used when actual power sensor unavailable - fallback values
@@ -1220,49 +1203,27 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 PREDICTION_MAX_SAMPLE_GAP_MINUTES: Final = UPDATE_INTERVAL_MINUTES * 2
 
 PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all
-PREDICTION_RESPONSIVENESS_MIN_HOURS: Final = 2  # before estimating how fast the house responds
 PREDICTION_LEARNED_PREHEAT_MIN_HOURS: Final = 24  # before acting on learned pre-heating
 
-# Adaptive learning parameters
-# Source: POST_PHASE_5_ROADMAP.md Phase 6 - Self-Learning Capability
-#
-# LEARNING OBSERVES ON A DIFFERENT CLOCK FROM CONTROL, and it has to.
-#
-# Control runs every UPDATE_INTERVAL_MINUTES because the pump needs steering that often. Learning
-# used to piggy-back on the same tick, and could therefore never learn anything: the room
-# sensor (NIBE BT50) reports to 0.1 C, and a house warming at a brisk 0.6 C/h moves 0.05 C in five minutes - half
-# a sensor tick. Every observed rate quantised to 0.0 or 1.2 C/h with nothing in between, so the
-# scatter that `_calculate_confidence` scores was a measurement of the SAMPLING INTERVAL, not of the
-# building. Confidence sat at 0.467 against a 0.7 gate, on any house, forever (F-132).
-#
-# The same house, identical physics, identical sensor, watched more slowly:
-#     5 min   quantum 1.20 C/h   confidence 0.467   never engages
-#    15 min   quantum 0.40 C/h   confidence 0.600   never engages
-#    30 min   quantum 0.20 C/h   confidence 0.707   engages, barely
-#    60 min   quantum 0.10 C/h   confidence 0.811   engages, comfortably
-#
-# Hourly is also the honest timescale for the question being asked. A building's thermal time
-# constant is hours; the concrete slab in UFH_CONCRETE_* lags six of them. Sampling that every five
-# minutes is sampling noise.
-#
-# It fixes the memory as well. The 672-entry deque was commented "1 week" but spanned 56 HOURS at the
-# 5-minute cadence - and it is a rolling window, so the model on day 90 saw exactly what it saw on
-# day 3, and the README's "Day 8-14: high confidence" was unreachable by construction. At one
-# observation an hour the same deque remembers 28 days.
+# Adaptive observations are hourly: five-minute temperature differences are dominated by the
+# room sensor's quantisation. A rolling month supplies training and later validation blocks.
+# Observation coverage alone never earns forecast confidence; each horizon is scored against
+# persistence on targets excluded from its fit (thermal_forecast.py).
 LEARNING_OBSERVATION_INTERVAL_MINUTES: Final = (
     60  # Learning observes hourly, not every control tick
 )
 LEARNING_OBSERVATION_WINDOW: Final = 672  # 672 hourly observations = 28 days of memory
 LEARNING_MIN_OBSERVATIONS: Final = 96  # 96 hourly observations = 4 days before learning may engage
-LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # 70% confidence to use learned params
+LEARNING_CONFIDENCE_THRESHOLD: Final = 0.7  # Minimum held-out squared-error skill over persistence
 
-# What it takes for the heating observations to carry any information at all.
-# The room sensor (NIBE BT50) reports to 0.1 C. A house that moved less than one sensor tick per
-# hour WHILE ACTIVELY HEATING has told us nothing measurable about itself: the signal is below the
-# instrument's resolution. Such a run must score ZERO confidence, not perfect confidence - which is
-# what a std/mean ratio does when every reading is identical and std collapses to 0 (F-132).
-LEARNING_MIN_HEATING_RATE: Final = 0.1  # °C/h - one sensor tick per hour; below this, no signal
-LEARNING_MIN_HEATING_SAMPLES: Final = 10  # observations under heating before consistency means much
+# Forecast validation policy, not physical constants. Fit the earlier half and score the later
+# half without refitting on it. Purge training targets that cross the split. A complete day of
+# validation origins is required at each horizon; flat persistence targets carry no skill signal.
+THERMAL_FORECAST_TRAIN_FRACTION: Final = 0.5
+THERMAL_FORECAST_MIN_VALIDATION_ORIGINS: Final = 24
+THERMAL_FORECAST_MAX_HOURS: Final = int(UFH_CONCRETE_PREDICTION_HORIZON / 2)
+THERMAL_FORECAST_SENSOR_QUANTUM: Final = 0.1  # °C: NIBE BT50 register resolution
+THERMAL_FORECAST_RANK_TOLERANCE: Final = 1e-8  # normalized least-squares singular-value cutoff
 
 # Swedish climate regions - SMHI historical data (1961-1990)
 # Source: Swedish_Climate_Adaptations.md

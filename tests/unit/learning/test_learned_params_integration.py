@@ -13,7 +13,6 @@ import pytest
 from custom_components.effektguard.const import (
     LEARNING_CONFIDENCE_THRESHOLD,
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
-    PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
     SAMPLES_PER_HOUR,
     UFHType,
     UPDATE_INTERVAL_MINUTES,
@@ -81,10 +80,10 @@ def low_confidence_learned_params():
 class TestPredictTemperatureWithLearnedParams:
     """Test predict_temperature uses learned parameters when appropriate."""
 
-    def test_uses_learned_heating_efficiency_when_high_confidence(
+    def test_unvalidated_parameter_confidence_cannot_invent_heat(
         self, predictor_with_history, high_confidence_learned_params
     ):
-        """Verify learned heating_efficiency is used when confidence is high."""
+        """A confidence label supplies no validated horizon or native heating equation."""
         # Predict with learned params
         result = predictor_with_history.predict_temperature(
             hours_ahead=4,
@@ -98,7 +97,8 @@ class TestPredictTemperatureWithLearnedParams:
         # Should complete without error
         assert result is not None
         assert len(result.predicted_temps) == 4
-        assert result.confidence > 0
+        assert result.confidence == 0.0
+        assert result.predicted_temps == [21.0] * 4
 
     def test_falls_back_when_low_confidence(
         self, predictor_with_history, low_confidence_learned_params

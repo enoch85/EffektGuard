@@ -21,31 +21,22 @@ from homeassistant.util import dt as dt_util
 from ..const import (
     LAYER_WEIGHT_PREDICTION,
     LEARNING_CONFIDENCE_THRESHOLD,
+    LEARNING_OBSERVATION_INTERVAL_MINUTES,
     PREDICTION_COMFORT_THRESHOLD_COLD,
     PREDICTION_COMFORT_THRESHOLD_EXTREME_COLD,
     PREDICTION_COMFORT_THRESHOLD_MILD,
-    PREDICTION_FALLBACK_HEAT_LOSS_RATE,
-    PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF,
-    PREDICTION_MIN_HEATING_OFFSET,
     PREDICTION_OUTDOOR_COLD,
     PREDICTION_OUTDOOR_EXTREME_COLD,
     PREDICTION_OVERSHOOT_LOG_THRESHOLD,
     PREDICTION_PREHEAT_MAX_COLD,
     PREDICTION_PREHEAT_MAX_EXTREME_COLD,
     PREDICTION_PREHEAT_MAX_MILD,
-    PREDICTION_PREHEAT_MULT_COLD,
-    PREDICTION_PREHEAT_MULT_EXTREME_COLD,
-    PREDICTION_PREHEAT_MULT_MILD,
-    PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT,
-    PREDICTION_THERMAL_RESPONSIVENESS_MAX,
-    PREDICTION_THERMAL_RESPONSIVENESS_MIN,
     PREDICTION_TREND_FALLING_THRESHOLD,
     PREDICTION_TREND_RISING_THRESHOLD,
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_MIN_HISTORY_HOURS,
     PREDICTION_MAX_SAMPLE_GAP_MINUTES,
     UPDATE_INTERVAL_MINUTES,
-    PREDICTION_RESPONSIVENESS_MIN_HOURS,
     SAMPLES_PER_HOUR,
 )
 from ..utils.time_utils import seconds_between
@@ -233,145 +224,59 @@ class ThermalStatePredictor:
         thermal_mass: float = 1.0,
         insulation_quality: float = 1.0,
         learned_params: LearnedThermalParameters | None = None,
+        current_indoor_temp: float | None = None,
     ) -> TempPrediction:
-        """Predict indoor temperature N hours ahead.
+        """Predict a conditional trajectory using independently validated horizon models.
 
-        Uses learned thermal parameters when available with sufficient confidence,
-        falling back to calculated responsiveness and simple heat loss formula.
-
-        Args:
-            hours_ahead: Number of hours to predict forward
-            future_outdoor_temps: Forecasted outdoor temps (one per hour)
-            planned_offsets: Planned heating offsets (one per hour), or None for current
-            thermal_mass: Building thermal mass (learned or configured)
-            insulation_quality: Insulation quality (learned or configured)
-            learned_params: Learned thermal parameters from AdaptiveThermalModel
-
-        Returns:
-            Temperature prediction with confidence
-
-        Notes:
-            When learned_params is provided with confidence >= LEARNING_CONFIDENCE_THRESHOLD:
-            - Uses heating_efficiency instead of calculated responsiveness
-            - Uses heat_loss_coefficient for proper heat loss calculation
-            - Uses thermal_decay_rate for natural cooling prediction
+        Native heating is included in each model's fitted intercept. Without a validated model,
+        holding the measured room temperature is the explicit zero-confidence fallback. Manual
+        mass/insulation settings cannot turn a heuristic into evidence of forecast skill.
         """
         room = self._measured_room()
-        if not self._has_history_for(room, PREDICTION_MIN_HISTORY_HOURS):
-            # Insufficient data - return simple projection
-            current_temp = room[-1].indoor_temp if room else 21.0
-            return TempPrediction(
-                predicted_temps=[current_temp] * hours_ahead,
-                hours_ahead=hours_ahead,
-                confidence=0.0,
-                trajectory_trend="stable",
-            )
-
-        # Get current state: the room as last measured, the rest as last read
-        current = self.state_history[-1]
-        current_temp = room[-1].indoor_temp
-        current_outdoor = current.outdoor_temp
-        current_offset = current.heating_offset
-
-        # Determine if we should use learned parameters
-        use_learned = (
-            learned_params is not None
-            and learned_params.confidence >= LEARNING_CONFIDENCE_THRESHOLD
+        current_temp = (
+            current_indoor_temp
+            if current_indoor_temp is not None
+            else (room[-1].indoor_temp if room else 21.0)
         )
-
-        # Get heating efficiency (thermal responsiveness)
-        if use_learned:
-            heating_efficiency = learned_params.heating_efficiency
-            _LOGGER.debug(
-                "Using learned heating_efficiency=%.3f (confidence=%.1f%%)",
-                heating_efficiency,
-                learned_params.confidence * 100,
+        temperatures = [current_temp] * hours_ahead
+        skills = [0.0] * hours_ahead
+        model_is_recent = False
+        if (
+            learned_params is not None
+            and learned_params.observations_end is not None
+            and learned_params.observations_end.tzinfo is not None
+        ):
+            model_age = seconds_between(learned_params.observations_end, dt_util.utcnow())
+            model_is_recent = (
+                0
+                <= model_age
+                <= (LEARNING_OBSERVATION_INTERVAL_MINUTES + PREDICTION_MAX_SAMPLE_GAP_MINUTES) * 60
             )
-        else:
-            # Fall back to calculated responsiveness
-            if self._thermal_responsiveness is None:
-                self._thermal_responsiveness = self._calculate_thermal_responsiveness()
-            heating_efficiency = self._thermal_responsiveness
-
-        # Use planned offsets or assume current offset continues
-        if planned_offsets is None:
-            planned_offsets = [current_offset] * hours_ahead
-
-        # Predict trajectory
-        predicted_temps = []
-        temp = current_temp
-
-        for hour in range(hours_ahead):
-            outdoor_temp = (
-                future_outdoor_temps[hour] if hour < len(future_outdoor_temps) else current_outdoor
+        if self._has_history_for(room, PREDICTION_MIN_HISTORY_HOURS) and model_is_recent:
+            current_offset = self.state_history[-1].heating_offset
+            offsets = (
+                planned_offsets if planned_offsets is not None else [current_offset] * hours_ahead
             )
-            offset = planned_offsets[hour] if hour < len(planned_offsets) else current_offset
-
-            # Calculate heat loss rate (natural cooling)
-            temp_diff = temp - outdoor_temp
-            if use_learned and temp_diff > 0:
-                # thermal_decay_rate was measured in °C/hour during actual cooling periods
-                # It already incorporates the building's insulation characteristics
-                #
-                # The learned rate is valid for "typical" conditions during learning.
-                # We have the actual historical average temp diff from state_history.
-                # For now, use the decay_rate directly - it's already calibrated to this building.
-                #
-                # Note: This is a simplification. In reality, heat loss scales with temp_diff
-                # (Newton's law of cooling), but the learned rate already captures the
-                # building's behavior at typical Swedish conditions.
-                heat_loss_rate = abs(learned_params.thermal_decay_rate)
-            elif temp_diff > 0:
-                # Fallback: Simple model based on temp difference (Newton's law of cooling)
-                # Scale linearly with temp_diff from reference conditions
-                # Better insulation (higher quality) = less heat loss
-                # insulation_quality 0.5 = poor (2x heat loss), 2.0 = excellent (0.5x heat loss)
-                base_heat_loss = (
-                    temp_diff / PREDICTION_FALLBACK_HEAT_LOSS_REF_DIFF
-                ) * PREDICTION_FALLBACK_HEAT_LOSS_RATE
-                heat_loss_rate = base_heat_loss / insulation_quality
-            else:
-                # Indoor colder than outdoor - no heat loss (actually gain, but ignore)
-                heat_loss_rate = 0.0
-
-            # Calculate heat input from heating system
-            # heating_efficiency is °C per offset per hour (already measured including thermal mass effects)
-            heat_input_rate = offset * heating_efficiency
-
-            # Net temperature change per hour
-            # When using learned params, heating_efficiency already accounts for building response
-            # When using fallback, thermal_mass scales the rate (higher mass = slower change)
-            if use_learned:
-                # Learned efficiency already captures building's response characteristics
-                dt_per_hour = heat_input_rate - heat_loss_rate
-            else:
-                # Fallback: apply thermal mass scaling (1.0 = normal, 2.0 = slow, 0.5 = fast)
-                dt_per_hour = (heat_input_rate - heat_loss_rate) / thermal_mass
-
-            # Update temperature
-            temp = temp + dt_per_hour
-            predicted_temps.append(temp)
-
-        # Calculate confidence based on history quality
-        confidence = self._calculate_prediction_confidence()
-
-        # Determine trajectory trend
-        if len(predicted_temps) >= 2:
-            temp_delta = predicted_temps[-1] - predicted_temps[0]
-            if temp_delta > PREDICTION_TREND_RISING_THRESHOLD:
-                trend = "rising"
-            elif temp_delta < PREDICTION_TREND_FALLING_THRESHOLD:
-                trend = "falling"
-            else:
-                trend = "stable"
-        else:
-            trend = "stable"
-
+            for hour in range(1, hours_ahead + 1):
+                forecast = learned_params.forecasts.get(hour)
+                if forecast is None or forecast.skill < LEARNING_CONFIDENCE_THRESHOLD:
+                    continue
+                predicted = forecast.predict(current_temp, future_outdoor_temps, offsets)
+                if predicted is not None:
+                    temperatures[hour - 1] = predicted
+                    skills[hour - 1] = forecast.skill
+        change = temperatures[-1] - current_temp if temperatures else 0.0
+        trend = "stable"
+        if change > PREDICTION_TREND_RISING_THRESHOLD:
+            trend = "rising"
+        elif change < PREDICTION_TREND_FALLING_THRESHOLD:
+            trend = "falling"
         return TempPrediction(
-            predicted_temps=predicted_temps,
+            predicted_temps=temperatures,
             hours_ahead=hours_ahead,
-            confidence=confidence,
+            confidence=skills[-1] if skills else 0.0,
             trajectory_trend=trend,
+            hourly_confidence=skills,
         )
 
     def should_pre_heat(
@@ -411,17 +316,25 @@ class ThermalStatePredictor:
             thermal_mass=thermal_mass,
             insulation_quality=insulation_quality,
             learned_params=learned_params,
+            current_indoor_temp=current_indoor_temp,
         )
 
-        # Check minimum predicted temperature
-        min_predicted_temp = min(no_heat_prediction.predicted_temps)
+        eligible = [
+            (hour, temp)
+            for hour, (temp, skill) in enumerate(
+                zip(no_heat_prediction.predicted_temps, no_heat_prediction.hourly_confidence),
+                start=1,
+            )
+            if skill >= LEARNING_CONFIDENCE_THRESHOLD
+        ]
+        if no_heat_prediction.confidence < LEARNING_CONFIDENCE_THRESHOLD or not eligible:
+            return PreHeatDecision(False, 0.0, "No validated room forecast", 0, target_temp)
+        event_hour, min_predicted_temp = min(eligible, key=lambda pair: pair[1])
         temp_deficit = target_temp - min_predicted_temp
-
-        # Account for current overshoot as stored thermal energy
-        # If we're 1.9°C above target, that stored heat will help coast through cold
-        # The effective deficit is reduced by the overshoot amount
+        # The forecast starts at the measured room; its existing warmth is already included.
         current_overshoot = max(0.0, current_indoor_temp - target_temp)
-        effective_deficit = max(0.0, temp_deficit - current_overshoot)
+        error_bound = learned_params.forecasts[event_hour].max_validation_error
+        effective_deficit = max(0.0, temp_deficit - error_bound)
 
         # Swedish climate-aware comfort thresholds
         # Colder weather = wider tolerance before pre-heating
@@ -436,31 +349,20 @@ class ThermalStatePredictor:
             comfort_threshold = PREDICTION_COMFORT_THRESHOLD_MILD
 
         if effective_deficit > comfort_threshold:
-            # Pre-heating recommended
-            # Calculate required offset to maintain comfort
-            # Use effective_deficit (accounting for current overshoot as thermal storage)
-            # More aggressive in extreme cold to compensate for thermal debt risk
+            forecast = learned_params.forecasts[event_hour]
             if current_outdoor_temp < PREDICTION_OUTDOOR_EXTREME_COLD:
-                # Extreme cold: Conservative pre-heating (risk of DM -1500)
-                recommended_offset = min(
-                    effective_deficit * PREDICTION_PREHEAT_MULT_EXTREME_COLD,
-                    PREDICTION_PREHEAT_MAX_EXTREME_COLD,
-                )
-                reason = f"room heads {temp_deficit:.1f}°C under target, extreme cold"
+                maximum = PREDICTION_PREHEAT_MAX_EXTREME_COLD
             elif current_outdoor_temp < PREDICTION_OUTDOOR_COLD:
-                # Cold: Moderate pre-heating
-                recommended_offset = min(
-                    effective_deficit * PREDICTION_PREHEAT_MULT_COLD,
-                    PREDICTION_PREHEAT_MAX_COLD,
-                )
-                reason = f"room heads {temp_deficit:.1f}°C under target, cold"
+                maximum = PREDICTION_PREHEAT_MAX_COLD
             else:
-                # Mild: Normal pre-heating
-                recommended_offset = min(
-                    effective_deficit * PREDICTION_PREHEAT_MULT_MILD,
-                    PREDICTION_PREHEAT_MAX_MILD,
-                )
-                reason = f"room heads {temp_deficit:.1f}°C under target"
+                maximum = PREDICTION_PREHEAT_MAX_MILD
+            recommended_offset = max(
+                0.0,
+                min(
+                    effective_deficit / forecast.coefficients[-1], maximum, forecast.offset_range[1]
+                ),
+            )
+            reason = f"validated room forecast {temp_deficit:.1f}°C under target"
 
             # Add strategic context if pre-heating when indoor already above target
             # This explains thermal storage strategy to user
@@ -468,11 +370,10 @@ class ThermalStatePredictor:
                 reason += f", {current_overshoot:.1f}°C stored"
 
             # Calculate hours until temperature drops below threshold
-            hours_until_cold = 0
-            for i, temp in enumerate(no_heat_prediction.predicted_temps):
-                if temp < target_temp - comfort_threshold:
-                    hours_until_cold = i + 1
-                    break
+            hours_until_cold = next(
+                (hour for hour, temp in eligible if temp < target_temp - comfort_threshold),
+                event_hour,
+            )
 
             # Calculate pre-heat target temperature
             # Higher thermal mass = building holds heat longer = LESS safety margin needed
@@ -481,7 +382,7 @@ class ThermalStatePredictor:
             preheat_target = target_temp + safety_margin
 
             return PreHeatDecision(
-                should_preheat=True,
+                should_preheat=recommended_offset > 0.0,
                 recommended_offset=recommended_offset,
                 reason=reason,
                 hours_until_event=hours_until_cold,
@@ -631,46 +532,6 @@ class ThermalStatePredictor:
                 weight=0.0,
                 reason=f"Calculation error: {err}",
             )
-
-    def _calculate_thermal_responsiveness(self) -> float:
-        """Calculate how responsive system is to offset changes.
-
-        Based on historical temperature response to heating changes.
-
-        Returns:
-            Responsiveness factor (°C per offset per hour)
-        """
-        room = self._measured_room()
-        if not self._has_history_for(room, PREDICTION_RESPONSIVENESS_MIN_HOURS):
-            return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
-
-        # Analyze temperature changes relative to offset
-        responsiveness_samples = []
-
-        for i in range(4, len(room)):
-            current = room[i]
-            prev = room[i - 4]  # 1 hour ago
-
-            time_delta = seconds_between(prev.timestamp, current.timestamp) / 3600
-
-            # Use the PREVIOUS offset - it's what caused the temperature change
-            # The current offset just started and hasn't affected indoor temp yet
-            if time_delta > 0 and prev.heating_offset > PREDICTION_MIN_HEATING_OFFSET:
-                temp_change = current.indoor_temp - prev.indoor_temp
-                responsiveness = temp_change / (time_delta * prev.heating_offset)
-
-                # Sanity check
-                if (
-                    PREDICTION_THERMAL_RESPONSIVENESS_MIN
-                    < responsiveness
-                    < PREDICTION_THERMAL_RESPONSIVENESS_MAX
-                ):
-                    responsiveness_samples.append(responsiveness)
-
-        if responsiveness_samples:
-            return np.median(responsiveness_samples)
-        else:
-            return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
     def _calculate_prediction_confidence(
         self, snapshots: list[ThermalSnapshot] | None = None

@@ -746,19 +746,27 @@ class DecisionEngine:
             is_cost_layer=True,  # Effect tariff optimizes cost, not comfort or safety
         )
 
-        # The room trajectory treats offset zero as zero heat, omitting the native curve.
-        # Its confidence measures history coverage, not forecast skill. Until that model is
-        # validated, it cannot request heat. The predictor still supplies measured trends.
-        prediction_decision = LayerDecision(
-            name="Learned Pre-heat",
-            offset=0.0,
-            weight=0.0,
-            reason=(
-                "Room trajectory is not validated"
-                if self.predictor
-                else "Predictor not initialized"
-            ),
-        )
+        # A learned forecast may vote only at its own validated horizon and inside its training
+        # domain. Missing models, insufficient history and unproven confidence abstain in the layer.
+        if self.predictor and self.config.get("enable_weather_prediction", True):
+            prediction = self.predictor.evaluate_layer(
+                nibe_state, weather_data, self.target_temp, self.thermal
+            )
+            prediction_decision = LayerDecision(
+                name=prediction.name,
+                offset=prediction.offset,
+                weight=prediction.weight,
+                reason=prediction.reason,
+            )
+        else:
+            prediction_decision = LayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason=(
+                    "Weather prediction disabled" if self.predictor else "Predictor not initialized"
+                ),
+            )
 
         # 6. Weather Compensation Layer
         comp_result = self.weather_comp_layer.evaluate_layer(
