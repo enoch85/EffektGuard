@@ -1060,13 +1060,17 @@ class DecisionEngine:
         A heating-only pump cannot remove the heat stored before the outdoor temperature reaches
         the house's balance point. The existing hourly forecast window can reveal that warmth
         before the room itself overheats. Recovery tiers abstain; the downstream control and
-        register guards still decide what reaches the pump. No learned room model is required.
+        register guards still decide what reaches the pump. The early full cut is limited to
+        radiators: extending it to underfloor heating increased cold time in the May replays.
+        No learned room model is required.
         """
         tier = getattr(emergency_decision, "tier", "")
         if (
             not self.config.get("enable_weather_prediction", True)
+            or self.weather_comp.is_underfloor
             or not getattr(nibe_state, "indoor_temp_valid", True)
             or not math.isfinite(nibe_state.indoor_temp)
+            or self._absolute_safety_floor(nibe_state) is not None
             or round(nibe_state.indoor_temp - room_floor, 2) < WARM_WEATHER_COAST_FLOOR_MARGIN
             or tier in DM_RECOVERY_TIERS
             or tier == DM_TIER_EMERGENCY

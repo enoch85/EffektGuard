@@ -5,7 +5,12 @@ from datetime import timedelta
 
 import pytest
 
-from custom_components.effektguard.const import MIN_OFFSET, SAFETY_EMERGENCY_OFFSET
+from custom_components.effektguard.const import (
+    MIN_OFFSET,
+    MIN_TARGET_TEMP,
+    MIN_TEMP_LIMIT,
+    SAFETY_EMERGENCY_OFFSET,
+)
 from tests.unit.optimization.test_a_warm_room_waits_for_cheaper_hours import (
     NOW,
     _engine,
@@ -42,6 +47,8 @@ def test_a_room_above_its_mode_floor_coasts_without_needing_an_expensive_price(f
     "case",
     [
         "disabled",
+        "concrete_floor_heating",
+        "timber_floor_heating",
         "sensor_missing",
         "at_floor",
         "comfort_floor",
@@ -59,6 +66,15 @@ def test_coasting_requires_a_measured_warm_room_and_complete_future_weather(free
     engine, state, weather = _inputs()
     if case == "disabled":
         engine.config["enable_weather_prediction"] = False
+    elif case in ("concrete_floor_heating", "timber_floor_heating"):
+        kind = "concrete_ufh" if case == "concrete_floor_heating" else "timber_ufh"
+        engine = type(engine)(
+            engine.price,
+            engine.effect,
+            engine.thermal,
+            engine.config | {"heating_type": kind},
+            heat_pump_model=engine.heat_pump_model,
+        )
     elif case == "sensor_missing":
         state = replace(state, indoor_temp_valid=False)
     elif case in ("at_floor", "comfort_floor", "savings_floor"):
@@ -89,7 +105,9 @@ def test_coasting_requires_a_measured_warm_room_and_complete_future_weather(free
     assert _decide(engine, state, weather).offset > MIN_OFFSET
 
 
-@pytest.mark.parametrize("case", ["manual", "cold_room", "capacity_shortfall", "emergency"])
+@pytest.mark.parametrize(
+    "case", ["manual", "cold_room", "safety_at_savings_floor", "capacity_shortfall", "emergency"]
+)
 def test_warm_weather_does_not_override_existing_control_guards(freezer, case):
     freezer.move_to(NOW)
     engine, state, weather = _inputs()
@@ -97,6 +115,11 @@ def test_warm_weather_does_not_override_existing_control_guards(freezer, case):
         engine.set_manual_override(1.0)
     elif case == "cold_room":
         state = replace(state, indoor_temp=17.0)
+    elif case == "safety_at_savings_floor":
+        engine.target_temp = MIN_TARGET_TEMP
+        engine.config["optimization_mode"] = "savings"
+        engine.update_mode_config()
+        state = replace(state, indoor_temp=MIN_TEMP_LIMIT - 0.1)
     elif case == "capacity_shortfall":
         engine.capacity_shortfall.is_short = lambda *_: True
         engine.capacity_shortfall._seen.append((NOW, 12.0))
@@ -105,7 +128,7 @@ def test_warm_weather_does_not_override_existing_control_guards(freezer, case):
     decision = _decide(engine, state, weather)
     if case == "manual":
         assert decision.offset == 1.0
-    elif case == "cold_room":
+    elif case in ("cold_room", "safety_at_savings_floor"):
         assert decision.offset == SAFETY_EMERGENCY_OFFSET
     elif case == "emergency":
         control, _, _ = _inputs()
@@ -115,7 +138,7 @@ def test_warm_weather_does_not_override_existing_control_guards(freezer, case):
         assert decision.offset >= 0.0
 
 
-@pytest.mark.parametrize("tier", ["T1", "T2", "T3"])
+@pytest.mark.parametrize("tier", ["T1", "T2", "T3", "EMERGENCY"])
 def test_a_recovery_proposal_cannot_be_replaced_by_warm_weather(freezer, monkeypatch, tier):
     from custom_components.effektguard.optimization.thermal_layer import EmergencyLayerDecision
 
@@ -123,4 +146,8 @@ def test_a_recovery_proposal_cannot_be_replaced_by_warm_weather(freezer, monkeyp
     engine, state, weather = _inputs()
     recovery = EmergencyLayerDecision("Thermal Debt", 1.5, 0.9, "Recovery", tier=tier)
     monkeypatch.setattr(engine.emergency_layer, "evaluate_layer", lambda **_: recovery)
-    assert _decide(engine, state, weather).offset > 0.0
+    offset = _decide(engine, state, weather).offset
+    if tier == "EMERGENCY":
+        assert offset >= 0.0
+    else:
+        assert offset > 0.0
