@@ -54,7 +54,7 @@ def mock_thermal_model():
 
 
 # A full day of history, in samples, at whatever cadence the coordinator actually runs at.
-REQUIRED_SAMPLES = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+REQUIRED_SAMPLES = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
 
 
 class TestEvaluateLayerInsufficientData:
@@ -89,7 +89,7 @@ class TestEvaluateLayerInsufficientData:
     ):
         """When partial observations, shows learning progress."""
         half = REQUIRED_SAMPLES // 2
-        for i in range(half):
+        for i in reversed(range(half)):
             predictor.record_state(
                 timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
@@ -117,7 +117,7 @@ class TestEvaluateLayerNoWeatherData:
     def test_no_weather_data_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When weather_data is None, returns no pre-heat."""
         # Add enough observations
-        for i in range(REQUIRED_SAMPLES + 4):
+        for i in reversed(range(REQUIRED_SAMPLES + 4)):
             predictor.record_state(
                 timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
@@ -142,7 +142,7 @@ class TestEvaluateLayerNoWeatherData:
     def test_empty_forecast_returns_zero(self, predictor, mock_nibe_state, mock_thermal_model):
         """When forecast_hours is empty, returns no pre-heat."""
         # Add enough observations
-        for i in range(REQUIRED_SAMPLES + 4):
+        for i in reversed(range(REQUIRED_SAMPLES + 4)):
             predictor.record_state(
                 timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
@@ -175,7 +175,7 @@ class TestEvaluateLayerReturnsDecision:
     ):
         """evaluate_layer returns PredictionLayerDecision."""
         # Add enough observations
-        for i in range(REQUIRED_SAMPLES + 4):
+        for i in reversed(range(REQUIRED_SAMPLES + 4)):
             predictor.record_state(
                 timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
@@ -203,7 +203,7 @@ class TestEvaluateLayerReturnsDecision:
     ):
         """Decision name is always 'Learned Pre-heat'."""
         # Add enough observations
-        for i in range(REQUIRED_SAMPLES + 4):
+        for i in reversed(range(REQUIRED_SAMPLES + 4)):
             predictor.record_state(
                 timestamp=datetime.now() - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
                 indoor_temp=21.0,
