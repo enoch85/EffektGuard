@@ -77,6 +77,14 @@ Per house, `output/summary-<tag>.json` holds the stats, failures and violations,
   electricity excluding standby; storage changes and immersion affect that diagnostic too.
 - `layer_votes` counts proposed votes before aggregation, gating and register conversion. A
   recovery vote in May does not by itself establish applied heat or extra cost.
+- `zero_heat_comfort_minutes_above` repeats the room balance with supplied heat set to zero,
+  starting from the same room and using the same weather and gains. When the emitter is
+  nonnegative and the discrete comparison coefficient is in [0, 1], that trajectory is a lower
+  temperature bound (`zero_heat_bound_valid`). A reference already over the upper-band budget
+  proves the heating-only plant cannot meet that budget; the failure says so. In the 21-day May
+  apartment case, even zero supplied heat gives 7,175 minutes above the band against a 720-minute
+  budget. This is a model-feasibility result, not a finding about the owner's home. The reference
+  can violate the lower comfort floor, so differences from it do not establish avoidable heat or savings.
 - `comfort_minutes_below` counts minutes at least `SCENARIO_COMFORT_BREACH_MIN_DEPTH_C` below
   the band the mode keeps, `comfort_band_low_c`: the target minus the configured tolerance, or
   minus the mode's `room_floor_below_target` where that is wider (savings: a degree). Shallower

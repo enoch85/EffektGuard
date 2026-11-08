@@ -40,3 +40,40 @@ def test_immersion_minus_instantaneous_deficit_does_not_identify_a_control_effec
 def test_removing_invalid_bounds_keeps_real_violation_checks(violation):
     failures = sim.check_invariants("physical-violation", _quiet_run(), [{"type": violation}])
     assert any("safety violation" in reason for reason in failures)
+
+
+def test_a_heating_only_plant_identifies_an_unattainable_upper_comfort_budget():
+    from datetime import datetime
+
+    house = next(h for h in sim.HOUSES if h.name == "apartment_f730")
+    times, temperatures, raw, unit = sim._synthetic_days(datetime(2026, 5, 1, tzinfo=sim.TZ), 2)
+    stats, violations, _ = sim.simulate(
+        house, times, [23.0] * len(temperatures), sim.PriceSource(raw, unit), 2
+    )
+    assert stats["zero_heat_bound_valid"]
+    assert stats["zero_heat_comfort_minutes_above"] > sim.MAX_COMFORT_MINUTES_ABOVE
+    assert stats["comfort_minutes_above"] >= stats["zero_heat_comfort_minutes_above"]
+    assert any(
+        "cannot meet" in reason
+        for reason in sim.check_invariants("warm-plant", stats, violations, house)
+    )
+
+
+def test_the_zero_heat_reference_does_not_follow_the_controller():
+    from datetime import datetime
+
+    house = next(h for h in sim.HOUSES if h.name == "apartment_f730")
+    times, temperatures, raw, unit = sim._synthetic_days(datetime(2026, 5, 1, tzinfo=sim.TZ), 2)
+    runs = [
+        sim.simulate(
+            house,
+            times,
+            [16.0] * len(temperatures),
+            sim.PriceSource(raw, unit),
+            2,
+            fixed_offset=offset,
+        )[0]
+        for offset in (-10.0, 10.0)
+    ]
+    assert runs[0]["comfort_minutes_above"] != runs[1]["comfort_minutes_above"]
+    assert runs[0]["zero_heat_comfort_minutes_above"] == runs[1]["zero_heat_comfort_minutes_above"]

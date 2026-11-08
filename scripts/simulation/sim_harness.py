@@ -1186,14 +1186,13 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
             failures.append(
                 f"{stats['comfort_minutes_below']} minutes below the comfort band of "
                 f"{stats['comfort_band_low_c']:.1f} C "
-                f"(budget {SCENARIO_COMFORT_BREACH_BUDGET_MIN}) - the optimiser let the "
-                f"house go cold in real weather it will meet every winter"
+                f"(budget {SCENARIO_COMFORT_BREACH_BUDGET_MIN})"
             )
 
     if "no_immersion_at_all" in scenario.expect and stats.get("immersion_kwh", 0.0) > 0.0:
         failures.append(
             f"the immersion heater burned {stats['immersion_kwh']:.1f} kWh in weather this mild. "
-            f"Resistive heat at COP 1.0 has no business running here at all"
+            f"The scenario's immersion budget is zero; this does not attribute its cause."
         )
 
     if "no_dm_past_immersion_limit" in scenario.expect:
@@ -1201,7 +1200,7 @@ def check_scenario_expectations(scenario: Scenario, stats: dict, house) -> list[
             failures.append(
                 f"degree minutes reached {stats['dm_min']:.0f}, past the "
                 f"{DM_THRESHOLD_IMMERSION_LIMIT:.0f} "
-                f"immersion limit - the thermal-debt ladder did not hold"
+                f"scenario immersion limit"
             )
 
     if "heating_tracks_demand" in scenario.expect:
@@ -1583,6 +1582,7 @@ def simulate(
 
     indoor = 22.0
     indoor_start = indoor
+    zero_heat_indoor = indoor
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
     last_learning_observation: datetime | None = None
@@ -1611,6 +1611,11 @@ def simulate(
         "comfort_degree_minutes_below": 0.0,
         "comfort_minutes_grazing": 0,
         "comfort_minutes_above": 0,
+        "zero_heat_comfort_minutes_above": 0,
+        "zero_heat_bound_valid": (
+            0.0 <= house.hlc_w_per_k * STEP_MIN * 60.0 / house.capacity_j_per_k <= 1.0
+            and house.design_heat_w >= 0.0
+        ),
         "compressor_starts": 0,
         "capacity_outside_published_minutes": 0,
         "compressor_below_declared_minimum_minutes": 0,
@@ -1820,6 +1825,18 @@ def simulate(
                 q_w + INTERNAL_GAINS_W - house.hlc_w_per_k * (indoor - tout)
             ) / house.capacity_j_per_k
             indoor += d_indoor * STEP_MIN * 60.0
+
+            # Same weather and initial room, but no supplied heat. With a nonnegative
+            # emitter and Euler coefficient in [0, 1], this is a lower temperature bound
+            # by induction. It diagnoses an impossible upper-band budget, not savings.
+            zero_heat_indoor += (
+                (INTERNAL_GAINS_W - house.hlc_w_per_k * (zero_heat_indoor - tout))
+                / house.capacity_j_per_k
+                * STEP_MIN
+                * 60.0
+            )
+            if zero_heat_indoor > TARGET_INDOOR + OVERSHOOT_TOLERANCE:
+                stats["zero_heat_comfort_minutes_above"] += STEP_MIN
 
             # The heating season, decided BEFORE degree minutes, because it governs whether
             # degree minutes are accumulated at all - see HEATING_SEASON_STOP_OUTDOOR_C.
@@ -2365,7 +2382,7 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     if stats["indoor_mean"] < stats["comfort_band_low_c"]:
         failures.append(
             f"mean indoor {stats['indoor_mean']:.2f} C is below the comfort band "
-            f"({stats['comfort_band_low_c']:.2f} C) - the optimiser under-heated the house"
+            f"({stats['comfort_band_low_c']:.2f} C)"
         )
 
     if stats["exceptions"]:
@@ -2389,14 +2406,24 @@ def check_invariants(tag: str, stats: dict, violations: list, house=None) -> lis
     if stats["comfort_minutes_below"] > MAX_COMFORT_MINUTES_BELOW:
         failures.append(
             f"{stats['comfort_minutes_below']} minutes below the comfort band of "
-            f"{stats['comfort_band_low_c']:.1f} C (budget {MAX_COMFORT_MINUTES_BELOW}) - the "
-            f"optimiser starved the house"
+            f"{stats['comfort_band_low_c']:.1f} C (budget {MAX_COMFORT_MINUTES_BELOW})"
         )
 
     if stats["comfort_minutes_above"] > MAX_COMFORT_MINUTES_ABOVE:
+        zero_heat_above = stats.get("zero_heat_comfort_minutes_above", 0)
+        impossible = (
+            stats.get("zero_heat_bound_valid", False)
+            and zero_heat_above > MAX_COMFORT_MINUTES_ABOVE
+        )
+        explanation = (
+            f"; even zero supplied heat gives {zero_heat_above} minutes above the band, "
+            "so this heating-only plant cannot meet the budget"
+            if impossible
+            else ""
+        )
         failures.append(
             f"{stats['comfort_minutes_above']} minutes above the comfort band "
-            f"(budget {MAX_COMFORT_MINUTES_ABOVE}) - the optimiser cooked the house"
+            f"(budget {MAX_COMFORT_MINUTES_ABOVE}){explanation}"
         )
 
     return failures
