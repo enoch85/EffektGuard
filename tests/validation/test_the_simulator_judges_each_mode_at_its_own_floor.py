@@ -37,7 +37,7 @@ def _quiet_month(mode: str, indoor_mean: float) -> dict:
         "indoor_mean": indoor_mean,
         "exceptions": 0,
         "water_node_leak_kwh": 0.0,
-        "unavoidable_immersion_kwh": 0.0,
+        "instantaneous_capacity_deficit_kwh": 0.0,
         "immersion_kwh": 0.0,
         "comfort_minutes_below": 0,
         "comfort_minutes_above": 0,

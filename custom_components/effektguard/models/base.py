@@ -149,6 +149,11 @@ class HeatPumpProfile(ABC):
     datasheet_points: tuple[RatingPoint, ...] = field(default_factory=tuple)
     datasheet_source: str = ""  # the document these came out of. No source, no number.
 
+    # Maximum compressor outputs, separate from nominal COP rating points.
+    # Each row is (source temperature, outputs at capacity_flow_temps_c).
+    capacity_flow_temps_c: tuple[float, ...] = ()
+    peak_capacity_kw: tuple[tuple[float, tuple[float, ...]], ...] = ()
+
     # The datasheet's own "Heating capacity (PH)" row, e.g. "3 - 12 kW". THIS IS NOT THE SAME THING
     # as the output at a rating point: NIBE's EN 14511 figures for the inverter machines are taken
     # at NOMINAL compressor frequency (50 Hz for the ground-source pumps), while this row is the
@@ -195,6 +200,11 @@ class HeatPumpProfile(ABC):
     supplementary_heat_kw: float = 0.0
 
     @property
+    def min_heat_output_kw(self) -> float:
+        """Declared minimum output; separate from nominal COP-test loads and peak capacity."""
+        return self.heating_capacity_range_kw[0]
+
+    @property
     def max_heat_output_kw(self) -> float:
         """The most heat this machine can make, from its own datasheet.
 
@@ -206,10 +216,12 @@ class HeatPumpProfile(ABC):
 
         # The ErP declaration is also a published statement about the maximum. For the F2040-8, the
         # AVERAGE declaration (Pdesignh 8.2 kW, Psup 1.1 kW at -10 C) puts the COMPRESSOR at 7.1 kW -
-        # above its coldest tabulated rating point (6.60 kW at -7 C), because inverter capacity rises
-        # as the weather cools. Tbiv and Psup belong to the average climate, so it is the only
+        # above its coldest nominal COP rating point (6.60 kW at -7 C).
+        # Tbiv and Psup belong to the average climate, so it is the only
         # Pdesignh they may be combined with.
         published = max(point.heat_output_kw for point in self.datasheet_points)
+        if self.peak_capacity_kw:
+            published = max(published, max(max(outputs) for _, outputs in self.peak_capacity_kw))
         if self.design_heat_load_average_kw > 0.0 and self.supplementary_heat_kw > 0.0:
             published = max(
                 published, self.design_heat_load_average_kw - self.supplementary_heat_kw
