@@ -395,7 +395,8 @@ class ThermalStatePredictor:
                 target_temp=target_temp,
             )
 
-    def _weather_for_hours(self, weather_data, hours: int) -> list[float]:
+    @staticmethod
+    def forecast_temperatures(weather_data, hours: int) -> list[float]:
         """Sample actual future instants; missing hourly coverage cannot become a trusted input.
 
         Forecast timestamps are absolute instants, including both occurrences of a repeated local
@@ -492,7 +493,7 @@ class ThermalStatePredictor:
             prediction_horizon = int(thermal_model.get_prediction_horizon())
             # Half of the configured horizon, measured in real elapsed hours.
             hours_ahead = prediction_horizon // 2
-            forecast_temps = self._weather_for_hours(weather_data, hours_ahead)
+            forecast_temps = self.forecast_temperatures(weather_data, hours_ahead)
 
             if not forecast_temps:
                 return PredictionLayerDecision(

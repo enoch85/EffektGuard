@@ -758,6 +758,11 @@ WAIT_CHEAPER_WARMING_HOURS: Final = 6  # within this many hours
 WAIT_CHEAPER_PRICE_RATIO: Final = 0.9  # a cheaper quarter costs at most this share of now
 WAIT_CHEAPER_LOOKAHEAD_QUARTERS: Final = 16  # 4 h
 
+# One BT50 sensor step above the mode floor before withholding heat for a forecast warm day.
+# Policy assumption; uses the existing weather horizon and register minimum, with the same
+# downstream trend, wear, immersion, capacity and write guards as every other automatic cut.
+WARM_WEATHER_COAST_FLOOR_MARGIN: Final = 0.1
+
 # Rapid cooling detection (Oct 19, 2025)
 # Detects rapid indoor temperature changes and boosts heating proactively
 RAPID_COOLING_THRESHOLD: Final = -0.3  # °C/hour for rapid cooling detection

@@ -100,6 +100,11 @@ Every 5 minutes it sets the heat, in whole degrees, from:
   expensive, cheaper power comes within 4 hours, and the weather forecast warms 1 °C or more within
   6 hours, it turns the heat right down until the cheaper hours, or until the room has cooled to
   that level. The heat already in the floor and the warmer day keep the room up meanwhile.
+- Warmer weather: with a measured room at least one sensor step above your mode's floor, it
+  turns the heat down before a warm afternoon. This needs a complete hourly forecast covering
+  the next 12 hours and Weather Prediction on. It stops coasting at the room floor; recovery
+  and safety guards still apply. A forecast can be wrong, so this cannot guarantee the room
+  will stay inside your tolerance.
 - Colder weather: when a colder day is coming, it heats ahead, earlier in a heavy house. Only at
   cheap times.
 - Monthly peak: less heat close to this month's highest power use. Needs peak protection, and a
