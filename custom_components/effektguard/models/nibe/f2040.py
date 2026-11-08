@@ -10,7 +10,7 @@ elsewhere.
 
 from dataclasses import dataclass
 
-from ...const import F2040_CAPACITY_FLOW_TEMPS_C, F2040_PEAK_CAPACITY_KW
+from ...const import F2040_CAPACITY_FLOW_TEMPS_C, F2040_MIN_HEAT_OUTPUT_KW, F2040_PEAK_CAPACITY_KW
 from ..base import HeatPumpProfile, RatingPoint, ValidationResult
 from ..registry import HeatPumpModelRegistry
 
@@ -125,6 +125,15 @@ class NibeF2040Profile(HeatPumpProfile):
     supports_weather_compensation: bool = True
     max_flow_temp: float = 58.0  # "Min. / Max. HM temp continuous operation: 25 / 58 C"
     min_flow_temp: float = 25.0
+
+    @property
+    def min_heat_output_kw(self) -> float:
+        """A7/W35 minimum from NIBE's catalogue, not a nominal test load.
+
+        Holding this floor at other conditions is a simulator assumption, stated in const.py.
+        The separate peak grid and nominal COP points keep their own normalization.
+        """
+        return F2040_MIN_HEAT_OUTPUT_KW
 
     def __post_init__(self):
         """The outdoor-keyed COP curve, and for THIS machine it is a real measurement.

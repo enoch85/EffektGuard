@@ -978,15 +978,6 @@ SCENARIOS = {
             expect=("heating_tracks_demand", "no_immersion_at_all", "no_emergency_tier"),
             known_open=(
                 KnownRed(
-                    fails_with="recovery ladder proposed",
-                    houses={"airsource_f2040": None},
-                    why=(
-                        "A recovery tier appears among proposed votes. This policy check does not "
-                        "establish that a positive register value was applied, that the pump was "
-                        "heating, or that the recovery tier changed heat delivery or cost."
-                    ),
-                ),
-                KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
                     houses={"wooden_f750": 3515, "apartment_f730": 12675},
@@ -1584,6 +1575,9 @@ def simulate(
         "compressor_starts": 0,
         "capacity_outside_published_minutes": 0,
         "compressor_below_declared_minimum_minutes": 0,
+        "minimum_positive_compressor_heat_kw": None,
+        "modeled_minimum_compressor_heat_kw": house.profile.min_heat_output_kw,
+        "independent_plant_validation": False,
         "heating_season_stops": 0,
         "out_of_season_minutes": 0,
         "compressor_blocked_hours": 0.0,
@@ -1716,14 +1710,21 @@ def simulate(
                 demand_w = (
                     q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
                 )
-                minimum_w = house.profile.heating_capacity_range_kw[0] * 1000.0
+                minimum_w = house.profile.min_heat_output_kw * 1000.0
                 q_comp_w = min(capacity_w, max(0.0, minimum_w, demand_w))
             else:
                 q_comp_w = 0.0
 
+            if q_comp_w > 0.0:
+                previous_minimum = stats["minimum_positive_compressor_heat_kw"]
+                output_kw = q_comp_w / 1000.0
+                stats["minimum_positive_compressor_heat_kw"] = (
+                    output_kw if previous_minimum is None else min(previous_minimum, output_kw)
+                )
+
             # How hard the compressor is being pushed, which is what sets its efficiency. No
             # circularity: q_comp is fixed by demand and capacity, both computed above.
-            if 0 < q_comp_w < house.profile.heating_capacity_range_kw[0] * 1000.0:
+            if 0 < q_comp_w < house.profile.min_heat_output_kw * 1000.0:
                 stats["compressor_below_declared_minimum_minutes"] += STEP_MIN
             load_fraction = q_comp_w / capacity_w if capacity_w > 0 else 0.0
 

@@ -200,6 +200,11 @@ class HeatPumpProfile(ABC):
     supplementary_heat_kw: float = 0.0
 
     @property
+    def min_heat_output_kw(self) -> float:
+        """Declared minimum output; separate from nominal COP-test loads and peak capacity."""
+        return self.heating_capacity_range_kw[0]
+
+    @property
     def max_heat_output_kw(self) -> float:
         """The most heat this machine can make, from its own datasheet.
 

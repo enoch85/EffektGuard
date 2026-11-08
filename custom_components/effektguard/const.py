@@ -2127,3 +2127,10 @@ F2040_PEAK_CAPACITY_KW: Final = (
     (6.0, (8.8, 8.8, 8.7, 8.7, 8.6, 8.4, 8.2)),
     (7.0, (9.4, 9.3, 9.2, 9.2, 9.1, 8.8, 8.6)),
 )
+
+# SOURCED: NIBE Belgian price catalogue, April 2025, F2040-8 heating-output range at A7/W35:
+# minimum 2.5 kW. The UK peak grid remains a separate source; this is not its maximum output.
+# https://www.nibe.eu/download/18.712dd4e31961ba0902e13d/1753783195714/NIBE%20Prijscatalogus%20BE-fr%201%20april%202025.pdf
+# ASSUMED: transfer to the UK peak-output profile and a constant floor away from A7/W35;
+# this is not a measured minimum-output operating map.
+F2040_MIN_HEAT_OUTPUT_KW: Final = 2.5

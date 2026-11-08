@@ -19,12 +19,27 @@ Five houses, all targeting 22.0 C (`TARGET_INDOOR`):
 | `villa_s1155` | timber underfloor, large villa | S1155 (ground source) |
 | `airsource_f2040` | outdoor air | F2040 (air to water) |
 
-Compressor output respects each profile's declared modulation range. The F2040 maximum comes
-from NIBE's separate peak-output grid, interpolated over outdoor and water temperatures; nominal
-COP rating loads are not capacity limits. The grid covers −7 to +7 C air and 25 to 55 C water.
-Outside it the nearest edge is held, and `capacity_outside_published_minutes` counts that
-extrapolation. Cold-end capacity is unvalidated. Profiles without a declared minimum still have
-an unknown minimum output; their cycling results require further data.
+Compressor output respects each profile's modeled minimum, using declared values where available. The F2040 uses a 2.5 kW minimum
+reference from [NIBE's Belgian catalogue](https://www.nibe.eu/download/18.712dd4e31961ba0902e13d/1753783195714/NIBE%20Prijscatalogus%20BE-fr%201%20april%202025.pdf)
+at A7/W35. Transferring that reference to this UK peak-output model and holding it at other
+conditions is an assumption, not an independently measured minimum-output map. A running
+compressor cannot silently modulate to zero; below that floor demand must be met by cycling.
+`minimum_positive_compressor_heat_kw` reports what the plant actually delivered while running.
+
+The F2040 maximum comes from NIBE's separate peak-output grid, interpolated over outdoor and
+water temperatures; nominal COP rating loads are not capacity limits. The grid covers −7 to
++7 C air and 25 to 55 C water. Outside it the nearest edge is held, and
+`capacity_outside_published_minutes` counts that extrapolation. Cold-end capacity is unvalidated.
+`independent_plant_validation` remains false: rated pins, physical consistency and a scenario
+pass do not establish performance across the operating envelope or in the owner's home.
+
+A 21-day May sensitivity run on the combined audit candidate (2026-11-08) used constant minimums
+of 1.25, 2.5 and 3.75 kW: respectively 310, 135 and 45 minutes below the comfort band, and 35,
+152 and 186 compressor starts. The lower probe breaches the 240-minute global budget; none shows
+a recovery-tier vote. These probes expose sensitivity, not a calibrated uncertainty interval.
+The former F2040 May known-red entry is removed because the unchanged recovery assertion now
+passes at the sourced minimum. The F750 and F730 upper-temperature failures remain visible.
+
 
 The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run at `ad88d4f`
 (the envelope patch on the adaptive simulator in #136), scaling only extrapolated capacity to 70%, 100%
