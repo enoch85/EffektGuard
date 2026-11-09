@@ -12,14 +12,22 @@
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.effektguard import _create_coordinator
+from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
+    CONF_POWER_SENSOR_ENTITY,
     DAYTIME_START_HOUR,
+    DOMAIN,
     EFFECT_OFFSET_PREDICTIVE,
     EFFECT_WEIGHT_PREDICTIVE,
+    UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 
@@ -27,6 +35,30 @@ DAYTIME_PERIOD = (DAYTIME_START_HOUR + 1) * 4  # 07:00 quarter - avoids night we
 
 OCTOBER = datetime(2025, 10, 20, 7, 0)
 NOVEMBER = datetime(2025, 11, 3, 7, 0)
+
+STOCKHOLM = "Europe/Stockholm"
+METER = "sensor.house_power"
+# The first quarter observed is partial and never recorded, so the evening starts a quarter early
+OCTOBER_EVENING = datetime(2026, 10, 31, 23, 30, 10, tzinfo=ZoneInfo(STOCKHOLM))
+CYCLE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
+CYCLES_TO_CLOSE_NOVEMBERS_FIRST_QUARTER = 10  # 23:30:10 to 00:15:10
+OCTOBER_EVENING_KW = 20.0
+NIGHT_KW = 2.0
+
+
+def _pump(now: datetime) -> NibeState:
+    return NibeState(
+        outdoor_temp=0.0,
+        indoor_temp=21.0,
+        supply_temp=35.0,
+        return_temp=30.0,
+        degree_minutes=-100.0,
+        current_offset=0.0,
+        is_heating=True,
+        is_hot_water=False,
+        timestamp=now,
+    )
+
 
 # A house cooling fast enough to trigger the predictive power-increase branch.
 COOLING_TREND = {"trend": "cooling", "rate_per_hour": -0.5, "confidence": 1.0}
@@ -53,6 +85,34 @@ class TestMonthlyPeaksReset:
             "so the protection threshold and the peak sensor would be a month stale."
         )
         assert summary["highest"] == 0.0
+
+    async def test_last_months_final_quarter_stays_out_of_this_month(self, hass, freezer):
+        """A month's last quarter closes at the first reading of the next, after the rollover.
+
+        Recorded then, October's 23:45 quarter (20 kW, 10.0 effective at night) was November's
+        highest peak, over November's own first quarter at 1.0, until the next restart. Real
+        control cycles across midnight, through the house as Home Assistant builds it.
+        """
+        await hass.config.async_set_time_zone(STOCKHOLM)
+        freezer.move_to(OCTOBER_EVENING)
+        entry = MockConfigEntry(domain=DOMAIN, data={CONF_POWER_SENSOR_ENTITY: METER}, options={})
+        entry.add_to_hass(hass)
+        coordinator = await _create_coordinator(hass, entry)
+        coordinator.gespot.get_prices = AsyncMock(return_value=None)
+        coordinator.weather.get_forecast = AsyncMock(return_value=None)
+        coordinator._schedule_aligned_refresh = MagicMock()
+
+        for cycle in range(CYCLES_TO_CLOSE_NOVEMBERS_FIRST_QUARTER):
+            now = OCTOBER_EVENING + cycle * CYCLE
+            freezer.move_to(now)
+            power = OCTOBER_EVENING_KW if dt_util.as_local(now).month == OCTOBER.month else NIGHT_KW
+            hass.states.async_set(METER, str(power), {"unit_of_measurement": "kW"})
+            coordinator.nibe.get_current_state = AsyncMock(return_value=_pump(now))
+            await coordinator._async_update_data()
+
+        summary = coordinator.effect.get_monthly_peak_summary()
+        months = {dt_util.parse_datetime(peak["timestamp"]).month for peak in summary["peaks"]}
+        assert months == {NOVEMBER.month}, summary
 
     @pytest.mark.asyncio
     async def test_this_months_peaks_are_kept(self, hass, monkeypatch):
