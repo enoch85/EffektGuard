@@ -6,6 +6,7 @@ BOUNDED by STARTUP_MAX_GRACE_ATTEMPTS: past it, a missing pump becomes UpdateFai
 permanently green entry that reads nothing and controls nothing.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,6 +23,7 @@ def coordinator() -> EffektGuardCoordinator:
     coord.nibe = MagicMock()
     coord.nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("no such entity"))
     coord._first_successful_update = False
+    coord._control_lock = asyncio.Lock()  # a read waits for a control cycle in flight
     coord._startup_grace_attempts = 0
     coord._schedule_aligned_refresh = MagicMock()
     coord.hass = MagicMock()
