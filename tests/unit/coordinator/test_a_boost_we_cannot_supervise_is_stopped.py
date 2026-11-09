@@ -6,6 +6,9 @@ the optimiser decided nothing and a boost it had started was neither abort-check
 it ran unsupervised until BT7 came back or NIBE's own lux timeout (review DHW F12). Without a
 decision the boost is now stopped, and nothing new is started - inside its minimum run as well:
 nothing then tells whether the house needs the compressor.
+
+The same holds when the heat pump cannot be read at all, or hot-water optimisation is switched
+off: either way nothing decides on the boost any more, and it ran on to NIBE's lux timeout.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import pytest
 from freezegun import freeze_time
 
 from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.effektguard.const import CONF_NIBE_TEMP_LUX_ENTITY
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
@@ -119,4 +123,42 @@ async def test_our_boost_is_stopped_when_the_tank_can_no_longer_be_read():
     assert switch_calls == ["turn_on", "turn_off"], (
         f"the tank stopped reporting five minutes ago and the boost EffektGuard started is still "
         f"on (switch calls {switch_calls}): nothing decides on it any more"
+    )
+
+
+@pytest.mark.asyncio
+async def test_our_boost_is_stopped_when_the_pump_can_no_longer_be_read():
+    pump = {"bt7": 15.0, "lux": STATE_OFF}
+    switch_calls: list[str] = []
+    with freeze_time(NOW) as clock:
+        coordinator = _coordinator(pump, switch_calls)
+        coordinator.data = await coordinator._drive_the_pump()
+        assert switch_calls == ["turn_on"], "precondition: the optimiser started its boost"
+
+        coordinator.nibe.get_current_state = AsyncMock(side_effect=UpdateFailed("BT1"))
+        clock.tick(timedelta(minutes=5))
+        await coordinator._do_aligned_refresh(retry=True)  # the failed read is shown
+
+    assert switch_calls == ["turn_on", "turn_off"], (
+        f"the heat pump cannot be read and the boost EffektGuard started is still on (switch calls "
+        f"{switch_calls})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_our_boost_is_stopped_when_hot_water_optimisation_is_switched_off():
+    pump = {"bt7": 15.0, "lux": STATE_OFF}
+    switch_calls: list[str] = []
+    with freeze_time(NOW) as clock:
+        coordinator = _coordinator(pump, switch_calls)
+        coordinator.data = await coordinator._drive_the_pump()
+        assert switch_calls == ["turn_on"], "precondition: the optimiser started its boost"
+
+        coordinator.entry.data["enable_hot_water_optimization"] = False  # what the switch writes
+        clock.tick(timedelta(minutes=5))
+        coordinator.data = await coordinator._drive_the_pump()
+
+    assert switch_calls == ["turn_on", "turn_off"], (
+        f"hot-water optimisation is off and the boost it started is still on (switch calls "
+        f"{switch_calls})"
     )
