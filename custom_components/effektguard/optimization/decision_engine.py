@@ -14,6 +14,7 @@ Globally applicable with latitude-based climate zone detection.
 Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without configuration.
 """
 
+import copy
 import logging
 import math
 from collections import deque
@@ -387,6 +388,24 @@ class DecisionEngine:
         self.weather_prediction.thermal_mass = thermal_mass
         self.weather_prediction.forecast_horizon = self._forecast_horizon_for(self.thermal)
 
+    def _throwaway_copy(self) -> "DecisionEngine":
+        """This engine with its own copy of everything a decision records, for a decision nothing
+        acts on.
+
+        A decision records the degree minutes and the register it reads (the emergency layer's
+        history and anti-windup, the immersion guard's readings, where the immersion heater starts
+        and where the pump runs short), the forecast's bias, its own ask and whether the room
+        waited. Kept from a read, these put the read's readings between the control cycle's: a
+        second degree-minute sample, a raise dated to the read, a wait no cycle made.
+        """
+        engine = copy.copy(self)
+        engine._immersion_readings = deque(self._immersion_readings)
+        engine.capacity_shortfall = copy.deepcopy(self.capacity_shortfall)
+        engine.immersion_start = copy.deepcopy(self.immersion_start)
+        engine.emergency_layer = copy.copy(self.emergency_layer)
+        engine.weather_prediction = copy.deepcopy(self.weather_prediction)
+        return engine
+
     def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
 
@@ -605,6 +624,7 @@ class DecisionEngine:
         temp_lux_active: bool = False,
         dhw_heating_end: datetime | None = None,
         compressor_saturated: bool = False,
+        record: bool = True,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -624,10 +644,25 @@ class DecisionEngine:
             current_peak: Current monthly peak threshold (kW) - from peak_this_month sensor
             current_power: Current whole-house power consumption (kW) - from peak_today sensor
             compressor_saturated: CompressorSaturation's verdict - no frequency left to give
+            record: False for a decision nothing acts on - Home Assistant's read-only refresh. It
+                decides on a throwaway copy of what decisions record (see _throwaway_copy), so it
+                decides as a control cycle would at that moment and the engine records nothing of it.
 
         Returns:
             OptimizationDecision with offset, reasoning, and layer votes
         """
+        if not record:
+            return self._throwaway_copy().calculate_decision(
+                nibe_state,
+                price_data,
+                weather_data,
+                current_peak,
+                current_power,
+                temp_lux_active,
+                dhw_heating_end,
+                compressor_saturated,
+            )
+
         _LOGGER.debug("Calculating optimization decision")
 
         # Where this pump starts its immersion heater and where it runs short of capacity: read

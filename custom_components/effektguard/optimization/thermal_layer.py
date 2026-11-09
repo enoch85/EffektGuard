@@ -424,6 +424,17 @@ class EmergencyLayer:
         self._last_offset_raise_time: Optional[datetime] = None
         self._last_offset_value: Optional[float] = None
 
+    def __copy__(self) -> "EmergencyLayer":
+        """A copy with its own degree-minute history.
+
+        The rest the layer records - the anti-windup cooldown, the register's last value and its
+        last raise - it replaces and never edits in place, so what a copy records stays its own.
+        """
+        layer = self.__class__.__new__(self.__class__)
+        layer.__dict__.update(self.__dict__)
+        layer._dm_history = deque(self._dm_history, maxlen=self._dm_history.maxlen)
+        return layer
+
     def set_heating_type(self, heating_type: str) -> None:
         """The heating type, and the DM history length that follows its thermal lag.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import partial
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -991,8 +992,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Public and debounced, so anything may refresh it (a reload, an options change, a
         bookkeeping service). Writes belong to the control loop `_do_aligned_refresh`; services
         that mean to command the pump call `async_refresh_and_apply`.
+
+        It waits for a control cycle in flight, and the engine records nothing of its decision:
+        what the engine keeps between decisions is the control cycle's. Outside the lock, a refresh
+        landing in a cycle ran two decisions at once and recorded a second degree-minute sample.
+
+        tests/unit/coordinator/test_one_writer_at_a_time.py,
+        tests/unit/optimization/test_a_read_decides_without_recording.py
         """
-        return await self._read_and_decide(apply=False)
+        async with self._control_lock:
+            return await self._read_and_decide(apply=False)
 
     async def async_refresh_and_apply(self, *, explicit_command: bool = False) -> None:
         """Read, decide, and DRIVE THE PUMP. For services that genuinely command it.
@@ -1012,7 +1021,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         The aligned control loop and an explicit-command service both reach the pump, and both
         await freely; without _control_lock a forced offset and an in-flight aligned decision
         race, and the older decision can overwrite the newer write (and corrupt _apply_offset's
-        read-then-write rate limiting). Reads are NOT serialised - they touch no hardware.
+        read-then-write rate limiting). A read-only refresh takes the lock too (_async_update_data).
 
         tests/unit/coordinator/test_one_writer_at_a_time.py
 
@@ -1420,7 +1429,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
 
                 decision = await self.hass.async_add_executor_job(
-                    self.engine.calculate_decision,
+                    # Only a decision that may drive the pump records: see _async_update_data.
+                    partial(self.engine.calculate_decision, record=apply),
                     nibe_data,
                     price_data,
                     weather_data,

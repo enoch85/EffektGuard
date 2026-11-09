@@ -128,6 +128,21 @@ async def test_a_read_publishes_what_a_control_cycle_would_and_records_nothing()
 
 
 @pytest.mark.asyncio
+async def test_the_engine_keeps_nothing_of_a_read():
+    """The engine keeps state between decisions: degree minutes, immersion readings, its asks. Only
+    a decision that may drive the pump records; a read decides without recording."""
+    coordinator, pump, clock = _coordinator([0.0, 0.0])
+
+    await coordinator._async_update_data()
+    await coordinator._drive_the_pump()
+
+    records = [
+        call.kwargs.get("record") for call in coordinator.engine.calculate_decision.call_args_list
+    ]
+    assert records == [False, True]
+
+
+@pytest.mark.asyncio
 async def test_only_the_scheduled_cycle_keeps_the_books():
     """Each read, and each cycle run out of schedule, booked another five minutes of savings and
     another learning snapshot: two reads at one instant doubled the savings figure."""

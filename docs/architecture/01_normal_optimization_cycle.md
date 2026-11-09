@@ -82,6 +82,7 @@ A 120-second lockout (`STARTUP_GRACE_MIN_INTERVAL`), then one observation cycle
   (F750/F730); both are skipped during start-up observation and on read-only refreshes.
 - The returned data updates the climate entity, the sensors and the switches.
 
-A read-only refresh (a reload, an options change, a bookkeeping service) runs the same reads and
-decision but writes nothing. Neither it nor a command's cycle between the scheduled ones adds to
-the savings figure or the learning.
+A read-only refresh (a reload, an options change, a bookkeeping service) waits for a cycle in
+progress, then runs the same reads and decision but writes nothing, and the decision engine
+records nothing of it. Neither it nor a command's cycle between the scheduled ones adds to the
+savings figure or the learning.
