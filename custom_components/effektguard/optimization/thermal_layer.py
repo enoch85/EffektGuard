@@ -399,7 +399,6 @@ class EmergencyLayer:
             get_outdoor_trend: Callable returning outdoor trend dict
         """
         self.climate_detector = climate_detector
-        self.heating_type = heating_type
         self._get_thermal_trend = get_thermal_trend or (
             lambda: {"rate_per_hour": 0.0, "confidence": 0.0}
         )
@@ -411,8 +410,8 @@ class EmergencyLayer:
         # When offset is positive but DM is still dropping, heat hasn't reached
         # the thermal mass yet - don't escalate offset further
         # History size varies by heating type to match thermal lag
-        history_size = self._get_dm_history_size_for_heating_type(heating_type)
-        self._dm_history: deque[tuple[datetime, float]] = deque(maxlen=history_size)
+        self._dm_history: deque[tuple[datetime, float]] = deque()
+        self.set_heating_type(heating_type)
 
         # Anti-windup cooldown: After detecting spiral, wait before trying to raise again
         # Jan 2026: Raising offset when DM is dropping makes DM drop FASTER
@@ -424,6 +423,17 @@ class EmergencyLayer:
         # Jan 2026: Distinguish self-induced spiral vs environmental DM drop
         self._last_offset_raise_time: Optional[datetime] = None
         self._last_offset_value: Optional[float] = None
+
+    def set_heating_type(self, heating_type: str) -> None:
+        """The heating type, and the DM history length that follows its thermal lag.
+
+        At construction and when the owner changes the thermal mass; the readings kept are the
+        latest that fit.
+        """
+        self.heating_type = heating_type
+        history_size = self._get_dm_history_size_for_heating_type(heating_type)
+        if self._dm_history.maxlen != history_size:
+            self._dm_history = deque(self._dm_history, maxlen=history_size)
 
     def _get_dm_history_size_for_heating_type(self, heating_type: str) -> int:
         """Get DM history size based on heating system thermal lag.
