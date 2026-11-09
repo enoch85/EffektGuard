@@ -20,8 +20,8 @@ flowchart LR
 
 | Learner | Records | Produces | Reaches control |
 |---|---|---|---|
-| `AdaptiveThermalModel` (`adaptive_learning.py`) | indoor, outdoor and offset once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); rolling 672 = 28 days | thermal mass 0.5-2.0, response type, heat-loss index, heating efficiency, decay rate, confidence | heating efficiency and decay rate, only behind the gate |
-| `ThermalStatePredictor` (`prediction_layer.py`) | indoor, outdoor, offset, flow, DM every cycle; 24 h window | indoor and outdoor trend; the `Learned Pre-heat` layer | trend: trend damping, the `Peak` layer's prediction, `Weather Pre-heat`, airflow. Pre-heat: weight 0.65 once 24 h of history and a forecast exist |
+| `AdaptiveThermalModel` (`adaptive_learning.py`) | indoor, outdoor and offset once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`), only with a measured room; rolling 672 = 28 days | thermal mass 0.5-2.0, response type, heat-loss index, heating efficiency, decay rate, confidence | heating efficiency and decay rate, only behind the gate |
+| `ThermalStatePredictor` (`prediction_layer.py`) | indoor, outdoor, offset, flow, DM every cycle, and whether the room was measured; 24 h window | indoor trend from measured rooms only, outdoor trend; the `Learned Pre-heat` layer | trend: trend damping, the `Peak` layer's prediction, `Weather Pre-heat`, airflow. Pre-heat: weight 0.65 once 24 h of measured room and a forecast exist; never without a room sensor |
 | `WeatherPatternLearner` (`weather_learning.py`) | one pattern per day from the first 24 forecast hours, keyed by month and week | typical weather for the date (the zone's seasonal defaults until data exists); `detect_unusual_weather` | unusual weather adds 0.5-1.5 °C to the `Math WC` safety margin and 0.15 to its weight ([10](10_adaptive_climate_zones.md)) |
 
 ## The confidence gate
