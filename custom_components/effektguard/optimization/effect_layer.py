@@ -426,6 +426,15 @@ class EffectManager:
 
         return None
 
+    def _threshold_to_beat(self) -> float | None:
+        """The lowest of the month's top three peaks, tariff-weighted: what a period stays under.
+
+        None without peaks. One definition, read by the immediate check and by the predictive one.
+        """
+        if not self._monthly_peaks:
+            return None
+        return min(peak.effective_power for peak in self._monthly_peaks)
+
     def should_limit_power(
         self,
         current_power: float,
@@ -445,17 +454,14 @@ class EffectManager:
         effective_power = effective_tariff_power_kw(current_power, current_period)
 
         # If no peaks yet, no limit needed
-        if not self._monthly_peaks:
+        threshold = self._threshold_to_beat()
+        if threshold is None:
             return PowerLimitDecision(
                 should_limit=False,
                 severity="OK",
                 reason="No peaks recorded yet",
                 recommended_offset=0.0,
             )
-
-        # Get lowest of top 3 peaks (the threshold to beat)
-        threshold_peak = min(self._monthly_peaks, key=lambda p: p.effective_power)
-        threshold = threshold_peak.effective_power
 
         # Calculate margin
         margin = threshold - effective_power
@@ -729,11 +735,21 @@ class EffectManager:
             prediction_reason = ""
 
         predicted_power = current_power + predicted_power_increase
-        predicted_margin = current_peak - predicted_power
-        # Every vote below says where the period's power stands against the month's peak, and which
-        # way the room is going
+        # Like with like, as should_limit_power: what the period would be billed at, against the
+        # threshold a period stays under. The unweighted draw against the month's highest peak voted
+        # -1.5 at weight 0.85 at night for 3.0 kW heading for 3.5 kW, billed 1.75 kW, under a
+        # 4.0 kW peak.
+        threshold = self._threshold_to_beat()
+        predicted_margin = (
+            None
+            if threshold is None
+            else threshold - effective_tariff_power_kw(predicted_power, current_period)
+        )
+        # Every vote below says where the period's power stands against the peak it was measured
+        # against, and which way the room is going
         trend = f", {prediction_reason}" if prediction_reason else ""
-        peak = f"{current_peak:.1f} kW peak"
+        against = current_peak if threshold is None else threshold
+        peak = f"{against:.1f} kW peak"
 
         # Peak protection logic with predictive enhancement
         # Oct 19, 2025: All values now constants for test script reuse
@@ -747,16 +763,16 @@ class EffectManager:
                 reason=f"{current_power:.1f} kW at the {peak}{trend}",
             )
         elif (
-            current_peak > 0
+            predicted_margin is not None
             and predicted_margin < EFFECT_MARGIN_PREDICTIVE
             and predicted_power_increase > 0
         ):
             # PREDICTIVE: Will approach peak in next 15 min - act NOW to prevent the spike.
             #
-            # The `current_peak > 0` guard is required: with no peak history current_peak is 0.0, so
-            # `predicted_margin = 0.0 - predicted_power` is ALWAYS negative and this branch would fire
-            # on every cooling house from day one, voting a heat-reducing offset that outranks T1/T2
-            # recovery. Missing input must abstain, never vote to reduce heat.
+            # No peak history, no margin: measured against a peak of 0.0 the margin is ALWAYS
+            # negative, and this branch fired on every cooling house from day one, voting a
+            # heat-reducing offset that outranks T1/T2 recovery. Missing input must abstain, never
+            # vote to reduce heat.
             return EffectLayerDecision(
                 name="Peak",
                 offset=EFFECT_OFFSET_PREDICTIVE,
@@ -787,5 +803,5 @@ class EffectManager:
                 name="Peak",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Safe margin ({current_power:.1f}/{current_peak:.1f} kW)",
+                reason=f"Safe margin ({current_power:.1f}/{against:.1f} kW)",
             )

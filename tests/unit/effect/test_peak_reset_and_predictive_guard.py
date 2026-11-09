@@ -62,6 +62,9 @@ def _pump(now: datetime) -> NibeState:
 
 # A house cooling fast enough to trigger the predictive power-increase branch.
 COOLING_TREND = {"trend": "cooling", "rate_per_hour": -0.5, "confidence": 1.0}
+BILLING_PERIOD_NOW = (
+    "custom_components.effektguard.optimization.effect_layer.get_current_billing_period"
+)
 
 
 class TestMonthlyPeaksReset:
@@ -171,10 +174,11 @@ class TestPredictiveBranchNeedsAPeakHistory:
         assert decision.offset >= 0.0, "Missing input must never produce a heat-reducing vote"
 
     @pytest.mark.asyncio
-    async def test_predictive_still_fires_once_a_peak_exists(self, hass):
+    async def test_predictive_still_fires_once_a_peak_exists(self, hass, monkeypatch):
         """Do not over-correct: with real history the predictive branch must still work."""
         effect = EffectManager(hass)
         await effect.record_period_measurement(3.0, DAYTIME_PERIOD, OCTOBER)
+        monkeypatch.setattr(BILLING_PERIOD_NOW, lambda: DAYTIME_PERIOD)
 
         decision = effect.evaluate_layer(
             current_peak=3.0,
