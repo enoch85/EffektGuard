@@ -66,7 +66,7 @@ from custom_components.effektguard.utils.volatile_helpers import (
     OffsetVolatilityTracker,
     gate_offset,
 )
-from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
+from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR, seconds_between
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
@@ -1735,7 +1735,12 @@ def simulate(
     band_low = comfort_band_low(mode)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
-    steps = days * 24 * 60 // STEP_MIN
+    # Calendar days, each as long as it really is. `days * 24` hours left a run over the autumn clock
+    # change an hour short - its last day billed 92 periods - and ran a spring one an hour long.
+    steps = int(
+        seconds_between(start, start + timedelta(days=days))
+        // timedelta(minutes=STEP_MIN).total_seconds()
+    )
 
     indoor = 22.0
     indoor_start = indoor
@@ -1749,6 +1754,7 @@ def simulate(
     violations = []
     trace = []
     stats = {
+        "control_steps": steps,
         "indoor_min": 99.0,
         "indoor_max": -99.0,
         "indoor_sum": 0.0,
@@ -2759,6 +2765,17 @@ def main() -> int:
                     f"means the repeated 02:00 quarters, which print the same digits and are an "
                     f"hour apart, were merged."
                 )
+            # And the run covers its days to their end: running `days * 24` hours, the day after
+            # the long one billed 92 periods and nothing failed.
+            quarter = timedelta(minutes=QUARTER_MINUTES).total_seconds()
+            for day, periods in stats["billing_periods_by_day"].items():
+                midnight = datetime.fromisoformat(day).replace(tzinfo=TZ)
+                length = round(seconds_between(midnight, midnight + timedelta(days=1)) / quarter)
+                if periods != length:
+                    failures.append(
+                        f"{day} was billed as {periods} periods, but it is {length} quarters long "
+                        f"- the run did not cover the whole day."
+                    )
 
         json.dump(
             {
@@ -2776,7 +2793,7 @@ def main() -> int:
         print(f"[{tag}] {json.dumps(stats)}")
         if votes:
             ranked = sorted(votes.items(), key=lambda kv: -kv[1])
-            total = max(days * 24 * 60 // STEP_MIN, 1)
+            total = max(stats["control_steps"], 1)
             share = ", ".join(f"{n} {100 * h / total:.0f}%" for n, h in ranked)
             print(f"[{tag}] layers that voted: {share}")
         if violations:
