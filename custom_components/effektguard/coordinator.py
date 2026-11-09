@@ -583,7 +583,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                                 "Synced with NIBE offset: %d°C", int(self.last_applied_offset)
                             )
                             offset_synced = True
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, OverflowError):  # int() of "inf"
                             pass
 
                 # Fall back to stored value if NIBE entity wasn't available
