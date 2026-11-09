@@ -55,6 +55,7 @@ from custom_components.effektguard.const import (
     CONF_GESPOT_ENTITY,
     DM_THRESHOLD_IMMERSION_LIMIT,
     INTERNAL_GAINS_W,
+    LEARNING_OBSERVATION_INTERVAL_MINUTES,
     MODE_CONFIGS,
     POWER_SOURCE_EXTERNAL_METER,
     SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH,
@@ -87,8 +88,10 @@ from custom_components.effektguard.optimization.decision_engine import (
     OptimizationDecision,
     get_safe_default_decision,
 )
+from custom_components.effektguard.optimization.adaptive_learning import AdaptiveThermalModel
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 TZ = zoneinfo.ZoneInfo("Europe/Stockholm")
@@ -973,30 +976,7 @@ SCENARIOS = {
                 "the same real event."
             ),
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(
-                KnownRed(
-                    fails_with="capacity deficit only forced",
-                    stat="immersion_kwh",
-                    houses={"airsource_f2040": 31.25},
-                    why=(
-                        "F-124 on the air-source F2040 only: immersion heat above what its "
-                        "capacity deficit forces. The wear guard caps raises while the compressor "
-                        "is saturated (54.25 kWh before it had a trigger), but lets a share of "
-                        "them through for a room low in its band; what still burns above the "
-                        "forced share is not attributed yet. 31.25 kWh against 17.7 forced since "
-                        "pre-heat is bought in cheap quarters only; 30.75 against 17.8 since the "
-                        "heat goes down an hour before a PEAK; 34.0 before, since the ladder "
-                        "raises only for a room below its floor and the immersion guard keeps such "
-                        "a room's DM off the immersion heater; 39.75 against 19.8 before that, "
-                        "since the bench runs the coordinator's gate policy and hands the engine "
-                        "the projected period-mean power; 35.75 against 20.4 while it gated every "
-                        "proposal on the instantaneous draw (eaa3986). The projected power alone "
-                        "takes it to 49.75, the three bypasses alone to 37.0, both to 39.75. The "
-                        "other four houses hold every invariant through Sweden's coldest wave "
-                        "since 1999 AND the 589 ore/kWh spike it caused."
-                    ),
-                ),
-            ),
+            known_open=(),
         ),
         Scenario(
             slug="undersized_coldsnap_jan2024",
@@ -1015,9 +995,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="immersion_kwh",
-                    houses={"concrete_f1155": 180.84},
+                    houses={"concrete_f1155": 182.01},
                     why=(
-                        "F-124 on the undersized F1155: 180.8 kWh of immersion against 120.4 "
+                        "F-124 on the undersized F1155: 182.0 kWh of immersion against 135.1 "
+                        "forced since the bench runs the predictor production runs (the learned "
+                        "pre-heat, the room and outdoor trends; 2026-11-08) - code unchanged, the "
+                        "bench now measures what Home Assistant runs. Before: 180.8 against 120.4 "
                         "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer "
                         "and its top three quarters 5.99 -> 6.81 kW - the two halves together: "
                         "the slab's normal-quarter price pre-heat gone alone gives 172.1, the "
@@ -1041,10 +1024,11 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes below the comfort band",
                     stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 890},
+                    houses={"airsource_f2040": 910},
                     why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 890 minutes "
-                        "below the band, where NIBE alone has 585 - 1450 before EffektGuard "
+                        "The undersized F2040 is colder under EffektGuard than alone: 910 minutes "
+                        "below the band since the bench runs the predictor production runs "
+                        "(2026-11-08), 890 before, where NIBE alone has 585 - 1450 before EffektGuard "
                         "learned where this pump runs short of capacity and stopped cutting below "
                         "its curve there; the ladder's room floor and the immersion guard without "
                         "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
@@ -1082,24 +1066,7 @@ SCENARIOS = {
             # forced is already caught for every run by check_invariants, against
             # IMMERSION_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(
-                KnownRed(
-                    fails_with="capacity deficit only forced",
-                    stat="immersion_kwh",
-                    houses={"airsource_f2040": 60.25},
-                    why=(
-                        "F-124 on the air-source F2040 only, the same saturation trap as "
-                        "nordic_coldsnap_jan2024: 60.25 kWh against 44.0 forced since the heat "
-                        "goes down an hour before a PEAK (63.25 before; 68.75 against "
-                        "46.5 before the ladder's room floor and the immersion guard; 87.25 before "
-                        "the wear guard had a trigger; 76.75 before the bench ran the "
-                        "coordinator's gate policy - the bypasses alone give 66.5, the projected "
-                        "period-mean power alone 76.25, both 68.75). The other four houses hold "
-                        "every invariant. First reproduction of F-124 on REAL weather rather than "
-                        "a synthetic temperature shift."
-                    ),
-                ),
-            ),
+            known_open=(),
         ),
         Scenario(
             slug="thaw_freeze_mar2024",
@@ -1693,13 +1660,25 @@ def build_engine(
         "thermal_mass": house.thermal_mass,
         "insulation_quality": house.insulation_quality,
     }
+    # The predictor production runs (Home Assistant builds the engine with one: its learned
+    # pre-heat vote, the room and outdoor trends the recovery damping, the Peak prediction and the
+    # weather pre-heat read). Without it every run here took the no-trend paths production never
+    # does. simulate() records a snapshot each control cycle, as the coordinator does.
     engine = DecisionEngine(
         price_analyzer=PriceAnalyzer(),
         effect_manager=effect,
         thermal_model=thermal,
         config=config,
+        thermal_predictor=ThermalStatePredictor(),
         heat_pump_model=house.profile,
     )
+    # And as setup does next (custom_components/effektguard/__init__.py): the engine's thermal model
+    # becomes the adaptive one, set to the owner's building settings, which the learned pre-heat
+    # asks for its learned parameters. simulate() records its hourly observations.
+    adaptive = AdaptiveThermalModel()
+    adaptive.thermal_mass = thermal.thermal_mass
+    adaptive.insulation_quality = thermal.insulation_quality
+    engine.thermal = adaptive
     return engine, effect
 
 
@@ -1746,6 +1725,7 @@ def simulate(
     indoor_start = indoor
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
+    last_learning_observation: datetime | None = None
     compressor_on = True
     # Start inside the heating season; the first cold/mild reading settles it either way.
     heating_season = True
@@ -2247,6 +2227,27 @@ def simulate(
             if new_int != offset_applied:
                 offset_applied = new_int
                 stats["writes"] += 1
+            # The coordinator's record after each cycle: what was read, and the register now
+            if engine.predictor is not None:
+                engine.predictor.record_state(
+                    timestamp=now,
+                    indoor_temp=nibe.indoor_temp,
+                    outdoor_temp=nibe.outdoor_temp,
+                    heating_offset=float(offset_applied),
+                    flow_temp=nibe.flow_temp,
+                    degree_minutes=nibe.degree_minutes,
+                )
+            # ... and the adaptive model's observation, once an hour
+            if last_learning_observation is None or now - last_learning_observation >= timedelta(
+                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            ):
+                engine.thermal.record_observation(
+                    timestamp=now,
+                    indoor_temp=nibe.indoor_temp,
+                    outdoor_temp=nibe.outdoor_temp,
+                    heating_offset=float(offset_applied),
+                )
+                last_learning_observation = now
 
             # --- invariants & stats ---
             # A degree-minute deficit that reaches the integrator floor means the recovery system -
