@@ -539,7 +539,7 @@ class TestClimateEntity:
 
         assert climate.coordinator == mock_coordinator_with_data
         assert climate.unique_id == f"{mock_config_entry.entry_id}_climate"
-        assert climate.temperature_unit == UnitOfTemperature.CELSIUS
+        assert climate.native_temperature_unit == UnitOfTemperature.CELSIUS
 
     def test_climate_supported_features(self, mock_coordinator_with_data, mock_config_entry):
         """Test climate entity has correct supported features."""
@@ -568,13 +568,13 @@ class TestClimateEntity:
         """Test climate entity reads current temperature from NIBE."""
         climate = EffektGuardClimate(mock_coordinator_with_data, mock_config_entry)
 
-        assert climate.current_temperature == 21.5
+        assert climate.native_current_temperature == 21.5
 
     def test_climate_target_temperature(self, mock_coordinator_with_data, mock_config_entry):
         """Test climate entity reads target temperature from config."""
         climate = EffektGuardClimate(mock_coordinator_with_data, mock_config_entry)
 
-        assert climate.target_temperature == 21.0
+        assert climate.native_target_temperature == 21.0
 
     def test_climate_preset_mode_mapping(self, mock_coordinator_with_data, mock_config_entry):
         """Test climate entity maps optimization mode to preset correctly."""
@@ -715,13 +715,13 @@ class TestConfigReloadIntegration:
         climate = EffektGuardClimate(mock_coordinator_with_data, mock_config_entry)
 
         # Initial value
-        assert climate.target_temperature == 21.0
+        assert climate.native_target_temperature == 21.0
 
         # Update options
         mock_config_entry.options[CONF_TARGET_INDOOR_TEMP] = 22.5
 
         # Should read new value
-        assert climate.target_temperature == 22.5
+        assert climate.native_target_temperature == 22.5
 
     @pytest.mark.asyncio
     async def test_climate_preset_updates_from_options(

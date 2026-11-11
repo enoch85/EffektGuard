@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
+from pytest_homeassistant.common import MockConfigEntry, async_mock_service
 
 from custom_components.effektguard import _create_coordinator, async_setup_entry
 from custom_components.effektguard.const import CONF_NIBE_TEMP_LUX_ENTITY, DOMAIN
