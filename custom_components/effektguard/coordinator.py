@@ -344,6 +344,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Offset volatility tracking (prevents rapid back-and-forth offset changes)
         # Uses same min duration as price volatility (45 min) for consistency
         self._offset_volatility_tracker = OffsetVolatilityTracker()
+        # The path that took the last cycle's emergency decision past the volatility gate, if it
+        # was one: an emergency is reported when it begins and when it ends, not on every cycle.
+        self._emergency_bypass: str | None = None
 
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
@@ -1510,18 +1513,32 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             track=not is_grace_period,
             record=apply,
         )
+        emergency_bypass = gated.bypass if decision.is_emergency else None
         if gated.blocked:
             _LOGGER.info("Offset change blocked: %s", gated.reasoning)
             decision = OptimizationDecision(offset=gated.offset, reasoning=gated.reasoning)
         elif gated.bypass is not None:
+            if emergency_bypass is None:
+                level = logging.INFO
+            elif emergency_bypass == self._emergency_bypass:
+                level = logging.DEBUG  # reported when it began
+            else:
+                level = logging.WARNING
             _LOGGER.log(
-                logging.WARNING if decision.is_emergency else logging.INFO,
+                level,
                 "%s: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
                 gated.bypass,
                 previous_offset or 0.0,
                 decision.offset,
                 decision.reasoning,
             )
+        if self._emergency_bypass is not None and emergency_bypass is None:
+            _LOGGER.info(
+                "Emergency over (indoor %.1f°C, DM %.0f)",
+                nibe_data.indoor_temp,
+                nibe_data.degree_minutes,
+            )
+        self._emergency_bypass = emergency_bypass
 
         self.last_decision_time = dt_util.utcnow()
 

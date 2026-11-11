@@ -278,6 +278,9 @@ class IntelligentDHWScheduler:
         # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
         # it begins and ends, not on every cycle it lasts.
         self._held_for_thermal_debt: bool = False
+        # Likewise a scheduled window that safety refused, or deferred for a PEAK price, last cycle.
+        self._scheduled_refused_for_safety: bool = False
+        self._scheduled_deferred_for_peak: bool = False
         # Whether the missing high-temperature cycle has been reported: once per stretch without one,
         # which ends when a cycle is seen (logged there), not on every cycle it lasts.
         self._reported_hygiene_overdue: bool = False
@@ -876,7 +879,7 @@ class IntelligentDHWScheduler:
                     # Not cancelled. OWED, and settled once the house is out of danger, even after
                     # the window has closed (see RULE 0.5).
                     self._scheduled_window_owed = True
-                    _LOGGER.warning(
+                    (_LOGGER.debug if self._scheduled_refused_for_safety else _LOGGER.warning)(
                         "Scheduled DHW refused for safety: %s. It will be heated as soon as the "
                         "house is safe again.",
                         unsafe,
@@ -1044,7 +1047,11 @@ class IntelligentDHWScheduler:
                             next_non_peak = self._find_next_non_peak_window(
                                 current_time, price_periods
                             )
-                            _LOGGER.warning(
+                            (
+                                _LOGGER.debug
+                                if self._scheduled_deferred_for_peak
+                                else _LOGGER.warning
+                            )(
                                 "DHW scheduled deadline approaching but PEAK price - deferring. "
                                 "Temp: %.1f°C, deadline: %.1fh away. May miss scheduled demand. "
                                 "Next non-peak: %s",
@@ -2408,6 +2415,24 @@ class IntelligentDHWScheduler:
         elif self._held_for_thermal_debt and not held:
             _LOGGER.info("Hot water no longer held back for thermal debt (DM %.0f)", thermal_debt)
         self._held_for_thermal_debt = held
+
+        # A scheduled window refused for safety, or deferred for a PEAK price, is reported in
+        # should_start_dhw when it begins, and here when it ends.
+        refused = decision.priority_reason == "DHW_SCHEDULED_BLOCKED_BY_SAFETY"
+        if self._scheduled_refused_for_safety and not refused:
+            _LOGGER.info(
+                "Scheduled DHW no longer refused for safety (DM %.0f, indoor %.1f°C)",
+                thermal_debt,
+                indoor_temp,
+            )
+        self._scheduled_refused_for_safety = refused
+        deferred = decision.priority_reason == "DHW_PEAK_AVOIDED_SCHEDULED"
+        if self._scheduled_deferred_for_peak and not deferred:
+            _LOGGER.info(
+                "DHW scheduled deadline no longer deferred for PEAK price (temp %.1f°C)",
+                current_dhw_temp,
+            )
+        self._scheduled_deferred_for_peak = deferred
 
         # Get scheduled target for amount tracking
         upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
