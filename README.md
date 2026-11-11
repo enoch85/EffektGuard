@@ -4,7 +4,7 @@
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
 ![Version](https://img.shields.io/badge/version-0.9.1-blue)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.11%2B-blue)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.11%2B-blue)
 [![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-1f425f?logo=github)](https://github.com/sponsors/enoch85)
 
 Heat your house when electricity is cheap, and save when it is expensive.
@@ -43,7 +43,7 @@ It works with NIBE heat pumps today. Other brands are welcome, see
 
 | You need | Details |
 |---|---|
-| Home Assistant | 2025.11 or newer |
+| Home Assistant | 2026.11 or newer |
 | Heat pump | NIBE F730, F750, F1155, F2040 or S1155, through MyUplink, nibe_heatpump or [Modbus](docs/LOCAL_MODBUS.md). Another model? [Ask for it](https://github.com/enoch85/EffektGuard/issues/new?labels=enhancement) |
 | Electricity price | [GE-Spot](https://github.com/enoch85/ge-spot), with prices from Nord Pool, ENTSO-E, Energy-Charts, Energi Data Service, Strømligning, OMIE, AEMO, ComEd or Amber |
 | Weather forecast | Met.no, which comes with Home Assistant. SMHI, OpenWeatherMap, AccuWeather and others with an hourly forecast work too |

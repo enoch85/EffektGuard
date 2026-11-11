@@ -71,7 +71,8 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
     coordinator: EffektGuardCoordinator
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    # The native_ names exist from Home Assistant 2026.11.0, the minimum hacs.json declares.
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = [PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT]
     _attr_supported_features = (
@@ -117,7 +118,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         return HVACMode.HEAT if enabled else HVACMode.OFF
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return current indoor temperature from NIBE."""
         if self.coordinator.data and "nibe" in self.coordinator.data:
             nibe_state = self.coordinator.data["nibe"]
@@ -126,7 +127,7 @@ class EffektGuardClimate(CoordinatorEntity[EffektGuardCoordinator], ClimateEntit
         return None
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return target temperature from config options."""
         # Check options first (preferred), fall back to data for migration
         return self._entry.options.get(
