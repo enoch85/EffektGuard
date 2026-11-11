@@ -357,6 +357,10 @@ class DecisionEngine:
         # _wait_for_cheaper_hours.
         self._waiting_for_cheaper = False
 
+        # Whether the immersion-limit emergency in force has been reported: it is reported when it
+        # begins and when it ends, not on every cycle it lasts.
+        self._immersion_limit_reported = False
+
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
@@ -904,6 +908,12 @@ class DecisionEngine:
 
         # Aggregate layers with priority weighting
         raw_offset = self._aggregate_layers(layers, starvation=starvation)
+        if (
+            self._immersion_limit_reported
+            and getattr(emergency_decision, "tier", "") != DM_TIER_EMERGENCY
+        ):
+            _LOGGER.info("Immersion-limit emergency over (DM %.0f)", nibe_state.degree_minutes)
+            self._immersion_limit_reported = False
         raw_offset, wait_note = self._wait_for_cheaper_hours(
             raw_offset,
             nibe_state,
@@ -1374,11 +1384,13 @@ class DecisionEngine:
         if emergency_layer is not None and emergency_layer.tier == DM_TIER_EMERGENCY:
             others = [layer for layer in layers if layer is not emergency_layer]
             offset = max(self._aggregate_layers(others, starvation), 0.0)
-            _LOGGER.warning(
+            # Its end is reported in calculate_decision.
+            (_LOGGER.debug if self._immersion_limit_reported else _LOGGER.warning)(
                 "Immersion-limit emergency: DM %.0f - no cuts, applying %.1f°C",
                 emergency_layer.degree_minutes,
                 offset,
             )
+            self._immersion_limit_reported = True
             return offset
 
         # 3. Recovery tiers (T1/T2/T3): thermal debt beyond the climate-aware warning
