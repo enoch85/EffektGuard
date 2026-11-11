@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.nibe_adapter import NibeState

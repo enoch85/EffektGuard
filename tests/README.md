@@ -36,7 +36,7 @@ Name a file for the behaviour it pins: `test_nibe_s_own_hot_water_cycle_is_seen.
 - Async tests need no marker (`asyncio_mode = "auto"` in `pyproject.toml`).
 - Pure-logic tests build what they need with `create_mock_hass()`, `create_mock_entry()` and
   `make_mock_async_all()` from `conftest.py`; a test that needs Home Assistant itself takes the
-  `hass` fixture from `pytest-homeassistant-custom-component`.
+  `hass` fixture from `pytest-homeassistant`.
 - No real network, no real clock, nothing written outside a temp folder.
 - A known defect stays visible: `xfail(strict=True)` here, or a known red in the simulator, each
   listed in the open-findings register.
