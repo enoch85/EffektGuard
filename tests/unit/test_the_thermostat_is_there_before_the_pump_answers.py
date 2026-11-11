@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry, MockEntityPlatform
+from pytest_homeassistant.common import MockConfigEntry, MockEntityPlatform
 
 from custom_components.effektguard.climate import EffektGuardClimate
 from custom_components.effektguard.const import DOMAIN

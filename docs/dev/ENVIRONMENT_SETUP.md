@@ -22,9 +22,10 @@ elsewhere install it first), creates `.venv`, checks that it is 3.15, and instal
 
 ## Dependencies
 
-`tests/requirements.txt` pins three things: `pytest-homeassistant-custom-component`, which in turn
-pins Home Assistant, NumPy, pytest, pytest-asyncio, pytest-cov and pytest-xdist; `voluptuous`; and
-the Black version CI uses. Reinstall with `pip install -r tests/requirements.txt`.
+`tests/requirements.txt` pins `pytest-homeassistant`, Home Assistant's own test package, which in
+turn pins Home Assistant, pytest, pytest-asyncio and pytest-xdist; NumPy and pytest-cov, which it
+does not pin; `voluptuous`; and the Black version CI uses. Reinstall with
+`pip install -r tests/requirements.txt`.
 
 ## Dev container and Codespaces
 

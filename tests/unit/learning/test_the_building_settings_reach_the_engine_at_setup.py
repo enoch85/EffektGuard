@@ -10,7 +10,7 @@ derived from the same options at engine construction, ran on the owner's values.
 from __future__ import annotations
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.const import (

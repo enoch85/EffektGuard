@@ -50,9 +50,9 @@ def house(request):
 def _weather_and_prices():
     """The harness's own two-day self-test data. Enough to exercise the plant loop, and fast.
 
-    A plain cache rather than a module-scoped fixture: pytest-homeassistant-custom-component
-    installs an autouse function-scoped event loop, and a module-scoped fixture in the same file
-    drags every test in it into a scope mismatch.
+    A plain cache rather than a module-scoped fixture: pytest-homeassistant installs an autouse
+    function-scoped event loop, and a module-scoped fixture in the same file drags every test in it
+    into a scope mismatch.
     """
     times, temps, price_days, unit = sim.load_data(selftest=True)
     return times, temps, sim.PriceSource(price_days, unit)
@@ -97,9 +97,9 @@ def _short_run(house, coldsnap: bool = False) -> dict:
     """Drive the real plant for two days.
 
     The harness is a script: it drives the async engine with `asyncio.run`, which closes the loop
-    and leaves the thread without one. pytest-homeassistant-custom-component has an autouse fixture
-    that calls `asyncio.get_event_loop()`, so without putting a loop back every LATER test in the
-    run errors out in setup. Hand it a fresh one.
+    and leaves the thread without one. pytest-homeassistant has an autouse fixture that calls
+    `asyncio.get_event_loop()`, so without putting a loop back every LATER test in the run errors
+    out in setup. Hand it a fresh one.
     """
     times, temps, prices = _weather_and_prices()
     if coldsnap:

@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard import async_migrate_entry
 from custom_components.effektguard.const import (
