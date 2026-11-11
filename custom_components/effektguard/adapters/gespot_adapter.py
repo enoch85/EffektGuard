@@ -238,6 +238,15 @@ class GESpotAdapter:
         tomorrow_periods = (
             self._contiguous(self._parse_periods(tomorrow_raw), "tomorrow") if tomorrow_raw else []
         )
+        # GE-Spot dates each quarter when it writes its state, and writes the new day a random
+        # 0-30 s after midnight. Read before that, its today is the day that has ended and its
+        # tomorrow the day that has begun.
+        now = dt_util.utcnow()
+        if (
+            index_containing(today_periods, now) is None
+            and index_containing(tomorrow_periods, now) is not None
+        ):
+            today_periods, tomorrow_periods = tomorrow_periods, []
         if (
             today_periods
             and tomorrow_periods
