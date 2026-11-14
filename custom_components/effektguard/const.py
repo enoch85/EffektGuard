@@ -2101,3 +2101,29 @@ class PumpMode(StrEnum):
     INTERMITTENT = "intermittent"  # OK for buffered only
     CONTINUOUS = "continuous"
     UNKNOWN = "unknown"
+
+
+# SOURCED: NIBE F2040-8 compressor peak output, kW. Nominal EN14511 COP loads are separate.
+# https://installer.nibe.eu/download/18.6e8729fc184415ed12a11b1/1668080270988/2040%208%20kw%20output%20data.pdf
+# Columns are supply temperatures; rows are outdoor temperatures. Outside this measured grid,
+# the simulator clamps to an edge and reports that extrapolation; no cold-end peak map is claimed.
+# ASSUMED: linear interpolation and edge hold. Extrapolation sensitivity is measured in
+# scripts/simulation/README.md; the cold-weather comfort verdict changes at 70% of the held edge.
+F2040_CAPACITY_FLOW_TEMPS_C: Final = (25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0)
+F2040_PEAK_CAPACITY_KW: Final = (
+    (-7.0, (7.7, 7.7, 7.7, 7.6, 7.6, 7.3, 6.9)),
+    (-6.0, (8.0, 7.9, 7.9, 7.9, 7.9, 7.5, 7.0)),
+    (-5.0, (8.2, 8.2, 8.2, 8.2, 8.2, 7.7, 7.1)),
+    (-4.0, (8.4, 8.4, 8.4, 8.5, 8.5, 7.9, 7.2)),
+    (-3.0, (8.6, 8.6, 8.7, 8.7, 8.8, 8.0, 7.3)),
+    (-2.0, (8.8, 8.8, 8.9, 9.0, 9.1, 8.2, 7.3)),
+    (-1.0, (6.0, 6.1, 6.2, 6.2, 6.3, 6.3, 6.2)),
+    (0.0, (6.2, 6.3, 6.4, 6.5, 6.6, 6.4, 6.3)),
+    (1.0, (6.4, 6.5, 6.6, 6.7, 6.8, 6.7, 6.6)),
+    (2.0, (6.5, 6.7, 6.8, 6.9, 7.1, 7.0, 6.8)),
+    (3.0, (7.1, 7.2, 7.3, 7.4, 7.4, 7.3, 7.2)),
+    (4.0, (7.6, 7.7, 7.7, 7.8, 7.8, 7.7, 7.5)),
+    (5.0, (8.2, 8.2, 8.2, 8.2, 8.2, 8.0, 7.9)),
+    (6.0, (8.8, 8.8, 8.7, 8.7, 8.6, 8.4, 8.2)),
+    (7.0, (9.4, 9.3, 9.2, 9.2, 9.1, 8.8, 8.6)),
+)

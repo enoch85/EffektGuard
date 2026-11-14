@@ -19,6 +19,19 @@ Five houses, all targeting 22.0 C (`TARGET_INDOOR`):
 | `villa_s1155` | timber underfloor, large villa | S1155 (ground source) |
 | `airsource_f2040` | outdoor air | F2040 (air to water) |
 
+Compressor output respects each profile's declared modulation range. The F2040 maximum comes
+from NIBE's separate peak-output grid, interpolated over outdoor and water temperatures; nominal
+COP rating loads are not capacity limits. The grid covers −7 to +7 C air and 25 to 55 C water.
+Outside it the nearest edge is held, and `capacity_outside_published_minutes` counts that
+extrapolation. Cold-end capacity is unvalidated. Profiles without a declared minimum still have
+an unknown minimum output; their cycling results require further data.
+
+The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run with this
+envelope and the adaptive simulator in #136, scaling only extrapolated capacity to 70%, 100%
+and 130% produced respectively 395, 0 and 0 minutes below the comfort band, and 274.25, 1.25
+and 0 kWh of immersion heat. These are sensitivity probes, not uncertainty bounds. A cold-weather
+pass therefore cannot establish real-world comfort or backup consumption without a cold-end map.
+
 Six scenarios, each a real weather window with the real prices of the same days, each with the
 behaviour it pins (`expect`) and its recorded known reds (`known_open`): `nordic_coldsnap_jan2024`,
 `undersized_coldsnap_jan2024` (the same days, every pump one size too small),
@@ -60,5 +73,6 @@ Per house, `output/summary-<tag>.json` holds the stats, failures and violations,
   through the same `BillingPeriodAccumulator` and `effective_tariff_power_kw` production uses
   (night periods count `NIGHT_TARIFF_WEIGHT`); `tariff_cost_sek` multiplies it by the illustrative
   `SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH`; `total_cost_sek` = energy + tariff.
-- The F750's COP curve is keyed on outdoor temperature, but an exhaust-air pump's COP depends on
-  exhaust and flow temperatures: F750 results are evidence of control behaviour, not of energy.
+- COP uses each profile's heat source, flow temperature and heat output. Reproducing nominal
+  rating points does not validate performance throughout the operating envelope, start losses,
+  defrosting or the physical model of any particular home.
