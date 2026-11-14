@@ -347,6 +347,8 @@ async def _create_coordinator(
     decision_engine.thermal = coordinator.adaptive_learning  # AdaptiveThermalModel
     decision_engine.predictor = coordinator.thermal_predictor
     decision_engine.weather_learner = coordinator.weather_learner
+    decision_engine.climate_system.weather_learner = coordinator.weather_learner
+    decision_engine.weather_comp_layer.weather_learner = coordinator.weather_learner
 
     # Connect heat pump model to decision engine
     decision_engine.heat_pump_model = coordinator.heat_pump_model
