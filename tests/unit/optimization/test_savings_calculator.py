@@ -80,9 +80,7 @@ class TestMonthlySavingsEstimation:
             average_spot_savings_per_day=5.0,
         )
 
-        assert estimate.monthly_estimate == pytest.approx(
-            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) + 150.0
-        )
+        assert estimate.monthly_estimate == pytest.approx(150.0)
         assert estimate.effect_savings == pytest.approx(
             round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
@@ -132,8 +130,8 @@ class TestMonthlySavingsEstimation:
             f"more."
         )
 
-    def test_a_measured_baseline_produces_a_real_saving(self):
-        """The mechanism must still work once a baseline actually exists."""
+    def test_an_observed_off_peak_produces_a_reference_difference(self):
+        """An observed OFF period supports a historical comparison, not causal savings."""
         calc = SavingsCalculator()
         calc.update_baseline_peak(10.0)  # observed while optimization was switched OFF
 
@@ -148,8 +146,8 @@ class TestMonthlySavingsEstimation:
             round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
 
-    def test_a_measured_baseline_that_is_worse_reports_no_saving_not_a_negative_one(self):
-        """The optimiser did worse than the baseline. That is zero saving, never a negative one."""
+    def test_a_worse_peak_keeps_the_negative_reference_difference(self):
+        """A historical comparison must retain both signs without attributing cause."""
         calc = SavingsCalculator()
         calc.update_baseline_peak(6.0)
 
@@ -158,7 +156,7 @@ class TestMonthlySavingsEstimation:
             baseline_peak_kw=calc.baseline_monthly_peak,
         )
 
-        assert estimate.effect_savings == 0.0
+        assert estimate.effect_savings == round(-3.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
 
     def test_estimate_no_reduction_no_savings(self):
         """Test that no peak reduction means no effect savings."""
@@ -174,8 +172,8 @@ class TestMonthlySavingsEstimation:
         assert estimate.spot_savings == 0.0
         assert estimate.monthly_estimate == 0.0
 
-    def test_estimate_higher_current_than_baseline_no_negative_savings(self):
-        """Test that higher current peak than baseline doesn't give negative savings."""
+    def test_a_higher_current_peak_is_a_negative_comparison(self):
+        """A higher peak must be visible as a worse reference comparison."""
         calc = SavingsCalculator()
 
         # Current peak higher than baseline (optimization made things worse?)
@@ -185,8 +183,7 @@ class TestMonthlySavingsEstimation:
             average_spot_savings_per_day=0.0,
         )
 
-        # Should not have negative effect savings (max with 0)
-        assert estimate.effect_savings == 0.0
+        assert estimate.effect_savings == round(-2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
 
     def test_estimate_spot_savings_calculation(self):
         """Test spot savings calculation uses DAYS_PER_MONTH."""
@@ -203,8 +200,8 @@ class TestMonthlySavingsEstimation:
         assert estimate.effect_savings == 0.0
         assert estimate.monthly_estimate == expected_spot
 
-    def test_estimate_combines_effect_and_spot_savings(self):
-        """Test that total estimate combines both effect and spot savings."""
+    def test_the_price_projection_excludes_the_unmatched_peak_comparison(self):
+        """These comparisons have different references and must not become one savings total."""
         calc = SavingsCalculator()
 
         estimate = calc.estimate_monthly_savings(
@@ -217,9 +214,7 @@ class TestMonthlySavingsEstimation:
             round(3.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
         assert estimate.spot_savings == 120.0
-        assert estimate.monthly_estimate == pytest.approx(
-            round(3.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH) + 120.0
-        )
+        assert estimate.monthly_estimate == pytest.approx(120.0)
 
 
 class TestCycleSavingsEstimation:
@@ -581,9 +576,7 @@ class TestIntegration:
             round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
         )
         assert estimate.spot_savings == 0.0
-        assert estimate.monthly_estimate == pytest.approx(
-            round(2.0 * SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH)
-        )
+        assert estimate.monthly_estimate == 0.0
 
     def test_spot_only_scenario(self):
         """Test scenario with only spot price savings."""

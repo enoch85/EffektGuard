@@ -35,6 +35,7 @@ from .const import (
     BILLING_PERIOD_MINUTES,
     BILLABLE_POWER_SOURCES,
     CONF_INDOOR_TEMP_METHOD,
+    DAYS_PER_MONTH,
     DEFAULT_INDOOR_TEMP_METHOD,
     POWER_SOURCE_ESTIMATE,
     POWER_SOURCE_EXTERNAL_METER,
@@ -335,11 +336,10 @@ SENSORS: tuple[EffektGuardSensorEntityDescription, ...] = (
         # to delete the history for. A projection is a gauge: MEASUREMENT keeps min/mean/max and
         # sums nothing, which is the statistic this value can actually support (F-144).
         #
-        # The unit is hardcoded SEK, correctly: the effect-tariff term is
-        # SWEDISH_EFFECT_TARIFF_SEK_PER_KW_MONTH and the spot component is dropped when the price
-        # unit is not SEK-compatible. Do NOT derive the unit from the spot entity, which reports
-        # öre/kWh - labelling a SEK value "öre" is a 100x error. (A non-Swedish user seeing a SEK
-        # figure from a Swedish tariff is a tariff-model issue, F-107, open with the owner.)
+        # The legacy entity key keeps existing dashboards connected. Its label and value now
+        # describe only the price-timing reference, never measured savings. SEK accumulation is
+        # already gated by the calculator's configured spot unit. Do not restore the former total,
+        # which combined this reference with an unmatched historical peak difference.
         native_unit_of_measurement="SEK",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda coordinator: (
@@ -497,7 +497,6 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
         # month's peak.
         should_restore = self.entity_description.key in {
             "peak_today",
-            "savings_estimate",
             "compressor_frequency",
             "indoor_temperature",
         }
@@ -877,7 +876,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         if additional_sensors:
                             # User has configured additional sensors
                             attrs["calculation_method"] = config.get(
-                                CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
+                                CONF_INDOOR_TEMP_METHOD, DAYS_PER_MONTH, DEFAULT_INDOOR_TEMP_METHOD
                             )
                             attrs["sensor_count"] = len(additional_sensors) + 1  # +1 for NIBE
 
@@ -961,29 +960,22 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         attrs["temp_change_last_2h"] = trend_data["temp_change_last_2h"]
 
         elif key == "savings_estimate":
-            # Show breakdown of savings
-            if "savings" in self.coordinator.data:
-                savings = self.coordinator.data["savings"]
-                if savings:
-                    if hasattr(savings, "effect_savings"):
-                        attrs["effect_savings"] = savings.effect_savings
-                    if hasattr(savings, "spot_savings"):
-                        attrs["spot_savings"] = savings.spot_savings
-                    if hasattr(savings, "baseline_cost"):
-                        attrs["baseline_cost"] = savings.baseline_cost
-                    if hasattr(savings, "optimized_cost"):
-                        attrs["optimized_cost"] = savings.optimized_cost
-                    if hasattr(savings, "effect_baseline_measured"):
-                        # A zero effect saving is ambiguous: either the baseline has never been
-                        # measured (no unoptimised period seen) or it has and the saving really is
-                        # zero. Surface the flag so the two are distinguishable.
-                        attrs["effect_baseline_measured"] = savings.effect_baseline_measured
-                        if not savings.effect_baseline_measured:
-                            attrs["effect_savings_note"] = (
-                                "No effect-tariff saving is claimed: this house has never been "
-                                "observed with optimization switched off, so there is nothing to "
-                                "compare against. Turn optimization off for a while to measure it."
-                            )
+            comparison = self.coordinator.data.get("savings")
+            if comparison:
+                attrs["savings_measured"] = False
+                attrs["reference"] = "Same metered energy at each day's average spot price"
+                attrs["projection_days"] = DAYS_PER_MONTH
+                attrs["spot_price_comparison"] = comparison.spot_savings
+                observed = comparison.effect_baseline_measured
+                attrs["off_period_peak_observed"] = observed
+                attrs["off_period_peak_cost_difference"] = (
+                    comparison.effect_savings if observed else None
+                )
+                attrs["comparison_note"] = (
+                    "Price timing is not energy saved or benefit caused by EffektGuard. "
+                    "OFF-period peaks differ in weather, comfort, stored heat and other loads; "
+                    "their cost difference is a separate reference, not avoided tariff charges."
+                )
 
         elif key == "peak_today":
             # Peak tracking metadata - when, how, and context

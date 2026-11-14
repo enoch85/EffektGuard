@@ -224,7 +224,7 @@
         "name": "Trend för utomhustemperatur"
       },
       "savings_estimate": {
-        "name": "Uppskattad besparing per månad"
+        "name": "Prisjämförelse per månad"
       },
       "optional_features_status": {
         "name": "Status för valfria funktioner"
