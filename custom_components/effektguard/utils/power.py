@@ -13,8 +13,14 @@ import math
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
 from homeassistant.core import State
+from homeassistant.util import dt as dt_util
 
-from ..const import KILOWATTS_PER_MEGAWATT, MILLIWATTS_PER_KILOWATT, WATTS_PER_KILOWATT
+from ..const import (
+    KILOWATTS_PER_MEGAWATT,
+    MAX_BILLING_OBSERVATION_GAP_MINUTES,
+    MILLIWATTS_PER_KILOWATT,
+    WATTS_PER_KILOWATT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,14 +48,22 @@ _UNAMBIGUOUS_FOLDED_UNITS: dict[str, float] = {
 }
 
 
-def power_kw_from_state(state: State | None) -> float | None:
-    """Return the state's value in kW, or None if it cannot be trusted.
+def power_kw_from_state(state: State | None, *, require_recent: bool = False) -> float | None:
+    """Read kW; heat-reducing control may require a recently reported value.
 
     None means "no power reading", and callers must treat it as exactly that - not as zero, and not as
     a reason to substitute a guess into a field that is documented to hold a measurement.
     """
     if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
         return None
+
+    # A fresh report may repeat an unchanged value. Change-driven templates need not report.
+    # Only a recent report can authorize reducing heat; billing still follows availability.
+    if require_recent and isinstance(state, State):
+        age_seconds = dt_util.utcnow().timestamp() - state.last_reported.timestamp()
+        if age_seconds > MAX_BILLING_OBSERVATION_GAP_MINUTES * 60:
+            _LOGGER.debug("Power sensor %s has no recent report for peak control", state.entity_id)
+            return None
 
     unit = str(state.attributes.get("unit_of_measurement", "")).strip()
     factor = POWER_UNIT_FACTORS_KW.get(unit)
