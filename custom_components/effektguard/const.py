@@ -1216,6 +1216,9 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 # The learned pre-heating layer therefore engaged on a THIRD of the data it believed it had, and
 # eight hours of a Swedish winter night is not a representative day. The hours are named here and
 # the sample counts derived from them, so the two can no longer drift apart.
+# ASSUMED control policy: allow one missed cycle; a longer gap is not continuous history.
+PREDICTION_MAX_SAMPLE_GAP_MINUTES: Final = UPDATE_INTERVAL_MINUTES * 2
+
 PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all
 PREDICTION_RESPONSIVENESS_MIN_HOURS: Final = 2  # before estimating how fast the house responds
 PREDICTION_LEARNED_PREHEAT_MIN_HOURS: Final = 24  # before acting on learned pre-heating

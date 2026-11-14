@@ -4,7 +4,7 @@ The coordinator records one sample every UPDATE_INTERVAL_MINUTES - twelve an hou
 that hardcoded 96 samples "for 24 hours" actually opened at 8 hours, so the learned pre-heat layer
 engaged on a third of the data it believed it had.
 
-Invariant: every gate is `hours * SAMPLES_PER_HOUR` (24 h -> 288 samples), the predictor's deque can
+Invariant: every gate bounds its intervals with `hours * SAMPLES_PER_HOUR + 1` samples, the predictor's deque can
 hold what the gate asks for, and the learning-progress reason string uses the same denominator.
 """
 
@@ -31,21 +31,21 @@ def test_the_coordinator_really_does_record_twelve_samples_an_hour():
 
 def test_a_full_day_of_history_is_a_full_day_of_history():
     """The gate that mattered: 96 samples is eight hours, not twenty-four."""
-    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
 
-    assert required == 288, (
+    assert required == 289, (
         f"The learned pre-heat gate needs {required} samples for "
         f"{PREDICTION_LEARNED_PREHEAT_MIN_HOURS} hours. It used to hardcode 96 - which at a "
         f"{UPDATE_INTERVAL_MINUTES}-minute tick is {96 / SAMPLES_PER_HOUR:.0f} hours, so the layer "
         f"acted on a third of the data it thought it had."
     )
-    assert required / SAMPLES_PER_HOUR == PREDICTION_LEARNED_PREHEAT_MIN_HOURS
+    assert (required - 1) / SAMPLES_PER_HOUR == PREDICTION_LEARNED_PREHEAT_MIN_HOURS
 
 
 def test_the_predictors_own_deque_can_hold_what_the_gate_asks_for():
     """A gate that can never open is worse than one that opens early."""
     predictor = ThermalStatePredictor()
-    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
 
     assert predictor.state_history.maxlen >= required, (
         f"The learned pre-heat gate wants {required} samples and the history deque holds only "
@@ -58,7 +58,7 @@ def test_the_learning_progress_message_counts_in_the_same_units_as_the_gate():
     from unittest.mock import MagicMock
 
     predictor = ThermalStatePredictor()
-    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+    required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
 
     decision = predictor.evaluate_layer(
         nibe_state=MagicMock(),
