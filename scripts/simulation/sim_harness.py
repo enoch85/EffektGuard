@@ -92,6 +92,8 @@ from custom_components.effektguard.optimization.adaptive_learning import Adaptiv
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
+from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 TZ = zoneinfo.ZoneInfo("Europe/Stockholm")
@@ -1670,6 +1672,7 @@ def build_engine(
         thermal_model=thermal,
         config=config,
         thermal_predictor=ThermalStatePredictor(),
+        weather_learner=WeatherPatternLearner(ClimateZoneDetector(latitude).zone_info),
         heat_pump_model=house.profile,
     )
     # And as setup does next (custom_components/effektguard/__init__.py): the engine's thermal model
@@ -1726,6 +1729,7 @@ def simulate(
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
     last_learning_observation: datetime | None = None
+    last_weather_record_date = times[0].date()
     compressor_on = True
     # Start inside the heating season; the first cold/mild reading settles it either way.
     heating_season = True
@@ -2228,9 +2232,10 @@ def simulate(
                 offset_applied = new_int
                 stats["writes"] += 1
             # The coordinator's record after each cycle: what was read, and the register now
+            learning_now = dt_util.utcnow()
             if engine.predictor is not None:
                 engine.predictor.record_state(
-                    timestamp=now,
+                    timestamp=learning_now,
                     indoor_temp=nibe.indoor_temp,
                     outdoor_temp=nibe.outdoor_temp,
                     heating_offset=float(offset_applied),
@@ -2238,16 +2243,30 @@ def simulate(
                     degree_minutes=nibe.degree_minutes,
                 )
             # ... and the adaptive model's observation, once an hour
-            if last_learning_observation is None or now - last_learning_observation >= timedelta(
-                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            if (
+                last_learning_observation is None
+                or learning_now - last_learning_observation
+                >= timedelta(minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES)
             ):
                 engine.thermal.record_observation(
-                    timestamp=now,
+                    timestamp=learning_now,
                     indoor_temp=nibe.indoor_temp,
                     outdoor_temp=nibe.outdoor_temp,
                     heating_offset=float(offset_applied),
                 )
-                last_learning_observation = now
+                last_learning_observation = learning_now
+
+            # Production records the next 24 forecast hours once per UTC date. These are
+            # forecast patterns, not observations of a completed day's weather.
+            if (
+                weather
+                and weather.forecast_hours
+                and learning_now.date() != last_weather_record_date
+            ):
+                engine.weather_learner.record_weather_pattern(
+                    learning_now, [hour.temperature for hour in weather.forecast_hours[:24]]
+                )
+                last_weather_record_date = learning_now.date()
 
             # --- invariants & stats ---
             # A degree-minute deficit that reaches the integrator floor means the recovery system -

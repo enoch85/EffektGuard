@@ -44,6 +44,13 @@ different experiment: known reds are not applied and every red is news.
 Per house, `output/summary-<tag>.json` holds the stats, failures and violations, and
 `output/trace-<tag>.json` the trace.
 
+The simulator constructs the predictor, adaptive thermal model and weather learner used by the
+decision engine. After each cycle it records a predictor snapshot, hourly thermal observations
+and, once per UTC date, the next 24 forecast temperatures, as the coordinator does. Runs start
+with empty learning history. Their weather forecast is future recorded weather, with perfect
+foresight; this does not validate performance with real forecast errors or after a restart.
+The harness does not run Home Assistant's service lifecycle, DHW draws or ventilation control.
+
 ## Reading a result
 
 - `PASS: all safety invariants held` is a healthy run. `FAIL*` means every failure is a recorded
