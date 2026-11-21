@@ -1,6 +1,6 @@
 # Developer documentation
 
-The rules live in [CLAUDE.md](../../CLAUDE.md) and `docs/agent/`:
+The rules live in [AGENTS.md](../../AGENTS.md) and `docs/agent/`:
 [IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) (workflow, verification, what earns a test, the
 safety rules) and [PROJECT_NOTES.md](../agent/PROJECT_NOTES.md) (conventions, the open-findings
 register, the traps). Read those first. This folder holds the mechanics.
