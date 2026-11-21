@@ -1655,12 +1655,13 @@ NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
 # entity satisfies at most ONE key, so a specific key MUST come before a broader one
 # that would also match its entities.
 # Register references (yozik04/nibe, file nibe/data/f1155_f1255.json — the map
-# HA's nibe_heatpump integration uses; F-series register ids double as MyUplink
-# parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
+# HA's nibe_heatpump integration uses): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
 # BT50=40033, BT25=40071, DM=40940 (32-bit)/43005 (16-bit, Modbus), offset S1=47011,
 # compressor state=43427, compressor frequency=43136, prio=43086,
 # BE1/BE2/BE3=40083/40081/40079.
-# 40941 is MyUplink's DM id on some models (second word of 40940).
+# MyUplink gives an F750 the same numbers (its parameter list, 2026-11-04), except the compressor
+# frequency, 41778 there (#159), and prio, 49994. 40941 is MyUplink's DM id on some models
+# (second word of 40940).
 NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "outd_temp", "40004"],
     # NOTE: no short "room_temp" - "bedroom_temp" etc. contain it as a
@@ -1703,7 +1704,7 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
         "43123",
         "31043",
     ],
-    "compressor_hz": ["compressor_frequency", "43136"],
+    "compressor_hz": ["compressor_frequency", "43136", "41778"],
     "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
     # "prio" also matches "priority" (MyUplink naming) as a substring
     "prio": ["prio", "43086"],
