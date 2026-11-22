@@ -112,7 +112,9 @@ async def test_a_cycle_in_flight_does_not_get_the_last_word(cycle_first):
     holding = asyncio.Event()
     release = asyncio.Event()
 
-    async def read_and_decide(apply: bool = False, explicit_command: bool = False):
+    async def read_and_decide(
+        apply: bool = False, explicit_command: bool = False, scheduled: bool = False
+    ):
         holding.set()
         await release.wait()
         if apply:

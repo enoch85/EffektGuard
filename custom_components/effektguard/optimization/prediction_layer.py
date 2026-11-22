@@ -83,6 +83,7 @@ class ThermalSnapshotDict(TypedDict):
     heating_offset: float
     flow_temp: float
     degree_minutes: float
+    indoor_measured: bool
 
 
 class PredictorStateDict(TypedDict):
@@ -139,6 +140,7 @@ class ThermalStatePredictor:
         heating_offset: float,
         flow_temp: float,
         degree_minutes: float,
+        indoor_measured: bool = True,
     ) -> None:
         """Record current thermal state.
 
@@ -149,6 +151,7 @@ class ThermalStatePredictor:
             heating_offset: Current heating curve offset (°C)
             flow_temp: Current flow temperature (°C)
             degree_minutes: Current thermal debt (DM/GM)
+            indoor_measured: False when indoor_temp is a placeholder (no room sensor)
         """
         snapshot = ThermalSnapshot(
             timestamp=timestamp,
@@ -157,6 +160,7 @@ class ThermalStatePredictor:
             heating_offset=heating_offset,
             flow_temp=flow_temp,
             degree_minutes=degree_minutes,
+            indoor_measured=indoor_measured,
         )
 
         self.state_history.append(snapshot)
@@ -170,6 +174,15 @@ class ThermalStatePredictor:
             flow_temp,
             degree_minutes,
         )
+
+    def _measured_room(self) -> list[ThermalSnapshot]:
+        """The snapshots whose room temperature was measured: the only ones a room figure may use.
+
+        Without a room sensor the adapter shows DEFAULT_INDOOR_TEMP. Learned from as a reading, a
+        constant 21 °C under a 22 °C target made the learned pre-heat vote +3.0 at weight 0.65 for a
+        room nothing measured. The outdoor readings of the same snapshots are real, and stay.
+        """
+        return [snapshot for snapshot in self.state_history if snapshot.indoor_measured]
 
     def predict_temperature(
         self,
@@ -202,9 +215,10 @@ class ThermalStatePredictor:
             - Uses heat_loss_coefficient for proper heat loss calculation
             - Uses thermal_decay_rate for natural cooling prediction
         """
-        if len(self.state_history) < PREDICTION_MIN_HISTORY_HOURS * SAMPLES_PER_HOUR:
+        room = self._measured_room()
+        if len(room) < PREDICTION_MIN_HISTORY_HOURS * SAMPLES_PER_HOUR:
             # Insufficient data - return simple projection
-            current_temp = self.state_history[-1].indoor_temp if self.state_history else 21.0
+            current_temp = room[-1].indoor_temp if room else 21.0
             return TempPrediction(
                 predicted_temps=[current_temp] * hours_ahead,
                 hours_ahead=hours_ahead,
@@ -212,9 +226,9 @@ class ThermalStatePredictor:
                 trajectory_trend="stable",
             )
 
-        # Get current state
+        # Get current state: the room as last measured, the rest as last read
         current = self.state_history[-1]
-        current_temp = current.indoor_temp
+        current_temp = room[-1].indoor_temp
         current_outdoor = current.outdoor_temp
         current_offset = current.heating_offset
 
@@ -471,13 +485,22 @@ class ThermalStatePredictor:
         # Skip until a full day of history exists. Derive the sample count from SAMPLES_PER_HOUR: a
         # hardcoded 96 is only EIGHT hours at the 5-minute tick, engaging the learned pre-heat on a
         # third of a day - and eight hours of a Swedish winter night is not a representative day.
-        required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
-        if len(self.state_history) < required:
+        # Without a measured room there is nothing to predict from: the reading is a placeholder.
+        if not getattr(nibe_state, "indoor_temp_valid", True):
             return PredictionLayerDecision(
                 name="Learned Pre-heat",
                 offset=0.0,
                 weight=0.0,
-                reason=f"Learning: {len(self.state_history)}/{required} observations",
+                reason="No room sensor",
+            )
+        required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
+        measured = len(self._measured_room())
+        if measured < required:
+            return PredictionLayerDecision(
+                name="Learned Pre-heat",
+                offset=0.0,
+                weight=0.0,
+                reason=f"Learning: {measured}/{required} observations",
             )
 
         # Skip if no weather forecast available
@@ -575,15 +598,16 @@ class ThermalStatePredictor:
         Returns:
             Responsiveness factor (°C per offset per hour)
         """
-        if len(self.state_history) < PREDICTION_RESPONSIVENESS_MIN_HOURS * SAMPLES_PER_HOUR:
+        room = self._measured_room()
+        if len(room) < PREDICTION_RESPONSIVENESS_MIN_HOURS * SAMPLES_PER_HOUR:
             return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
         # Analyze temperature changes relative to offset
         responsiveness_samples = []
 
-        for i in range(4, len(self.state_history)):
-            current = self.state_history[i]
-            prev = self.state_history[i - 4]  # 1 hour ago
+        for i in range(4, len(room)):
+            current = room[i]
+            prev = room[i - 4]  # 1 hour ago
 
             time_delta = (current.timestamp - prev.timestamp).total_seconds() / 3600
 
@@ -606,20 +630,27 @@ class ThermalStatePredictor:
         else:
             return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
-    def _calculate_prediction_confidence(self) -> float:
+    def _calculate_prediction_confidence(
+        self, snapshots: list[ThermalSnapshot] | None = None
+    ) -> float:
         """Calculate confidence in predictions based on history quality.
+
+        Args:
+            snapshots: The history to judge; the measured room by default. The outdoor trend passes
+                every snapshot, as it always did.
 
         Returns:
             Confidence 0-1
         """
-        if len(self.state_history) < 4:
+        room = self._measured_room() if snapshots is None else snapshots
+        if len(room) < 4:
             return 0.0
 
         # Base confidence on history length
-        history_confidence = min(len(self.state_history) / (24 * SAMPLES_PER_HOUR), 1.0)
+        history_confidence = min(len(room) / (24 * SAMPLES_PER_HOUR), 1.0)
 
         # Data consistency (low variance in last hour = higher confidence)
-        recent_temps = [s.indoor_temp for s in list(self.state_history)[-SAMPLES_PER_HOUR:]]
+        recent_temps = [s.indoor_temp for s in room[-SAMPLES_PER_HOUR:]]
         if len(recent_temps) > 4:
             temp_variance = np.std(recent_temps)
             # Low variance in reasonable range = good
@@ -636,7 +667,8 @@ class ThermalStatePredictor:
         Returns:
             Dictionary with trend information
         """
-        if len(self.state_history) < 8:
+        room = self._measured_room()
+        if len(room) < 8:
             return {
                 "trend": "unknown",
                 "rate_per_hour": 0.0,
@@ -645,11 +677,9 @@ class ThermalStatePredictor:
             }
 
         # Calculate temperature change over last 2 hours
-        current = self.state_history[-1]
+        current = room[-1]
         two_hours_ago = (
-            self.state_history[-(SAMPLES_PER_HOUR * 2)]
-            if len(self.state_history) >= SAMPLES_PER_HOUR * 2
-            else self.state_history[0]
+            room[-(SAMPLES_PER_HOUR * 2)] if len(room) >= SAMPLES_PER_HOUR * 2 else room[0]
         )
 
         time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600
@@ -670,8 +700,8 @@ class ThermalStatePredictor:
         return {
             "trend": trend,
             "rate_per_hour": rate,
-            "confidence": self._calculate_prediction_confidence(),
-            "samples": len(self.state_history),
+            "confidence": self._calculate_prediction_confidence(room),
+            "samples": len(room),
         }
 
     def get_outdoor_trend(self) -> OutdoorTrendDict:
@@ -723,7 +753,7 @@ class ThermalStatePredictor:
         return {
             "trend": trend,
             "rate_per_hour": rate,
-            "confidence": self._calculate_prediction_confidence(),
+            "confidence": self._calculate_prediction_confidence(list(self.state_history)),
             "samples": len(self.state_history),
             "temp_change_last_2h": outdoor_delta,
         }
@@ -744,6 +774,7 @@ class ThermalStatePredictor:
                     "heating_offset": snapshot.heating_offset,
                     "flow_temp": snapshot.flow_temp,
                     "degree_minutes": snapshot.degree_minutes,
+                    "indoor_measured": snapshot.indoor_measured,
                 }
                 for snapshot in self.state_history
             ],
@@ -771,6 +802,9 @@ class ThermalStatePredictor:
                 heating_offset=snapshot_data["heating_offset"],
                 flow_temp=snapshot_data["flow_temp"],
                 degree_minutes=snapshot_data["degree_minutes"],
+                # Stored before the flag existed: read as measured, as it was. A placeholder among
+                # them leaves the 24-hour history within a day.
+                indoor_measured=snapshot_data.get("indoor_measured", True),
             )
             predictor.state_history.append(snapshot)
 

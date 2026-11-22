@@ -8,7 +8,7 @@ The details behind the [README](../README.md).
 |---|---|
 | Home Assistant 2025.11 or newer | Not supported |
 | Your heat pump in Home Assistant: [MyUplink](https://www.home-assistant.io/integrations/myuplink/), [nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) (turn on its entities) or [Modbus](https://www.home-assistant.io/integrations/modbus/) ([how](LOCAL_MODBUS.md)) | Nothing works |
-| A model profile: NIBE F730, F750, F1155, F2040 or S1155 | Pick the closest |
+| A model profile: NIBE F730, F750, F1155, F2040, S1155 or S735 | Pick the closest |
 | [GE-Spot](https://github.com/enoch85/ge-spot), which gets prices from Nord Pool, ENTSO-E and others | No price optimization |
 | A weather entity with an hourly forecast: Met.no (comes with Home Assistant), SMHI, OpenWeatherMap, AccuWeather or others (optional) | No heating ahead of a colder day |
 | A whole-house power meter (optional) | Peak protection uses the pump's current readings, if it has them |
@@ -130,8 +130,9 @@ flip-flopping, it holds back a reversal of 2 °C or more within 45 minutes. Safe
 
 Off by default. Turn on Hot Water Optimization and pick the boost switch in setup. Then EffektGuard
 heats the tank when power is cheap and has hot water ready at your hot-water times. Each boost runs
-at least 15 minutes, unless the house needs the heat or the tank can't be read. A boost you start
-yourself is left alone, and the pump still heats a cold tank by itself.
+at least 15 minutes, unless the house needs the heat or the tank or the pump can't be read. Turning
+Hot Water Optimization off stops its boost. A boost you start yourself is left alone, and the pump
+still heats a cold tank by itself.
 [Hot water in detail](DHW_OPTIMIZATION.md).
 
 ## Safety
@@ -152,7 +153,7 @@ yourself is left alone, and the pump still heats a cold tank by itself.
 |---|---|---|
 | `effektguard.force_offset` | Holds the heat setting you choose | -10 to +10 °C for 0-480 min (0 = one cycle), once per 5 min |
 | `effektguard.boost_heating` | Full heat (+10) | 30-360 min, once per 45 min |
-| `effektguard.boost_dhw` | Hot-water boost | 30-180 min, once per 60 min, not during the [safety limits](#safety) |
+| `effektguard.boost_dhw` | Hot-water boost | 30-180 min, once per 60 min, not during the [safety limits](#safety) or while the pump can't be read |
 | `effektguard.reset_peak_tracking` | Clears the monthly peaks, for example at a new billing period | |
 | `effektguard.calculate_optimal_schedule` | A 24-hour price preview | |
 

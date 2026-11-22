@@ -5,6 +5,7 @@ Tests the model-specific profiles for NIBE heat pumps:
 - F750 (8kW ASHP) - widely used, not in current NIBE lineup
 - F2040 (12-16kW ASHP) - widely used, not in current NIBE lineup
 - S1155 (3-12kW GSHP mid-range) - CURRENT MODEL, verified from NIBE website
+- S735 (exhaust air, S-series) - CURRENT MODEL, from its installer manual
 
 Validates:
 - Model registration system
@@ -23,6 +24,7 @@ from custom_components.effektguard.models.nibe import (
     NibeF750Profile,
     NibeF2040Profile,
     NibeS1155Profile,
+    NibeS735Profile,
 )
 
 
@@ -37,6 +39,7 @@ class TestModelRegistry:
         assert "nibe_f750" in supported
         assert "nibe_f2040" in supported
         assert "nibe_s1155" in supported
+        assert "nibe_s735" in supported
         # S1255 removed - doesn't exist in NIBE lineup
 
     def test_get_model_returns_profile(self):
@@ -61,15 +64,16 @@ class TestModelRegistry:
         assert "nibe_f1155" in nibe_models
         assert "nibe_f2040" in nibe_models
         assert "nibe_s1155" in nibe_models
+        assert "nibe_s735" in nibe_models
         # S1255 removed - doesn't exist
-        assert len(nibe_models) == 5
+        assert len(nibe_models) == 6
 
     def test_get_models_grouped_by_manufacturer(self):
         """Test getting models grouped by manufacturer."""
         grouped = HeatPumpModelRegistry.get_models_grouped_by_manufacturer()
 
         assert "NIBE" in grouped
-        assert len(grouped["NIBE"]) == 5  # F1155 added for issue #18
+        assert len(grouped["NIBE"]) == 6  # F1155 added for issue #18, S735 for #125
 
         # Check structure
         f750 = next(m for m in grouped["NIBE"] if m["id"] == "nibe_f750")
@@ -273,6 +277,7 @@ class TestModelComparisons:
             NibeF750Profile(),
             NibeF2040Profile(),
             NibeS1155Profile(),
+            NibeS735Profile(),
             # S1255 removed - doesn't exist in NIBE lineup
         ]
 

@@ -60,3 +60,37 @@ async def test_the_engine_runs_on_the_owner_s_building_settings_from_setup(
         f"layer and the learned pre-heat run on {engine.thermal.thermal_mass}, "
         f"{engine.thermal.insulation_quality}"
     )
+
+
+def _derived(engine) -> dict:
+    """Everything the engine builds from the thermal mass."""
+    return {
+        "thermal_mass": engine.thermal.thermal_mass,
+        "ladder": engine.emergency_layer.heating_type,
+        "dm_history": engine.emergency_layer._dm_history.maxlen,
+        "zones": engine.proactive_layer.heating_type,
+        "emitters": engine.weather_comp.heating_type,
+        "emitter_exponent": engine.weather_comp.emitter_exponent,
+        "design_flow": engine.weather_comp.design_flow_temp,
+        "pre_heat_mass": engine.weather_prediction.thermal_mass,
+        "pre_heat_horizon": engine.weather_prediction.forecast_horizon,
+    }
+
+
+async def test_a_thermal_mass_saved_in_the_options_builds_what_a_restart_builds(hass):
+    """Saved in the options, a slab's 1.8 reached the thermal model alone: the ladder kept the
+    radiator's buffer and the weather pre-heat its 12-hour horizon, until the next restart built the
+    slab's, 48 hours. The options flow's save, as the update listener applies it."""
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    coordinator = await _create_coordinator(hass, entry)
+
+    await coordinator.async_update_config({CONF_THERMAL_MASS: CONCRETE_SLAB_MASS})
+
+    restarted = MockConfigEntry(
+        domain=DOMAIN, data={}, options={CONF_THERMAL_MASS: CONCRETE_SLAB_MASS}
+    )
+    restarted.add_to_hass(hass)
+    assert _derived(coordinator.engine) == _derived(
+        (await _create_coordinator(hass, restarted)).engine
+    )
