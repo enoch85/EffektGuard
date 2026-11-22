@@ -94,6 +94,7 @@ from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
 from .utils.compressor_monitor import CompressorHealthMonitor, CompressorSaturation
+from .utils.episode import Episode
 from .utils.power import power_kw_from_state
 from .utils.time_utils import get_current_billing_period, seconds_between
 from .utils.volatile_helpers import OffsetVolatilityTracker, gate_offset
@@ -344,9 +345,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # Offset volatility tracking (prevents rapid back-and-forth offset changes)
         # Uses same min duration as price volatility (45 min) for consistency
         self._offset_volatility_tracker = OffsetVolatilityTracker()
-        # The path that took the last cycle's emergency decision past the volatility gate, if it
-        # was one: an emergency is reported when it begins and when it ends, not on every cycle.
+        # An emergency decision going past the volatility gate is reported when it begins and when
+        # it ends, not on every cycle; again when it goes past by another path.
+        self._emergency_report = Episode()
         self._emergency_bypass: str | None = None
+        # Control cycles that read the pump and decided, numbered for these reports (utils/episode.py)
+        self._control_cycles = 0
 
         # Peak tracking metadata (for sensor attributes)
         self.peak_today_time: datetime | None = None  # When today's peak occurred
@@ -1141,6 +1145,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             nibe_data = await self.nibe.get_current_state()
             self.current_offset = float(nibe_data.current_offset)
+            if apply:
+                self._control_cycles += 1
             _LOGGER.debug(
                 "NIBE data retrieved: indoor %.1f°C, outdoor %.1f°C, flow %.1f°C, DM %.0f",
                 nibe_data.indoor_temp,
@@ -1433,7 +1439,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
                 decision = await self.hass.async_add_executor_job(
                     # Only a decision that may drive the pump records: see _async_update_data.
-                    partial(self.engine.calculate_decision, record=apply),
+                    partial(
+                        self.engine.calculate_decision, record=apply, cycle=self._control_cycles
+                    ),
                     nibe_data,
                     price_data,
                     weather_data,
@@ -1514,16 +1522,30 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             record=apply,
         )
         emergency_bypass = gated.bypass if decision.is_emergency else None
+        # A read, or a start-up cycle that only observes, reports nothing (utils/episode.py).
+        reports = apply and not is_grace_period
+        cycle = self._control_cycles
+        if emergency_bypass is None and self._emergency_report.gone(cycle, reports):
+            # What took its place, not a recovery: optimisation off, an override or the fallback
+            # end it as well.
+            _LOGGER.info(
+                "No emergency decision now (indoor %.1f°C, DM %.0f): %s",
+                nibe_data.indoor_temp,
+                nibe_data.degree_minutes,
+                decision.reasoning,
+            )
         if gated.blocked:
             _LOGGER.info("Offset change blocked: %s", gated.reasoning)
             decision = OptimizationDecision(offset=gated.offset, reasoning=gated.reasoning)
         elif gated.bypass is not None:
             if emergency_bypass is None:
                 level = logging.INFO
-            elif emergency_bypass == self._emergency_bypass:
-                level = logging.DEBUG  # reported when it began
-            else:
+            elif self._emergency_report.seen(cycle, reports) or (
+                reports and emergency_bypass != self._emergency_bypass
+            ):
                 level = logging.WARNING
+            else:
+                level = logging.DEBUG  # reported when it began
             _LOGGER.log(
                 level,
                 "%s: bypassing volatile check (offset %.1f°C → %.1f°C) - %s",
@@ -1532,13 +1554,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 decision.offset,
                 decision.reasoning,
             )
-        if self._emergency_bypass is not None and emergency_bypass is None:
-            _LOGGER.info(
-                "Emergency over (indoor %.1f°C, DM %.0f)",
-                nibe_data.indoor_temp,
-                nibe_data.degree_minutes,
-            )
-        self._emergency_bypass = emergency_bypass
+        if reports:
+            self._emergency_bypass = emergency_bypass
 
         self.last_decision_time = dt_util.utcnow()
 
@@ -1735,7 +1752,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
             try:
                 dhw_result = await self._calculate_dhw_recommendation(
-                    nibe_data, price_data, weather_data, current_dhw_temp, now_time
+                    nibe_data,
+                    price_data,
+                    weather_data,
+                    current_dhw_temp,
+                    now_time,
+                    record=apply,
+                    cycle=self._control_cycles,
                 )
                 dhw_recommendation = dhw_result.recommendation
                 dhw_planning_summary = dhw_result.summary
@@ -1881,7 +1904,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         }
 
     async def _calculate_dhw_recommendation(
-        self, nibe_data, price_data, weather_data, current_dhw_temp: float, now_time: datetime
+        self,
+        nibe_data,
+        price_data,
+        weather_data,
+        current_dhw_temp: float,
+        now_time: datetime,
+        record: bool = True,
+        cycle: int | None = None,
     ) -> DHWRecommendation:
         """Calculate DHW heating recommendation with detailed planning.
 
@@ -1894,6 +1924,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             weather_data: Weather forecast
             current_dhw_temp: Current DHW temperature (°C)
             now_time: Current datetime
+            record: False for a read-only refresh, which reports nothing
+            cycle: This control cycle's number (utils/episode.py)
 
         Returns:
             DHWRecommendation with recommendation text and detailed planning info
@@ -1972,6 +2004,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             price_data=price_data,
             dhw_amount_minutes=dhw_amount_minutes,
             weather_forecast=weather_forecast,
+            record=record,
+            cycle=cycle,
         )
 
         return result

@@ -72,6 +72,7 @@ from ..const import (
 from homeassistant.util import dt as dt_util
 
 from ..adapters.gespot_adapter import index_containing
+from ..utils.episode import Episode
 from ..utils.price_math import price_savings_fraction
 from ..utils.time_utils import after, seconds_between
 from .thermal_layer import estimate_dm_recovery_time, get_thermal_debt_status
@@ -275,12 +276,13 @@ class IntelligentDHWScheduler:
         # yet - which is a debt to be settled the moment the house is out of danger, not a shower
         # silently cancelled. Cleared when the tank is where the window itself stops forcing heat.
         self._scheduled_window_owed: bool = False
-        # Whether RULE 1 held hot water back for thermal debt last cycle: the hold is reported when
-        # it begins and ends, not on every cycle it lasts.
-        self._held_for_thermal_debt: bool = False
-        # Likewise a scheduled window that safety refused, or deferred for a PEAK price, last cycle.
-        self._scheduled_refused_for_safety: bool = False
-        self._scheduled_deferred_for_peak: bool = False
+        # RULE 1's hold for thermal debt, a scheduled window refused for safety and one deferred for
+        # a PEAK price are each reported when they begin and when they end, not on every cycle.
+        self._thermal_debt_hold = Episode()
+        self._safety_refusal = Episode()
+        self._peak_deferral = Episode()
+        # The control cycle these reports count by (calculate_recommendation's cycle).
+        self._cycle = 0
         # Whether the missing high-temperature cycle has been reported: once per stretch without one,
         # which ends when a cycle is seen (logged there), not on every cycle it lasts.
         self._reported_hygiene_overdue: bool = False
@@ -719,6 +721,8 @@ class IntelligentDHWScheduler:
         is_volatile: bool = False,  # True if current price run is too brief (<45 min)
         dhw_amount_minutes: float | None = None,  # Current hot water amount from sensor
         weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
+        record: bool = True,  # False for a read-only refresh, which reports nothing
+        cycle: int | None = None,  # the control cycle; else each recorded call is the next one
     ) -> DHWScheduleDecision:
         """Decide if DHW heating should start based on priority rules.
 
@@ -742,10 +746,15 @@ class IntelligentDHWScheduler:
                 When scheduling is active and amount >= target, stop heating.
             weather_forecast: Optional list of WeatherForecastHour for predictive pre-heating.
                 Used to anticipate cold periods that may cause thermal debt blocking.
+            record: False for a read-only refresh, which reports nothing.
+            cycle: The control cycle a refusal or deferral is reported for (utils/episode.py);
+                without one, each recorded call is the next cycle.
 
         Returns:
             DHWScheduleDecision with recommendation and abort conditions
         """
+        if record:
+            self._cycle = self._cycle + 1 if cycle is None else cycle
         self._hygiene_run = False  # set by RULE 2.3 when this cycle's decision is its run
 
         # One notion of a price, read by every rule: VERY_CHEAP is cheap. RULES 5 and 7 spelled their
@@ -879,7 +888,8 @@ class IntelligentDHWScheduler:
                     # Not cancelled. OWED, and settled once the house is out of danger, even after
                     # the window has closed (see RULE 0.5).
                     self._scheduled_window_owed = True
-                    (_LOGGER.debug if self._scheduled_refused_for_safety else _LOGGER.warning)(
+                    begins = self._safety_refusal.seen(self._cycle, record)
+                    (_LOGGER.warning if begins else _LOGGER.debug)(
                         "Scheduled DHW refused for safety: %s. It will be heated as soon as the "
                         "house is safe again.",
                         unsafe,
@@ -1048,9 +1058,9 @@ class IntelligentDHWScheduler:
                                 current_time, price_periods
                             )
                             (
-                                _LOGGER.debug
-                                if self._scheduled_deferred_for_peak
-                                else _LOGGER.warning
+                                _LOGGER.warning
+                                if self._peak_deferral.seen(self._cycle, record)
+                                else _LOGGER.debug
                             )(
                                 "DHW scheduled deadline approaching but PEAK price - deferring. "
                                 "Temp: %.1f°C, deadline: %.1fh away. May miss scheduled demand. "
@@ -2278,6 +2288,8 @@ class IntelligentDHWScheduler:
         price_data=None,  # PriceData for volatility calculation
         dhw_amount_minutes: float | None = None,  # Hot water amount for scheduled check
         weather_forecast: list | None = None,  # WeatherForecastHour list for predictive heating
+        record: bool = True,  # False for a read-only refresh, which reports nothing
+        cycle: int | None = None,  # the coordinator's control cycle; else each recorded call is one
     ) -> DHWRecommendation:
         """Calculate complete DHW heating recommendation.
 
@@ -2308,6 +2320,8 @@ class IntelligentDHWScheduler:
         Returns:
             DHWRecommendation with recommendation, summary, details, and decision
         """
+        if record:
+            self._cycle = self._cycle + 1 if cycle is None else cycle
         # Calculate volatility using shared helper (consistent with space heating)
         is_volatile = False
         if self.price_analyzer and price_data:
@@ -2400,39 +2414,40 @@ class IntelligentDHWScheduler:
             is_volatile=is_volatile,
             dhw_amount_minutes=dhw_amount_minutes,
             weather_forecast=weather_forecast,
+            record=record,
+            cycle=self._cycle,
         )
 
-        held = decision.priority_reason == "CRITICAL_THERMAL_DEBT"
-        if held and not self._held_for_thermal_debt:
-            _LOGGER.warning(
-                "Hot water held back for thermal debt: DM %.0f at or below %.0f (zone %s, "
-                "outdoor %.1f°C)",
-                thermal_debt,
-                self.get_dm_block_and_abort_thresholds(outdoor_temp)[0],
-                zone_name,
-                outdoor_temp,
-            )
-        elif self._held_for_thermal_debt and not held:
+        if decision.priority_reason == "CRITICAL_THERMAL_DEBT":
+            if self._thermal_debt_hold.seen(self._cycle, record):
+                _LOGGER.warning(
+                    "Hot water held back for thermal debt: DM %.0f at or below %.0f (zone %s, "
+                    "outdoor %.1f°C)",
+                    thermal_debt,
+                    self.get_dm_block_and_abort_thresholds(outdoor_temp)[0],
+                    zone_name,
+                    outdoor_temp,
+                )
+        elif self._thermal_debt_hold.gone(self._cycle, record):
             _LOGGER.info("Hot water no longer held back for thermal debt (DM %.0f)", thermal_debt)
-        self._held_for_thermal_debt = held
 
         # A scheduled window refused for safety, or deferred for a PEAK price, is reported in
         # should_start_dhw when it begins, and here when it ends.
-        refused = decision.priority_reason == "DHW_SCHEDULED_BLOCKED_BY_SAFETY"
-        if self._scheduled_refused_for_safety and not refused:
+        if decision.priority_reason != "DHW_SCHEDULED_BLOCKED_BY_SAFETY" and (
+            self._safety_refusal.gone(self._cycle, record)
+        ):
             _LOGGER.info(
                 "Scheduled DHW no longer refused for safety (DM %.0f, indoor %.1f°C)",
                 thermal_debt,
                 indoor_temp,
             )
-        self._scheduled_refused_for_safety = refused
-        deferred = decision.priority_reason == "DHW_PEAK_AVOIDED_SCHEDULED"
-        if self._scheduled_deferred_for_peak and not deferred:
+        if decision.priority_reason != "DHW_PEAK_AVOIDED_SCHEDULED" and (
+            self._peak_deferral.gone(self._cycle, record)
+        ):
             _LOGGER.info(
                 "DHW scheduled deadline no longer deferred for PEAK price (temp %.1f°C)",
                 current_dhw_temp,
             )
-        self._scheduled_deferred_for_peak = deferred
 
         # Get scheduled target for amount tracking
         upcoming_demand = self._check_upcoming_demand_period(current_time, current_dhw_temp)
