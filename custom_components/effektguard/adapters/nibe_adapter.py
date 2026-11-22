@@ -25,6 +25,7 @@ Data read includes:
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -35,6 +36,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from ..const import (
@@ -64,7 +66,10 @@ from ..const import (
     NIBE_DISCOVERY_RANK_MANUAL,
     NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
     NIBE_DISCOVERY_SLOW_RETRY_CYCLES,
+    NIBE_HEATPUMP_EXCLUDE,
+    NIBE_HEATPUMP_PLATFORM,
     NIBE_MANUAL_OVERRIDE_KEYS,
+    NIBE_OFFSET_CIRCUIT_PATTERN,
     NIBE_OFFSET_RESYNC_MINUTES,
     NIBE_POWER_FACTOR,
     NIBE_PRIO_HEATING_STATES,
@@ -88,6 +93,30 @@ if TYPE_CHECKING:
     from ..models.types import AdapterConfigDict
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _names(text: str, pattern: str) -> bool:
+    """Whether a name holds a discovery pattern as a whole word or number.
+
+    A pattern that begins with a letter or digit does not match inside a longer word or number
+    ("eq1" is not in "freq1", "40004" not in "140004"), and one that ends in a digit does not run
+    on into another digit ("_bt1" is BT1, not BT10, brine in; "_bt6" is not BT61).
+    """
+    start = text.find(pattern)
+    while start != -1:
+        end = start + len(pattern)
+        starts_inside = pattern[0].isalnum() and start > 0 and text[start - 1].isalnum()
+        runs_on = pattern[-1].isdigit() and end < len(text) and text[end].isdigit()
+        if not (starts_inside or runs_on):
+            return True
+        start = text.find(pattern, start + 1)
+    return False
+
+
+def _circuit_of(name: str) -> int | None:
+    """The climate system an offset's name gives ("heat_offset_s2" is 2)."""
+    match = re.search(NIBE_OFFSET_CIRCUIT_PATTERN, name)
+    return int(match.group(1)) if match else None
 
 
 @dataclass
@@ -177,6 +206,13 @@ class NibeAdapter:
         self._manual_overrides: dict[str, str] = {}
         if config.get(CONF_NIBE_ENTITY):
             self._manual_overrides["offset"] = config[CONF_NIBE_ENTITY]
+        # The climate system whose offset was picked, when its name gives one (nibe_heatpump's
+        # "Heat Offset S2", "Heating offset climate system 2"); discovery reads it again from the
+        # registry. Another circuit's sensors stay out of discovery only while it is climate system
+        # 1's, or unnamed.
+        self._offset_circuit = _circuit_of(str(config.get(CONF_NIBE_ENTITY) or "").lower())
+        self._other_unit_seen = False
+        self._warned: set[str] = set()
         if self._degree_minutes_entity:
             self._manual_overrides["degree_minutes"] = self._degree_minutes_entity
         for cache_key, conf_key in NIBE_MANUAL_OVERRIDE_KEYS.items():
@@ -746,6 +782,10 @@ class NibeAdapter:
         Matching rules:
         - Keys are tried in NIBE_DISCOVERY_PATTERNS dict order; each entity can
           satisfy at most one key, so specific keys are ordered before broader ones.
+        - A pattern matches a whole word or number only ("_bt1" is not BT10, "eq1" not "freq1").
+        - On nibe_heatpump, another climate system, another outdoor unit, a cooling sensor or a
+          setting that merely contains "prio" never matches (NIBE_HEATPUMP_EXCLUDE, by the
+          coil's own name).
         - Temperature keys require device_class temperature or a °C/°F unit.
         - The offset key requires a number entity (write path uses
           number.set_value; a read-only Modbus offset sensor must never win).
@@ -761,9 +801,18 @@ class NibeAdapter:
 
         ranks = self._entity_ranks
         claimed: set[str] = set(self._entity_cache.values())
+        self._other_unit_seen = False
 
         registry = er.async_get(self.hass)
         live_ids = set()
+
+        # The offset's circuit, from its registry name first: a renamed one keeps "Heat Offset S2"
+        offset_id = self._manual_overrides.get("offset")
+        offset_name = (
+            getattr(registry.async_get(offset_id), "original_name", None) if offset_id else None
+        )
+        circuit = _circuit_of(slugify(offset_name)) if isinstance(offset_name, str) else None
+        self._offset_circuit = circuit or _circuit_of(str(offset_id or "").lower())
 
         for state in self.hass.states.async_all(("sensor", "number")):
             live_ids.add(state.entity_id)
@@ -786,6 +835,8 @@ class NibeAdapter:
                 ),
                 ranks,
                 claimed,
+                platform=registry_entry.platform if registry_entry else None,
+                name=registry_entry.original_name if registry_entry else None,
             )
 
         for entity in registry.entities.values():
@@ -800,6 +851,8 @@ class NibeAdapter:
                 NIBE_DISCOVERY_RANK_REGISTRY_ONLY,
                 ranks,
                 claimed,
+                platform=entity.platform,
+                name=entity.original_name,
             )
 
         # Discover switch entities (separate domain scan for increased_ventilation).
@@ -823,6 +876,22 @@ class NibeAdapter:
                 ):
                     self._entity_cache[key] = entity_id
                     _LOGGER.debug("Found NIBE switch %s: %s", key, entity_id)
+
+        # Said once, when first seen, whether or not a binding changed
+        if self._other_unit_seen and "other_unit" not in self._warned:
+            self._warned.add("other_unit")
+            _LOGGER.warning(
+                "Entities of outdoor units 2-8 (EB102-EB108) or an S135 module are turned on: "
+                "EffektGuard reads the first outdoor unit, EB101, only"
+            )
+        if self._offset_circuit not in (None, 1) and "offset_circuit" not in self._warned:
+            self._warned.add("offset_circuit")
+            _LOGGER.warning(
+                "The offset entity %s is climate system %d's. EffektGuard cannot tell which supply "
+                "and room temperature belong to that circuit: pick them under Reconfigure",
+                offset_id,
+                self._offset_circuit,
+            )
 
         # Log results only when they changed (rediscovery runs during startup
         # while core sensors are missing - identical repeats are just noise)
@@ -872,6 +941,9 @@ class NibeAdapter:
         rank: int,
         ranks: dict[str, int],
         claimed: set[str],
+        *,
+        platform: str | None = None,
+        name: str | None = None,
     ) -> None:
         """Match one entity against the pattern table and cache it if it wins.
 
@@ -882,6 +954,8 @@ class NibeAdapter:
             rank: Candidate quality (lower wins; live state beats registry-only)
             ranks: Current rank per cached key (mutated)
             claimed: Entity ids already assigned to a key (mutated)
+            platform: The integration behind it, from the entity registry
+            name: Its own name, from the entity registry (no device prefix)
         """
         if entity_id in claimed:
             # Already bound to a key - refresh its rank so a registry-only
@@ -894,11 +968,23 @@ class NibeAdapter:
             return
 
         entity_id_lower = entity_id.lower()
-        if any(excluded in entity_id_lower for excluded in NIBE_DISCOVERY_EXCLUDE):
+        if any(_names(entity_id_lower, excluded) for excluded in NIBE_DISCOVERY_EXCLUDE):
             return
+        if platform == NIBE_HEATPUMP_PLATFORM:
+            own = (
+                slugify(name)
+                if isinstance(name, str) and name
+                else entity_id_lower.partition(".")[2]
+            )
+            for family, words in NIBE_HEATPUMP_EXCLUDE.items():
+                if family == "other_circuit" and self._offset_circuit not in (None, 1):
+                    continue
+                if any(_names(own, word) for word in words):
+                    self._other_unit_seen |= family == "other_unit"
+                    return
 
         for key, patterns_list in NIBE_DISCOVERY_PATTERNS.items():
-            if not any(pattern in entity_id_lower for pattern in patterns_list):
+            if not any(_names(entity_id_lower, pattern) for pattern in patterns_list):
                 continue
 
             if key in NIBE_TEMPERATURE_KEYS:
