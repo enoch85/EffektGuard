@@ -8,7 +8,7 @@ The details behind the [README](../README.md).
 |---|---|
 | Home Assistant 2026.11 or newer | Not supported |
 | Your heat pump in Home Assistant: [MyUplink](https://www.home-assistant.io/integrations/myuplink/), [nibe_heatpump](https://www.home-assistant.io/integrations/nibe_heatpump/) (turn on its entities) or [Modbus](https://www.home-assistant.io/integrations/modbus/) ([how](LOCAL_MODBUS.md)) | Nothing works |
-| A model profile: NIBE F730, F750, F1155, F2040 or S1155 | Pick the closest |
+| A model profile: NIBE F730, F750, F1155, F2040, S1155 or S735 | Pick the closest |
 | [GE-Spot](https://github.com/enoch85/ge-spot), which gets prices from Nord Pool, ENTSO-E and others | No price optimization |
 | A weather entity with an hourly forecast: Met.no (comes with Home Assistant), SMHI, OpenWeatherMap, AccuWeather or others (optional) | No heating ahead of a colder day |
 | A whole-house power meter (optional) | Peak protection uses the pump's current readings, if it has them |

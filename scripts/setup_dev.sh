@@ -50,12 +50,16 @@ python -c 'import sys; assert sys.version_info[:2] == (3, 15), "Recreate .venv w
 # Upgrade pip
 echo ""
 echo "Upgrading pip..."
-pip install --upgrade pip -q
+python -m pip install --upgrade pip -q
 
-# Install requirements
+# Install requirements. pytest-homeassistant replaced pytest-homeassistant-custom-component, and
+# with both installed pytest stops before running a test: a .venv made with the old one loses it.
 echo ""
 echo "Installing test requirements..."
-pip install -q -r "$PROJECT_DIR/tests/requirements.txt"
+if python -m pip show -q pytest-homeassistant-custom-component > /dev/null 2>&1; then
+    python -m pip uninstall -q -y pytest-homeassistant-custom-component
+fi
+python -m pip install -q -r "$PROJECT_DIR/tests/requirements.txt"
 
 echo ""
 echo "=== Setup Complete ==="

@@ -40,6 +40,7 @@ from custom_components.effektguard.models.nibe import (
     NibeF2040Profile,
     NibeS1155Profile,
 )
+from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 
 _SPEC = importlib.util.spec_from_file_location(
     "sim_harness", pathlib.Path("scripts/simulation/sim_harness.py")
@@ -47,6 +48,8 @@ _SPEC = importlib.util.spec_from_file_location(
 sim = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(sim)
 
+# The profiles the simulator runs, one house each. Every registered profile - these and the ones
+# not simulated - must still carry its sourced datasheet: see `registered_profile`.
 PROFILES = [
     NibeF750Profile,
     NibeF730Profile,
@@ -68,6 +71,11 @@ def profile(request):
     return request.param()
 
 
+@pytest.fixture(params=sorted(HeatPumpModelRegistry.get_supported_models()))
+def registered_profile(request):
+    return HeatPumpModelRegistry.get_model(request.param)
+
+
 def _house_for(profile):
     """A HouseConfig wrapping this profile, so the real simulator physics is exercised."""
     return next(h for h in sim.HOUSES if h.profile.model_name == profile.model_name)
@@ -76,7 +84,8 @@ def _house_for(profile):
 class TestEveryNumberHasASource:
     """No source, no number. That is the whole rule, and it was not being followed."""
 
-    def test_the_profile_carries_its_datasheet(self, profile):
+    def test_the_profile_carries_its_datasheet(self, registered_profile):
+        profile = registered_profile
         assert profile.datasheet_points, (
             f"{profile.model_name} has no EN 14511 rating points. Every performance figure in this "
             f"package is now derived from the manufacturer's published measurements, because the "
@@ -88,11 +97,12 @@ class TestEveryNumberHasASource:
             f"neither."
         )
 
-    def test_every_rating_point_names_its_condition(self, profile):
+    def test_every_rating_point_names_its_condition(self, registered_profile):
         """`A20(12)W35, 252 m3/h, min compressor frequency` is the datasheet's own string.
 
         Without it a rating point is just four floats, and four floats are what got invented.
         """
+        profile = registered_profile
         for point in profile.datasheet_points:
             assert len(point.condition) > 8 and any(
                 c.isdigit() for c in point.condition
@@ -314,13 +324,15 @@ class TestTheImmersionHeaterIsAlsoFromTheDatasheet:
     an outdoor monobloc, and the electric addition belongs to the indoor module it is paired with.
     """
 
-    def test_each_machine_carries_its_own_published_immersion_heater(self, profile):
+    def test_each_machine_carries_its_own_published_immersion_heater(self, registered_profile):
+        profile = registered_profile
         published = {
             "F750": 3.5,  # "6.5 (3.5) kW" - max 6.5, delivery setting 3.5
             "F730": 3.5,
             "F1155": 7.0,  # additional power 1/2/3/4/5/6/7 kW
             "S1155": 7.0,
             "F2040": 0.0,  # it has none
+            "S735": 9.0,  # "9.0 (9.0) kW" stainless and enamel; copper and 1x230 V "6.5 (6.5)"
         }
 
         assert profile.immersion_heater_kw == published[profile.model_name], (
