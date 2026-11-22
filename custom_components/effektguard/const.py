@@ -1704,7 +1704,9 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
         "43123",
         "31043",
     ],
-    "compressor_hz": ["compressor_frequency", "43136", "41778"],
+    # nibe_heatpump on an SMO 20/40 or VVM 225/310/320/325/500: the outdoor unit's "EB101-EP14
+    # Actual Cpr Frequency Outdoor Unit" (44701)
+    "compressor_hz": ["compressor_frequency", "actual_cpr_frequency", "43136", "41778"],
     "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
     # "prio" also matches "priority" (MyUplink naming) as a substring
     "prio": ["prio", "43086"],
@@ -1734,6 +1736,58 @@ NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = [
     "requested_compressor_frequency",
     "min_compressor_frequency",
 ]
+
+# Entities of the nibe_heatpump integration (registry platform) that are never discovered, matched
+# against the coil's own name (its registry name: no device prefix, and it survives a renamed entity
+# id). A NIBE with more circuits, outdoor units or cooling names those with the same words as the
+# ones EffektGuard reads, and the first match wins in the order Home Assistant created the states -
+# which a restart changes (#158). Names as in nibe 2.25.0's model lists, which nibe_heatpump uses.
+NIBE_HEATPUMP_PLATFORM: Final = "nibe_heatpump"
+NIBE_HEATPUMP_EXCLUDE: Final[dict[str, list[str]]] = {
+    # Climate systems 2-8: EP21-EP23 and EP44-EP47 ("EP21-BT2 Supply temp S2", "Supply line
+    # (EP21-BT2)"), and "Room average temp clim. system 2 (BT50)". Not applied when the offset
+    # picked in setup is one of theirs.
+    "other_circuit": [
+        "ep21",
+        "ep22",
+        "ep23",
+        "ep44",
+        "ep45",
+        "ep46",
+        "ep47",
+        "clim_system_2",
+        "clim_system_3",
+        "clim_system_4",
+        "clim_system_5",
+        "clim_system_6",
+        "clim_system_7",
+        "clim_system_8",
+    ],
+    # Outdoor units 2-8 of an SMO 40 / SMO S40 (EB102-EB108) and the S135 exhaust-air module:
+    # EffektGuard reads the first outdoor unit, EB101.
+    "other_unit": ["eb102", "eb103", "eb104", "eb105", "eb106", "eb107", "eb108", "s135"],
+    # Not a heating reading: cooling ("Cool Degree Minutes", the cooling module EQ1's "EQ1-BT64 Cool
+    # Supply Temp" and "Return line (EQ1-BT65)", and BT64, "Supply temperature (BT64)"); BT70, the
+    # hot-water comfort supply; and settings that contain "prio" (the OPT boiler's, the smart energy
+    # source's - "SES" - "prio hot water opt", "Permit prioritised additional heat", "Speed
+    # circ.pump add prio", "All sub units operating prio").
+    "not_a_reading": [
+        "cool",
+        "eq1",
+        "bt64",
+        "bt70",
+        "opt_boiler",
+        "energy_source",
+        "ses",
+        "prio_hot_water_opt",
+        "prioritised",
+        "circ_pump",
+        "sub_units",
+    ],
+}
+# The circuit of an offset entity: nibe_heatpump's "Heat Offset S2" (F-series, SMO, VVM) and
+# "Heating offset climate system 2" (S-series), as entity ids.
+NIBE_OFFSET_CIRCUIT_PATTERN: Final = r"heat(?:ing)?_offset_(?:s|climate_system_)(\d)(?:_|$)"
 
 # Keys that trigger re-discovery on the update cycle while missing.
 # Source integrations (modbus, nibe_heatpump, myuplink) may create their
