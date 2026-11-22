@@ -4,7 +4,7 @@ Hard-won, non-obvious knowledge that is **not** derivable from the code, the git
 `docs/`. This is the file that stops the next session - or the next model - from re-deciding
 something that was already decided, or "fixing" something that is deliberately open.
 
-Read [CLAUDE.md](../../CLAUDE.md) for the map and commands, and
+Read [AGENTS.md](../../AGENTS.md) for the map and commands, and
 [IMPLEMENTATION.md](IMPLEMENTATION.md) for how to work. This file is
 the **why**, and the traps those two do not cover.
 
