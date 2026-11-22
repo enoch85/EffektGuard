@@ -43,6 +43,21 @@ _LOGGER = logging.getLogger(__name__)
 QUARTER_DURATION: Final = timedelta(minutes=MINUTES_PER_QUARTER)
 
 
+def _follows(earlier: "QuarterPeriod", later: "QuarterPeriod") -> bool:
+    """`later` is the quarter right after `earlier`, in real time (a DST night included)."""
+    return seconds_between(earlier.start_time, later.start_time) == (
+        QUARTER_DURATION.total_seconds()
+    )
+
+
+def _up_to_first_gap(periods: list["QuarterPeriod"]) -> list["QuarterPeriod"]:
+    """The quarters before the first one missing, in the order they come."""
+    for index in range(1, len(periods)):
+        if not _follows(periods[index - 1], periods[index]):
+            return periods[:index]
+    return periods
+
+
 class RawPricePeriod(TypedDict):
     """One interval as GE-Spot publishes it in `today_interval_prices`.
 
@@ -168,6 +183,8 @@ class GESpotAdapter:
         self.hass = hass
         self.price_unit: str | None = None
         self._gespot_entity = config.get(CONF_GESPOT_ENTITY)
+        # The holes already reported - see _report_gap
+        self._reported_gaps: set[tuple[str, datetime]] = set()
 
     async def get_prices(self) -> PriceData:
         """Read price data from GE-Spot entities.
@@ -217,8 +234,17 @@ class GESpotAdapter:
         tomorrow_raw = state.attributes.get("tomorrow_interval_prices", [])
 
         # Convert to QuarterPeriod objects (no unit conversion, use as-is)
-        today_periods = self._parse_periods(today_raw)
-        tomorrow_periods = self._parse_periods(tomorrow_raw) if tomorrow_raw else []
+        today_periods = self._contiguous(self._parse_periods(today_raw), "today")
+        tomorrow_periods = (
+            self._contiguous(self._parse_periods(tomorrow_raw), "tomorrow") if tomorrow_raw else []
+        )
+        if (
+            today_periods
+            and tomorrow_periods
+            and not _follows(today_periods[-1], tomorrow_periods[0])
+        ):
+            self._report_gap("tomorrow", tomorrow_periods[0], "does not join today's last quarter")
+            tomorrow_periods = []
 
         # Log availability with dynamic unit
         if tomorrow_periods:
@@ -241,6 +267,35 @@ class GESpotAdapter:
             has_tomorrow=len(tomorrow_periods) > 0,
         )
 
+    def _contiguous(self, periods: list[QuarterPeriod], day: str) -> list[QuarterPeriod]:
+        """A day's quarters up to the first one missing.
+
+        Every reader of the lists counts quarters by position - the price forecast's "N quarters
+        away", the cheap-run search, the volatility runs - so a hole (an interval dropped as
+        unparseable, or hours GE-Spot did not publish) moved every later quarter earlier by the
+        hole's length: with 10:30-14:45 missing, a price at 15:00 read as 30 minutes away at 10:00.
+        After the hole the day has no prices, as before it is published, and the price layer
+        abstains for those quarters; tomorrow, which no longer joins today, waits for midnight.
+        """
+        kept = _up_to_first_gap(periods)
+        if len(kept) < len(periods):
+            self._report_gap(day, periods[len(kept)], "does not follow the quarter before it")
+        return kept
+
+    def _report_gap(self, day: str, period: QuarterPeriod, why: str) -> None:
+        """Say once per hole, not every cycle it stays, that prices stop there."""
+        key = (day, period.start_time)
+        if key in self._reported_gaps:
+            return
+        self._reported_gaps.add(key)
+        _LOGGER.warning(
+            "GE-Spot's %s prices have a hole: the interval at %s %s. Using the quarters before it "
+            "only, rather than counting later prices too early.",
+            day,
+            period.start_time.isoformat(),
+            why,
+        )
+
     def _parse_periods(self, raw_prices: list[RawPricePeriod]) -> list[QuarterPeriod]:
         """Parse raw price data into QuarterPeriod objects.
 
@@ -252,7 +307,7 @@ class GESpotAdapter:
         Returns:
             The day's native intervals sorted by absolute instant: 96 on a
             normal day, 92/100 on DST days. Nothing is fabricated for gaps;
-            consumers locate intervals by timestamp or list position.
+            get_prices uses a day only up to its first hole (_contiguous).
 
         Note:
             Prices are used exactly as GE-Spot provides them.
@@ -294,9 +349,9 @@ class GESpotAdapter:
                 periods.append(QuarterPeriod(start_time=start_time, price=price))
 
             except (ValueError, TypeError, KeyError) as err:
-                # Drop it rather than substitute anything. Lookups are by timestamp, so a gap
-                # means that quarter has no price and the price layer abstains for it; if every
-                # interval drops, the empty day trips the no-price-source repair issue.
+                # Drop it rather than substitute anything. The day is then used up to this hole
+                # (_contiguous); if every interval drops, the empty day trips the no-price-source
+                # repair issue.
                 _LOGGER.warning("Dropping unparseable price period (%s): %s", err, item)
                 continue
 

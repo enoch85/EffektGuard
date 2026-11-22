@@ -100,3 +100,54 @@ def test_a_day_where_every_price_is_missing_yields_no_day_at_all():
         f"are all invented zeros, every quarter of the day classifies VERY_CHEAP and the pump "
         f"pre-heats aggressively, around the clock, on a day nobody sent us a single price for."
     )
+
+
+AT_TEN = 40  # 10:00, the quarter the forecast is asked from
+HOLE = range(42, 60)  # 10:30-14:45 not published
+EXPENSIVE_FROM = 60  # 15:00 onwards
+
+
+def _entity(today: list[dict[str, object]], tomorrow: list[dict[str, object]]) -> MagicMock:
+    state = MagicMock()
+    state.state = "40"
+    state.attributes = {
+        "unit_of_measurement": "öre/kWh",
+        "today_interval_prices": today,
+        "tomorrow_interval_prices": tomorrow,
+    }
+    return state
+
+
+def _priced_day(start, *, hole: range = range(0)) -> list[dict[str, object]]:
+    return [
+        {
+            "time": (start + timedelta(minutes=15 * i)).isoformat(),
+            "value": 100.0 if i >= 60 else 10.0,
+        }
+        for i in range(96)
+        if i not in hole
+    ]
+
+
+@pytest.mark.parametrize("hole", [range(0), HOLE], ids=["a whole day", "hours not published"])
+async def test_a_price_after_a_hole_is_never_counted_too_early(hole):
+    """GE-Spot left 10:30-14:45 out. Counted by position, the expensive 15:00 was the quarter
+    after 10:15, and at 10:00 the forecast saw it 30 minutes away. Now the day stops at the hole -
+    no price is known past it, as before a day is published - and tomorrow, which no longer joins
+    it, waits too."""
+    midnight = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    adapter = _adapter()
+    adapter.hass.states.get.return_value = _entity(
+        _priced_day(midnight, hole=hole), _priced_day(midnight + timedelta(days=1))
+    )
+
+    prices = await adapter.get_prices()
+    forecast = PriceAnalyzer().get_price_forecast(AT_TEN, prices, lookahead_hours=2)
+
+    if not hole:
+        assert (len(prices.today), prices.has_tomorrow) == (96, True)
+        assert forecast.next_expensive_quarters_away is None, "15:00 is five hours from 10:00"
+        return
+    assert len(prices.today) == HOLE.start, [p.start_time.isoformat() for p in prices.today[-3:]]
+    assert not prices.has_tomorrow
+    assert forecast.next_expensive_quarters_away is None, forecast

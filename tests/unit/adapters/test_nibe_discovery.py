@@ -685,12 +685,14 @@ class TestStatusParsing:
             "sensor.f750_cu_3x400v_current_compressor_frequency",
             id="myuplink",
         ),
+        pytest.param([], "sensor.aktuell_kompressorfrekvens_41778", id="myuplink-f750-number"),
     ],
 )
 async def test_the_compressor_frequency_is_the_one_it_runs_at(monkeypatch, others, frequency):
     """A NIBE publishes several frequencies whose names hold "compressor_frequency": what it was
     asked for, what it aims at, the least it may run at. Only the one it runs at is its frequency,
-    whichever the integration creates first (nibe_heatpump creates them in register order)."""
+    whichever the integration creates first (nibe_heatpump creates them in register order). Named
+    in another language, an F750's is found by its MyUplink number, 41778 (#159)."""
     states = required_core_states() + [make_state(e, "50", {}) for e in others + [frequency]]
     adapter = NibeAdapter(make_hass(states, [], monkeypatch), {})
     await adapter.discover_entities()

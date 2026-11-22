@@ -50,6 +50,8 @@ class ThermalSnapshot:
     heating_offset: float
     flow_temp: float
     degree_minutes: float
+    # False when the room reading was the adapter's placeholder (no room sensor), not a measurement
+    indoor_measured: bool = True
 
 
 @dataclass
