@@ -285,8 +285,9 @@ class WeatherPatternLearner:
                 recommendation="No forecast data",
             )
 
-        # Get typical weather for this period
-        typical = self.predict_typical_weather(current_date)
+        # The forecast is the next 24 hours, and record_weather_pattern files each pattern under
+        # the day it was taken: compare with the same period, not the one three days on.
+        typical = self.predict_typical_weather(current_date, days_ahead=0)
 
         # Calculate forecast statistics
         forecast_avg = np.mean(forecast)

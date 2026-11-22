@@ -956,7 +956,9 @@ class WeatherCompensationLayer:
         # simply stands down - the emitter law above does not, and did not need to.
         if self.weather_learner and weather_data and weather_data.forecast_hours:
             try:
-                current_date = get_current_datetime() if get_current_datetime else dt_util.now()
+                # UTC, as the coordinator files each pattern: in Sweden the local date runs one hour
+                # ahead of it after midnight (two in summer), and that can be the next week.
+                current_date = get_current_datetime() if get_current_datetime else dt_util.utcnow()
 
                 # Extract forecast for unusual weather detection
                 forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
@@ -965,7 +967,9 @@ class WeatherCompensationLayer:
                     forecast=forecast_temps,
                 )
 
-                if unusual.is_unusual:
+                # Only a forecast colder than usual widens the margin and the weight. A warmer one
+                # needs less heat, and a wider margin would hold back the cut it calls for.
+                if unusual.is_unusual and unusual.deviation_from_typical < 0:
                     unusual_weather = True
                     # Map severity string to 0.0-1.0 scale
                     unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5
