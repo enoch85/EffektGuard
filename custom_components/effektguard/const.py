@@ -1216,8 +1216,13 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 # The learned pre-heating layer therefore engaged on a THIRD of the data it believed it had, and
 # eight hours of a Swedish winter night is not a representative day. The hours are named here and
 # the sample counts derived from them, so the two can no longer drift apart.
-# ASSUMED control policy: allow one missed cycle; a longer gap is not continuous history.
-PREDICTION_MAX_SAMPLE_GAP_MINUTES: Final = UPDATE_INTERVAL_MINUTES * 2
+# ASSUMED control policy: allow one missed cycle; two in a row are not continuous history, and a
+# day may miss one.
+PREDICTION_MAX_MISSED_CYCLES: Final = 1
+# The coordinator's cycles start this many seconds past each five-minute mark (:00:10, :05:10, ...;
+# coordinator._calculate_next_aligned_time). The predictor counts its history in those cycles: a
+# reading belongs to the cycle it was recorded in, however late in the cycle that was.
+UPDATE_ALIGNMENT_SECONDS: Final = 10
 
 PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all
 PREDICTION_RESPONSIVENESS_MIN_HOURS: Final = 2  # before estimating how fast the house responds
