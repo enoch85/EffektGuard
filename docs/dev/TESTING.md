@@ -32,7 +32,7 @@ pytest's own options are in `pyproject.toml`: `asyncio_mode = "auto"`, `--strict
 
 Tests are one gate of several. The list - Black, the hardcoded-value ratchet, the simulator's
 `--selftest`, `--dst` and `--all-scenarios`, the live bench, the owner's closed loop for a change to
-what the register receives - is in [CLAUDE.md](../../CLAUDE.md) under "Before claiming it works".
+what the register receives - is in [AGENTS.md](../../AGENTS.md) under "Before claiming it works".
 
 ## CI
 
