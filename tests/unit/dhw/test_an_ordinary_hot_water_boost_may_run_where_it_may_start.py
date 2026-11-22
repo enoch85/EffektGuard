@@ -30,7 +30,7 @@ from custom_components.effektguard.optimization.dhw_optimizer import (
 from custom_components.effektguard.optimization.thermal_layer import EmergencyLayer
 
 STOCKHOLM = ZoneInfo("Europe/Stockholm")
-NOW = datetime(2026, 1, 15, 10, 30, tzinfo=STOCKHOLM)  # outside the 07:00 and 18:00 windows
+NOW = datetime(2026, 1, 15, 9, 30, tzinfo=STOCKHOLM)  # outside the 07:00 and 18:00 windows
 TARGET = 21.0
 MILD = 3.0  # outdoor, at or above DHW_SPACE_HEATING_OUTDOOR_THRESHOLD
 DM = -200.0
