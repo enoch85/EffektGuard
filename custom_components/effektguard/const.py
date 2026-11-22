@@ -2024,6 +2024,50 @@ SHORTFALL_FORECAST_HOURS: Final = 12
 IMMERSION_START_MEMORY: Final = 5  # starts remembered
 IMMERSION_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
 
+# THE NIBE S735 (models/nibe/s735.py): the S735-7, from its installer manual IHB EN 2647-4 (M13212,
+# S735 Stainless 3x400 V, 3x230 V), "Technical specifications". "Output data according to EN 14511",
+# its footnotes 2, 4 and 6, at A20(12) - 20 C extract air: the condition, flow temperature (C),
+# heating output PH (kW), COP and exhaust airflow (m3/h). NIBE's S735 data sheet (CIL EN 2218-1,
+# M12836) prints the same three figures.
+S735_EXTRACT_AIR_C: Final = 20.0
+S735_EN14511_POINTS: Final = (
+    (
+        "A20(12)W35, exhaust airflow 25 l/s (90 m3/h) min. compressor frequency",
+        35.0,
+        1.16,
+        3.90,
+        90.0,
+    ),
+    (
+        "A20(12)W35, exhaust airflow 70 l/s (252 m3/h) min. compressor frequency",
+        35.0,
+        1.57,
+        5.19,
+        252.0,
+    ),
+    (
+        "A20(12)W45, exhaust airflow 70 l/s (252 m3/h) max. compressor frequency",
+        45.0,
+        5.37,
+        2.55,
+        252.0,
+    ),
+)
+S735_PDESIGNH_KW: Final = 6.0  # "Rated heating output (Pdesignh)"
+# "Max power, immersion heater (factory setting)": 9.0 (9.0) kW in the stainless and enamel
+# 3x400 V versions, 6.5 (6.5) in the copper and 1x230 V ones (IHB SV 2647-4, IHB EN 2647-3), whose
+# rating points are the same. Only the power-plausibility ceiling reads it, so the larger stands.
+S735_IMMERSION_HEATER_KW: Final = 9.0
+S735_SUPPLY_MAX_C: Final = 70.0  # heating medium "Max temperature", compressor and additional heat
+S735_SUPPLY_MIN_C: Final = 20.0  # the lowest that menu 1.30.4 "Lowest supply heating" accepts
+# NIBE publishes no compressor frequency range for the S735: this is the span its menu 7.1.3.1
+# ("Block freq") lets an installer block, start 15-92 Hz and stop 18-95 Hz.
+S735_BLOCK_FREQ_HZ: Final = (15, 95)
+# An S-series pump starts its immersion heater "Relative DM start additional heat" below "Start
+# compressor" (menu 7.1.10.3). The S735 manual gives both, with the S1155's setting ranges, but no
+# factory value; the S1155's own register export has them: DM_THRESHOLD_START and this one.
+S_SERIES_RELATIVE_DM_START_ADDITIONAL_HEAT: Final = 400
+
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)
 COMPRESSOR_HZ_RANGE: Final = 100  # 120-20 = operating range
