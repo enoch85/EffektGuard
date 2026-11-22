@@ -22,30 +22,36 @@ STOCKHOLM = ZoneInfo("Europe/Stockholm")
 ENDED = datetime(2026, 11, 10, tzinfo=STOCKHOLM)
 BEGUN = datetime(2026, 11, 11, tzinfo=STOCKHOLM)
 FIRST_CYCLE = BEGUN + timedelta(seconds=10)
+# Each day has its own price, so the ended day relabelled as today cannot pass for the new day.
+ENDED_PRICE = 200.0
+BEGUN_PRICE = 40.0
 
 
-def _day(midnight: datetime) -> list[dict[str, object]]:
+def _day(midnight: datetime, price: float) -> list[dict[str, object]]:
     return [
-        {"time": midnight + timedelta(minutes=15 * quarter), "value": 40.0 + quarter}
+        {"time": midnight + timedelta(minutes=15 * quarter), "value": price}
         for quarter in range(96)
     ]
 
 
 @pytest.mark.parametrize(
-    ("tomorrow", "first_quarter"),
-    [(_day(BEGUN), BEGUN), ([], None)],
+    ("tomorrow", "read_as_today", "first_quarter"),
+    [
+        (_day(BEGUN, BEGUN_PRICE), _day(BEGUN, BEGUN_PRICE), (BEGUN, BEGUN_PRICE)),
+        ([], _day(ENDED, ENDED_PRICE), None),
+    ],
     ids=["the new day is there under tomorrow", "no prices for the new day"],
 )
 async def test_the_first_cycle_after_midnight_finds_its_quarter(
-    monkeypatch, tomorrow, first_quarter
+    monkeypatch, tomorrow, read_as_today, first_quarter
 ):
-    """With the new day under tomorrow, it is today. Without it, nothing is made up."""
+    """With the new day under tomorrow, all of it is today. Without it, nothing is made up."""
     monkeypatch.setattr(dt_util, "utcnow", lambda: FIRST_CYCLE.astimezone(timezone.utc))
     state = MagicMock()
     state.state = "40"
     state.attributes = {
         "unit_of_measurement": "öre/kWh",
-        "today_interval_prices": _day(ENDED),
+        "today_interval_prices": _day(ENDED, ENDED_PRICE),
         "tomorrow_interval_prices": tomorrow,
     }
     hass = MagicMock()
@@ -53,9 +59,12 @@ async def test_the_first_cycle_after_midnight_finds_its_quarter(
 
     prices = await GESpotAdapter(hass, {"gespot_entity": "sensor.gespot"}).get_prices()
 
-    index = prices.get_period_index(FIRST_CYCLE)
-    assert (prices.today[index].start_time if index is not None else None) == first_quarter, (
+    period = prices.get_period(FIRST_CYCLE)
+    assert ((period.start_time, period.price) if period else None) == first_quarter, (
         f"At {FIRST_CYCLE.isoformat()} today runs from {prices.today[0].start_time.isoformat()}: "
-        "the price layer finds no quarter for the time and abstains for the cycle."
+        "the price layer prices the cycle from the wrong day, or finds no quarter and abstains."
     )
+    assert [(p.start_time, p.price) for p in prices.today] == [
+        (entry["time"], entry["value"]) for entry in read_as_today
+    ], "today must hold the whole day it was read as, not part of it"
     assert not prices.has_tomorrow
