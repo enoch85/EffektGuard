@@ -25,7 +25,8 @@ elsewhere install it first), creates `.venv`, checks that it is 3.15, and instal
 `tests/requirements.txt` pins `pytest-homeassistant`, Home Assistant's own test package, which in
 turn pins Home Assistant, pytest, pytest-asyncio and pytest-xdist; NumPy and pytest-cov, which it
 does not pin; `voluptuous`; and the Black version CI uses. Reinstall with
-`pip install -r tests/requirements.txt`.
+`bash scripts/setup_dev.sh`, which also removes `pytest-homeassistant-custom-component`, the
+package the tests used before: with both installed, pytest stops before running a test.
 
 ## Dev container and Codespaces
 
