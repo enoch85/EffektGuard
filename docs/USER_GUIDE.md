@@ -19,11 +19,9 @@ Turn off the pump's own price control, or the two fight. On a NIBE it is Smart C
 ## Install
 
 - Marketplace (Home Assistant 2026.11 and newer): the first button in the README. Download, restart.
-- HACS (2026.10 and older): the second button. If HACS asks to add the repository, say yes.
-  Download, restart.
 - By hand: copy `custom_components/effektguard/` into your `custom_components/` folder and restart.
 
-Then add it with the third button, or Settings → Devices & services → Add integration →
+Then add it with the second button, or Settings → Devices & services → Add integration →
 EffektGuard.
 
 ## Setup

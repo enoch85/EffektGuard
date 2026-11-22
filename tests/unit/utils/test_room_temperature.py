@@ -9,11 +9,8 @@ from __future__ import annotations
 import random
 
 import pytest
-from pytest_homeassistant.common import MockConfigEntry
 
-from custom_components.effektguard import async_migrate_entry
 from custom_components.effektguard.const import (
-    DOMAIN,
     INDOOR_TEMP_METHOD_AVERAGE,
     INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN,
     INDOOR_TEMP_METHOD_MEDIAN,
@@ -62,11 +59,3 @@ def test_median_and_average_stay_what_they_say():
     assert combine_room_temperatures(temps, INDOOR_TEMP_METHOD_INTERQUARTILE_MEAN) == pytest.approx(
         interquartile_mean(temps)
     )
-
-
-async def test_an_entry_from_a_newer_major_version_is_refused(hass):
-    """Home Assistant 2025.11, the minimum, hands a newer entry to the integration to judge."""
-    entry = MockConfigEntry(domain=DOMAIN, version=2, minor_version=1, data={})
-    entry.add_to_hass(hass)
-
-    assert await async_migrate_entry(hass, entry) is False

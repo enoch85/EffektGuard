@@ -34,7 +34,6 @@ from .const import (
     CONF_INDOOR_TEMP_METHOD,
     CONF_NIBE_TEMP_LUX_ENTITY,
     CONFIG_ENTRY_MINOR_VERSION,
-    CONFIG_ENTRY_VERSION,
     DHW_BOOST_COOLDOWN_MINUTES,
     DHW_BOOST_DEFAULT_DURATION_MINUTES,
     DHW_BOOST_MAX_DURATION_MINUTES,
@@ -123,10 +122,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     1.1 -> 1.2: the median, which the setup stored by default, becomes the interquartile mean (see
     DEFAULT_INDOOR_TEMP_METHOD). Median and average stay selectable in Reconfigure.
     """
-    if entry.version > CONFIG_ENTRY_VERSION:
-        # Made by a newer EffektGuard: this one cannot know what its data means.
-        return False
-
     if entry.minor_version < CONFIG_ENTRY_MINOR_VERSION:
         data = dict(entry.data)
         if data.get(CONF_INDOOR_TEMP_METHOD) == INDOOR_TEMP_METHOD_MEDIAN:
