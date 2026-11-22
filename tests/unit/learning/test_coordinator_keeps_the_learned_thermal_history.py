@@ -40,6 +40,7 @@ async def test_a_restart_keeps_the_parameters_and_their_confidence(hass, hass_st
         )
     before = source.adaptive_learning.get_parameters()
     assert before.confidence >= LEARNING_CONFIDENCE_THRESHOLD
+    gate_before = source.adaptive_learning.should_use_learned_parameters()
     await source._save_learned_data(
         source.adaptive_learning, source.thermal_predictor, source.weather_learner
     )
@@ -51,6 +52,9 @@ async def test_a_restart_keeps_the_parameters_and_their_confidence(hass, hass_st
 
     assert after is not None
     assert asdict(after) == asdict(before)
+    assert (
+        restored.adaptive_learning.should_use_learned_parameters() == gate_before
+    ), "a restart must not open the learned-parameter gate the running model kept closed"
     assert list(restored.adaptive_learning.observations) == list(
         source.adaptive_learning.observations
     )
