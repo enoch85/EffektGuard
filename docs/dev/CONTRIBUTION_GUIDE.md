@@ -1,7 +1,7 @@
 # Contributing
 
 Production code in real homes: safety and pump health first, then savings, down to the room
-temperature the chosen mode keeps. The rules are in [CLAUDE.md](../../CLAUDE.md), [IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) and
+temperature the chosen mode keeps. The rules are in [AGENTS.md](../../AGENTS.md), [IMPLEMENTATION.md](../agent/IMPLEMENTATION.md) and
 [PROJECT_NOTES.md](../agent/PROJECT_NOTES.md). This page is the sequence.
 
 ## 1. Set up
@@ -29,7 +29,7 @@ One change per branch, and one pull request in progress at a time.
   passes on the branch. Name the file for the behaviour, e.g.
   `tests/unit/dhw/test_a_slow_tank_is_heated_in_time.py`.
 - Docs: update what the change makes false (`README.md`, `docs/`), and add any new doc to the table
-  in CLAUDE.md.
+  in AGENTS.md.
 
 ## 4. Check
 
@@ -41,7 +41,7 @@ python scripts/simulation/sim_harness.py --selftest
 python scripts/simulation/sim_harness.py --dst
 ```
 
-The complete gate list, including `--all-scenarios` and the live bench, is in CLAUDE.md ("Before
+The complete gate list, including `--all-scenarios` and the live bench, is in AGENTS.md ("Before
 claiming it works").
 
 ## 5. Commit

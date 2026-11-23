@@ -19,8 +19,10 @@ Five houses, all targeting 22.0 C (`TARGET_INDOOR`):
 | `villa_s1155` | timber underfloor, large villa | S1155 (ground source) |
 | `airsource_f2040` | outdoor air | F2040 (air to water) |
 
-Compressor output respects each profile's modeled minimum, using declared values where available. The F2040 uses a 2.5 kW minimum
-reference from [NIBE's Belgian catalogue](https://www.nibe.eu/download/18.712dd4e31961ba0902e13d/1753783195714/NIBE%20Prijscatalogus%20BE-fr%201%20april%202025.pdf)
+Compressor output stays between each pump's minimum and maximum. For the exhaust-air F750 and
+F730 both are NIBE's figures at the rated 252 m³/h airflow, the airflow the efficiency fit uses
+(their minimum at the smallest airflow, 108 and 90 m³/h, is lower). The F2040 uses a 2.5 kW
+minimum reference from [NIBE's Belgian catalogue](https://www.nibe.eu/download/18.712dd4e31961ba0902e13d/1753783195714/NIBE%20Prijscatalogus%20BE-fr%201%20april%202025.pdf)
 at A7/W35. Transferring that reference to this UK peak-output model and holding it at other
 conditions is an assumption, not an independently measured minimum-output map. A running
 compressor cannot silently modulate to zero; below that floor demand must be met by cycling.

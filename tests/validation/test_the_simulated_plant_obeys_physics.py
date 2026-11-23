@@ -146,8 +146,8 @@ class TestTheCopModelIsBoundedByPhysicsAndByTheDatasheet:
 
         They are replaced by tests/validation/test_the_pump_models_match_their_datasheets.py, which
         checks something strictly stronger, against real data: the model reproduces every published
-        EN 14511 rating point to within 2 %, and PREDICTS the F2040's W45 rows - which the fit never
-        saw - to within 8 %.
+        EN 14511 rating point to within 2 %, and predicts each F2040 W45 condition from the
+        other four rating points to within 8 %. This does not validate the full operating surface.
 
         What stays in this file is the part that is a property of the PLANT rather than of the pump:
         the second law, and the fact that hotter water costs efficiency.

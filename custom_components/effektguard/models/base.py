@@ -33,8 +33,8 @@ class RatingPoint:
     condition, not a fitted curve. `condition` is the datasheet's own string, and
     test_the_pump_models_match_their_datasheets reproduces the COP at every point.
 
-    NOTE `source_temp_c` is the HEAT SOURCE temperature, which is NOT outdoor air for four of the
-    five machines: A20(12) is 20 C extract air (exhaust-air pump), B0 is 0 C brine (ground-source),
+    NOTE `source_temp_c` is the HEAT SOURCE temperature, which is NOT outdoor air for five of the
+    six machines: A20(12) is 20 C extract air (exhaust-air pump), B0 is 0 C brine (ground-source),
     A7 is 7 C outdoor. Only an air/water pump like the F2040 has outdoor air as its source, so only
     for it is an outdoor-keyed curve meaningful.
     """
@@ -58,7 +58,7 @@ def seasonal_cop_proxy(
 
     NOTHING COMPUTES FROM THIS - it is a dashboard proxy. The simulator takes COP from
     `datasheet_points` via the exergy model, which uses SOURCE and FLOW temperatures, never the
-    weather (four of the five machines do not have outdoor air as their heat source).
+    weather (five of the six machines do not have outdoor air as their heat source).
 
     `source_temp_c` filters to one source condition (how a brine machine is anchored on its two
     published W35/W45 COPs at 0 C). Left None, every published point is used.
@@ -133,7 +133,7 @@ class HeatPumpProfile(ABC):
 
     # Whether the pump publishes the frequency its compressor may run up to right now: 43123 "Compr.
     # current max.freq." on the F730/F750/F1155/F1255, 31043 "Max frequency compressor" on the
-    # S1155/S1255; an F2040 behind an SMO 40 or VVM publishes none (yozik04/nibe register lists,
+    # S1155/S1255 and S735; an F2040 behind an SMO 40 or VVM publishes none (yozik04/nibe register lists,
     # checked 2026-10-18). CompressorSaturation judges against it where it exists, so the simulator
     # publishes one where a real pump does. Only the simulator reads it.
     publishes_max_frequency: bool = False
@@ -162,9 +162,10 @@ class HeatPumpProfile(ABC):
 
     # The immersion heater's DELIVERY SETTING, from the datasheet. 0.0 means the machine has none.
     # NIBE ships the F750/F730 with a 6.5 kW immersion heater set to 3.5 kW at delivery, the
-    # F1155-12/S1155-12 with a 7 kW immersion heater in seven automatic steps, and the F2040 with
-    # none (outdoor monobloc - its electric addition lives in the paired indoor module, which this
-    # package does not model).
+    # F1155-12/S1155-12 with a 7 kW immersion heater in seven automatic steps, the S735 with 9 kW
+    # set to 9 kW (6.5 in its copper and 1x230 V versions), and the F2040 with none (outdoor
+    # monobloc - its electric addition lives in the paired indoor module, which this package does
+    # not model).
     immersion_heater_kw: float = 0.0
     # The machine's published minimum OUTDOOR operating temperature, or None where the
     # manufacturer publishes none. Only meaningful for a machine whose heat source IS the outdoor
