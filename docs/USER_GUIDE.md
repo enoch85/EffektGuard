@@ -83,6 +83,9 @@ Under the gear icon:
 Switches on by default: Enable Optimization, Price Optimization, Peak Protection, Weather
 Prediction. Off by default: Hot Water Optimization, Airflow Optimization.
 
+Learned indoor-temperature pre-heating is inactive while its forecasts are being validated.
+Measured temperature trends and weather-based control continue to operate.
+
 ## How it decides
 
 Every 5 minutes it sets the heat, in whole degrees, from:

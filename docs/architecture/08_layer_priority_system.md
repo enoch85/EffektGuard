@@ -15,7 +15,7 @@ attribute and the current offset sensor's attributes
 | `Thermal Debt`, `T1`, `T2`, `T3`, `Anti-windup`, `Anti-windup Cooldown` | `thermal_layer.py` `EmergencyLayer` | by tier, table below |
 | `Proactive` | `thermal_layer.py` `ProactiveLayer` | Z1-Z5: 0.3, 0.4, 0.5, 0.55, 0.6 |
 | `Peak` | `effect_layer.py` `EffectManager` | 1.0 at the monthly peak (offset -3); 0.85 predictive (-1.5); 0.75 / 0.65 warning (-1.0 / -0.5); else 0 |
-| `Learned Pre-heat` | `prediction_layer.py` | 0.65 when it votes (`LAYER_WEIGHT_PREDICTION`), see [06](06_learning_integration.md) |
+| `Learned Pre-heat` | `prediction_layer.py` | 0: indoor trajectory unvalidated; see [06](06_learning_integration.md) |
 | `Math WC` | `weather_layer.py` `WeatherCompensationLayer` | 0.50-0.95 by outdoor temperature × 0.49, reduced under thermal debt ([10](10_adaptive_climate_zones.md)) |
 | `Weather Pre-heat` | `weather_layer.py` `WeatherPredictionLayer` | 0.85 × thermal mass, capped at 0.99 |
 | `Spot Price` | `price_layer.py` `PriceAnalyzer` | 0.8 (`LAYER_WEIGHT_PRICE`); 1.0 in a PEAK quarter or PEAK cluster; × 0.3 while prices are volatile, unless it is pre-heating for the hours ahead |
@@ -125,10 +125,10 @@ guard withdrawal and an immersion guard cut pass the gate at once.
 Normal day, no critical layer, Safety / Thermal Debt / Proactive / Peak all at weight 0:
 
 ```
-Learned Pre-heat  +1.0 × 0.65 = +0.65
+Learned Pre-heat   0.0 × 0.00
 Math WC           +0.5 × 0.42 = +0.21
 Weather Pre-heat   0.0 × 0.00
 Spot Price        -1.5 × 0.80 = -1.20
 Comfort           -0.2 × 0.20 = -0.04
-Sum of weights 2.07, weighted sum -0.38, offset -0.18 °C: inside the 1 °C deadband, no write
+Sum of weights 1.42, weighted sum -1.03, offset -0.73 °C: inside the 1 °C deadband, no write
 ```
