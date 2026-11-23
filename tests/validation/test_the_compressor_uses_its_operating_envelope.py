@@ -45,3 +45,62 @@ def test_a_pump_cannot_modulate_below_its_declared_minimum_in_a_mild_house():
     assert stats["compressor_starts"] > 0, "the declared minimum requires cycling below 3 kW demand"
     assert stats["compressor_below_declared_minimum_minutes"] == 0
     assert abs(stats["energy_balance_residual_kwh"]) < 0.1
+
+
+F750 = next(h for h in sim.HOUSES if h.profile.model_name == "F750")
+F730 = next(h for h in sim.HOUSES if h.profile.model_name == "F730")
+
+
+# NIBE's minimum-frequency outputs at A20(12)W35: the F750 1.144 kW at 108 m3/h and 1.498 kW at
+# 252 m3/h, the F730 1.27 kW at 90 m3/h and 1.53 kW at 252 m3/h. The maximum and the efficiency fit
+# are both at 252 m3/h.
+@pytest.mark.parametrize(
+    ("house", "minimum"), [(F750, 1.498), (F730, 1.53), (F1155, 3.0)], ids=["F750", "F730", "F1155"]
+)
+def test_the_minimum_output_is_taken_at_the_airflow_of_the_maximum(house, minimum):
+    assert house.minimum_output_kw == pytest.approx(minimum)
+
+
+def _priced_run(monkeypatch, house, outdoor, days=2):
+    """Two mild days on the baseline curve, recording each step's heat output, the compressor's
+    electricity for it, and the flow its capacity was read at."""
+    house_type = type(house)
+    cop_for_output, capacity_at = house_type.cop_at_heat_output, house_type.capacity_kw_at
+    run = {"heat_kw": [], "compressor_kw": [], "capacity_flows": []}
+
+    def priced(self, outdoor_temp, flow, heat_kw):
+        cop = cop_for_output(self, outdoor_temp, flow, heat_kw)
+        run["heat_kw"].append(heat_kw)
+        run["compressor_kw"].append(heat_kw / cop)
+        return cop
+
+    def bounded(self, outdoor_temp, flow=sim.COP_RATING_FLOW_C):
+        run["capacity_flows"].append(flow)
+        return capacity_at(self, outdoor_temp, flow)
+
+    monkeypatch.setattr(house_type, "cop_at_heat_output", priced)
+    monkeypatch.setattr(house_type, "capacity_kw_at", bounded)
+    start = datetime(2026, 1, 15, tzinfo=sim.TZ)
+    times, temperatures, raw, unit = sim._synthetic_days(start, days)
+    stats, violations, _ = sim.simulate(
+        house, times, [outdoor] * len(temperatures), sim.PriceSource(raw, unit), days, baseline=True
+    )
+    assert not violations
+    return stats, run
+
+
+def test_an_exhaust_air_pump_cycles_rather_than_run_below_its_minimum(monkeypatch):
+    stats, run = _priced_run(monkeypatch, F750, 15.0)
+    assert stats["compressor_starts"] > 0
+    assert min(kw for kw in run["heat_kw"] if kw > 0) >= 1.498 - 1e-9
+
+
+def test_the_plant_buys_each_step_of_heat_at_the_cop_of_that_output(monkeypatch):
+    stats, run = _priced_run(monkeypatch, F2040, 2.0)
+    hours = sim.STEP_MIN / 60.0
+    assert stats["energy_kwh"] == pytest.approx(
+        sum(run["compressor_kw"]) * hours
+        + stats["immersion_kwh"]
+        + sim.STANDBY_KW * len(run["compressor_kw"]) * hours
+    ), "every step's electricity is its heat over the COP of that heat output"
+    assert len(set(run["capacity_flows"])) > 1, "the capacity is read at each step's own flow"
