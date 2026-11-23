@@ -141,10 +141,10 @@ class TestThermalPredictorSerialization:
         """Test predictor restores from dictionary."""
         predictor1 = ThermalStatePredictor()
 
-        # Add states
+        # Add states, ending now: a snapshot dated after now is dropped on restore
         for i in range(20):
             predictor1.record_state(
-                timestamp=datetime.now() + timedelta(minutes=15 * i),
+                timestamp=datetime.now() - timedelta(minutes=15 * (19 - i)),
                 indoor_temp=21.0,
                 outdoor_temp=-5.0,
                 heating_offset=2.0,

@@ -14,6 +14,7 @@ Globally applicable with latitude-based climate zone detection.
 Automatically adapts from Arctic (-30°C) to Mild (5°C) climates without configuration.
 """
 
+import copy
 import logging
 import math
 from collections import deque
@@ -246,15 +247,6 @@ class DecisionEngine:
         self.predictor = thermal_predictor  # Phase 6
         self.weather_learner = weather_learner  # Phase 6
         self.heat_pump_model = heat_pump_model  # Model profile
-        # Heat bought for later fades as the pump speeds up (PriceAnalyzer.evaluate_layer) where the
-        # heat source does not weaken with the weather: a profile with no declared bivalent
-        # temperature, an exhaust-air or ground-source machine. An outdoor-air pump cannot heat the
-        # house alone below its bivalent point, and needs what it banks in a cheap hour for a colder
-        # one: faded, the simulator's F2040 left its room 190 minutes under the band in a cold snap
-        # and burned more immersion heat (sim_harness nordic_coldsnap_jan2024, steady_winter_feb2024).
-        self._raises_fade = heat_pump_model is not None and not getattr(
-            heat_pump_model, "bivalent_temp_c", 0.0
-        )
 
         # Configuration with defaults
         self.target_temp = config.get("target_indoor_temp", DEFAULT_TARGET_TEMP)
@@ -293,8 +285,6 @@ class DecisionEngine:
         # Heat loss coefficient from learned values or config, fallback to default
         heat_loss_coeff = config.get("heat_loss_coefficient", DEFAULT_HEAT_LOSS_COEFFICIENT)
         radiator_output = config.get("radiator_rated_output", None)
-        # Infer heating_type from thermal_mass if not explicitly set
-        # Uses THERMAL_MASS_*_THRESHOLD constants from const.py
         thermal_mass_value = DEFAULT_THERMAL_MASS  # Fallback to default (1.0)
         if thermal_model is not None:
             try:
@@ -303,15 +293,7 @@ class DecisionEngine:
                     thermal_mass_value = float(tm_attr)
             except (TypeError, AttributeError):
                 pass  # Use default if thermal_model is mocked or has no thermal_mass
-
-        if "heating_type" in config:
-            heating_type = config["heating_type"]
-        elif thermal_mass_value >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
-            heating_type = "concrete_ufh"
-        elif thermal_mass_value >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
-            heating_type = "timber"
-        else:
-            heating_type = "radiator"
+        heating_type = self._heating_type_for(thermal_mass_value)
 
         self.weather_comp = WeatherCompensationCalculator(
             heat_loss_coefficient=heat_loss_coeff,
@@ -379,6 +361,50 @@ class DecisionEngine:
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
         self._manual_override_one_shot = False
+
+    def _heating_type_for(self, thermal_mass: float) -> str:
+        """The heating type from the configuration, or inferred from the owner's thermal mass."""
+        if "heating_type" in self.config:
+            return self.config["heating_type"]
+        if thermal_mass >= THERMAL_MASS_CONCRETE_UFH_THRESHOLD:
+            return "concrete_ufh"
+        if thermal_mass >= THERMAL_MASS_TIMBER_UFH_THRESHOLD:
+            return "timber"
+        return "radiator"
+
+    def set_thermal_mass(self, thermal_mass: float) -> None:
+        """The owner's thermal mass, and everything the engine derives from it, as setup does.
+
+        Setup derives the heating type, the degree-minute ladder's buffer, the emitter law and the
+        weather pre-heat's horizon from it. Changed in the options, only the thermal model took the
+        new value: a slab set from 1.0 to 1.8 kept the radiator ladder and a 12-hour horizon where a
+        restart builds the slab's and 48 hours.
+        """
+        self.thermal.thermal_mass = thermal_mass
+        heating_type = self._heating_type_for(thermal_mass)
+        self.weather_comp.set_heating_type(heating_type)
+        self.emergency_layer.set_heating_type(heating_type)
+        self.proactive_layer.heating_type = heating_type
+        self.weather_prediction.thermal_mass = thermal_mass
+        self.weather_prediction.forecast_horizon = self._forecast_horizon_for(self.thermal)
+
+    def _throwaway_copy(self) -> "DecisionEngine":
+        """This engine with its own copy of everything a decision records, for a decision nothing
+        acts on.
+
+        A decision records the degree minutes and the register it reads (the emergency layer's
+        history and anti-windup, the immersion guard's readings, where the immersion heater starts
+        and where the pump runs short), the forecast's bias, its own ask and whether the room
+        waited. Kept from a read, these put the read's readings between the control cycle's: a
+        second degree-minute sample, a raise dated to the read, a wait no cycle made.
+        """
+        engine = copy.copy(self)
+        engine._immersion_readings = deque(self._immersion_readings)
+        engine.capacity_shortfall = copy.deepcopy(self.capacity_shortfall)
+        engine.immersion_start = copy.deepcopy(self.immersion_start)
+        engine.emergency_layer = copy.copy(self.emergency_layer)
+        engine.weather_prediction = copy.deepcopy(self.weather_prediction)
+        return engine
 
     def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
@@ -535,6 +561,23 @@ class DecisionEngine:
         return {"trend": "unknown", "rate_per_hour": 0.0, "confidence": 0.0}
 
     @property
+    def raises_fade(self) -> bool:
+        """Heat bought for later fades as the pump speeds up (PriceAnalyzer.evaluate_layer).
+
+        Where the heat source does not weaken with the weather: a profile with no declared bivalent
+        temperature, an exhaust-air or ground-source machine. An outdoor-air pump cannot heat the
+        house alone below its bivalent point, and needs what it banks in a cheap hour for a colder
+        one: faded, the simulator's F2040 left its room 190 minutes under the band in a cold snap
+        and burned more immersion heat (sim_harness nordic_coldsnap_jan2024, steady_winter_feb2024).
+
+        Read from the model the engine runs with, at every decision: setup attaches the model after
+        building the engine (_create_coordinator), and a flag stored at construction stayed off on
+        every Home Assistant install while the simulator, built with the model, ran it.
+        """
+        model = self.heat_pump_model
+        return model is not None and not getattr(model, "bivalent_temp_c", 0.0)
+
+    @property
     def target_temp(self) -> float:
         """The indoor temperature being aimed for."""
         return self._target_temp
@@ -581,6 +624,7 @@ class DecisionEngine:
         temp_lux_active: bool = False,
         dhw_heating_end: datetime | None = None,
         compressor_saturated: bool = False,
+        record: bool = True,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -600,10 +644,25 @@ class DecisionEngine:
             current_peak: Current monthly peak threshold (kW) - from peak_this_month sensor
             current_power: Current whole-house power consumption (kW) - from peak_today sensor
             compressor_saturated: CompressorSaturation's verdict - no frequency left to give
+            record: False for a decision nothing acts on - Home Assistant's read-only refresh. It
+                decides on a throwaway copy of what decisions record (see _throwaway_copy), so it
+                decides as a control cycle would at that moment and the engine records nothing of it.
 
         Returns:
             OptimizationDecision with offset, reasoning, and layer votes
         """
+        if not record:
+            return self._throwaway_copy().calculate_decision(
+                nibe_state,
+                price_data,
+                weather_data,
+                current_peak,
+                current_power,
+                temp_lux_active,
+                dhw_heating_end,
+                compressor_saturated,
+            )
+
         _LOGGER.debug("Calculating optimization decision")
 
         # Where this pump starts its immersion heater and where it runs short of capacity: read
@@ -786,7 +845,7 @@ class DecisionEngine:
             tolerance=self.tolerance,
             mode_config=self.mode_config,
             enable_price_optimization=self.config.get("enable_price_optimization", True),
-            raises_fade=self._raises_fade,
+            raises_fade=self.raises_fade,
         )
         price_decision = LayerDecision(
             name=price_result.name,

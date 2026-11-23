@@ -4,7 +4,7 @@ This is production code that controls heat pumps in real homes. **Safety and cor
 speed**; safety and pump health first, then savings, down to the room temperature the chosen mode
 keeps. When uncertain about NIBE behaviour, ask and verify rather than implement a plausible guess.
 
-Read [CLAUDE.md](../../CLAUDE.md) for the map and commands, and
+Read [AGENTS.md](../../AGENTS.md) for the map and commands, and
 [PROJECT_NOTES.md](PROJECT_NOTES.md) for the conventions, the
 open-findings register, and the traps - **before** writing code.
 
@@ -35,7 +35,7 @@ open-findings register, and the traps - **before** writing code.
    wrong until someone ran them - three verdicts in one audit, two of them the reviewer's own.
 
 6. **Validate the diff.** Focused tests during development, then the full suite, Black, and the
-   hardcoded-value ratchet before committing. See [CLAUDE.md](../../CLAUDE.md#commands).
+   hardcoded-value ratchet before committing. See [AGENTS.md](../../AGENTS.md#commands).
 
 7. **Finish within the authorized scope.** When commit or push is authorized, complete it without
    asking again. Honour "do not push" or "leave uncommitted". Report what you ran and what you
@@ -46,6 +46,9 @@ open-findings register, and the traps - **before** writing code.
 ## Git and pull requests
 
 - **Commit under the owner's git identity** (the devbox's `git config`), never a tool's or an AI's.
+- **Claude Code writes the change, Codex reviews it, before any PR opens.** Codex reviews that
+  exact commit at its highest effort and runs what it doubts. The PR opens only when both agree.
+  An issue's finding, if it has one, gets the same review before it is fixed.
 - **Small steps: one change per PR, and one PR in progress at a time.** Stack a PR only on the one
   it depends on.
 - **Pull the latest `main` into the branch before you post a patch.** If a push is refused, hand the

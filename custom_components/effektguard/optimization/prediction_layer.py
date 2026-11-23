@@ -43,7 +43,8 @@ from ..const import (
     PREDICTION_TREND_RISING_THRESHOLD,
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_MIN_HISTORY_HOURS,
-    PREDICTION_MAX_SAMPLE_GAP_MINUTES,
+    PREDICTION_MAX_MISSED_CYCLES,
+    UPDATE_ALIGNMENT_SECONDS,
     UPDATE_INTERVAL_MINUTES,
     PREDICTION_RESPONSIVENESS_MIN_HOURS,
     SAMPLES_PER_HOUR,
@@ -112,6 +113,11 @@ class PredictionLayerDecision:
     reason: str
 
 
+def _cycle_of(moment: datetime) -> int:
+    """The control cycle that read the pump at `moment`, numbered on the absolute time line."""
+    return int((moment.timestamp() - UPDATE_ALIGNMENT_SECONDS) // (UPDATE_INTERVAL_MINUTES * 60))
+
+
 class ThermalStatePredictor:
     """Predict future temperature based on thermal state trajectory.
 
@@ -132,7 +138,7 @@ class ThermalStatePredictor:
         """
         self.lookback_hours = lookback_hours
         self.state_history: deque[ThermalSnapshot] = deque(
-            maxlen=int(lookback_hours * SAMPLES_PER_HOUR) + 2
+            maxlen=int(lookback_hours * SAMPLES_PER_HOUR) + 1 + PREDICTION_MAX_MISSED_CYCLES
         )
         self._thermal_responsiveness: float | None = None
 
@@ -167,16 +173,27 @@ class ThermalStatePredictor:
             indoor_measured=indoor_measured,
         )
 
+        # A snapshot dated after now was never measured: a clock that ran ahead put it there. It must
+        # not keep the present out; an older arrival behind real history is still ignored below.
+        now = dt_util.utcnow().timestamp()
+        while (
+            self.state_history
+            and timestamp.timestamp() < self.state_history[-1].timestamp.timestamp()
+            and self.state_history[-1].timestamp.timestamp() > now
+        ):
+            self.state_history.pop()
+        cycle = _cycle_of(timestamp)
         if self.state_history:
-            previous = self.state_history[-1].timestamp.timestamp()
-            if timestamp.timestamp() < previous:
+            previous = self.state_history[-1].timestamp
+            if timestamp.timestamp() < previous.timestamp():
                 return
-            if timestamp.timestamp() == previous:
+            if _cycle_of(previous) == cycle:
+                # One reading per control cycle: a second one in the same cycle replaces the first.
                 self.state_history.pop()
         self.state_history.append(snapshot)
-        # Retain both endpoints and one cycle of scheduling jitter around the lookback window.
-        cutoff = timestamp.timestamp() - self.lookback_hours * 3600 - UPDATE_INTERVAL_MINUTES * 60
-        while self.state_history and self.state_history[0].timestamp.timestamp() < cutoff:
+        # The lookback's cycles and the ones a day may miss, so such a day keeps both of its ends.
+        oldest = cycle - self.lookback_hours * SAMPLES_PER_HOUR - PREDICTION_MAX_MISSED_CYCLES
+        while self.state_history and _cycle_of(self.state_history[0].timestamp) < oldest:
             self.state_history.popleft()
 
         _LOGGER.debug(
@@ -203,27 +220,38 @@ class ThermalStatePredictor:
         )
 
     def _recent_history(self, snapshots: list[ThermalSnapshot]) -> list[ThermalSnapshot]:
-        """Only the continuous suffix ending in a recent, non-future measurement."""
+        """Only the continuous suffix ending in a recent, non-future measurement.
+
+        Counted in control cycles: PREDICTION_MAX_MISSED_CYCLES may be missing between two readings,
+        and between the newest reading and the cycle running now.
+        """
         if not snapshots:
             return []
-        limit = PREDICTION_MAX_SAMPLE_GAP_MINUTES * 60
-        age = dt_util.utcnow().timestamp() - snapshots[-1].timestamp.timestamp()
-        if age < 0 or age > limit:
+        now = dt_util.utcnow()
+        newest = snapshots[-1].timestamp
+        step = PREDICTION_MAX_MISSED_CYCLES + 1
+        if newest.timestamp() > now.timestamp() or _cycle_of(now) - _cycle_of(newest) > step:
             return []
         start = len(snapshots) - 1
         while start > 0:
-            elapsed = seconds_between(snapshots[start - 1].timestamp, snapshots[start].timestamp)
-            if elapsed <= 0 or elapsed > limit:
+            gap = _cycle_of(snapshots[start].timestamp) - _cycle_of(snapshots[start - 1].timestamp)
+            if gap <= 0 or gap > step:
                 break
             start -= 1
         return snapshots[start:]
 
     def _has_history_for(self, room: list[ThermalSnapshot], hours: int) -> bool:
-        """N intervals need N+1 measurements and the claimed real elapsed duration."""
-        return (
-            len(room) >= hours * SAMPLES_PER_HOUR + 1
-            and seconds_between(room[0].timestamp, room[-1].timestamp) >= hours * 3600
-        )
+        """N cycles of history: a reading N cycles back or more, and since that reading at most
+        PREDICTION_MAX_MISSED_CYCLES cycles without one."""
+        if not room:
+            return False
+        cycles = [_cycle_of(snapshot.timestamp) for snapshot in room]
+        reach = [cycle for cycle in cycles if cycle <= cycles[-1] - hours * SAMPLES_PER_HOUR]
+        if not reach:
+            return False
+        first = reach[-1]
+        present = sum(1 for cycle in cycles if cycle >= first)
+        return cycles[-1] - first + 1 - present <= PREDICTION_MAX_MISSED_CYCLES
 
     def predict_temperature(
         self,
@@ -836,7 +864,9 @@ class ThermalStatePredictor:
         """
         predictor = cls(lookback_hours=data.get("lookback_hours", 24))
 
-        # Restore state history
+        # Restore state history. A snapshot dated after now was never measured, and kept it would
+        # prune the real day behind it.
+        now = dt_util.utcnow().timestamp()
         for snapshot_data in sorted(
             data.get("state_history", []),
             key=lambda row: datetime.fromisoformat(row["timestamp"]).timestamp(),
@@ -852,6 +882,8 @@ class ThermalStatePredictor:
                 # them leaves the 24-hour history within a day.
                 indoor_measured=snapshot_data.get("indoor_measured", True),
             )
+            if snapshot.timestamp.timestamp() > now:
+                continue
             predictor.record_state(
                 snapshot.timestamp,
                 snapshot.indoor_temp,

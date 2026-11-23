@@ -52,6 +52,7 @@ HEAT_PUMP_MODEL_OPTIONS: dict[str, str] = {
     "nibe_f1155": "NIBE F1155 (GSHP)",
     "nibe_f2040": "NIBE F2040 (12-16kW ASHP)",
     "nibe_s1155": "NIBE S1155 (GSHP)",
+    "nibe_s735": "NIBE S735 (exhaust air)",
 }
 
 

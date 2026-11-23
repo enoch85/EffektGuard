@@ -54,7 +54,7 @@ All paths under `custom_components/effektguard/`.
 | `optimization/dhw_optimizer.py` | Hot-water scheduling through the temporary-lux switch |
 | `optimization/airflow_optimizer.py` | Exhaust-air ventilation (F750/F730) |
 | `utils/offset.py`, `utils/volatile_helpers.py` | The integer the register receives; the volatility gate |
-| `models/` | Heat pump profiles: F730, F750, F1155, F2040, S1155 |
+| `models/` | Heat pump profiles: F730, F750, F1155, F2040, S1155, S735 |
 | `climate.py`, `sensor.py`, `switch.py`, `services.yaml` | The Home Assistant entities and services |
 | `const.py` | Every numeric value |
 
