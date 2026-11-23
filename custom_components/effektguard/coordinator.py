@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from functools import partial
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -88,6 +89,7 @@ from .optimization.dhw_optimizer import (
     DHWRecommendation,
     IntelligentDHWScheduler,
 )
+from .optimization.effect_layer import in_billing_month
 from .optimization.prediction_layer import ThermalStatePredictor
 from .optimization.savings_calculator import SavingsCalculator
 from .optimization.weather_learning import WeatherPatternLearner
@@ -317,8 +319,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         # "current power" - see current_power_kw.
         self.peak_today: float = 0.0
         # Instantaneous whole-house power (kW), refreshed every cycle by
-        # _update_peak_tracking. None until the first successful measurement, in which
-        # case peak protection stays disabled rather than acting on a guess.
+        # _update_peak_tracking. None in a cycle without a measurement - an estimate is not
+        # one - and peak protection then stands down rather than acting on a guess.
         self.current_power_kw: float | None = None
         # What the effect tariff bills: the time-weighted mean power over one billing period,
         # BILLING_PERIOD_MINUTES long. That is a quarter-hour for the owner's tariff; an hourly
@@ -518,7 +520,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         A cycle that cannot read the heat pump runs once more, HEAT_PUMP_READ_RETRY_SECONDS later,
         before that failure is shown: the pump's source is often back by then, and the cycle's work
         is done late rather than not at all. Until then the entities show the last cycle, as they
-        do between any two cycles.
+        do between any two cycles. A failure shown also ends the hot-water boosts it leaves
+        unsupervised (_hot_water_without_a_reading).
 
         Args:
             retry: This run is that second try, so a failed read is shown.
@@ -526,10 +529,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         try:
             # The one place the pump is driven on a schedule. `_drive_the_pump` holds the control
             # lock, so a service commanding the pump at the same moment waits its turn.
-            data = await self._drive_the_pump()
+            data = await self._drive_the_pump(scheduled=True)
         except HeatPumpUnreadable as err:
             if retry:
                 self.async_set_update_error(err)
+                await self._hot_water_without_a_reading()
             else:
                 _LOGGER.info(
                     "Could not read the heat pump, trying again in %d s: %s",
@@ -580,7 +584,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                                 "Synced with NIBE offset: %d°C", int(self.last_applied_offset)
                             )
                             offset_synced = True
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, OverflowError):  # int() of "inf"
                             pass
 
                 # Fall back to stored value if NIBE entity wasn't available
@@ -841,7 +845,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
 
         The stop is the predicate that refuses the start (async_start_dhw_boost) and gates the
         scheduled window: price never ends a user boost, the ordinary thermal-debt block does not
-        either, the safety gate does.
+        either, the safety gate does. Without a reading (nibe_data None: the pump cannot be read)
+        safety cannot be judged, as at the start, and the window still closes on time.
         """
         if self._service_boost_until is None:
             return
@@ -855,8 +860,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Missing, unavailable or unknown is not an end: the boost may well be running.
             return
 
-        unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
-            nibe_data.degree_minutes, nibe_data.indoor_temp
+        unsafe = (
+            self.dhw_optimizer.hot_water_unsafe_reason(
+                nibe_data.degree_minutes, nibe_data.indoor_temp
+            )
+            if nibe_data is not None
+            else None
         )
         if unsafe is None and now_time < self._service_boost_until:
             return
@@ -870,6 +879,40 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.warning("User DHW boost stopped for safety: %s", unsafe)
         else:
             _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
+
+    async def _stop_our_unsupervised_boost(self, now_time: datetime, why: str) -> None:
+        """Stop the optimiser's own boost when nothing supervises it any more.
+
+        The optimiser's boost runs while the optimiser decides on it (_apply_dhw_control). With
+        hot-water optimisation switched off, or the pump unreadable, nothing does, and the boost ran
+        on to NIBE's own lux timeout. Inside its minimum run too: nothing then tells whether the
+        house needs the compressor. A boost_dhw window is the user's, and ends by its own rule.
+        """
+        if self._service_boost_until is not None or not (
+            self._lux_boost_is_ours and self.temp_lux_entity
+        ):
+            return
+        state = self.hass.states.get(self.temp_lux_entity)
+        if state is not None and state.state == STATE_OFF:
+            self._lux_turned_off()
+            return
+        if state is None or state.state != STATE_ON:
+            # Unavailable or unknown says nothing about the boost: the next reading decides.
+            return
+        _LOGGER.warning("Stopping the hot-water boost EffektGuard started: %s", why)
+        if await self._set_temporary_lux(False):
+            self._last_dhw_control_time = now_time
+
+    async def _hot_water_without_a_reading(self) -> None:
+        """The heat pump cannot be read: a boost_dhw window still closes on time, and ours stops.
+
+        The failed cycle ends before its hot-water control, so neither ran: a user boost stayed on
+        past its window and the optimiser's boost ran on to NIBE's lux timeout.
+        """
+        now_time = dt_util.now()
+        async with self._control_lock:
+            await self._end_user_dhw_boost_when_due(None, now_time)
+            await self._stop_our_unsupervised_boost(now_time, "the heat pump cannot be read")
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
@@ -949,8 +992,16 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         Public and debounced, so anything may refresh it (a reload, an options change, a
         bookkeeping service). Writes belong to the control loop `_do_aligned_refresh`; services
         that mean to command the pump call `async_refresh_and_apply`.
+
+        It waits for a control cycle in flight, and the engine records nothing of its decision:
+        what the engine keeps between decisions is the control cycle's. Outside the lock, a refresh
+        landing in a cycle ran two decisions at once and recorded a second degree-minute sample.
+
+        tests/unit/coordinator/test_one_writer_at_a_time.py,
+        tests/unit/optimization/test_a_read_decides_without_recording.py
         """
-        return await self._read_and_decide(apply=False)
+        async with self._control_lock:
+            return await self._read_and_decide(apply=False)
 
     async def async_refresh_and_apply(self, *, explicit_command: bool = False) -> None:
         """Read, decide, and DRIVE THE PUMP. For services that genuinely command it.
@@ -962,20 +1013,27 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self.data = await self._drive_the_pump(explicit_command=explicit_command)
         self.async_set_updated_data(self.data)
 
-    async def _drive_the_pump(self, *, explicit_command: bool = False) -> dict[str, object]:
+    async def _drive_the_pump(
+        self, *, explicit_command: bool = False, scheduled: bool = False
+    ) -> dict[str, object]:
         """The write path. Its sole owner, and the only place `apply=True` is passed.
 
         The aligned control loop and an explicit-command service both reach the pump, and both
         await freely; without _control_lock a forced offset and an in-flight aligned decision
         race, and the older decision can overwrite the newer write (and corrupt _apply_offset's
-        read-then-write rate limiting). Reads are NOT serialised - they touch no hardware.
+        read-then-write rate limiting). A read-only refresh takes the lock too (_async_update_data).
 
         tests/unit/coordinator/test_one_writer_at_a_time.py
+
+        Args:
+            explicit_command: A user command - see _read_and_decide.
+            scheduled: The aligned control loop's own cycle, which keeps the books.
         """
         async with self._control_lock:
             return await self._read_and_decide(
                 apply=True,
                 explicit_command=explicit_command,
+                scheduled=scheduled,
             )
 
     def _report_no_price_source(self, reason: str) -> None:
@@ -1047,6 +1105,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self,
         apply: bool,
         explicit_command: bool = False,
+        scheduled: bool = False,
     ) -> dict[str, object]:
         """Fetch data and calculate optimal offset.
 
@@ -1055,6 +1114,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 loop and the services that explicitly command the pump may pass True.
             explicit_command: A user command that bypasses startup observation and ordinary write
                 cooldown. The decision engine's absolute safety floor still applies.
+            scheduled: The aligned control loop's own cycle: the only one that books an interval
+                of savings and a learning observation.
 
         This method:
         1. Gathers data from all sources (with graceful degradation)
@@ -1305,9 +1366,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 # the effect layer to CRITICAL - weight 1.0, offset -3.0 - for the rest of
                 # the day, even with the compressor idle.
                 if self.current_power_kw is None or self.current_power_kw < 0:
-                    # None while a configured meter has not answered since start-up, or the read
-                    # failed.
-                    _LOGGER.warning(
+                    # None without a measurement this cycle: a configured meter that has not
+                    # answered since start-up or has gone silent, an install with only the
+                    # compressor-Hz estimate, or a failed read. Each is reported where it arises
+                    # (_update_peak_tracking); here it would repeat every cycle.
+                    _LOGGER.debug(
                         "No valid power measurement (%s) - disabling peak protection this "
                         "cycle rather than acting on a guess.",
                         self.current_power_kw,
@@ -1366,7 +1429,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     )
 
                 decision = await self.hass.async_add_executor_job(
-                    self.engine.calculate_decision,
+                    # Only a decision that may drive the pump records: see _async_update_data.
+                    partial(self.engine.calculate_decision, record=apply),
                     nibe_data,
                     price_data,
                     weather_data,
@@ -1514,10 +1578,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if not self.nibe.holds(decision.offset):
                     self._offset_volatility_tracker.last_change = previous_change
 
-        self._accumulate_spot_savings(nibe_data, price_data)
-
-        # Record observations for learning (Phase 6)
-        await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
+        # The books are the scheduled cycle's: one cycle, one interval. A read - anything may refresh
+        # one - and a command or a switch-on between cycles each added another five minutes of
+        # savings and another learning snapshot: two reads at one instant doubled the savings figure,
+        # and the learned pre-heat's "day of history" counted snapshots, not time.
+        if scheduled:
+            self._accumulate_spot_savings(nibe_data, price_data)
+            await self._record_learning_observations(nibe_data, weather_data, self.current_offset)
 
         # Save state periodically
         await self.effect.async_save()
@@ -1715,6 +1782,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 _LOGGER.info("Skipping DHW control during startup grace period")
             else:
                 await self._apply_dhw_control(dhw_decision, current_dhw_temp, now_time)
+        elif apply:
+            # Hot-water optimisation switched off: nothing decides on the optimiser's boost any more.
+            await self._stop_our_unsupervised_boost(now_time, "hot-water optimisation is off")
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
@@ -2293,11 +2363,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     return  # Exit early, event listener will trigger refresh when ready
                 else:
                     # It has answered before and is not answering now. Everything below still runs -
-                    # the decision layers need SOME power figure - but the source stays unbillable,
-                    # so nothing invented here reaches the tariff record, and an outage longer than
-                    # MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole period rather than
-                    # billing a stale reading stretched across it. Reported when the outage begins
-                    # and when it ends, not on every cycle it lasts.
+                    # the day's peak still shows a figure - but the source is not a measurement, so
+                    # nothing invented here reaches the tariff record or peak protection, and an
+                    # outage longer than MAX_BILLING_OBSERVATION_GAP_MINUTES refuses the whole
+                    # period rather than billing a stale reading stretched across it. Reported when
+                    # the outage begins and when it ends, not on every cycle it lasts.
                     (_LOGGER.debug if self._power_meter_silent else _LOGGER.warning)(
                         "External power meter %s is not reporting (state %s). This cycle is not "
                         "billable, and an outage longer than %d minutes refuses the whole billing "
@@ -2373,8 +2443,14 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # effect tariff bills the top three quarters, so it would stand for weeks.
 
             # Publish the instantaneous reading for the effect layer (see the decision site for why
-            # it must be current power and never peak_today). This runs before the decision.
-            self.current_power_kw = current_power
+            # it must be current power and never peak_today). This runs before the decision. Only a
+            # measurement: an estimate never reaches the peaks it would be compared against
+            # (PEAK_CONTROL_POWER_SOURCES), and it does not drive peak protection either. Published,
+            # a meter that dropped out mid-month had the compressor-Hz estimate (5.5 kW at 90 Hz)
+            # cut the curve to -3 at weight 1.0 against the meter's own peaks.
+            self.current_power_kw = (
+                current_power if power_source in PEAK_CONTROL_POWER_SOURCES else None
+            )
 
             # The source is recorded where the value was produced, never reconstructed here from the
             # config entry and the number's magnitude - which once filed a compressor estimate as
@@ -2422,7 +2498,10 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             completed = self._billing_period.add(now, current_power, power_source)
 
             peak_event = None
-            if completed is not None:
+            # This month's peaks only. A month's last quarter closes at the first reading of the
+            # next, after the rollover in _read_and_decide has pruned the old month: recorded then,
+            # October's 23:45 quarter became November's highest peak until the next restart.
+            if completed is not None and in_billing_month(completed.started_at):
                 peak_event = await self.effect.record_period_measurement(
                     power_kw=completed.mean_power_kw,
                     period=completed.billing_period,
@@ -2602,33 +2681,43 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         """Start a user-commanded hot-water boost that price optimization may not cancel.
 
         Only safety outranks the user: `hot_water_unsafe_reason` refuses the boost here, on the
-        last reading, and stops it on any later cycle (_end_user_dhw_boost_when_due); so does
-        unload. The duration is real - EffektGuard turns the switch back off when it expires,
+        pump as it reads now, and stops it on any later cycle (_end_user_dhw_boost_when_due); so
+        does unload. A pump that cannot be read refuses it too. The duration is real - EffektGuard turns the switch back off when it expires,
         through the same owned door the cleanup uses - so the service argument means what it
         says instead of being validated and discarded. NIBE's own lux timeout still applies
         underneath; whichever ends first wins.
+
+        Under the control lock, as OFF and the control cycle are: switched OFF while the switch call
+        was in flight, the boost used to start after OFF's cleanup had found nothing to cancel, and
+        ran on while EffektGuard was OFF.
         """
-        if not self.optimization_enabled:
-            raise HomeAssistantError(
-                "EffektGuard is OFF. Turn optimization on before boosting hot water."
-            )
+        async with self._control_lock:
+            if not self.optimization_enabled:
+                raise HomeAssistantError(
+                    "EffektGuard is OFF. Turn optimization on before boosting hot water."
+                )
 
-        # Refused by the rule that would stop it on the next cycle, or it is a five-minute pulse.
-        # No reading yet (start-up): the first cycle with one judges it.
-        nibe = self.data.get("nibe") if self.data else None
-        unsafe = (
-            self.dhw_optimizer.hot_water_unsafe_reason(nibe.degree_minutes, nibe.indoor_temp)
-            if nibe is not None
-            else None
-        )
-        if unsafe:
-            raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
-
-        if not await self._set_temporary_lux(True):
-            raise HomeAssistantError(
-                f"Could not start the hot-water boost on {self.temp_lux_entity}"
+            # Refused by the rule that would stop it on the next cycle, or it is a five-minute
+            # pulse - judged on a reading taken now. The last cycle's is up to a cycle old, and
+            # hours old once reads have failed: a house at 17 C and -2000 DM started a boost on
+            # the safe reading before it. A pump that cannot be read cannot supervise one either.
+            try:
+                nibe = await self.nibe.get_current_state()
+            except (UpdateFailed, AttributeError, KeyError, ValueError, TypeError) as err:
+                raise HomeAssistantError(
+                    f"Hot water boost refused: the heat pump cannot be read ({err})"
+                ) from err
+            unsafe = self.dhw_optimizer.hot_water_unsafe_reason(
+                nibe.degree_minutes, nibe.indoor_temp
             )
-        self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
+            if unsafe:
+                raise HomeAssistantError(f"Hot water boost refused for safety: {unsafe}")
+
+            if not await self._set_temporary_lux(True):
+                raise HomeAssistantError(
+                    f"Could not start the hot-water boost on {self.temp_lux_entity}"
+                )
+            self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
 
     async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
         """Apply one explicit user heating command through the locked control path."""
@@ -2677,9 +2766,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 self.engine.tolerance_range,
             )
 
-        # Update thermal model parameters
+        # Update thermal model parameters: the thermal mass with all the engine derives from it
         if "thermal_mass" in options:
-            self.engine.thermal.thermal_mass = options["thermal_mass"]
+            self.engine.set_thermal_mass(options["thermal_mass"])
             _LOGGER.debug("Updated thermal mass: %.2f", options["thermal_mass"])
 
         if "insulation_quality" in options:
@@ -2862,8 +2951,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if self._last_learning_observation is None
                 else now - self._last_learning_observation
             )
-            if since_last is None or since_last >= timedelta(
-                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            # Without a room sensor the indoor reading is the adapter's placeholder, not the room:
+            # learning observes only a measured room, and the predictor is told which one it got.
+            room_measured = getattr(nibe_data, "indoor_temp_valid", True)
+            if room_measured and (
+                since_last is None
+                or since_last >= timedelta(minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES)
             ):
                 self.adaptive_learning.record_observation(
                     timestamp=now,
@@ -2881,6 +2974,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 heating_offset=current_offset,
                 flow_temp=nibe_data.flow_temp,
                 degree_minutes=nibe_data.degree_minutes,
+                indoor_measured=room_measured,
             )
 
             # Save thermal predictor state immediately (throttled to UPDATE_INTERVAL_MINUTES)
