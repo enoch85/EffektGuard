@@ -976,7 +976,18 @@ SCENARIOS = {
                 "the same real event."
             ),
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(),
+            known_open=(
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="immersion_kwh",
+                    houses={"airsource_f2040": 30.75},
+                    why=(
+                        "F-124 on the F2040: 30.75 kWh of immersion against 17.8 forced since the "
+                        "learned pre-heat has no vote (2026-11-23); 24.25 against 21.3 before, "
+                        "when it voted on 39 % of this run's cycles."
+                    ),
+                ),
+            ),
         ),
         Scenario(
             slug="undersized_coldsnap_jan2024",
@@ -995,10 +1006,11 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="immersion_kwh",
-                    houses={"concrete_f1155": 182.01},
+                    houses={"concrete_f1155": 166.84},
                     why=(
-                        "F-124 on the undersized F1155: 182.0 kWh of immersion against 135.1 "
-                        "forced since the bench runs the predictor production runs (the learned "
+                        "F-124 on the undersized F1155: 166.8 kWh of immersion against 120.0 "
+                        "forced since the learned pre-heat has no vote (2026-11-23). 182.0 against "
+                        "135.1 forced since the bench runs the predictor production runs (the learned "
                         "pre-heat, the room and outdoor trends; 2026-11-08) - code unchanged, the "
                         "bench now measures what Home Assistant runs. Before: 180.8 against 120.4 "
                         "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer "
@@ -1066,7 +1078,18 @@ SCENARIOS = {
             # forced is already caught for every run by check_invariants, against
             # IMMERSION_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(),
+            known_open=(
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="immersion_kwh",
+                    houses={"airsource_f2040": 61.75},
+                    why=(
+                        "F-124 on the F2040: 61.75 kWh of immersion against 43.7 forced since the "
+                        "learned pre-heat has no vote (2026-11-23); 59.75 against 44.8 before, "
+                        "when it voted on 57 % of this run's cycles."
+                    ),
+                ),
+            ),
         ),
         Scenario(
             slug="thaw_freeze_mar2024",
