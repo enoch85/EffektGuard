@@ -14,6 +14,7 @@ from custom_components.effektguard.const import (
     LEARNING_STORAGE_VERSION,
     STORAGE_KEY_LEARNING,
 )
+from custom_components.effektguard.optimization.decision_engine import DecisionEngine
 from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
 
 FALL_BACK = datetime(2026, 10, 25, 1, tzinfo=timezone.utc)
@@ -111,6 +112,25 @@ def test_the_predictor_records_on_the_real_time_line_across_the_fall_back(monkey
     assert steps == {sim.STEP_MIN * 60.0}
 
 
+def test_the_engine_reads_the_pump_on_the_real_time_line_across_the_fall_back(monkeypatch):
+    """Production's adapter dates the pump's state in UTC, and the guards that subtract those dates
+    (saturation, anti-windup, capacity shortfall, the immersion start) count real time. Two local
+    times of one zone subtract on the wall clock: an hour backwards in the repeated hour."""
+    stamps = []
+    decide = DecisionEngine.calculate_decision
+
+    def capture(self, *args, **kwargs):
+        stamps.append(kwargs["nibe_state"].timestamp)
+        return decide(self, *args, **kwargs)
+
+    monkeypatch.setattr(DecisionEngine, "calculate_decision", capture)
+    _fall_back_run(monkeypatch, 2)
+    assert stamps[0] < FALL_BACK < stamps[-1]
+    assert {stamp.utcoffset() for stamp in stamps} == {timedelta(0)}
+    steps = {(b - a).total_seconds() for a, b in zip(stamps, stamps[1:])}
+    assert steps == {sim.STEP_MIN * 60.0}
+
+
 async def test_the_simulated_weather_vote_is_the_one_production_sets_up(
     hass, hass_storage, freezer
 ):
@@ -143,6 +163,7 @@ async def test_the_simulated_weather_vote_is_the_one_production_sets_up(
         decision = engine.weather_comp_layer.evaluate_layer(state, weather, engine.target_temp)
         return decision.unusual_weather, decision.safety_margin
 
-    for forecast in (-30.0, 15.0):  # colder and warmer than this house's own Januaries
+    for forecast in (-10.0, 15.0):  # colder and warmer than this house's own Januaries
         assert vote(simulated, forecast) == vote(production, forecast)
-    assert vote(simulated, -30.0)[0], "the history reaches both votes"
+    blank, _ = sim.build_engine(sim.HOUSES[0])  # the same engine with no history
+    assert vote(simulated, -10.0)[0] and not vote(blank, -10.0)[0], "only the history marks -10 C"

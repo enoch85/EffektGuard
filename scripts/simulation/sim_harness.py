@@ -2081,7 +2081,10 @@ def simulate(
                 current_offset=float(offset_applied),
                 is_heating=compressor_on and available,
                 is_hot_water=False,
-                timestamp=now,
+                # In UTC, as the adapter dates it: the guards that subtract these dates (saturation,
+                # anti-windup, capacity shortfall, the immersion start) count real time across the
+                # clock change, and two local times of one zone subtract on the wall clock.
+                timestamp=utc_now,
                 compressor_hz=hz,
                 # What a real pump of this model publishes: the frequency it may run up to. Here
                 # that is where full load maps, so a saturated compressor sits at it (#49).
