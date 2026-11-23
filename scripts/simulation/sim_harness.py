@@ -67,7 +67,7 @@ from custom_components.effektguard.utils.volatile_helpers import (
     OffsetVolatilityTracker,
     gate_offset,
 )
-from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR
+from custom_components.effektguard.utils.time_utils import QUARTERS_PER_HOUR, seconds_between
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.adapters.weather_adapter import (
     WeatherData,
@@ -414,6 +414,36 @@ class HouseConfig:
         return outdoor_temp
 
     @functools.cached_property
+    def rated_points(self) -> list:
+        """The datasheet points at the rated (largest) airflow; all of them for a pump without one.
+
+        An exhaust-air pump's points differ by airflow as well as by load: the F750's
+        minimum-frequency output is 1.144 kW at 108 m3/h and 1.498 kW at 252 m3/h. The efficiency
+        fit and the maximum output are taken at the rated airflow, and so is all that reads them.
+        """
+        rated_airflow = max(
+            (p.airflow_m3h for p in self.profile.datasheet_points if p.airflow_m3h), default=None
+        )
+        return [
+            p
+            for p in self.profile.datasheet_points
+            if rated_airflow is None or p.airflow_m3h == rated_airflow
+        ]
+
+    @functools.cached_property
+    def minimum_output_kw(self) -> float:
+        """The least a running compressor makes, at the same source condition as its maximum.
+
+        For an exhaust-air pump, the minimum-frequency point at the rated airflow (F750 1.498,
+        F730 1.53 kW); the lower end of its declared range is the figure at the smallest airflow.
+        A pump rated without an airflow keeps its declared range (F1155 and S1155 3 kW, none for
+        the F2040).
+        """
+        if any(p.airflow_m3h for p in self.profile.datasheet_points):
+            return min(p.heat_output_kw for p in self.rated_points)
+        return self.profile.heating_capacity_range_kw[0]
+
+    @functools.cached_property
     def exergy_fit(self) -> tuple[float, float, float]:
         """(a, b, c) in  eta = a + b*load + c*(flow - 35),  fitted to this machine's OWN datasheet.
 
@@ -452,14 +482,7 @@ class HouseConfig:
 
         That assumption is not a measurement of the F750 and nothing here pretends it is.
         """
-        rated_airflow = max(
-            (p.airflow_m3h for p in self.profile.datasheet_points if p.airflow_m3h), default=None
-        )
-        points = [
-            p
-            for p in self.profile.datasheet_points
-            if rated_airflow is None or p.airflow_m3h == rated_airflow
-        ]
+        points = self.rated_points
         ph_max = self.profile.max_heat_output_kw
 
         def eta(point) -> float:
@@ -989,9 +1012,9 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3515, "apartment_f730": 12675},
+                    houses={"wooden_f750": 3505, "apartment_f730": 12855},
                     why=(
-                        "Fresh 21-day May replay: F750 3515 and F730 12675 above-band minutes. "
+                        "Fresh 21-day May replay: F750 3505 and F730 12855 above-band minutes. "
                         "Their zero-heat references give 350 and 7175; the latter already exceeds "
                         "the 720-minute budget. These are model/scenario failures, not established "
                         "effects on the owner's home or bill. Raw failures stay visible."
@@ -1543,7 +1566,12 @@ def simulate(
     band_low = comfort_band_low(mode)
 
     start = times[0].replace(hour=0, minute=0, second=0, microsecond=0)
-    steps = days * 24 * 60 // STEP_MIN
+    # Calendar days, each as long as it really is. `days * 24` hours left a run over the autumn clock
+    # change an hour short - its last day billed 92 periods - and ran a spring one an hour long.
+    steps = int(
+        seconds_between(start, start + timedelta(days=days))
+        // timedelta(minutes=STEP_MIN).total_seconds()
+    )
 
     indoor = 22.0
     indoor_start = indoor
@@ -1559,6 +1587,7 @@ def simulate(
     violations = []
     trace = []
     stats = {
+        "control_steps": steps,
         "indoor_min": 99.0,
         "indoor_max": -99.0,
         "indoor_sum": 0.0,
@@ -1716,14 +1745,14 @@ def simulate(
                 demand_w = (
                     q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
                 )
-                minimum_w = house.profile.heating_capacity_range_kw[0] * 1000.0
+                minimum_w = house.minimum_output_kw * 1000.0
                 q_comp_w = min(capacity_w, max(0.0, minimum_w, demand_w))
             else:
                 q_comp_w = 0.0
 
             # How hard the compressor is being pushed, which is what sets its efficiency. No
             # circularity: q_comp is fixed by demand and capacity, both computed above.
-            if 0 < q_comp_w < house.profile.heating_capacity_range_kw[0] * 1000.0:
+            if 0 < q_comp_w < house.minimum_output_kw * 1000.0:
                 stats["compressor_below_declared_minimum_minutes"] += STEP_MIN
             load_fraction = q_comp_w / capacity_w if capacity_w > 0 else 0.0
 
@@ -2539,6 +2568,17 @@ def main() -> int:
                     f"means the repeated 02:00 quarters, which print the same digits and are an "
                     f"hour apart, were merged."
                 )
+            # And the run covers its days to their end: running `days * 24` hours, the day after
+            # the long one billed 92 periods and nothing failed.
+            quarter = timedelta(minutes=QUARTER_MINUTES).total_seconds()
+            for day, periods in stats["billing_periods_by_day"].items():
+                midnight = datetime.fromisoformat(day).replace(tzinfo=TZ)
+                length = round(seconds_between(midnight, midnight + timedelta(days=1)) / quarter)
+                if periods != length:
+                    failures.append(
+                        f"{day} was billed as {periods} periods, but it is {length} quarters long "
+                        f"- the run did not cover the whole day."
+                    )
 
         json.dump(
             {
@@ -2556,7 +2596,7 @@ def main() -> int:
         print(f"[{tag}] {json.dumps(stats)}")
         if votes:
             ranked = sorted(votes.items(), key=lambda kv: -kv[1])
-            total = max(days * 24 * 60 // STEP_MIN, 1)
+            total = max(stats["control_steps"], 1)
             share = ", ".join(f"{n} {100 * h / total:.0f}%" for n, h in ranked)
             print(f"[{tag}] layers that voted: {share}")
         if violations:

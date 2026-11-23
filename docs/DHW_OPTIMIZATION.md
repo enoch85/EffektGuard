@@ -11,7 +11,7 @@ and off. It never changes the pump's own hot-water settings. The code is `should
 
 | Input | Where it comes from |
 |---|---|
-| Hot-water top temperature (BT7) | Auto-discovered from the NIBE integration (an entity id containing `_bt7`, `bt7_`, `hw_top`, `hot_water_top` or `40013`), or "Override: hot water top temperature (BT7)" in the config flow. Without it the hot-water sensors read `not_configured` and nothing runs. |
+| Hot-water top temperature (BT7) | Auto-discovered from the NIBE integration (an entity id containing `_bt7`, `bt7_`, `hw_top`, `hot_water_top` or `40013` as a whole name, so not BT70-BT79; on nibe_heatpump never a cooling sensor or another circuit's or unit's), or "Override: hot water top temperature (BT7)" in the config flow. Without it the hot-water sensors read `not_configured` and nothing runs. |
 | Temporary-lux entity | "Temporary lux switch (DHW)" in the config flow, auto-detected when a `switch.` id contains `temporary` or `temp` plus `lux`, or `50004` or `48132`, and comes from myuplink or nibe_heatpump or has a NIBE model name in its id. myuplink creates `switch.<device>_temporary_lux` on F-series pumps (parameter 50004). nibe_heatpump exposes register 48132 as a select (F-series, SMO, VVM), and nothing for the S-series; bridge it with an `input_boolean` helper. Without an entity EffektGuard raises the repair issue "No hot-water control entity" and touches nothing. |
 | Hot-water amount (optional) | A sensor whose id contains `hot_water_amount` or `hw_amount` (minutes of hot water). With it, the scheduled window can stop on amount instead of temperature. |
 
@@ -103,13 +103,16 @@ on, a lux entity is configured, and not during the start-up grace period.
   is open or the boost is inside its minimum run.
 - **A `boost_dhw` boost** ends at its duration or at the safety gate (indoor below 18 °C, DM at or
   below −1500) on every control cycle, whether hot-water optimisation is on or not; the same gate
-  refuses to start it. Price and the ordinary thermal-debt block do not end it.
+  refuses to start it, on the pump as it reads at that moment, and so does a pump that cannot be
+  read. Price and the ordinary thermal-debt block do not end it. While the heat pump cannot be read
+  the duration still ends it. Switching EffektGuard OFF ends it, also while it is
+  starting.
 - **Starts are rate-limited**: at most one start per 60 min (`DHW_CONTROL_MIN_INTERVAL_MINUTES`)
   after the last start or stop. Stops are never delayed.
 - Only a boost EffektGuard started is stopped: one the household switched on (pump panel, MyUplink)
   is left alone, by the control loop and on unload or a Home Assistant stop.
-- Without a BT7 reading nothing new starts, and a boost EffektGuard started is stopped, inside its
-  minimum run too.
+- Without a BT7 reading, with the heat pump unreadable, or with hot-water optimisation switched off,
+  nothing new starts, and a boost EffektGuard started is stopped, inside its minimum run too.
 - NIBE's own lux timeout still ends the boost underneath; the decision's `max_runtime_minutes` is
   for display only.
 

@@ -19,7 +19,9 @@ Five houses, all targeting 22.0 C (`TARGET_INDOOR`):
 | `villa_s1155` | timber underfloor, large villa | S1155 (ground source) |
 | `airsource_f2040` | outdoor air | F2040 (air to water) |
 
-Compressor output respects each profile's declared modulation range. The F2040 maximum comes
+Compressor output stays between each pump's minimum and maximum. For the exhaust-air F750 and
+F730 both are NIBE's figures at the rated 252 m³/h airflow, the airflow the efficiency fit uses
+(their minimum at the smallest airflow, 108 and 90 m³/h, is lower). The F2040 maximum comes
 from NIBE's separate peak-output grid, interpolated over outdoor and water temperatures; nominal
 COP rating loads are not capacity limits. The grid covers −7 to +7 C air and 25 to 55 C water.
 Outside it the nearest edge is held, and `capacity_outside_published_minutes` counts that
