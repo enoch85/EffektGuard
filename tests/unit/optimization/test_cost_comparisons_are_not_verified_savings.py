@@ -79,3 +79,50 @@ async def test_observed_zero_days_count_but_missing_units_do_not(unit, expected_
         await coord._async_update_data()
     assert coord.savings_calculator._optimization_days == expected_days
     assert coord.savings_calculator.average_daily_spot_savings == 6.0 / expected_days
+
+
+@pytest.mark.asyncio
+async def test_the_former_combined_total_is_not_restored(hass):
+    """A restart before the first cycle showed the last state, from the formula that added an
+    unmatched OFF-period peak difference."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+
+    coord = MagicMock()
+    coord.data = None  # before the first cycle
+    entry = MagicMock()
+    entry.entry_id = "comparison"
+    sensor = EffektGuardSensor(
+        coord, entry, next(s for s in SENSORS if s.key == "savings_estimate")
+    )
+    sensor.hass = hass
+    sensor.entity_id = "sensor.effektguard_estimated_monthly_savings"
+    sensor.async_get_last_state = AsyncMock(return_value=State(sensor.entity_id, "466.0"))
+    await sensor.async_added_to_hass()
+    assert sensor.native_value is None
+
+
+def test_extra_room_sensors_still_show_how_the_room_is_read():
+    """The indoor-temperature sensor's attributes with an extra room sensor configured."""
+    from types import SimpleNamespace
+
+    from custom_components.effektguard.const import CONF_INDOOR_TEMP_METHOD
+
+    coord = MagicMock()
+    coord.data = {"nibe": SimpleNamespace(indoor_temp=21.0, outdoor_temp=0.0)}
+    coord.config_entry.data = {
+        "additional_indoor_sensors": ["sensor.living_room"],
+        CONF_INDOOR_TEMP_METHOD: "median",
+    }
+    coord.hass.states.get.return_value = SimpleNamespace(
+        state="21.5", attributes={"friendly_name": "Living room"}
+    )
+    entry = MagicMock()
+    entry.entry_id = "rooms"
+    sensor = EffektGuardSensor(
+        coord, entry, next(s for s in SENSORS if s.key == "indoor_temperature")
+    )
+    attrs = sensor.extra_state_attributes
+    assert attrs["calculation_method"] == "median"
+    assert attrs["sensor_count"] == 2

@@ -163,7 +163,8 @@ The first three need EffektGuard on, and act at once.
 The monthly price-timing comparison shows what the same metered energy would cost at each day's
 average spot price, projected over 30 days. Positive means cheaper than that reference; negative
 means dearer. It can be positive with EffektGuard off and does not measure energy saved or money
-saved by EffektGuard. Its entity ID still contains `savings_estimate` for existing dashboards.
+saved by EffektGuard. Its entity is still `sensor.effektguard_estimated_monthly_savings`, so
+existing dashboards keep working.
 Earlier recorded values used a different formula and are not verified savings either. The
 projection uses completed-day observations since this restart; missing readings and partial days
 limit how representative it is.

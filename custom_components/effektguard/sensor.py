@@ -876,7 +876,7 @@ class EffektGuardSensor(CoordinatorEntity[EffektGuardCoordinator], SensorEntity,
                         if additional_sensors:
                             # User has configured additional sensors
                             attrs["calculation_method"] = config.get(
-                                CONF_INDOOR_TEMP_METHOD, DAYS_PER_MONTH, DEFAULT_INDOOR_TEMP_METHOD
+                                CONF_INDOOR_TEMP_METHOD, DEFAULT_INDOOR_TEMP_METHOD
                             )
                             attrs["sensor_count"] = len(additional_sensors) + 1  # +1 for NIBE
 
