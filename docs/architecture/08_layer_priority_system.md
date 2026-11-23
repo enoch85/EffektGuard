@@ -125,10 +125,10 @@ guard withdrawal and an immersion guard cut pass the gate at once.
 Normal day, no critical layer, Safety / Thermal Debt / Proactive / Peak all at weight 0:
 
 ```
-Learned Pre-heat  +1.0 × 0.65 = +0.65
+Learned Pre-heat   0.0 × 0.00
 Math WC           +0.5 × 0.42 = +0.21
 Weather Pre-heat   0.0 × 0.00
 Spot Price        -1.5 × 0.80 = -1.20
 Comfort           -0.2 × 0.20 = -0.04
-Sum of weights 2.07, weighted sum -0.38, offset -0.18 °C: inside the 1 °C deadband, no write
+Sum of weights 1.42, weighted sum -1.03, offset -0.73 °C: inside the 1 °C deadband, no write
 ```
