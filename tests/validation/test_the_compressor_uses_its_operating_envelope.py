@@ -61,25 +61,39 @@ def test_the_minimum_output_is_taken_at_the_airflow_of_the_maximum(house, minimu
     assert house.minimum_output_kw == pytest.approx(minimum)
 
 
+_NO_FLOW = object()
+
+
 def _priced_run(monkeypatch, house, outdoor, days=2):
-    """Two mild days on the baseline curve, recording each step's heat output, the compressor's
-    electricity for it, and the flow its capacity was read at."""
+    """Two days on the baseline curve, recording each step's heat output, the compressor's
+    electricity for it, the flow its capacity and its COP were read at, and the flow the emitters
+    saw at the start of the step - the plant's own water temperature, read where the room's heat is
+    computed rather than where the capacity or the COP is."""
     house_type = type(house)
     cop_for_output, capacity_at = house_type.cop_at_heat_output, house_type.capacity_kw_at
-    run = {"heat_kw": [], "compressor_kw": [], "capacity_flows": []}
+    emitted = house_type.heat_output_w
+    run = {"heat_kw": [], "compressor_kw": [], "capacity_flows": [], "cop_flows": [], "water": []}
 
     def priced(self, outdoor_temp, flow, heat_kw):
         cop = cop_for_output(self, outdoor_temp, flow, heat_kw)
         run["heat_kw"].append(heat_kw)
         run["compressor_kw"].append(heat_kw / cop)
+        run["cop_flows"].append(flow)
         return cop
 
-    def bounded(self, outdoor_temp, flow=sim.COP_RATING_FLOW_C):
+    def bounded(self, outdoor_temp, flow=_NO_FLOW):
+        if flow is _NO_FLOW:  # whether the compressor may run at all, not this step's output
+            return capacity_at(self, outdoor_temp)
         run["capacity_flows"].append(flow)
         return capacity_at(self, outdoor_temp, flow)
 
+    def emitting(self, flow, indoor):
+        run["water"].append(flow)
+        return emitted(self, flow, indoor)
+
     monkeypatch.setattr(house_type, "cop_at_heat_output", priced)
     monkeypatch.setattr(house_type, "capacity_kw_at", bounded)
+    monkeypatch.setattr(house_type, "heat_output_w", emitting)
     start = datetime(2026, 1, 15, tzinfo=sim.TZ)
     times, temperatures, raw, unit = sim._synthetic_days(start, days)
     stats, violations, _ = sim.simulate(
@@ -103,4 +117,19 @@ def test_the_plant_buys_each_step_of_heat_at_the_cop_of_that_output(monkeypatch)
         + stats["immersion_kwh"]
         + sim.STANDBY_KW * len(run["compressor_kw"]) * hours
     ), "every step's electricity is its heat over the COP of that heat output"
-    assert len(set(run["capacity_flows"])) > 1, "the capacity is read at each step's own flow"
+
+
+def test_the_capacity_and_the_cop_are_read_at_the_water_the_plant_has(monkeypatch):
+    """The capacity bounds a step from the flow temperature it starts at, and the step's heat is
+    priced at a flow temperature it passes through: not the curve's target, not the return."""
+    _, run = _priced_run(monkeypatch, F2040, 2.0)
+    water = run["water"]
+    assert len(set(water)) > 1, "the run must move the flow temperature to tell anything apart"
+    assert run["capacity_flows"] == water
+    assert len(run["cop_flows"]) == len(water)
+    for step, flow in enumerate(run["cop_flows"][:-1]):
+        low, high = sorted((water[step], water[step + 1]))
+        assert low - 1e-9 <= flow <= high + 1e-9, (
+            f"step {step}: COP read at {flow:.2f} C while the water ran from {water[step]:.2f} to "
+            f"{water[step + 1]:.2f} C"
+        )
