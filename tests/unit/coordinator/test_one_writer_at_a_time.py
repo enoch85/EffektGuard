@@ -6,7 +6,9 @@ them freely. Without a lock, an aligned refresh that snapshotted the engine befo
 force_offset(+3) can finish afterwards and overwrite it with a stale +0.5; the same interleaving
 corrupts _apply_offset's rate limiting, which reads last_offset_timestamp and then writes it.
 
-One writer at a time, via the control lock. Reads are unaffected: they are free to overlap, and do.
+One writer at a time, via the control lock - and a read-only refresh waits its turn as well: it runs
+the decision engine, which keeps state between decisions (the HACS review of v0.9.0; what a read
+keeps is tests/unit/optimization/test_a_read_decides_without_recording.py).
 """
 
 from __future__ import annotations
@@ -95,20 +97,24 @@ async def test_the_control_loop_and_a_service_never_write_together(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reads_are_still_free_to_overlap(monkeypatch):
-    """The lock guards the pump, not the sensors. Serialising reads would be a needless stall."""
+async def test_a_read_waits_for_a_cycle_in_flight(monkeypatch):
+    """Outside the lock a read landing in a control cycle ran a second decision at the same moment,
+    on the same engine, and recorded a second degree-minute sample. It waits, then runs."""
     coordinator = _make_coordinator()
 
     started = asyncio.Event()
     release = asyncio.Event()
+    began: list[bool] = []
 
     async def blocking_cycle(
         apply: bool,
         explicit_command: bool = False,
         scheduled: bool = False,
     ) -> dict[str, object]:
-        started.set()
-        await release.wait()
+        began.append(apply)
+        if apply:
+            started.set()
+            await release.wait()
         return {}
 
     monkeypatch.setattr(coordinator, "_read_and_decide", blocking_cycle)
@@ -116,15 +122,18 @@ async def test_reads_are_still_free_to_overlap(monkeypatch):
     monkeypatch.setattr(coordinator, "_schedule_aligned_refresh", MagicMock())
 
     writer = asyncio.create_task(coordinator.async_refresh_and_apply())
-    await started.wait()  # the writer now holds whatever it holds
-
-    # A read must not be stuck behind it. HA calls this hook on its own schedule and on reload;
-    # blocking it on a write in progress would stall the entities for no reason.
-    monkeypatch.setattr(coordinator, "_read_and_decide", AsyncMock(return_value={}))
-    await asyncio.wait_for(coordinator._async_update_data(), timeout=1.0)
+    await started.wait()  # the cycle is deciding
+    reader = asyncio.create_task(coordinator._async_update_data())
+    for _ in range(10):
+        await asyncio.sleep(0)
+    during = list(began)
 
     release.set()
     await writer
+    await asyncio.wait_for(reader, timeout=1.0)
+
+    assert during == [True], "a read started deciding while a control cycle was deciding"
+    assert began == [True, False]
 
 
 def test_nothing_can_write_without_taking_the_lock():

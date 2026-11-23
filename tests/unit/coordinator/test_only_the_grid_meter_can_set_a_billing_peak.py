@@ -14,20 +14,32 @@ Two things were once recorded against the tariff that the grid did not deliver:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
 from custom_components.effektguard.const import (
     BILLABLE_POWER_SOURCES,
+    CONF_POWER_SENSOR_ENTITY,
+    DOMAIN,
     POWER_SOURCE_EXTERNAL_METER,
     POWER_SOURCE_NIBE_CURRENTS,
 )
 from custom_components.effektguard.coordinator import EffektGuardCoordinator
-from custom_components.effektguard.optimization.effect_layer import EffectManager
+from custom_components.effektguard.optimization.effect_layer import EffectManager, PeakEvent
+
+STOCKHOLM = "Europe/Stockholm"
+DAYTIME = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)  # 11:00 in Stockholm
+DAYTIME_PERIOD = 44  # 11:00-11:15
+METER = "sensor.house_power"
+MONTH_PEAK_KW = 5.0
+RACING_HZ = 90
 
 
 def _coordinator(power_entity: str | None) -> EffektGuardCoordinator:
@@ -173,6 +185,46 @@ async def test_an_estimate_drives_nothing_at_all(monkeypatch):
     )
 
     coordinator.effect.record_period_measurement.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "meter",
+    [
+        pytest.param(None, id="no meter"),
+        pytest.param(STATE_UNAVAILABLE, id="a meter that dropped out"),
+    ],
+)
+async def test_an_estimate_never_drives_peak_protection(hass, freezer, meter):
+    """The month's peaks are a meter's; then the meter drops out and the pump runs fast.
+
+    Handed to the effect layer, the compressor-Hz estimate (5.5 kW at 90 Hz) cut the curve to -3 at
+    weight 1.0 against those peaks, every cycle of the outage. The house as Home Assistant builds it,
+    one read through the real update path.
+    """
+    await hass.config.async_set_time_zone(STOCKHOLM)
+    freezer.move_to(DAYTIME)
+    data = {CONF_POWER_SENSOR_ENTITY: METER} if meter else {}
+    entry = MockConfigEntry(domain=DOMAIN, data=data, options={})
+    entry.add_to_hass(hass)
+    coordinator = await _create_coordinator(hass, entry)
+    if meter:
+        hass.states.async_set(METER, meter)
+        coordinator._power_sensor_available = True  # it has answered before this cycle
+    coordinator.effect._monthly_peaks = [
+        PeakEvent(DAYTIME - timedelta(days=day), DAYTIME_PERIOD, MONTH_PEAK_KW, MONTH_PEAK_KW, True)
+        for day in (1, 2, 3)
+    ]
+    pump = _pump(compressor_hz=RACING_HZ, currents=None)
+    pump.timestamp = DAYTIME
+    coordinator.nibe.get_current_state = AsyncMock(return_value=pump)
+    coordinator.gespot.get_prices = AsyncMock(return_value=None)
+    coordinator.weather.get_forecast = AsyncMock(return_value=None)
+    coordinator._schedule_aligned_refresh = MagicMock()
+
+    decision = (await coordinator._async_update_data())["decision"]
+
+    peak = next(layer for layer in decision.layers if layer.name == "Peak")
+    assert peak.weight == 0.0, peak.reason
 
 
 @pytest.mark.asyncio

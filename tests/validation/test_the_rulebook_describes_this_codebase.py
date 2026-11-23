@@ -1,8 +1,9 @@
 """The document every contributor is told to read first must not describe a codebase that is gone.
 
-`CLAUDE.md` is read at the start of every Claude Code session and routes to `docs/agent/`, so a
-false claim in any of them is an instruction, not a documentation nit. This test reads the whole
-rulebook - the entrypoint and every file it routes to - and holds it to the code:
+`AGENTS.md` (which `CLAUDE.md` imports) is read at the start of every agent session and routes to
+`docs/agent/`, so a false claim in any of them is an instruction, not a documentation nit. This
+test reads the whole rulebook - the entrypoint and every file it routes to - and holds it to the
+code:
 
   - it must not teach the removed Kuhne flow-temperature formula (F-119/F-121), nor a second, linear
     flow rule, as live models - both were replaced by the EN 442 emitter law;
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # and was still missed, because nothing routed a reader to the relevant section of a file that
 # long. The test follows the split so the guard does not shrink to whichever file it used to name.
 RULEBOOK_FILES = (
+    ROOT / "AGENTS.md",
     ROOT / "CLAUDE.md",
     ROOT / "docs" / "agent" / "IMPLEMENTATION.md",
     ROOT / "docs" / "agent" / "PROJECT_NOTES.md",

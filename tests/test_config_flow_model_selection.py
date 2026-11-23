@@ -610,14 +610,11 @@ class TestModelStepIntegration:
         assert DEFAULT_HEAT_PUMP_MODEL == "nibe_f750"
 
     def test_all_model_keys_match_registry(self):
-        """Test that config flow model keys resolve in the model registry."""
+        """The models setup offers are the models the registry has: none missing, none extra."""
+        from custom_components.effektguard.config_flow import HEAT_PUMP_MODEL_OPTIONS
         from custom_components.effektguard.models.registry import HeatPumpModelRegistry
 
-        expected_models = ["nibe_f730", "nibe_f750", "nibe_f1155", "nibe_f2040", "nibe_s1155"]
-
-        supported = HeatPumpModelRegistry.get_supported_models()
-        for model_key in expected_models:
-            assert model_key in supported
+        assert set(HEAT_PUMP_MODEL_OPTIONS) == set(HeatPumpModelRegistry.get_supported_models())
 
 
 if __name__ == "__main__":
