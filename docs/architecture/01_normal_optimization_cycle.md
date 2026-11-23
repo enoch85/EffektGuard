@@ -22,7 +22,9 @@ flowchart LR
   and the next cycle tries again.
 - **Prices** (`GESpotAdapter.get_prices`): GE-Spot's `today_interval_prices` and
   `tomorrow_interval_prices`. Missing prices mean the price layer abstains and a repair issue is
-  raised; nothing is invented.
+  raised; nothing is invented. A day is used up to its first gap, and tomorrow only when it follows
+  on, so a later price is never counted too early; after a gap the rest of the day counts as
+  missing (logged once, no repair issue).
 - **Weather** (`WeatherAdapter.get_forecast`): the hourly forecast. Missing weather stands the
   pre-heat layer down; weather compensation runs on the pump's own sensors.
 - **Peak tracking** (`_update_peak_tracking`) runs before the decision: power from the external
@@ -72,12 +74,15 @@ A 120-second lockout (`STARTUP_GRACE_MIN_INTERVAL`), then one observation cycle
 
 ## After the write
 
-- Learning: the thermal predictor records every cycle; the `AdaptiveThermalModel` once an hour
-  (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); the weather pattern once a day.
+- Learning and the savings figure, on the scheduled cycle only: the thermal predictor records every
+  cycle; the `AdaptiveThermalModel` once an hour (`LEARNING_OBSERVATION_INTERVAL_MINUTES`); the
+  weather pattern once a day.
 - Persistence: the effect peaks every cycle, learned data at most hourly.
 - Hot-water control runs when its switch is on, airflow control when its switch is on
   (F750/F730); both are skipped during start-up observation and on read-only refreshes.
 - The returned data updates the climate entity, the sensors and the switches.
 
-A read-only refresh (a reload, an options change, a bookkeeping service) runs the same reads and
-decision but writes nothing.
+A read-only refresh (a reload, an options change, a bookkeeping service) waits for a cycle in
+progress, then runs the same reads and decision but writes nothing, and the decision engine
+records nothing of it. Neither it nor a command's cycle between the scheduled ones adds to the
+savings figure or the learning.

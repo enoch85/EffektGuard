@@ -186,23 +186,10 @@ class WeatherCompensationCalculator:
         self.heat_loss_coefficient = heat_loss_coefficient
         self.radiator_rated_output = radiator_rated_output
         self.internal_gains_w = internal_gains_w
-        self.heating_type = heating_type
         self.design_outdoor_temp = design_outdoor_temp
         self.design_spread = design_spread
-
-        # Underfloor heating has its own emitter exponent (EN 1264, n ~ 1.1) and a far lower
-        # design flow temperature. Its lower temperatures belong HERE, in the curve itself - not
-        # as a fixed subtraction applied to a radiator curve afterwards.
-        self.is_underfloor = heating_type in ("concrete_ufh", "timber_ufh", "timber")
-        self.emitter_exponent = (
-            UFH_POWER_COEFFICIENT if self.is_underfloor else RADIATOR_POWER_COEFFICIENT
-        )
-        if design_flow_temp is not None:
-            self.design_flow_temp = design_flow_temp
-        elif self.is_underfloor:
-            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_UFH
-        else:
-            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
+        self._given_design_flow_temp = design_flow_temp
+        self.set_heating_type(heating_type)
 
         _LOGGER.debug(
             "WeatherCompensationCalculator initialized: type=%s, design %.1f°C @ %.1f°C outdoor, "
@@ -215,6 +202,26 @@ class WeatherCompensationCalculator:
             heat_loss_coefficient,
             radiator_rated_output,
         )
+
+    def set_heating_type(self, heating_type: str) -> None:
+        """The emitters, and what follows from them: at construction and when the owner changes it.
+
+        Underfloor heating has its own emitter exponent (EN 1264, n ~ 1.1) and a far lower design
+        flow temperature. Its lower temperatures belong HERE, in the curve itself - not as a fixed
+        subtraction applied to a radiator curve afterwards. A design flow temperature given at
+        construction stays.
+        """
+        self.heating_type = heating_type
+        self.is_underfloor = heating_type in ("concrete_ufh", "timber_ufh", "timber")
+        self.emitter_exponent = (
+            UFH_POWER_COEFFICIENT if self.is_underfloor else RADIATOR_POWER_COEFFICIENT
+        )
+        if self._given_design_flow_temp is not None:
+            self.design_flow_temp = self._given_design_flow_temp
+        elif self.is_underfloor:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_UFH
+        else:
+            self.design_flow_temp = DEFAULT_DESIGN_FLOW_TEMP_RADIATOR
 
     def balance_point_temp(self, indoor_setpoint: float) -> float:
         """Outdoor temperature at which this house needs no heat at all.
@@ -949,7 +956,9 @@ class WeatherCompensationLayer:
         # simply stands down - the emitter law above does not, and did not need to.
         if self.weather_learner and weather_data and weather_data.forecast_hours:
             try:
-                current_date = get_current_datetime() if get_current_datetime else dt_util.now()
+                # UTC, as the coordinator files each pattern: in Sweden the local date runs one hour
+                # ahead of it after midnight (two in summer), and that can be the next week.
+                current_date = get_current_datetime() if get_current_datetime else dt_util.utcnow()
 
                 # Extract forecast for unusual weather detection
                 forecast_temps = [h.temperature for h in weather_data.forecast_hours[:24]]
@@ -958,7 +967,9 @@ class WeatherCompensationLayer:
                     forecast=forecast_temps,
                 )
 
-                if unusual.is_unusual:
+                # Only a forecast colder than usual widens the margin and the weight. A warmer one
+                # needs less heat, and a wider margin would hold back the cut it calls for.
+                if unusual.is_unusual and unusual.deviation_from_typical < 0:
                     unusual_weather = True
                     # Map severity string to 0.0-1.0 scale
                     unusual_severity = 1.0 if unusual.severity == "extreme" else 0.5

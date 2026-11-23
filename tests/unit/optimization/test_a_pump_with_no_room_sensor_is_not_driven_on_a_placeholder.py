@@ -12,16 +12,39 @@ real reading it still corrects a genuine overshoot or a genuinely cold house.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.nibe_adapter import NibeState
-from custom_components.effektguard.const import DEFAULT_INDOOR_TEMP, MIN_TEMP_LIMIT
+from custom_components.effektguard.adapters.weather_adapter import (
+    WeatherData,
+    WeatherForecastHour,
+)
+from custom_components.effektguard.const import (
+    CONF_TARGET_INDOOR_TEMP,
+    CONF_THERMAL_MASS,
+    DEFAULT_INDOOR_TEMP,
+    DOMAIN,
+    MIN_TEMP_LIMIT,
+    PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
+    SAMPLES_PER_HOUR,
+    UFH_CONCRETE_PREDICTION_HORIZON,
+    UPDATE_INTERVAL_MINUTES,
+)
 from custom_components.effektguard.optimization.comfort_layer import ComfortLayer
+from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 # Targets a real owner can set. All of them sit BELOW the placeholder, which is the whole problem.
 COOL_TARGETS = [20.5, 20.0, 19.0, 18.5]
+# One above it: a room nothing measures then reads as a degree too cold
+WARM_TARGET = 22.0
+CONCRETE_SLAB = 1.8
+START = datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc)
 
 
 def _sensorless_pump() -> NibeState:
@@ -67,6 +90,66 @@ def test_the_comfort_layer_abstains_with_no_room_sensor(target):
         f"and the pump stays coasted for the whole winter."
     )
     assert decision.offset == 0.0
+
+
+async def test_a_day_without_a_room_sensor_teaches_the_learning_no_room(hass, freezer):
+    """A day of placeholder readings under a target above it made the learned pre-heat vote +3.0 at
+    weight 0.65 for a room nothing measured, and gave the house a room trend of its own invention.
+    The house as Home Assistant builds it, its observations recorded as each cycle records them."""
+    freezer.move_to(START)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        options={CONF_TARGET_INDOOR_TEMP: WARM_TARGET, CONF_THERMAL_MASS: CONCRETE_SLAB},
+    )
+    entry.add_to_hass(hass)
+    coordinator = await _create_coordinator(hass, entry)
+    state = _sensorless_pump()
+    for _ in range(PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR):
+        state.timestamp = dt_util.utcnow()
+        await coordinator._record_learning_observations(state, None, 0.0)
+        freezer.tick(timedelta(minutes=UPDATE_INTERVAL_MINUTES))
+    state.timestamp = dt_util.utcnow()
+    forecast = WeatherData(
+        current_temp=state.outdoor_temp,
+        forecast_hours=[
+            WeatherForecastHour(state.timestamp + timedelta(hours=hour), state.outdoor_temp)
+            for hour in range(1, int(UFH_CONCRETE_PREDICTION_HORIZON) + 1)
+        ],
+    )
+
+    decision = coordinator.engine.calculate_decision(state, None, forecast, 0.0, 0.0)
+
+    learned = next(layer for layer in decision.layers if layer.name == "Learned Pre-heat")
+    assert learned.weight == 0.0, f"{learned.offset:+.1f}@{learned.weight} ({learned.reason})"
+    assert coordinator.thermal_predictor.get_current_trend()["trend"] == "unknown"
+    assert not coordinator.adaptive_learning.observations
+
+
+@pytest.mark.parametrize("measured", [True, False], ids=["room sensor", "the sensor dropped out"])
+def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured):
+    """A day of a measured room 1 C under its target gives the learned layer a vote; the moment the
+    reading becomes the placeholder, the vote is gone - its overshoot would be the placeholder's."""
+    predictor = ThermalStatePredictor()
+    for cycle in range(PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR):
+        predictor.record_state(
+            START + cycle * timedelta(minutes=UPDATE_INTERVAL_MINUTES),
+            WARM_TARGET - 1.0,
+            0.0,
+            0.0,
+            35.0,
+            -100.0,
+        )
+    state = _pump_with_a_real_sensor(WARM_TARGET - 1.0)
+    state.indoor_temp_valid = measured
+    forecast = WeatherData(
+        current_temp=0.0,
+        forecast_hours=[WeatherForecastHour(START + timedelta(hours=h), 0.0) for h in range(1, 25)],
+    )
+
+    vote = predictor.evaluate_layer(state, forecast, WARM_TARGET, ThermalModel(CONCRETE_SLAB))
+
+    assert (vote.weight > 0.0) == measured, f"{vote.offset:+.1f}@{vote.weight} ({vote.reason})"
 
 
 class TestTheLayerStillWorksWhenItCanSee:
