@@ -74,5 +74,5 @@ failure never becomes a write.
 
 ## Before committing
 
-Black, the ratchet, the suite: the commands are in [CLAUDE.md](../../CLAUDE.md#commands), and the
+Black, the ratchet, the suite: the commands are in [AGENTS.md](../../AGENTS.md#commands), and the
 full list of gates is under "Before claiming it works" there.

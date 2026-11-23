@@ -1663,12 +1663,13 @@ NIBE_FRACTIONAL_ACCUMULATOR_THRESHOLD: Final = (
 # entity satisfies at most ONE key, so a specific key MUST come before a broader one
 # that would also match its entities.
 # Register references (yozik04/nibe, file nibe/data/f1155_f1255.json — the map
-# HA's nibe_heatpump integration uses; F-series register ids double as MyUplink
-# parameter ids): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
+# HA's nibe_heatpump integration uses): BT1=40004, BT2=40008, BT3=40012, BT7=40013, BT6=40014,
 # BT50=40033, BT25=40071, DM=40940 (32-bit)/43005 (16-bit, Modbus), offset S1=47011,
 # compressor state=43427, compressor frequency=43136, prio=43086,
 # BE1/BE2/BE3=40083/40081/40079.
-# 40941 is MyUplink's DM id on some models (second word of 40940).
+# MyUplink gives an F750 the same numbers (its parameter list, 2026-11-04), except the compressor
+# frequency, 41778 there (#159), and prio, 49994. 40941 is MyUplink's DM id on some models
+# (second word of 40940).
 NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
     "outdoor_temp": ["_bt1", "bt1_", "outdoor_temp", "outd_temp", "40004"],
     # NOTE: no short "room_temp" - "bedroom_temp" etc. contain it as a
@@ -1711,7 +1712,9 @@ NIBE_DISCOVERY_PATTERNS: Final[dict[str, list[str]]] = {
         "43123",
         "31043",
     ],
-    "compressor_hz": ["compressor_frequency", "43136"],
+    # nibe_heatpump on an SMO 20/40 or VVM 225/310/320/325/500: the outdoor unit's "EB101-EP14
+    # Actual Cpr Frequency Outdoor Unit" (44701)
+    "compressor_hz": ["compressor_frequency", "actual_cpr_frequency", "43136", "41778"],
     "compressor_status": ["compressor_state", "status_compressor", "compressor_status", "43427"],
     # "prio" also matches "priority" (MyUplink naming) as a substring
     "prio": ["prio", "43086"],
@@ -1741,6 +1744,58 @@ NIBE_DISCOVERY_EXCLUDE: Final[list[str]] = [
     "requested_compressor_frequency",
     "min_compressor_frequency",
 ]
+
+# Entities of the nibe_heatpump integration (registry platform) that are never discovered, matched
+# against the coil's own name (its registry name: no device prefix, and it survives a renamed entity
+# id). A NIBE with more circuits, outdoor units or cooling names those with the same words as the
+# ones EffektGuard reads, and the first match wins in the order Home Assistant created the states -
+# which a restart changes (#158). Names as in nibe 2.25.0's model lists, which nibe_heatpump uses.
+NIBE_HEATPUMP_PLATFORM: Final = "nibe_heatpump"
+NIBE_HEATPUMP_EXCLUDE: Final[dict[str, list[str]]] = {
+    # Climate systems 2-8: EP21-EP23 and EP44-EP47 ("EP21-BT2 Supply temp S2", "Supply line
+    # (EP21-BT2)"), and "Room average temp clim. system 2 (BT50)". Not applied when the offset
+    # picked in setup is one of theirs.
+    "other_circuit": [
+        "ep21",
+        "ep22",
+        "ep23",
+        "ep44",
+        "ep45",
+        "ep46",
+        "ep47",
+        "clim_system_2",
+        "clim_system_3",
+        "clim_system_4",
+        "clim_system_5",
+        "clim_system_6",
+        "clim_system_7",
+        "clim_system_8",
+    ],
+    # Outdoor units 2-8 of an SMO 40 / SMO S40 (EB102-EB108) and the S135 exhaust-air module:
+    # EffektGuard reads the first outdoor unit, EB101.
+    "other_unit": ["eb102", "eb103", "eb104", "eb105", "eb106", "eb107", "eb108", "s135"],
+    # Not a heating reading: cooling ("Cool Degree Minutes", the cooling module EQ1's "EQ1-BT64 Cool
+    # Supply Temp" and "Return line (EQ1-BT65)", and BT64, "Supply temperature (BT64)"); BT70, the
+    # hot-water comfort supply; and settings that contain "prio" (the OPT boiler's, the smart energy
+    # source's - "SES" - "prio hot water opt", "Permit prioritised additional heat", "Speed
+    # circ.pump add prio", "All sub units operating prio").
+    "not_a_reading": [
+        "cool",
+        "eq1",
+        "bt64",
+        "bt70",
+        "opt_boiler",
+        "energy_source",
+        "ses",
+        "prio_hot_water_opt",
+        "prioritised",
+        "circ_pump",
+        "sub_units",
+    ],
+}
+# The circuit of an offset entity: nibe_heatpump's "Heat Offset S2" (F-series, SMO, VVM) and
+# "Heating offset climate system 2" (S-series), as entity ids.
+NIBE_OFFSET_CIRCUIT_PATTERN: Final = r"heat(?:ing)?_offset_(?:s|climate_system_)(\d)(?:_|$)"
 
 # Keys that trigger re-discovery on the update cycle while missing.
 # Source integrations (modbus, nibe_heatpump, myuplink) may create their
@@ -2030,6 +2085,50 @@ SHORTFALL_FORECAST_HOURS: Final = 12
 # instead (a setting): 4706, 4628 and 4504 SEK.
 IMMERSION_START_MEMORY: Final = 5  # starts remembered
 IMMERSION_START_MAX_GAP_MINUTES: Final = 2 * UPDATE_INTERVAL_MINUTES
+
+# THE NIBE S735 (models/nibe/s735.py): the S735-7, from its installer manual IHB EN 2647-4 (M13212,
+# S735 Stainless 3x400 V, 3x230 V), "Technical specifications". "Output data according to EN 14511",
+# its footnotes 2, 4 and 6, at A20(12) - 20 C extract air: the condition, flow temperature (C),
+# heating output PH (kW), COP and exhaust airflow (m3/h). NIBE's S735 data sheet (CIL EN 2218-1,
+# M12836) prints the same three figures.
+S735_EXTRACT_AIR_C: Final = 20.0
+S735_EN14511_POINTS: Final = (
+    (
+        "A20(12)W35, exhaust airflow 25 l/s (90 m3/h) min. compressor frequency",
+        35.0,
+        1.16,
+        3.90,
+        90.0,
+    ),
+    (
+        "A20(12)W35, exhaust airflow 70 l/s (252 m3/h) min. compressor frequency",
+        35.0,
+        1.57,
+        5.19,
+        252.0,
+    ),
+    (
+        "A20(12)W45, exhaust airflow 70 l/s (252 m3/h) max. compressor frequency",
+        45.0,
+        5.37,
+        2.55,
+        252.0,
+    ),
+)
+S735_PDESIGNH_KW: Final = 6.0  # "Rated heating output (Pdesignh)"
+# "Max power, immersion heater (factory setting)": 9.0 (9.0) kW in the stainless and enamel
+# 3x400 V versions, 6.5 (6.5) in the copper and 1x230 V ones (IHB SV 2647-4, IHB EN 2647-3), whose
+# rating points are the same. Only the power-plausibility ceiling reads it, so the larger stands.
+S735_IMMERSION_HEATER_KW: Final = 9.0
+S735_SUPPLY_MAX_C: Final = 70.0  # heating medium "Max temperature", compressor and additional heat
+S735_SUPPLY_MIN_C: Final = 20.0  # the lowest that menu 1.30.4 "Lowest supply heating" accepts
+# NIBE publishes no compressor frequency range for the S735: this is the span its menu 7.1.3.1
+# ("Block freq") lets an installer block, start 15-92 Hz and stop 18-95 Hz.
+S735_BLOCK_FREQ_HZ: Final = (15, 95)
+# An S-series pump starts its immersion heater "Relative DM start additional heat" below "Start
+# compressor" (menu 7.1.10.3). The S735 manual gives both, with the S1155's setting ranges, but no
+# factory value; the S1155's own register export has them: DM_THRESHOLD_START and this one.
+S_SERIES_RELATIVE_DM_START_ADDITIONAL_HEAT: Final = 400
 
 COMPRESSOR_HZ_MIN: Final = 20  # Minimum operating frequency
 COMPRESSOR_HZ_MAX: Final = 120  # Maximum operating frequency (NIBE F-series inverter)

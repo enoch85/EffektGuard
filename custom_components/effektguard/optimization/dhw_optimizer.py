@@ -19,6 +19,7 @@ DHW Heating Speed (enoch85):
 """
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -653,6 +654,9 @@ class IntelligentDHWScheduler:
             for state in state_list:
                 try:
                     temp = float(state.state)
+                    # float() reads "nan" and "inf" too: not a temperature, as the adapter refuses it
+                    if not math.isfinite(temp):
+                        continue
                     timestamp = state.last_changed
 
                     self.bt7_history.append((timestamp, temp))
