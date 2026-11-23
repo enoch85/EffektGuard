@@ -436,12 +436,12 @@ class HouseConfig:
 
         For an exhaust-air pump, the minimum-frequency point at the rated airflow (F750 1.498,
         F730 1.53 kW); the lower end of its declared range is the figure at the smallest airflow.
-        A pump rated without an airflow keeps its declared range (F1155 and S1155 3 kW, none for
-        the F2040).
+        A pump rated without an airflow keeps its profile's minimum (F1155 and S1155 3 kW from their
+        declared range, the F2040 2.5 kW from NIBE's Belgian catalogue at A7/W35).
         """
         if any(p.airflow_m3h for p in self.profile.datasheet_points):
             return min(p.heat_output_kw for p in self.rated_points)
-        return self.profile.heating_capacity_range_kw[0]
+        return self.profile.min_heat_output_kw
 
     @functools.cached_property
     def exergy_fit(self) -> tuple[float, float, float]:
@@ -854,11 +854,10 @@ HOUSES = [
         # system now, so the capacity curve, the COP and the design load all describe one machine in
         # one application.
         #
-        # WHAT REMAINS UNKNOWN, and it bounds every conclusion drawn from this house: NIBE tabulates
-        # the F2040's maximum output only down to -7 C. Below that the manual gives a GRAPH and no
-        # numbers, so the model holds capacity at the -7 C figure. A Swedish January goes lower. The
-        # results for this house below -7 C therefore rest on an assumption, and are reported as a
-        # bound rather than a measurement. The F750 carries no such caveat - see the F-124 test.
+        # NIBE tabulates maximum output only down to -7 C in the grid used here. Below it the
+        # model holds capacity at the -7 C figure. That continuation is an assumption, not a
+        # validated cold-end map or an upper/lower performance bound. Exhaust-air profiles also
+        # need independent validation away from their stated rating conditions.
         thermal_mass=1.0,
         insulation_quality=0.9,
         hlc_w_per_k=218.0,  # F2040-8 Pdesignh 9.0 kW (COLD climate, 35 C application)
@@ -1000,15 +999,6 @@ SCENARIOS = {
             ),
             expect=("heating_tracks_demand", "no_immersion_at_all", "no_emergency_tier"),
             known_open=(
-                KnownRed(
-                    fails_with="recovery ladder proposed",
-                    houses={"airsource_f2040": None},
-                    why=(
-                        "A recovery tier appears among proposed votes. This policy check does not "
-                        "establish that a positive register value was applied, that the pump was "
-                        "heating, or that the recovery tier changed heat delivery or cost."
-                    ),
-                ),
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
@@ -1613,6 +1603,9 @@ def simulate(
         "compressor_starts": 0,
         "capacity_outside_published_minutes": 0,
         "compressor_below_declared_minimum_minutes": 0,
+        "minimum_positive_compressor_heat_kw": None,
+        "modeled_minimum_compressor_heat_kw": house.minimum_output_kw,
+        "independent_plant_validation": False,
         "heating_season_stops": 0,
         "out_of_season_minutes": 0,
         "compressor_blocked_hours": 0.0,
@@ -1749,6 +1742,13 @@ def simulate(
                 q_comp_w = min(capacity_w, max(0.0, minimum_w, demand_w))
             else:
                 q_comp_w = 0.0
+
+            if q_comp_w > 0.0:
+                previous_minimum = stats["minimum_positive_compressor_heat_kw"]
+                output_kw = q_comp_w / 1000.0
+                stats["minimum_positive_compressor_heat_kw"] = (
+                    output_kw if previous_minimum is None else min(previous_minimum, output_kw)
+                )
 
             # How hard the compressor is being pushed, which is what sets its efficiency. No
             # circularity: q_comp is fixed by demand and capacity, both computed above.
