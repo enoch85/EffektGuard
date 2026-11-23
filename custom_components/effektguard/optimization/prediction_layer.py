@@ -114,7 +114,7 @@ class PredictionLayerDecision:
 
 
 def _cycle_of(moment: datetime) -> int:
-    """The control cycle a reading was recorded in, numbered on the absolute time line."""
+    """The control cycle that read the pump at `moment`, numbered on the absolute time line."""
     return int((moment.timestamp() - UPDATE_ALIGNMENT_SECONDS) // (UPDATE_INTERVAL_MINUTES * 60))
 
 

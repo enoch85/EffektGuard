@@ -1221,7 +1221,7 @@ SAMPLES_PER_HOUR: Final = 60 // UPDATE_INTERVAL_MINUTES  # 12 samples/hour with 
 PREDICTION_MAX_MISSED_CYCLES: Final = 1
 # The coordinator's cycles start this many seconds past each five-minute mark (:00:10, :05:10, ...;
 # coordinator._calculate_next_aligned_time). The predictor counts its history in those cycles: a
-# reading belongs to the cycle it was recorded in, however late in the cycle that was.
+# reading belongs to the cycle that read the pump, however late in the cycle that was.
 UPDATE_ALIGNMENT_SECONDS: Final = 10
 
 PREDICTION_MIN_HISTORY_HOURS: Final = 1  # before projecting forward at all

@@ -150,11 +150,11 @@ def test_a_clock_that_ran_ahead_does_not_keep_the_present_out(freezer):
     assert [snapshot.timestamp for snapshot in predictor.state_history] == [NOW]
 
 
-# A reading recorded late in its cycle, up to the start of the next one, still belongs to it.
+# A reading dated late in its cycle, up to the start of the next one, still belongs to it.
 LATE = [timedelta(0), timedelta(seconds=1), CADENCE - timedelta(seconds=1)]
 
 
-def test_a_reading_belongs_to_the_cycle_it_was_recorded_in(freezer):
+def test_a_reading_belongs_to_the_cycle_it_is_dated_in(freezer):
     freezer.move_to(NOW + 2 * CADENCE)
     predictor = ThermalStatePredictor()
     _record(predictor, NOW, 21.0)

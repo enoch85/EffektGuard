@@ -24,17 +24,16 @@ flowchart LR
 | `ThermalStatePredictor` (`prediction_layer.py`) | indoor, outdoor, offset, flow, DM every cycle, and whether the room was measured; 24 h window | indoor trend from measured rooms only, outdoor trend; the `Learned Pre-heat` layer | trend: trend damping, the `Peak` layer's prediction, `Weather Pre-heat`, airflow. Pre-heat: weight 0.65 once 24 h of measured room and a forecast exist; never without a room sensor |
 | `WeatherPatternLearner` (`weather_learning.py`) | one pattern per day from the first 24 forecast hours, keyed by month and week | typical weather for the date (the zone's seasonal defaults until data exists); `detect_unusual_weather` | unusual weather adds 0.5-1.5 °C to the `Math WC` safety margin and 0.15 to its weight ([10](10_adaptive_climate_zones.md)) |
 
-The predictor requires real elapsed coverage as well as enough samples. A full day needs both
-endpoints; repeated timestamps replace the same observation, and older arrivals are ignored.
-Snapshots dated after now are dropped on restore, and dropped when a reading arrives behind them,
-so a clock that ran ahead cannot keep the present out. History is counted in control cycles: a
-reading belongs to the five-minute cycle it was recorded in (cycles start at :00:10, :05:10, ...,
-`UPDATE_ALIGNMENT_SECONDS`), however late in it, and a second reading in a cycle replaces the
-first. Trends and pre-heat use only the continuous, recently reported suffix. One missed cycle
-(`PREDICTION_MAX_MISSED_CYCLES`) is allowed between two readings, before the cycle running now,
-and once in a day; two are not. Future timestamps, stale restores and gaps of two missed cycles
-cannot authorize pre-heating. Elapsed time is counted on the absolute timeline across clock
-changes.
+The predictor counts its history in control cycles, not samples. A snapshot is dated when the
+pump was read and belongs to the five-minute cycle that read it (cycles start at :00:10, :05:10,
+..., `UPDATE_ALIGNMENT_SECONDS`), however late in it; a second reading in a cycle replaces the
+first, and older arrivals are ignored. A full day needs a reading in the cycle 24 hours before the
+newest. One missed cycle (`PREDICTION_MAX_MISSED_CYCLES`) is allowed between two readings, before
+the cycle running now, and once in a day; two are not. Trends and pre-heat use only the
+continuous, recently reported suffix. Snapshots dated after now are dropped on restore, and
+dropped when a reading arrives behind them, so a clock that ran ahead cannot keep the present out.
+Future timestamps, stale restores and gaps of two missed cycles cannot authorize pre-heating.
+Elapsed time is counted on the absolute timeline across clock changes.
 
 ## The confidence gate
 
