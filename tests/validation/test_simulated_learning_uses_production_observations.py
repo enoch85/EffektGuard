@@ -3,8 +3,20 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from scripts.simulation import sim_harness as sim
+from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.weather_adapter import WeatherData, WeatherForecastHour
+from custom_components.effektguard.const import (
+    DOMAIN,
+    LEARNING_STORAGE_VERSION,
+    STORAGE_KEY_LEARNING,
+)
+from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
+
+FALL_BACK = datetime(2026, 10, 25, 1, tzinfo=timezone.utc)
 
 
 def test_learned_unusual_weather_changes_the_simulated_weather_vote(freezer):
@@ -57,3 +69,80 @@ def test_simulation_records_forecast_patterns_and_hourly_observations_across_dst
     dates = [p.date.astimezone(timezone.utc).date() for p in patterns]
     assert len(dates) == len(set(dates))
     assert all(p.date.utcoffset() == timedelta(0) for p in patterns)
+
+
+def _fall_back_run(monkeypatch, days, temperatures=None):
+    """A simulated run from 24 October 2026 in Stockholm, over the night the clocks go back."""
+    engines = []
+    original = sim.build_engine
+
+    def capture(*args, **kwargs):
+        engine, effect = original(*args, **kwargs)
+        engines.append(engine)
+        return engine, effect
+
+    monkeypatch.setattr(sim, "build_engine", capture)
+    times, temps, raw, unit = sim._synthetic_days(datetime(2026, 10, 24, tzinfo=sim.TZ), days)
+    temps = temperatures(times) if temperatures else temps
+    stats, _, _ = sim.simulate(sim.HOUSES[0], times, temps, sim.PriceSource(raw, unit), days)
+    assert stats["exceptions"] == 0
+    return engines[0], times
+
+
+def test_the_pattern_learned_across_the_fall_back_is_the_next_24_real_hours(monkeypatch):
+    # Rising 0.1 C each real hour, so a window an hour off shows in every figure of the pattern.
+    engine, times = _fall_back_run(
+        monkeypatch, 3, lambda times: [-5.0 + 0.1 * hour for hour in range(len(times))]
+    )
+    recorded = datetime(2026, 10, 25, tzinfo=timezone.utc)  # the first cycle of that UTC date
+    hour_now = (recorded - times[0]).total_seconds() / 3600
+    expected = [-5.0 + 0.1 * (hour_now + ahead) for ahead in range(1, 25)]
+    patterns = [p for group in engine.weather_learner.pattern_db.values() for p in group]
+    pattern = next(p for p in patterns if p.date == recorded)
+    assert pattern.avg_temp == pytest.approx(sum(expected) / len(expected))
+    assert (pattern.min_temp, pattern.max_temp) == pytest.approx((expected[0], expected[-1]))
+
+
+def test_the_predictor_records_on_the_real_time_line_across_the_fall_back(monkeypatch):
+    engine, _ = _fall_back_run(monkeypatch, 2)
+    history = list(engine.predictor.state_history)
+    assert history[0].timestamp < FALL_BACK < history[-1].timestamp
+    steps = {(b.timestamp - a.timestamp).total_seconds() for a, b in zip(history, history[1:])}
+    assert steps == {sim.STEP_MIN * 60.0}
+
+
+async def test_the_simulated_weather_vote_is_the_one_production_sets_up(
+    hass, hass_storage, freezer
+):
+    now = datetime(2026, 1, 15, 12, tzinfo=timezone.utc)
+    freezer.move_to(now)
+    history = WeatherPatternLearner()
+    for year in (2023, 2024, 2025):
+        history.record_weather_pattern(now.replace(year=year), [0.0] * 24)
+    hass_storage[STORAGE_KEY_LEARNING] = {
+        "version": LEARNING_STORAGE_VERSION,
+        "minor_version": 1,
+        "key": STORAGE_KEY_LEARNING,
+        "data": {"version": LEARNING_STORAGE_VERSION, "weather_patterns": history.to_dict()},
+    }
+    hass.config.latitude = sim.STOCKHOLM_LATITUDE
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    production = (await _create_coordinator(hass, entry)).engine
+    simulated, _ = sim.build_engine(sim.HOUSES[0])
+    simulated.weather_learner.load_from_dict(history.to_dict())
+
+    def vote(engine, forecast):
+        required = engine.weather_comp.calculate_optimal_flow_temp(engine.target_temp, 0.0)
+        state = SimpleNamespace(
+            outdoor_temp=0.0, flow_temp=required.flow_temp + 2.0, degree_minutes=-50.0
+        )
+        weather = WeatherData(
+            0.0, [WeatherForecastHour(now + timedelta(hours=h), forecast) for h in range(1, 25)]
+        )
+        decision = engine.weather_comp_layer.evaluate_layer(state, weather, engine.target_temp)
+        return decision.unusual_weather, decision.safety_margin
+
+    for forecast in (-30.0, 15.0):  # colder and warmer than this house's own Januaries
+        assert vote(simulated, forecast) == vote(production, forecast)
+    assert vote(simulated, -30.0)[0], "the history reaches both votes"

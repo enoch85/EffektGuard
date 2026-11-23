@@ -1501,10 +1501,14 @@ def load_data(selftest: bool, live_se4: bool = False, dst: bool = False, arctic:
 
 
 def outdoor_at(times, temps, when: datetime) -> float:
-    """Linear interpolation of hourly outdoor temperature."""
-    idx = int((when - times[0]).total_seconds() // 3600)
+    """Linear interpolation of hourly outdoor temperature, on the absolute time line.
+
+    `times` are local and so is `when`, and Python subtracts two datetimes of one zone on the wall
+    clock: in the hour the clocks go back, a moment read the temperature of an hour earlier.
+    """
+    idx = int((when.timestamp() - times[0].timestamp()) // 3600)
     idx = max(0, min(idx, len(temps) - 2))
-    frac = ((when - times[idx]).total_seconds() / 3600.0) if idx < len(times) else 0.0
+    frac = (when.timestamp() - times[idx].timestamp()) / 3600.0
     frac = max(0.0, min(frac, 1.0))
     return temps[idx] * (1 - frac) + temps[idx + 1] * frac
 
@@ -2043,12 +2047,14 @@ def simulate(
             else:
                 cur_price_ore = cur_period.price
 
+            # The forecast's hours are real hours ahead, as a weather entity publishes them. Added on
+            # the local clock they are not: at 02:00 CEST on the night the clocks go back, "+1 h" is
+            # 03:00 CET, two real hours on, and the daily pattern learned the wrong 24 hours.
+            utc_now = now.astimezone(zoneinfo.ZoneInfo("UTC"))
+            ahead = [(utc_now + timedelta(hours=h)).astimezone(TZ) for h in range(1, 49)]
             fc = [
-                WeatherForecastHour(
-                    datetime=now + timedelta(hours=h),
-                    temperature=outdoor_at(times, temps, now + timedelta(hours=h)),
-                )
-                for h in range(1, 49)
+                WeatherForecastHour(datetime=moment, temperature=outdoor_at(times, temps, moment))
+                for moment in ahead
             ]
             # A weather entity is vol.Optional in the config flow, and with none configured
             # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no
