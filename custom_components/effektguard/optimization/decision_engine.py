@@ -71,6 +71,7 @@ from ..const import (
     WAIT_CHEAPER_WARMING_HOURS,
 )
 from ..utils.capacity_shortfall import CapacityShortfall
+from ..utils.episode import Episode
 from ..utils.immersion_start import ImmersionStart
 from ..utils.reasons import adjusted
 from ..utils.time_utils import seconds_between
@@ -357,6 +358,13 @@ class DecisionEngine:
         # _wait_for_cheaper_hours.
         self._waiting_for_cheaper = False
 
+        # The immersion-limit emergency is reported when it begins and when it ends, not on every
+        # cycle it lasts, by control cycle (calculate_decision's cycle). A read reports nothing
+        # (_throwaway_copy).
+        self._immersion_limit_report = Episode()
+        self._reports = True
+        self._cycle = 0
+
         # Manual override state (Phase 5 service support)
         self._manual_override_offset: float | None = None
         self._manual_override_until: Optional[datetime] = None
@@ -396,15 +404,22 @@ class DecisionEngine:
         history and anti-windup, the immersion guard's readings, where the immersion heater starts
         and where the pump runs short), the forecast's bias, its own ask and whether the room
         waited. Kept from a read, these put the read's readings between the control cycle's: a
-        second degree-minute sample, a raise dated to the read, a wait no cycle made.
+        second degree-minute sample, a raise dated to the read, a wait no cycle made. A read
+        reports nothing either: what is reported belongs to the control cycles.
         """
         engine = copy.copy(self)
+        engine._reports = False
         engine._immersion_readings = deque(self._immersion_readings)
         engine.capacity_shortfall = copy.deepcopy(self.capacity_shortfall)
         engine.immersion_start = copy.deepcopy(self.immersion_start)
         engine.emergency_layer = copy.copy(self.emergency_layer)
         engine.weather_prediction = copy.deepcopy(self.weather_prediction)
         return engine
+
+    def _end_immersion_limit_report(self, degree_minutes: float) -> None:
+        """Report that the immersion-limit emergency is over, where one was going on."""
+        if self._immersion_limit_report.gone(self._cycle, self._reports):
+            _LOGGER.info("Immersion-limit emergency over (DM %.0f)", degree_minutes)
 
     def update_mode_config(self) -> None:
         """Update cached mode configuration from current optimization mode.
@@ -625,6 +640,7 @@ class DecisionEngine:
         dhw_heating_end: datetime | None = None,
         compressor_saturated: bool = False,
         record: bool = True,
+        cycle: int | None = None,
     ) -> OptimizationDecision:
         """Calculate optimal heating offset using multi-layer approach.
 
@@ -647,6 +663,8 @@ class DecisionEngine:
             record: False for a decision nothing acts on - Home Assistant's read-only refresh. It
                 decides on a throwaway copy of what decisions record (see _throwaway_copy), so it
                 decides as a control cycle would at that moment and the engine records nothing of it.
+            cycle: The coordinator's number for this control cycle, which counts the cycles that do
+                not ask the engine too; without one, each recorded decision is the next cycle.
 
         Returns:
             OptimizationDecision with offset, reasoning, and layer votes
@@ -664,6 +682,7 @@ class DecisionEngine:
             )
 
         _LOGGER.debug("Calculating optimization decision")
+        self._cycle = self._cycle + 1 if cycle is None else cycle
 
         # Where this pump starts its immersion heater and where it runs short of capacity: read
         # every cycle, a manual override included - one below the curve is a cut of ours as much as
@@ -685,6 +704,10 @@ class DecisionEngine:
         # asking for MORE heat (e.g. boost_heating) is passed through untouched.
         manual_override = self._check_manual_override()
         if manual_override is not None:
+            # The layers do not run under a command, so an immersion-limit emergency ends here when
+            # degree minutes come back above the limit.
+            if nibe_state.degree_minutes > DM_THRESHOLD_IMMERSION_LIMIT:
+                self._end_immersion_limit_report(nibe_state.degree_minutes)
             safety_floor = self._absolute_safety_floor(nibe_state)
 
             if safety_floor is not None and manual_override < safety_floor:
@@ -904,6 +927,8 @@ class DecisionEngine:
 
         # Aggregate layers with priority weighting
         raw_offset = self._aggregate_layers(layers, starvation=starvation)
+        if getattr(emergency_decision, "tier", "") != DM_TIER_EMERGENCY:
+            self._end_immersion_limit_report(nibe_state.degree_minutes)
         raw_offset, wait_note = self._wait_for_cheaper_hours(
             raw_offset,
             nibe_state,
@@ -1374,7 +1399,9 @@ class DecisionEngine:
         if emergency_layer is not None and emergency_layer.tier == DM_TIER_EMERGENCY:
             others = [layer for layer in layers if layer is not emergency_layer]
             offset = max(self._aggregate_layers(others, starvation), 0.0)
-            _LOGGER.warning(
+            # Its end is reported in calculate_decision.
+            begins = self._immersion_limit_report.seen(self._cycle, self._reports)
+            (_LOGGER.warning if begins else _LOGGER.debug)(
                 "Immersion-limit emergency: DM %.0f - no cuts, applying %.1f°C",
                 emergency_layer.degree_minutes,
                 offset,
