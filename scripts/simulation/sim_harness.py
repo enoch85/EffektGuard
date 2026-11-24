@@ -422,6 +422,36 @@ class HouseConfig:
         return outdoor_temp
 
     @functools.cached_property
+    def rated_points(self) -> list:
+        """The datasheet points at the rated (largest) airflow; all of them for a pump without one.
+
+        An exhaust-air pump's points differ by airflow as well as by load: the F750's
+        minimum-frequency output is 1.144 kW at 108 m3/h and 1.498 kW at 252 m3/h. The efficiency
+        fit and the maximum output are taken at the rated airflow, and so is all that reads them.
+        """
+        rated_airflow = max(
+            (p.airflow_m3h for p in self.profile.datasheet_points if p.airflow_m3h), default=None
+        )
+        return [
+            p
+            for p in self.profile.datasheet_points
+            if rated_airflow is None or p.airflow_m3h == rated_airflow
+        ]
+
+    @functools.cached_property
+    def minimum_output_kw(self) -> float:
+        """The least a running compressor makes, at the same source condition as its maximum.
+
+        For an exhaust-air pump, the minimum-frequency point at the rated airflow (F750 1.498,
+        F730 1.53 kW); the lower end of its declared range is the figure at the smallest airflow.
+        A pump rated without an airflow keeps its declared range (F1155 and S1155 3 kW, none for
+        the F2040).
+        """
+        if any(p.airflow_m3h for p in self.profile.datasheet_points):
+            return min(p.heat_output_kw for p in self.rated_points)
+        return self.profile.heating_capacity_range_kw[0]
+
+    @functools.cached_property
     def exergy_fit(self) -> tuple[float, float, float]:
         """(a, b, c) in  eta = a + b*load + c*(flow - 35),  fitted to this machine's OWN datasheet.
 
@@ -460,14 +490,7 @@ class HouseConfig:
 
         That assumption is not a measurement of the F750 and nothing here pretends it is.
         """
-        rated_airflow = max(
-            (p.airflow_m3h for p in self.profile.datasheet_points if p.airflow_m3h), default=None
-        )
-        points = [
-            p
-            for p in self.profile.datasheet_points
-            if rated_airflow is None or p.airflow_m3h == rated_airflow
-        ]
+        points = self.rated_points
         ph_max = self.profile.max_heat_output_kw
 
         def eta(point) -> float:
@@ -530,102 +553,53 @@ class HouseConfig:
         """The Carnot bound at this weather. The harness asserts the plant never beats it."""
         return self.carnot_at(self.source_temp_c(outdoor_temp), flow_temp)
 
-    def capacity_kw_at(self, outdoor_temp: float) -> float:
-        """The most heat this machine can make right now. FROM ITS DATASHEET.
+    @functools.cached_property
+    def peak_capacity_columns(self):
+        """The published maximum-output surface, indexed by flow temperature."""
+        rows = sorted(self.profile.peak_capacity_kw)
+        return [
+            (flow, [outdoor for outdoor, _ in rows], [outputs[i] for _, outputs in rows])
+            for i, flow in enumerate(self.profile.capacity_flow_temps_c)
+        ]
 
-        AND IT DOES NOT DERATE AS IT GETS COLDER. It rises.
+    def capacity_is_extrapolated(self, outdoor_temp: float, flow_temp: float) -> bool:
+        """Whether an edge must be held outside the published peak-output grid."""
+        columns = self.peak_capacity_columns
+        return bool(columns) and (
+            outdoor_temp < columns[0][1][0]
+            or outdoor_temp > columns[0][1][-1]
+            or flow_temp < columns[0][0]
+            or flow_temp > columns[-1][0]
+        )
 
-        This method used to be:
+    def capacity_kw_at(self, outdoor_temp: float, flow_temp: float = COP_RATING_FLOW_C) -> float:
+        """Maximum output at the operating point, separate from nominal COP test loads.
 
-            derate = 1.0 - ASHP_DERATE_PER_C * max(0.0, ASHP_RATING_POINT_C - outdoor_temp)
-            return rated * max(ASHP_MIN_CAPACITY_FRACTION, derate)
-
-        with a comment claiming "the EN 14511 rating points (A7/W35, A2/W35, A-7/W35, A-15/W35)
-        trace a near-linear decline". They trace a near-linear RISE. The F2040-8's published
-        capacity goes 3.86 -> 5.11 -> 6.60 kW from +7 to +2 to -7 C, because it is an INVERTER: at
-        its +7 rating point it is throttled back to part load, and as the weather cools it ramps
-        the compressor UP. What collapses in the cold is the COP (4.65 -> 3.76 -> 2.68), not the
-        capacity. There is no derating table in the datasheet because there is no derating.
-
-        I invented that citation and got the sign of the effect backwards, and the entire
-        saturated-compressor finding (F-124) was built on the result.
-
-        The capacity is now interpolated from the machine's own published points, against its own
-        SOURCE temperature - which for four of the five machines is a constant, so their capacity
-        is flat, which is correct and is what the datasheets show. Below the coldest published
-        point the curve is HELD, because NIBE tabulates nothing there (only a graph), and holding
-        is the honest thing to do with the end of the evidence.
+        Interpolation inside the manufacturer's peak grid is assumed linear. Outside it an edge
+        is held: those minutes are reported as extrapolated, not validated cold-end capacity.
+        The operating-temperature cutoff remains a hard stop.
         """
-        # BELOW THE PUBLISHED OPERATING FLOOR THERE IS NO MACHINE TO MODEL.
-        #
-        # The F2040 manual (IHB EN 1848-8/231846 p.65): "Min. / Max. air temp: -20 / 43 C". A hard
-        # edge, not a derating - strictly below it the unit does not run, and this model used to
-        # hold the -7 C capacity forever, making phantom compressor heat through 28% of a real
-        # Kiruna January. Only the F2040 carries a floor: NIBE publishes none for the brine and
-        # exhaust-air machines, whose sources the weather never touches, and inventing one would be
-        # exactly the unsourced physics this file exists to remove. AT the floor the machine is in
-        # range and every datasheet pin at -20.0 still holds.
         floor = self.profile.min_operating_outdoor_c
         if floor is not None and outdoor_temp < floor:
             return 0.0
-
-        # THE MODULATION ENVELOPE WINS WHERE THE DATASHEET PUBLISHES ONE.
-        #
-        # "Heating capacity (PH): 3 - 12 kW" is what an F1155-12 can actually deliver. Its 0/35
-        # rating point of 5.06 kW is its output at NOMINAL (50 Hz) frequency, and reading THAT as
-        # the machine's ceiling would halve a 12 kW heat pump. The exhaust-air pumps publish their
-        # maximum directly - their third rating point is explicitly "max compressor frequency" - so
-        # for them the envelope and the top rating point are the same number.
+        if self.peak_capacity_columns:
+            flows = [flow for flow, _, _ in self.peak_capacity_columns]
+            capacities = [
+                float(np.interp(outdoor_temp, temps, outputs))
+                for _, temps, outputs in self.peak_capacity_columns
+            ]
+            return float(np.interp(flow_temp, flows, capacities))
         if self.profile.heating_capacity_range_kw[1] > 0.0:
             return self.profile.heating_capacity_range_kw[1]
+        return self.profile.max_heat_output_kw
 
-        # Only the F2040 has no envelope row, and it is the only machine whose source IS the
-        # weather. Its capacity is the EN 14511 curve against SOURCE temperature, HELD below the
-        # coldest published point - because NIBE tabulates nothing below -7 C, only a graph.
-        #
-        # THAT MEANS THIS UNDERSTATES THE F2040. Its true maximum below -7 C is not a number I
-        # have. Any saturation the simulator shows for this machine is therefore an UPPER BOUND on
-        # the real thing, and must never be reported as a measured failure. F-124 was.
-        source = self.source_temp_c(outdoor_temp)
-        by_source = sorted(
-            {
-                point.source_temp_c: point
-                for point in self.profile.datasheet_points
-                if point.flow_temp_c == COP_RATING_FLOW_C
-            }.items()
-        )
-        if len(by_source) < 2:
-            return self.profile.max_heat_output_kw
+    def cop_at_heat_output(self, outdoor_temp: float, flow_temp: float, heat_kw: float) -> float:
+        """Use the same load normalization as the nominal-point COP fit.
 
-        temps = [t for t, _ in by_source]
-        caps = [point.heat_output_kw for _, point in by_source]
-
-        # BELOW THE COLDEST RATING POINT, NIBE'S OWN ErP DECLARATION CLOSES THE MODEL.
-        #
-        # The manual tabulates the F2040's maximum output down to -7 C and no further - below that
-        # it gives a graph. But the AVERAGE-climate ErP declaration is one complete published
-        # statement: Pdesignh 8.2 kW at -10 C with Psup 1.1 kW, so the COMPRESSOR must deliver
-        # 8.2 - 1.1 = 7.1 kW at -10 C, against 6.60 kW measured at -7 C. An earlier version
-        # spliced the COLD-climate Pdesignh (9.0, declared at -22) onto that same Psup and
-        # anchored the result at -22 - a capacity from two different declarations that NIBE
-        # never published, worth +0.8 kW of phantom compressor in exactly the runs that decide
-        # whether this machine saturates.
-        #
-        # So capacity keeps RISING below -7 C to the -10 C declaration, and is HELD below it,
-        # because that is where every published statement stops.
-        #
-        # The old model derated 2.5 %/C in the opposite direction and blamed EN 14511 for it.
-        pdesign_avg = self.profile.design_heat_load_average_kw
-        psup = self.profile.supplementary_heat_kw
-        if source < temps[0] and pdesign_avg > 0.0 and psup > 0.0:
-            at_design = pdesign_avg - psup
-            if EN14825_AVERAGE_DESIGN_C < temps[0]:
-                span = temps[0] - EN14825_AVERAGE_DESIGN_C
-                frac = min(1.0, (temps[0] - source) / span)
-                return caps[0] + (at_design - caps[0]) * frac
-            return at_design
-
-        return float(np.interp(source, temps, caps))
+        Compressor frequency uses output / available capacity. The COP fit instead uses output /
+        the profile's fixed maximum; mixing those fractions invalidates its nominal rating pins.
+        """
+        return self.cop_at(outdoor_temp, flow_temp, heat_kw / self.profile.max_heat_output_kw)
 
 
 # EVERY HOUSE IS SIZED FROM ITS PUMP'S OWN Pdesignh. It used to be sized from nothing at all.
@@ -997,10 +971,13 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="capacity deficit only forced",
                     stat="immersion_kwh",
-                    houses={"concrete_f1155": 182.01},
+                    houses={"concrete_f1155": 189.01},
                     why=(
-                        "F-124 on the undersized F1155: 182.0 kWh of immersion against 135.1 "
-                        "forced since the bench runs the predictor production runs (the learned "
+                        "F-124 on the undersized F1155: 189.0 kWh of immersion against 123.5 "
+                        "forced since the simulator holds each compressor to its minimum output "
+                        "and prices each step's heat at the COP of that output (2026-11-23). "
+                        "182.0 against 135.1 forced since the bench runs the predictor "
+                        "production runs (the learned "
                         "pre-heat, the room and outdoor trends; 2026-11-08) - code unchanged, the "
                         "bench now measures what Home Assistant runs. Before: 180.8 against 120.4 "
                         "forced since pre-heat is bought in cheap quarters only, 4.2 SEK dearer "
@@ -1023,34 +1000,6 @@ SCENARIOS = {
                         "14 %, +11.1 kWh, 61 SEK cheaper."
                     ),
                 ),
-                KnownRed(
-                    fails_with="minutes below the comfort band",
-                    stat="comfort_minutes_below",
-                    houses={"airsource_f2040": 910},
-                    why=(
-                        "The undersized F2040 is colder under EffektGuard than alone: 910 minutes "
-                        "below the band since the bench runs the predictor production runs "
-                        "(2026-11-08), 890 before, where NIBE alone has 585 - 1450 before EffektGuard "
-                        "learned where this pump runs short of capacity and stopped cutting below "
-                        "its curve there; the ladder's room floor and the immersion guard without "
-                        "that memory gave 2280. 1200 before the bench ran the coordinator's gate "
-                        "policy. Each bypass measured alone, with the projected period-mean power: "
-                        "anti-windup 1445, the wear guard's withdrawal 1385 (DM to the -3000 "
-                        "integrator floor), emergency 1085 - the same as the projected power "
-                        "alone, so it changes nothing here - and all three 1450. Not attributed "
-                        "below that (F-124)."
-                    ),
-                ),
-                KnownRed(
-                    fails_with="past the -1500 immersion limit",
-                    houses={"airsource_f2040": None},
-                    why=(
-                        "The undersized F2040's DM reaches -2554 (-2804 before the capacity "
-                        "shortfall, -2779 before the bench ran the coordinator's gate policy); "
-                        "NIBE alone reaches -1890 (F-124, F-112: its own immersion heater "
-                        "starts at -760)."
-                    ),
-                ),
             ),
         ),
         Scenario(
@@ -1068,7 +1017,20 @@ SCENARIOS = {
             # forced is already caught for every run by check_invariants, against
             # IMMERSION_OVER_PHYSICS_TOLERANCE, so nothing is lost by dropping it here.
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(),
+            known_open=(
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="immersion_kwh",
+                    houses={"airsource_f2040": 21.76},
+                    why=(
+                        "F-124 on the F2040: 21.75 kWh of immersion against 7.65 forced (2.8x) "
+                        "since its maximum output comes from NIBE's peak-output grid instead of "
+                        "its nominal COP test loads (2026-11-23). The grid gives it more "
+                        "capacity, so its deficit forces less: 59.75 against 44.8 forced before, "
+                        "inside the check."
+                    ),
+                ),
+            ),
         ),
         Scenario(
             slug="thaw_freeze_mar2024",
@@ -1099,9 +1061,9 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 6.29, "apartment_f730": 8.00, "airsource_f2040": 8.86},
+                    houses={"wooden_f750": 5.55, "apartment_f730": 6.62, "airsource_f2040": 9.55},
                     why=(
-                        "PLANT BOUND, not a controller result: seasonal COP comes out 1.3-1.9x the "
+                        "PLANT BOUND, not a controller result: seasonal COP comes out 1.2-2.1x the "
                         "best published figure for each machine, so the harness's own "
                         "Carnot/datasheet guard fails the run. The exergy COP fit is anchored on "
                         "EN 14511 rating points taken at winter source temperatures and "
@@ -1113,15 +1075,20 @@ SCENARIOS = {
                         "room floor, the immersion guard and the capacity shortfall the F750's "
                         "from 6.28 to 6.34 and the F2040's to 8.66; the overshoot coast's stop at "
                         "-5 the F750's to 6.45 and the F730's to 8.00; a warm room waiting for "
-                        "cheaper hours on a warming day the F750's to 6.29 and the F2040's to 8.86."
+                        "cheaper hours on a warming day the F750's to 6.29 and the F2040's to 8.86;"
+                        " the compressor envelope (the F2040's peak-output grid, each compressor's"
+                        " minimum output, heat priced at the COP of its output; 2026-11-23) the"
+                        " F750's to 5.55, the F730's to 6.62 and the F2040's to 9.55."
                     ),
                 ),
                 KnownRed(
                     fails_with="recovery ladder fired",
-                    houses={"concrete_f1155": None, "villa_s1155": None, "airsource_f2040": None},
+                    houses={"airsource_f2040": None},
                     why=(
-                        "CONTROLLER: the thermal-debt recovery ladder (T1/T2) fires in May on "
-                        "three of five houses, DM reaching -460. In mild weather the curve is "
+                        "CONTROLLER: the thermal-debt recovery ladder (T1/T2) fires in May on the "
+                        "F2040. It fired on the F1155 and S1155 too, DM reaching -460, until the "
+                        "simulator took up the compressor envelope (2026-11-23). In mild weather "
+                        "the curve is "
                         "correctly LOW, so (BT25 - S1) stays negative and DM drifts down without "
                         "the house being in any difficulty. EffektGuard has NO heating-season "
                         "concept and relies entirely on the pump's own stop-heating cutoff to make "
@@ -1133,7 +1100,7 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="minutes above the comfort band",
                     stat="comfort_minutes_above",
-                    houses={"wooden_f750": 3310, "apartment_f730": 12690},
+                    houses={"wooden_f750": 3505, "apartment_f730": 12855},
                     why=(
                         "Comfort breaches in mild weather - the oversized F730 and the F750 spend "
                         "days above their band. The plant models no solar gain: its constant "
@@ -1144,7 +1111,8 @@ SCENARIOS = {
                         "softer than the old -7 C coast above 0.6 C and harder than the old mild "
                         "correction below it. The ladder's room floor and the immersion guard "
                         "moved them from 3405 and 11505; the overshoot coast's stop at -5 from "
-                        "3305 and 11390, the F730 0.10 C warmer on average."
+                        "3305 and 11390, the F730 0.10 C warmer on average; the compressor "
+                        "envelope (2026-11-23) to 3505 and 12855."
                     ),
                 ),
             ),
@@ -1161,12 +1129,12 @@ SCENARIOS = {
                 KnownRed(
                     fails_with="seasonal COP was",
                     stat="mean_cop",
-                    houses={"wooden_f750": 5.68, "apartment_f730": 7.41, "airsource_f2040": 7.49},
+                    houses={"wooden_f750": 5.50, "apartment_f730": 6.25, "airsource_f2040": 8.28},
                     why=(
                         "PLANT BOUND, not a controller result, and the same mechanism as "
                         "shoulder_may2024: October source temperatures sit above the EN 14511 "
                         "rating points the exergy COP fit is anchored on, so the fit extrapolates "
-                        "and seasonal COP comes out 1.20-1.61x the best published figure. The "
+                        "and seasonal COP comes out 1.17-1.78x the best published figure. The "
                         "harness's own datasheet guard catches it, which is the guard working. "
                         "Every COST number in this run is therefore too low; the CONTROL decisions "
                         "- which layer voted, which offset was written - do not depend on the COP "
@@ -1176,7 +1144,9 @@ SCENARIOS = {
                         "report - see SCENARIO_COMFORT_BREACH_MIN_DEPTH_C. The ladder's room floor "
                         "and the immersion guard moved the F750's from 5.66 and the F730's from "
                         "7.40, the overshoot coast's stop at -5 them from 5.68 and 7.43, the heat "
-                        "going down an hour before a PEAK back to 5.68 and 7.41."
+                        "going down an hour before a PEAK back to 5.68 and 7.41; the compressor "
+                        "envelope (2026-11-23) the F750's to 5.50, the F730's to 6.25 and the "
+                        "F2040's to 8.28."
                     ),
                 ),
             ),
@@ -1761,6 +1731,8 @@ def simulate(
         "comfort_minutes_grazing": 0,
         "comfort_minutes_above": 0,
         "compressor_starts": 0,
+        "capacity_outside_published_minutes": 0,
+        "compressor_below_declared_minimum_minutes": 0,
         "heating_season_stops": 0,
         "out_of_season_minutes": 0,
         "compressor_blocked_hours": 0.0,
@@ -1876,7 +1848,9 @@ def simulate(
             # source, and a controller that swings the flow pays the real cost of doing so.
             q_emit_w = house.heat_output_w(flow, indoor)
 
-            capacity_w = house.capacity_kw_at(tout) * 1000.0
+            capacity_w = house.capacity_kw_at(tout, flow) * 1000.0
+            if house.capacity_is_extrapolated(tout, flow):
+                stats["capacity_outside_published_minutes"] += STEP_MIN
             # Below the machine's published operating floor the capacity is zero and everything
             # here must agree with that - the physics above AND the state reported to the engine.
             available = capacity_w > 0.0
@@ -1891,12 +1865,15 @@ def simulate(
                 demand_w = (
                     q_emit_w + WATER_LOOP_J_PER_K * (flow_target - flow) / COMPRESSOR_RESPONSE_S
                 )
-                q_comp_w = max(0.0, min(demand_w, capacity_w))
+                minimum_w = house.minimum_output_kw * 1000.0
+                q_comp_w = min(capacity_w, max(0.0, minimum_w, demand_w))
             else:
                 q_comp_w = 0.0
 
             # How hard the compressor is being pushed, which is what sets its efficiency. No
             # circularity: q_comp is fixed by demand and capacity, both computed above.
+            if 0 < q_comp_w < house.minimum_output_kw * 1000.0:
+                stats["compressor_below_declared_minimum_minutes"] += STEP_MIN
             load_fraction = q_comp_w / capacity_w if capacity_w > 0 else 0.0
 
             # THE IMMERSION HEATER IS THERMOSTATIC, because every real one is.
@@ -2005,7 +1982,7 @@ def simulate(
             elif compressor_on and dm >= DM_STOP:
                 compressor_on = False
 
-            cop = house.cop_at(tout, flow, load_fraction)
+            cop = house.cop_at_heat_output(tout, flow, q_comp_w / 1000.0)
 
             # THE SECOND LAW. No machine can beat Carnot between the temperatures it is working across.
             #
