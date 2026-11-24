@@ -172,8 +172,8 @@ async def test_the_hour_of_the_day_is_not_a_saving(coordinator, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_real_reduction_is_still_reported(coordinator, monkeypatch):
-    """The regression guard. Killing the fabrication must not silence a genuine saving."""
+async def test_an_observed_difference_is_still_reported(coordinator, monkeypatch):
+    """The two measured peaks remain comparable, without attributing their difference."""
     await _observe_a_whole_quarter(coordinator, monkeypatch, DAY_HOUR, 8.0)
     baseline = coordinator.savings_calculator._baseline_monthly_peak
 
@@ -197,7 +197,7 @@ async def test_a_real_reduction_is_still_reported(coordinator, monkeypatch):
 
     assert estimate.effect_savings > 0, (
         f"The house drew 8.0 kW unoptimised and 5.0 kW optimised, both in DAYTIME quarters where "
-        f"the weighting is 1.0 on each side. That is a real 3 kW cut in the billed peak, and it "
+        f"the weighting is 1.0 on each side. That is a 3 kW difference in the observed peaks, and it "
         f"reported {estimate.effect_savings:.0f} SEK."
     )
 
@@ -352,16 +352,16 @@ class TestZeroSavingsMeansTwoDifferentThings:
         """0 SEK because we have never seen this house unoptimised - not because we are failing."""
         attrs = self._savings_sensor(measured=False).extra_state_attributes
 
-        assert attrs["effect_baseline_measured"] is False
-        assert "effect_savings_note" in attrs, (
+        assert attrs["off_period_peak_observed"] is False
+        assert "comparison_note" in attrs, (
             "The savings sensor reads 0 SEK and the owner has no way to tell whether that means "
             "'we have never measured your unoptimised house' or 'we are saving you nothing'. The "
             "flag that distinguishes them was computed and never shown."
         )
 
-    def test_a_measured_baseline_does_not_apologise(self):
-        """Once it IS measured, zero means zero and there is nothing to explain."""
+    def test_an_observed_peak_still_explains_the_comparison_limit(self):
+        """An OFF-period measurement does not establish matched weather or comfort."""
         attrs = self._savings_sensor(measured=True).extra_state_attributes
 
-        assert attrs["effect_baseline_measured"] is True
-        assert "effect_savings_note" not in attrs
+        assert attrs["off_period_peak_observed"] is True
+        assert "comparison_note" in attrs

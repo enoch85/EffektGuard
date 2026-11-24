@@ -224,7 +224,7 @@
         "name": "Ulkolämpötilan suuntaus"
       },
       "savings_estimate": {
-        "name": "Arvioitu kuukausisäästö"
+        "name": "Kuukausittainen hintavertailu"
       },
       "optional_features_status": {
         "name": "Valinnaisten toimintojen tila"

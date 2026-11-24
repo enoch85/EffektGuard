@@ -224,7 +224,7 @@
         "name": "Outdoor Temperature Trend"
       },
       "savings_estimate": {
-        "name": "Estimated Monthly Savings"
+        "name": "Monthly price-timing comparison"
       },
       "optional_features_status": {
         "name": "Optional Features Status"
