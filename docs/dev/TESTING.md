@@ -26,7 +26,8 @@ Categories: `all` (default), `unit`, `validation`, `integration` (`tests/test_*.
 `simulation` (the simulator's `--selftest`; not listed by `--help`).
 
 pytest's own options are in `pyproject.toml`: `asyncio_mode = "auto"`, `--strict-markers`,
-`--tb=short`. `pytest-homeassistant-custom-component` supplies the `hass` fixture.
+`--tb=short` and `-p no:respx`. `pytest-homeassistant`, Home Assistant's own test package, supplies
+the `hass` fixture and asks for `-p no:respx`.
 
 ## The other gates
 

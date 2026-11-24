@@ -43,9 +43,8 @@ def a_swedish_installation():
     The test harness leaves that at UTC, and the coordinator asks `as_local` which month a completed
     billing period belongs to. A test that does not set it is not testing a Swedish install - it is
     testing a UTC one, where the month boundary cannot go wrong and the assertion would pass for the
-    wrong reason. (It is set here rather than in a fixture because
-    pytest-homeassistant-custom-component asserts at teardown that nobody has left the default zone
-    moved, and a fixture's undo loses that race.)
+    wrong reason. (It is set here rather than in a fixture because pytest-homeassistant asserts at
+    teardown that nobody has left the default zone moved, and a fixture's undo loses that race.)
     """
     previous = dt_util.DEFAULT_TIME_ZONE
     dt_util.DEFAULT_TIME_ZONE = STOCKHOLM

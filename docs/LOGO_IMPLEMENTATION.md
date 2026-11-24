@@ -27,7 +27,7 @@ missing file falls back along `IMAGE_FALLBACKS` in `homeassistant/components/bra
 So `brand/` only needs the two icon files. The accepted names are `icon.png`, `logo.png`,
 `icon@2x.png`, `logo@2x.png` and their `dark_` variants (`ALLOWED_IMAGES`).
 
-An install older than 2026.3 (`hacs.json` allows 2025.11.0) has no `brands` integration and
+An install older than 2026.3 has no `brands` integration and
 ignores the folder: its frontend loads `https://brands.home-assistant.io/effektguard/<image>`,
 built from the [home-assistant/brands](https://github.com/home-assistant/brands) repository, where
 `custom_integrations/effektguard/` holds the same `icon.png` and `icon@2x.png`. A new icon goes

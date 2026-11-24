@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard import _create_coordinator
 from custom_components.effektguard.adapters.gespot_adapter import PriceData, QuarterPeriod

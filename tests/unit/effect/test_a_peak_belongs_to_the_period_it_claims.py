@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from homeassistant.core import State
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard import _async_register_services, _create_coordinator
 from custom_components.effektguard.const import (

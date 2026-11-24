@@ -1,5 +1,8 @@
-# The HA test plugin pins Home Assistant, NumPy and the pytest toolchain.
-# Update the plugin as a unit instead of adding conflicting direct pins.
-pytest-homeassistant-custom-component==0.13.375
+# Home Assistant's own test package pins Home Assistant and the pytest toolchain: update it as a
+# unit instead of adding conflicting direct pins. It does not pin NumPy, which the integration
+# needs, or pytest-cov, so they are pinned here.
+pytest-homeassistant==2026.11.1
+numpy==2.3.2
+pytest-cov==7.1.0
 voluptuous==0.16.0
 black==26.10.1

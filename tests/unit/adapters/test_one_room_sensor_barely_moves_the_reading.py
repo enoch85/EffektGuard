@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.effektguard.adapters.nibe_adapter import NibeAdapter
 from custom_components.effektguard.config_flow import EffektGuardConfigFlow
@@ -81,9 +81,7 @@ async def test_a_chosen_median_is_still_honoured():
     ("stored", "migrated"),
     [("median", "interquartile_mean"), ("average", "average"), (None, None)],
 )
-async def test_an_entry_from_an_older_version_moves_off_the_median(
-    hass, enable_custom_integrations, stored, migrated
-):
+async def test_an_entry_from_an_older_version_moves_off_the_median(hass, stored, migrated):
     """The median was the setup's default, so it is what nearly every entry holds."""
     data = {CONF_NIBE_ENTITY: "number.offset"}
     if stored is not None:

@@ -23,7 +23,7 @@ echo -e "${GREEN}✓ Cache cleaned${NC}"
 # Check if pytest is installed
 if ! command -v pytest &> /dev/null; then
     echo -e "${RED}ERROR: pytest is not installed${NC}"
-    echo "Install with: pip install pytest pytest-homeassistant-custom-component"
+    echo "Install with: pip install -r tests/requirements.txt"
     exit 1
 fi
 

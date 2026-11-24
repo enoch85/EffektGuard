@@ -28,6 +28,9 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "--disable-warnings",
+    # pytest-homeassistant asks for it: respx's plugin imports httpx before HA can alias it
+    "-p",
+    "no:respx",
 ]
 
 # Markers
