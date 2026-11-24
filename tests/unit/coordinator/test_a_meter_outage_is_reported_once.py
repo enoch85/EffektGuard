@@ -1,8 +1,8 @@
 """A power-meter outage is reported when it begins and when it ends, not on every cycle it lasts.
 
-A meter is out only when Home Assistant says so (unavailable, unknown, unreadable). A value nobody
-has rewritten is a steady house: template and MQTT sensors do not write an unchanged value, so a
-meter at 0 W import under solar shows the same state, with the same `last_reported`, for hours.
+A change-driven template can hold the same available state for hours. Availability-based billing
+continues, but an old report must not authorize heat-reducing peak control. A fresh report with an
+unchanged value remains suitable for control.
 """
 
 from __future__ import annotations
@@ -95,10 +95,11 @@ async def test_an_outage_is_reported_when_it_begins_and_when_it_ends(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_value_nobody_has_rewritten_is_still_the_measurement(monkeypatch, caplog):
-    """The owner's template meter at 0 W import: unchanged, so not rewritten, for two hours."""
+@pytest.mark.parametrize("power_w", [0, 20000])
+async def test_a_held_value_bills_without_authorizing_peak_control(monkeypatch, caplog, power_w):
+    """A held value is not an outage, and a held high draw must not keep cutting heat."""
     coordinator = _coordinator()
-    steady = _meter("0", START - timedelta(hours=2))
+    steady = _meter(str(power_w), START - timedelta(hours=2))
     period = BILLING_PERIOD_MINUTES // UPDATE_INTERVAL_MINUTES
 
     for step in range(period + 1):
@@ -107,7 +108,7 @@ async def test_a_value_nobody_has_rewritten_is_still_the_measurement(monkeypatch
     billed = [
         c.kwargs["power_kw"] for c in coordinator.effect.record_period_measurement.await_args_list
     ]
-    assert billed == [0.0], f"a steady 0 W import billed {billed}"
-    assert coordinator.current_power_kw == 0.0
+    assert billed == [power_w / 1000.0], billed
+    assert coordinator.current_power_kw is None
     warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert not warnings, warnings
