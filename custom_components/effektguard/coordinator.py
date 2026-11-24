@@ -335,7 +335,9 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         self._last_predictor_save: datetime | None = None  # Track last thermal predictor save
         self._grace_period_ended_logged = False  # Track if grace period end was logged
         self._last_update_date = dt_util.now().date()  # Track date for daily resets
-        self._last_dhw_control_time: datetime | None = None  # Track last DHW control action
+        # When the last hot-water boost started (EffektGuard's or boost_dhw's): the next starts
+        # DHW_CONTROL_MIN_INTERVAL_MINUTES later at the earliest. A stop does not move it.
+        self._last_dhw_control_time: datetime | None = None
         self._last_weather_record_date = dt_util.now().date()  # Track weather recording date
         self._predictor_save_interval = timedelta(
             minutes=UPDATE_INTERVAL_MINUTES
@@ -874,13 +876,12 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         if not await self._set_temporary_lux(False):
             return
         self._service_boost_until = None
-        self._last_dhw_control_time = now_time
         if unsafe:
             _LOGGER.warning("User DHW boost stopped for safety: %s", unsafe)
         else:
             _LOGGER.info("User DHW boost window ended - returning temporary lux to normal")
 
-    async def _stop_our_unsupervised_boost(self, now_time: datetime, why: str) -> None:
+    async def _stop_our_unsupervised_boost(self, why: str) -> None:
         """Stop the optimiser's own boost when nothing supervises it any more.
 
         The optimiser's boost runs while the optimiser decides on it (_apply_dhw_control). With
@@ -900,8 +901,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             # Unavailable or unknown says nothing about the boost: the next reading decides.
             return
         _LOGGER.warning("Stopping the hot-water boost EffektGuard started: %s", why)
-        if await self._set_temporary_lux(False):
-            self._last_dhw_control_time = now_time
+        await self._set_temporary_lux(False)
 
     async def _hot_water_without_a_reading(self) -> None:
         """The heat pump cannot be read: a boost_dhw window still closes on time, and ours stops.
@@ -912,7 +912,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         now_time = dt_util.now()
         async with self._control_lock:
             await self._end_user_dhw_boost_when_due(None, now_time)
-            await self._stop_our_unsupervised_boost(now_time, "the heat pump cannot be read")
+            await self._stop_our_unsupervised_boost("the heat pump cannot be read")
 
     async def async_shutdown(self) -> None:
         """Clean shutdown of coordinator.
@@ -1784,7 +1784,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 await self._apply_dhw_control(dhw_decision, current_dhw_temp, now_time)
         elif apply:
             # Hot-water optimisation switched off: nothing decides on the optimiser's boost any more.
-            await self._stop_our_unsupervised_boost(now_time, "hot-water optimisation is off")
+            await self._stop_our_unsupervised_boost("hot-water optimisation is off")
 
         # Get temperature trend from thermal predictor
         temperature_trend_data = self.thermal_predictor.get_current_trend()
@@ -2047,7 +2047,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             _LOGGER.info("🌀 Ventilation NORMAL: OFF - %s", decision.reason)
 
     def _is_dhw_start_rate_limited(self, now_time: datetime) -> bool:
-        """True if a DHW boost was started or stopped too recently to start another.
+        """True if the last hot-water boost started too recently to start another.
 
         Guards STARTS only. A stop must never be deferred - see _apply_dhw_control.
 
@@ -2063,7 +2063,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
         minutes_since_last = seconds_between(self._last_dhw_control_time, now_time) / 60
         if minutes_since_last < DHW_CONTROL_MIN_INTERVAL_MINUTES:
             _LOGGER.debug(
-                "DHW start rate limited: %.1f min since last change (min %d min)",
+                "DHW start rate limited: %.1f min since the last start (min %d min)",
                 minutes_since_last,
                 DHW_CONTROL_MIN_INTERVAL_MINUTES,
             )
@@ -2143,8 +2143,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     "DHW control: no hot-water decision this cycle (no tank reading, or the "
                     "optimiser failed) - stopping the temporary lux EffektGuard started"
                 )
-                if await self._set_temporary_lux(False):
-                    self._last_dhw_control_time = now_time
+                await self._set_temporary_lux(False)
             return
 
         # Use pre-calculated decision from _calculate_dhw_recommendation()
@@ -2193,8 +2192,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     abort_reason,
                 )
                 # Stop through the owned door so `_lux_boost_is_ours` is cleared.
-                if await self._set_temporary_lux(False):
-                    self._last_dhw_control_time = now_time
+                await self._set_temporary_lux(False)
                 return  # Exit early - abort handled
 
         # Apply control decision.
@@ -2208,12 +2206,13 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
             if self._is_dhw_start_rate_limited(now_time):
                 return
             # Not a boost the tank would finish inside its minimum run, which would then heat on
-            # past the target for the rest of it. A tank below the safety minimum is heated anyway.
+            # past the target for the rest of it. A tank below the safety minimum is heated anyway,
+            # and so is one the scheduled window finds short of its set hour's target.
             needed = (
                 self.dhw_optimizer.estimate_heating_time(current_dhw_temp, decision.target_temp)
                 * 60
             )
-            if needed < DHW_MIN_RUN_MINUTES and not decision.for_safety:
+            if needed < DHW_MIN_RUN_MINUTES and not (decision.for_safety or decision.for_schedule):
                 _LOGGER.debug(
                     "DHW control: %s needs %.0f min of heating, under the %d-min minimum run - "
                     "not starting",
@@ -2250,8 +2249,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 current_dhw_temp,
                 thermal_debt,
             )
-            if await self._set_temporary_lux(False):
-                self._last_dhw_control_time = now_time
+            await self._set_temporary_lux(False)
         else:
             # No change needed
             _LOGGER.debug(
@@ -2718,6 +2716,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     f"Could not start the hot-water boost on {self.temp_lux_entity}"
                 )
             self._service_boost_until = now_time + timedelta(minutes=duration_minutes)
+            self._last_dhw_control_time = now_time
 
     async def async_apply_manual_override(self, offset: float, duration_minutes: int) -> None:
         """Apply one explicit user heating command through the locked control path."""

@@ -198,8 +198,14 @@ DHW_BOOST_COOLDOWN_MINUTES: Final = 60  # DHW boost cooldown
 DHW_BOOST_DEFAULT_DURATION_MINUTES: Final = 90
 DHW_BOOST_MIN_DURATION_MINUTES: Final = 30
 DHW_BOOST_MAX_DURATION_MINUTES: Final = 180
-DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60  # Automatic DHW control rate limit (1 hour)
+# EffektGuard starts its own hot-water boost at least this long after the last start, its own or a
+# boost_dhw call's (that service keeps DHW_BOOST_COOLDOWN_MINUTES between its own calls). A stop
+# does not restart the hour: on 18 and 20 November 2026 the hour from a stop at 20:00 and at 20:05
+# kept the owner's tank from a top-up while it ran empty before the 21:00 set hour. The owner's
+# choice, 2026-11-22.
+DHW_CONTROL_MIN_INTERVAL_MINUTES: Final = 60
 # The shortest hot-water boost EffektGuard runs: it does not start one the tank would finish sooner,
+# unless the tank is below DHW_SAFETY_MIN or the scheduled window tops it up,
 # and only safety ends one sooner. Each boost runs the compressor near full speed, and short runs
 # wear the pump; 19 of the 52 temporary-lux runs on the owner's F750, 8-21 October 2026, lasted
 # under 11 minutes (production history). The owner's choice, 2026-10-23.
@@ -1369,7 +1375,12 @@ DHW_LEGIONELLA_MAX_DAYS: Final = 14.0  # Days - Max time without high-temp cycle
 DHW_HEATING_TIME_HOURS: Final = 1.5  # Hours to heat DHW tank (typically 1-2h)
 DHW_SCHEDULING_WINDOW_MAX: Final = 24  # Max hours ahead for DHW scheduling
 DHW_SCHEDULING_WINDOW_MIN: Final = 0.25  # Min hours ahead (15 min minimum for meaningful pre-heat)
-DHW_SCHEDULED_WINDOW_HOURS: Final = 6  # Hours before target time when scheduling becomes active
+# Hours before a set hot-water hour that its scheduled window opens: 8, the owner's choice of
+# 2026-11-22 (it was 6, with no reason recorded). On the owner's prices, 13-21 November 2026, the
+# cheapest 45-minute run ending by 20:30 (the window keeps DHW_AMOUNT_HEATING_BUFFER before 21:00)
+# averaged 190.0 öre/kWh over the 9 evenings searched 8 h back, against 213.8 searched 6 h back.
+# Not longer, the owner's reason: the water would cool before it is used.
+DHW_SCHEDULED_WINDOW_HOURS: Final = 8
 
 # DHW amount-based scheduling (minutes of hot water available)
 # Schedule time = when water should be AVAILABLE (ready), not when heating starts

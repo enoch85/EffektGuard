@@ -40,7 +40,7 @@ any rule: if the house is more than 0.3 °C below
 target and cooling faster than 0.3 °C/h, hot water is held back (`INDOOR_COOLING_RAPIDLY`), and a
 running boost is stopped as a new one would be refused.
 
-**The scheduled window** opens 6 h (`DHW_SCHEDULED_WINDOW_HOURS`) before the next enabled
+**The scheduled window** opens 8 h (`DHW_SCHEDULED_WINDOW_HOURS`) before the next enabled
 availability hour, or earlier if the tank needs longer: the heating-time estimate (learned rate,
 default 14 °C/h) plus a 0.5 h buffer. Only the closest availability hour within 24 h counts.
 
@@ -93,7 +93,8 @@ on, a lux entity is configured, and not during the start-up grace period.
   `DHW_SCHEDULED_BLOCKED_BY_SAFETY`, rules 1 and 2, `INDOOR_COOLING_RAPIDLY`, a thermal-debt or
   indoor abort, or no BT7 reading. The scheduled window outranks rules 1 and 2 at both ends: what
   lets it start a boost does not cut the boost short. A boost the heating-time estimate says the
-  tank finishes sooner is not started, unless the tank is below 30 °C (rule 3).
+  tank finishes sooner is not started, unless the tank is below 30 °C (rule 3) or the scheduled
+  window heats it (rule 0, `DHW_SCHEDULED_PRIORITY_*` / `DHW_SCHEDULED_OPTIMAL_*`).
 - **Abort**: while the switch is on, the decision's abort conditions are checked every cycle:
   `thermal_debt <` the abort threshold; rule 4.7 also aborts at `dhw_temp >=` target, after the
   minimum run; a scheduled
@@ -107,8 +108,9 @@ on, a lux entity is configured, and not during the start-up grace period.
   read. Price and the ordinary thermal-debt block do not end it. While the heat pump cannot be read
   the duration still ends it. Switching EffektGuard OFF ends it, also while it is
   starting.
-- **Starts are rate-limited**: at most one start per 60 min (`DHW_CONTROL_MIN_INTERVAL_MINUTES`)
-  after the last start or stop. Stops are never delayed.
+- **Starts are rate-limited**: EffektGuard starts a boost at most once per 60 min
+  (`DHW_CONTROL_MIN_INTERVAL_MINUTES`), counted from the last start - its own or a `boost_dhw`
+  call's (the service keeps its own 60-min cooldown). Stops are never delayed.
 - Only a boost EffektGuard started is stopped: one the household switched on (pump panel, MyUplink)
   is left alone, by the control loop and on unload or a Home Assistant stop.
 - Without a BT7 reading, with the heat pump unreadable, or with hot-water optimisation switched off,

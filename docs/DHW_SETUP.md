@@ -81,7 +81,7 @@ At `info` you see every switch action; at `debug` also the rate limiter and "No 
 DHW control: Activating temporary lux - OPTIMAL_WINDOW_Q12_@31.2öre (DHW: 42.0°C, DM: -120)
 DHW control: Deactivating temporary lux - CRITICAL_THERMAL_DEBT (DHW: 38.9°C, DM: -370)
 DHW heating aborted early: Thermal debt -820 < -800. Stopping DHW to prioritize space heating.
-DHW start rate limited: 23.4 min since last change (min 60 min)
+DHW start rate limited: 23.4 min since the last start (min 60 min)
 ```
 
 ## Troubleshooting
@@ -94,7 +94,7 @@ DHW start rate limited: 23.4 min since last change (min 60 min)
   and stops a boost it started.
 - **A boost started on the pump or in MyUplink is not stopped**: by design - EffektGuard only stops
   the boosts it started.
-- **A start does not happen when expected**: one start per 60 min after the last start or stop;
+- **A start does not happen when expected**: one start per 60 min after the last start;
   nothing is controlled during the start-up grace period after a restart.
 - **The pump heats hot water while EffektGuard says "block"**: temporary lux is a boost, not an
   enable. The pump still heats on its own comfort settings and its periodic increase; EffektGuard

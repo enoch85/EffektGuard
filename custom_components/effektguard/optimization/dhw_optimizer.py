@@ -119,10 +119,10 @@ class DHWScheduleDecision:
     2. NIBE heats DHW until BT7 reaches target OR coordinator detects abort condition
     3. If abort condition hit → Turn off temp lux switch early
     4. max_runtime_minutes is reference for logging/diagnostics, not enforced timer
-    5. After heating completes, DHW_CONTROL_MIN_INTERVAL_MINUTES cooldown applies
+    5. No new boost starts until DHW_CONTROL_MIN_INTERVAL_MINUTES after this one started
 
-    The coordinator respects DHW_CONTROL_MIN_INTERVAL_MINUTES (60 min) between
-    control actions to avoid switch spam and allow NIBE to complete heating cycles.
+    The coordinator keeps DHW_CONTROL_MIN_INTERVAL_MINUTES (60 min) between starts
+    to avoid switch spam and allow NIBE to complete heating cycles.
     """
 
     should_heat: bool
@@ -137,6 +137,10 @@ class DHWScheduleDecision:
     # and the room to start a boost, and they do not cut its minimum run short either. A heat for a
     # tank below DHW_SAFETY_MIN starts even if it would finish sooner than the minimum run.
     for_safety: bool = False
+    # The scheduled window's own heat (RULE 0, LANE 1): the tank is short of the set hour's target.
+    # It starts even if the tank would reach the target sooner than the minimum run, and then runs
+    # the minimum run: the set hour needs its minutes or its temperature (the owner, 2026-11-23).
+    for_schedule: bool = False
 
     def __post_init__(self):
         """Validate decision consistency.
@@ -1106,6 +1110,7 @@ class IntelligentDHWScheduler:
                         recommended_start_time=(
                             current_time if not optimal_window else optimal_window.start_time
                         ),
+                        for_schedule=True,
                     )
             else:
                 # === LANE 2: OUTSIDE SCHEDULED WINDOW - NORMAL OPTIMIZATION ===
