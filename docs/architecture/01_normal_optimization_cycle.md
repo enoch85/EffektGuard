@@ -24,7 +24,9 @@ flowchart LR
   `tomorrow_interval_prices`. Missing prices mean the price layer abstains and a repair issue is
   raised; nothing is invented. A day is used up to its first gap, and tomorrow only when it follows
   on, so a later price is never counted too early; after a gap the rest of the day counts as
-  missing (logged once, no repair issue).
+  missing (logged once, no repair issue). When today's prices no longer cover the current time
+  but tomorrow's do - right after midnight, before GE-Spot writes the new day - tomorrow's prices
+  are read as today's.
 - **Weather** (`WeatherAdapter.get_forecast`): the hourly forecast. Missing weather stands the
   pre-heat layer down; weather compensation runs on the pump's own sensors.
 - **Peak tracking** (`_update_peak_tracking`) runs before the decision: power from the external
