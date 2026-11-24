@@ -43,9 +43,9 @@ So:
 
 - A pump's own immersion start has to be read from that pump. The model profiles'
   `immersion_start_dm` holds the factory default, and the simulator's plant reads it. The immersion
-  guard (which keeps a room at or above its floor short of the immersion heater) and the capacity
-  shortfall read the start as the pump has shown it, in its immersion heater's power (43084, 31028
-  on the S-series) while the compressor heats the house: where it switches on, the shallowest of
+  guard (which keeps a room at or above its floor short of the immersion heater) reads the start
+  as the pump has shown it, in its immersion heater's power (43084, 31028 on the S-series) while
+  the compressor heats the house: where it switches on, the shallowest of
   the last five such starts, and before the first, the deepest degree minutes it held with the
   immersion heater off - never shallower than the factory default (`utils/immersion_start.py`). In
   Home Assistant's hourly statistics of the owner's F750, 2025-10-28 to 2026-10-28, the immersion

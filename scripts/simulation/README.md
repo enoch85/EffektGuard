@@ -31,8 +31,9 @@ an unknown minimum output; their cycling results require further data.
 The edge hold is load-bearing. On the 21-day `nordic_coldsnap_jan2024` F2040 run with this
 envelope and the adaptive simulator in #136, scaling only extrapolated capacity to 70%, 100%
 and 130% produced respectively 395, 0 and 0 minutes below the comfort band, and 274.25, 1.25
-and 0 kWh of immersion heat. These are sensitivity probes, not uncertainty bounds. A cold-weather
-pass therefore cannot establish real-world comfort or backup consumption without a cold-end map.
+and 0 kWh of immersion heat (at 100%, 6.75 kWh since the capacity shortfall was removed,
+2026-11-24). These are sensitivity probes, not uncertainty bounds. A cold-weather pass therefore
+cannot establish real-world comfort or backup consumption without a cold-end map.
 
 Six scenarios, each a real weather window with the real prices of the same days, each with the
 behaviour it pins (`expect`) and its recorded known reds (`known_open`): `nordic_coldsnap_jan2024`,

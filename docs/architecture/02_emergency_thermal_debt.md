@@ -12,8 +12,7 @@ The ladder raises only for a room below its floor: the target less the mode's
 `room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it the room needs
 no heat, and a raise there only deepens DM toward the pump's immersion heater. Without a room
 sensor the ladder runs on DM alone. Near the immersion start, the immersion guard keeps such a
-room's DM off the immersion heater, except while the pump is short of capacity; then nothing cuts
-below 0 ([08](08_layer_priority_system.md)).
+room's DM off the immersion heater ([08](08_layer_priority_system.md)).
 
 ## The rungs
 

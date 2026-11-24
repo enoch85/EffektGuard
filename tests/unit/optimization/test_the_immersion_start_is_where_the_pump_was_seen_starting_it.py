@@ -27,9 +27,6 @@ from custom_components.effektguard.const import (
     IMMERSION_START_MEMORY,
     MODE_CONFIGS,
     OPTIMIZATION_MODE_BALANCED,
-    SHORTFALL_AFTER_CUT_HOURS,
-    SHORTFALL_DWELL_MINUTES,
-    SHORTFALL_NEAR_IMMERSION_START_DM,
     UPDATE_INTERVAL_MINUTES,
 )
 from custom_components.effektguard.models.nibe import NibeF750Profile
@@ -43,7 +40,6 @@ CYCLE = timedelta(minutes=UPDATE_INTERVAL_MINUTES)
 TARGET = 21.0
 ROOM = TARGET - MODE_CONFIGS[OPTIMIZATION_MODE_BALANCED].room_floor_below_target + 0.4
 ASKED = 2.0  # what the layers ask for: the guard caps it or lets it stand
-CUT = -2.0
 FACTORY = NibeF750Profile().immersion_start_dm
 OWN_START = -1450.0  # the owner's F750: start compressor -250, start diff additional heat 1200
 IMMERSION_KW = 0.5  # the owner's F750's first immersion heater step
@@ -217,32 +213,6 @@ def test_the_start_is_the_shallowest_of_the_last_starts_seen():
 
     pump.immersion_switches_on(DEEPER_THAN_FACTORY)
     assert pump.falls()
-
-
-def test_a_pump_held_off_its_immersion_heater_is_short_only_once_it_has_started():
-    """Short of capacity, a pump's immersion heater holds its degree minutes at its start. Held off
-    past the factory value, the pump has shown only that its start is deeper: three hours just short
-    of where it held off, without the immersion heater, are the compressor's, not a shortfall. Once
-    it has switched the immersion heater on, the same three hours at its start are."""
-    pump = _Pump()
-    pump.read(OWN_START + 10.0)
-    pump.read(OWN_START)  # held off at -1440
-    near_start = OWN_START + SHORTFALL_NEAR_IMMERSION_START_DM - 20.0
-
-    def short_after_three_hours_near_the_start() -> bool:
-        for _ in range(int(timedelta(hours=SHORTFALL_AFTER_CUT_HOURS) / CYCLE)):
-            pump.read(OWN_START + IMMERSION_GUARD_ENGAGE_DM * 2)  # quiet hours, well clear of it
-        for _ in range(int(timedelta(minutes=SHORTFALL_DWELL_MINUTES) / CYCLE) + 1):
-            pump.read(near_start)
-        pump.ask = CUT
-        short = pump.read(near_start).offset == 0.0
-        pump.ask = ASKED
-        return short
-
-    assert not short_after_three_hours_near_the_start()
-
-    pump.immersion_switches_on(OWN_START)
-    assert short_after_three_hours_near_the_start()
 
 
 @pytest.mark.parametrize(

@@ -70,7 +70,6 @@ from ..const import (
     WAIT_CHEAPER_WARMING,
     WAIT_CHEAPER_WARMING_HOURS,
 )
-from ..utils.capacity_shortfall import CapacityShortfall
 from ..utils.episode import Episode
 from ..utils.immersion_start import ImmersionStart
 from ..utils.reasons import adjusted
@@ -349,9 +348,7 @@ class DecisionEngine:
         # at the register as it is now - see _limit_for_immersion.
         self._immersion_readings: deque[tuple[datetime, float, float]] = deque()
 
-        # Where this pump runs short of capacity, and where it starts its immersion heater - both
-        # stored across restarts by the coordinator.
-        self.capacity_shortfall = CapacityShortfall()
+        # Where this pump starts its immersion heater, stored across restarts by the coordinator.
         self.immersion_start = ImmersionStart()
 
         # Whether a warm room waited for cheaper hours on the last decision - see
@@ -401,8 +398,8 @@ class DecisionEngine:
         acts on.
 
         A decision records the degree minutes and the register it reads (the emergency layer's
-        history and anti-windup, the immersion guard's readings, where the immersion heater starts
-        and where the pump runs short), the forecast's bias, its own ask and whether the room
+        history and anti-windup, the immersion guard's readings and where the immersion heater
+        starts), the forecast's bias, its own ask and whether the room
         waited. Kept from a read, these put the read's readings between the control cycle's: a
         second degree-minute sample, a raise dated to the read, a wait no cycle made. A read
         reports nothing either: what is reported belongs to the control cycles.
@@ -410,7 +407,6 @@ class DecisionEngine:
         engine = copy.copy(self)
         engine._reports = False
         engine._immersion_readings = deque(self._immersion_readings)
-        engine.capacity_shortfall = copy.deepcopy(self.capacity_shortfall)
         engine.immersion_start = copy.deepcopy(self.immersion_start)
         engine.emergency_layer = copy.copy(self.emergency_layer)
         engine.weather_prediction = copy.deepcopy(self.weather_prediction)
@@ -684,16 +680,8 @@ class DecisionEngine:
         _LOGGER.debug("Calculating optimization decision")
         self._cycle = self._cycle + 1 if cycle is None else cycle
 
-        # Where this pump starts its immersion heater and where it runs short of capacity: read
-        # every cycle, a manual override included - one below the curve is a cut of ours as much as
-        # the layers'. A pump short of capacity is held by its immersion heater, at a start it has
-        # switched the immersion heater on at.
+        # Where this pump starts its immersion heater: read every cycle, a manual override included.
         self.immersion_start.update(nibe_state)
-        factory = getattr(self.heat_pump_model, "immersion_start_dm", None)
-        if factory is not None:
-            self.capacity_shortfall.update(
-                nibe_state, self.immersion_start.started_degree_minutes(float(factory))
-            )
 
         # Check for manual override first (Phase 5 service support).
         #
@@ -719,7 +707,6 @@ class DecisionEngine:
                     nibe_state.indoor_temp,
                     nibe_state.degree_minutes,
                 )
-                self.capacity_shortfall.record_ask(nibe_state.timestamp, safety_floor)
                 return OptimizationDecision(
                     offset=self._clamp_offset(safety_floor),
                     layers=[
@@ -742,7 +729,6 @@ class DecisionEngine:
                 )
 
             _LOGGER.info("Using manual override: %.2f°C", manual_override)
-            self.capacity_shortfall.record_ask(nibe_state.timestamp, manual_override)
             return OptimizationDecision(
                 offset=self._clamp_offset(manual_override),
                 layers=[
@@ -788,11 +774,6 @@ class DecisionEngine:
         # The lowest room the mode accepts before it buys heat - the degree-minute ladder's raises
         # and the pump's immersion heater both wait for a room below it.
         room_floor = self.target_temp - self.mode_config.room_floor_below_target
-
-        # Is it, or will it be within the forecast's next hours, as cold as where this pump has been
-        # seen short of capacity? Then heat held back comes back only from the immersion heater, or
-        # not at all: nothing below the pump's curve, and the immersion guard stands down.
-        short = self.capacity_shortfall.is_short(nibe_state, weather_data)
 
         # 2. Emergency Layer
         emergency_decision = self.emergency_layer.evaluate_layer(
@@ -980,17 +961,9 @@ class DecisionEngine:
         worn_offset, wear_note = self._limit_for_compressor_wear(
             asked_offset, nibe_state, compressor_saturated, trend_rate
         )
-        self.capacity_shortfall.record_ask(nibe_state.timestamp, worn_offset)
         final_offset, immersion_note = self._limit_for_immersion(
-            worn_offset, nibe_state, room_floor, short
+            worn_offset, nibe_state, room_floor
         )
-        if short and final_offset < 0:
-            immersion_note = adjusted(
-                f"Pump short of capacity at or below {self.capacity_shortfall.temperature:.1f}°C",
-                final_offset,
-                0.0,
-            )
-            final_offset = 0.0
 
         notes = [note for note in (wait_note, trend_note, wear_note, immersion_note) if note]
         reasoning = self._generate_reasoning(layers, notes)
@@ -1216,7 +1189,7 @@ class DecisionEngine:
         )
 
     def _limit_for_immersion(
-        self, offset: float, nibe_state, room_floor: float, short: bool
+        self, offset: float, nibe_state, room_floor: float
     ) -> tuple[float, str]:
         """Keep degree minutes off the pump's immersion heater while the room needs no heat.
 
@@ -1244,10 +1217,6 @@ class DecisionEngine:
         IMMERSION_GUARD_MIN_SPAN_MINUTES; until then the register holds. The immersion start is as
         the pump has shown it (immersion_start_in_force). Without a room sensor, or without a
         model profile, nothing is guarded.
-
-        While the pump is short of capacity (CapacityShortfall) the immersion heater is the pump's
-        own answer to a cold it cannot cover, and nothing is guarded either: held off, the house
-        only enters the cold with less heat in it. The readings are kept all the same.
         """
         immersion_start = self.immersion_start_in_force()
         if immersion_start is None:
@@ -1265,7 +1234,7 @@ class DecisionEngine:
         while seconds_between(readings[0][0], now) > window:
             readings.popleft()
 
-        if short or not getattr(nibe_state, "indoor_temp_valid", True):
+        if not getattr(nibe_state, "indoor_temp_valid", True):
             return offset, ""
         above_floor = nibe_state.indoor_temp - room_floor
         if above_floor < 0 or degree_minutes > immersion_start + IMMERSION_GUARD_ENGAGE_DM:

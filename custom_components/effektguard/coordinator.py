@@ -648,11 +648,8 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                     # Use the new restore method for all DHW state
                     self.dhw_optimizer.restore_from_persistence(dhw_state)
 
-                # Restore where the pump runs short of capacity, and where it starts
-                # its immersion heater
-                if "capacity_shortfall" in learned_data:
-                    self.engine.capacity_shortfall.restore(learned_data["capacity_shortfall"])
-                # Saved as "heater_start" before the immersion heater had one name (v0.9.0)
+                # Restore where the pump starts its immersion heater. Saved as "heater_start"
+                # before the immersion heater had one name (v0.9.0).
                 saved_start = learned_data.get("immersion_start", learned_data.get("heater_start"))
                 if saved_start is not None:
                     self.engine.immersion_start.restore(saved_start)
@@ -3113,9 +3110,7 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 if dhw_state:
                     learned_data["dhw_state"] = dhw_state
 
-            # Where the pump runs short of capacity: a restart must not forget a cold spell, nor
-            # where the pump starts its immersion heater
-            learned_data["capacity_shortfall"] = self.engine.capacity_shortfall.to_dict()
+            # Where the pump starts its immersion heater: a restart must not forget it
             learned_data["immersion_start"] = self.engine.immersion_start.to_dict()
 
             await self.learning_store.async_save(learned_data)

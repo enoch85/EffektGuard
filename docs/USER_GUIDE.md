@@ -107,16 +107,11 @@ Every 5 minutes it sets the heat, in whole degrees, from:
   compressor gives more. Below that level the immersion heater may help. It learns where your pump
   starts it by watching its power (on nibe_heatpump, turn on "Int. el.add. Power", on an S-series
   "Power internal additional heat"); until it has seen that, it uses your model's factory setting.
-- Cold your pump can't keep up with: once EffektGuard has seen your pump need its immersion
-  heater at some outdoor temperature, it never turns the heat below the pump's own heating curve
-  when it is that cold, or will be within 12 hours. Heat saved then could only come back from
-  the immersion heater.
 - Comfort: it pulls the room back to your target.
 
-Safety, the most expensive times, a new monthly peak and a room far too warm always win. Two
-exceptions: while the pump catches up after falling far behind, a price or power peak only limits
-the extra heat to +0.5 to +1 °C; and in a cold your pump can't keep up with, none of them turns the
-heat below the pump's own heating curve.
+Safety, the most expensive times, a new monthly peak and a room far too warm always win. One
+exception: while the pump catches up after falling far behind, a price or power peak only limits
+the extra heat to +0.5 to +1 °C.
 
 When the room drifts below your tolerance, the cuts for price and peaks ease off. To avoid
 flip-flopping, it holds back a reversal of 2 °C or more within 45 minutes. Safety comes first.

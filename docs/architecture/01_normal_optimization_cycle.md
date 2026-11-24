@@ -46,9 +46,7 @@ while the debt ladder recovers). A trend
 step then damps it (x0.75 when heating into a room warming 0.3 °C/h or faster, x1.15 when heating
 below +3 into a room cooling that fast), `_limit_for_compressor_wear` caps a raise the saturated
 compressor cannot follow, and `_limit_for_immersion` keeps the degree minutes of a room at or above
-its floor off the pump's immersion heater. Where the pump has been seen short of capacity and it is,
-or within 12 forecast hours will be, as cold (`CapacityShortfall`), the guard stands down and
-nothing goes below 0.
+its floor off the pump's immersion heater.
 
 With the master switch off the decision is offset 0 and no layer runs. A manual override
 (`force_offset`, `boost_heating`) replaces the layers, floored by `_absolute_safety_floor`.

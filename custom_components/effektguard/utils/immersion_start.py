@@ -19,8 +19,7 @@ Hot water is left out: the pump runs the same immersion heater for the tank at a
 and so is a reading whose priority cannot say which it serves. The pump's immersion start is the
 shallowest of the last IMMERSION_START_MEMORY starts seen; before the first, the deepest degree
 minutes it has held with the immersion heater off; never shallower than the model's factory value
-(ImmersionStart.degree_minutes). The capacity shortfall reads only a start the pump has switched its
-immersion heater on at (ImmersionStart.started_degree_minutes).
+(ImmersionStart.degree_minutes).
 """
 
 from __future__ import annotations
@@ -71,23 +70,6 @@ class ImmersionStart:
         """
         seen = self.seen
         return factory if seen is None else min(factory, seen)
-
-    def started_degree_minutes(self, factory: float) -> float | None:
-        """Where the immersion heater starts as far as the pump has switched it on, never shallower
-        than `factory`; None while the pump has held deeper than `factory` with its immersion
-        heater off but not yet switched it on - the factory value is not its start then, and its
-        own is not known yet.
-
-        This is the start an immersion heater holds degree minutes at. The depth held with the
-        immersion heater off only says the start is deeper, and held there the pump is not held by
-        its immersion heater.
-        """
-        started = self.started
-        if started is not None:
-            return min(factory, started)
-        if self._held_off is not None and self._held_off < factory:
-            return None
-        return factory
 
     def update(self, nibe_state) -> None:
         """Record a reading of the immersion heater's power while the compressor heats the house."""
