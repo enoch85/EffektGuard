@@ -2040,11 +2040,18 @@ COMPRESSOR_SATURATION_BAND_HZ: Final = 5.0  # how close to that ceiling counts a
 # outside hot water at the register as it is now, once they span IMMERSION_GUARD_MIN_SPAN_MINUTES;
 # within IMMERSION_GUARD_FADE of the floor it hands back to the layers. Closed loop on the owner's
 # F750 + slab (slider 1.2, target 21 C), four plant fits, Oct 18 2025 - Apr 30 2026, with the
-# ladder's room floor and the capacity shortfall, per season against PRICE_OFFSET_DEEPEST_CUT alone:
-# heating cost comfort 4766 -> 4705 SEK, balanced 4769 -> 4642, savings 4772 -> 4372, cheaper on
-# every fit; immersion heat 274 -> 244, 276 -> 213, 278 -> 43 kWh; offset reversals 1616 -> 1150,
-# 1678 -> 1160, 1684 -> 1143 - the guard reading the F750 profile's -700 where the plant starts at
-# the owner's -1450. ASSUMED the hold and engage depths and the approach time.
+# ladder's room floor and the capacity shortfall (since removed), per season against
+# PRICE_OFFSET_DEEPEST_CUT alone: heating cost comfort 4766 -> 4705 SEK, balanced 4769 -> 4642,
+# savings 4772 -> 4372, cheaper on every fit; immersion heat 274 -> 244, 276 -> 213, 278 -> 43 kWh;
+# offset reversals 1616 -> 1150, 1678 -> 1160, 1684 -> 1143 - the guard reading the F750 profile's
+# -700 where the plant starts at the owner's -1450. ASSUMED the hold and engage depths and the
+# approach time. It guards a pump short of capacity too: the capacity shortfall, which stood the
+# guard down and cut nothing below 0 where the pump had held its DM at its immersion start for
+# three hours, was removed on 2026-11-24. Closed loop on the owner's F750 + slab, four fits summed
+# over Oct 18 - Dec 30, Jan-Feb and Mar-Apr (balanced, tolerance 1.5, target 20.5): heating
+# 17819.8 -> 17690.9 SEK, immersion heat 666.0 -> 588.7 kWh, hours below 20.0 C 63.6 -> 64.6. The
+# repository simulator's F2040 in nordic_coldsnap_jan2024 burns 1.25 -> 6.75 kWh of immersion heat
+# (a known red).
 IMMERSION_GUARD_HOLD_DM: Final = 200.0  # DM above the immersion start
 IMMERSION_GUARD_ENGAGE_DM: Final = 500.0  # DM above the immersion start
 IMMERSION_GUARD_APPROACH_HOURS: Final = 2.0
@@ -2054,31 +2061,11 @@ IMMERSION_GUARD_MIN_SPAN_MINUTES: Final = 15
 # between the supply and S1 every minute, and one step moves S1 by the curve sensitivity.
 DM_PER_HOUR_PER_OFFSET_STEP: Final = DEFAULT_CURVE_SENSITIVITY * 60
 
-# THE CAPACITY SHORTFALL (utils/capacity_shortfall.py). A pump short of capacity at its own curve
-# holds its degree minutes at its immersion start; a pump with capacity to spare only reaches it
-# after a cut of ours. Repository simulator, undersized_coldsnap_jan2024: the undersized F1155,
-# S1155 and F2040 kept DM within SHORTFALL_NEAR_IMMERSION_START_DM of their immersion starts 78 /
-# 65 / 83 % of the time; the closed loop on the owner's F750 model 0.9-2.2 % (told its true start,
-# -1450). Counting only DM strictly past the start never saw the F1155 short - its immersion
-# heater holds DM AT the start - and it burned 2.3 kWh more immersion heat than recorded.
-# SHORTFALL_DWELL_MINUTES, on the same closed loop told the true start: an hour flagged 10 % of
-# winter cycles and cost 60 SEK that winter on one fit (F3a, balanced); two and three hours
-# 3.3-3.4 %, and three hours no autumn flag. ASSUMED SHORTFALL_AFTER_CUT_HOURS,
-# SHORTFALL_MEMORY_DAYS and SHORTFALL_FORECAST_HOURS; in the undersized cold snap (F2040 minutes
-# below the band / F1155 immersion kWh: 890 / 175.0 as set) three hours after a cut gave 900 /
-# 168.0, seven days of memory 950 for the F2040, and six or 24 forecast hours 915 / 177.3 and 890
-# / 174.4. Not measured on the owner's model.
-SHORTFALL_NEAR_IMMERSION_START_DM: Final = 50.0  # DM above the immersion start
-SHORTFALL_DWELL_MINUTES: Final = 180
-SHORTFALL_AFTER_CUT_HOURS: Final = 6
-SHORTFALL_MEMORY_DAYS: Final = 30
-SHORTFALL_FORECAST_HOURS: Final = 12
-
 # THE IMMERSION START (utils/immersion_start.py). Where the pump switches its immersion heater on
 # while the compressor heats the house, seen in the immersion heater's power reading (43084
 # F-series, 31028 S-series), and before its first start the deepest DM it held for two readings with
-# the immersion heater off: the immersion guard and the capacity shortfall read it in place of the
-# model profile's factory immersion_start_dm. The owner's F750 (start compressor -250, start diff
+# the immersion heater off: the immersion guard reads it in place of the model profile's factory
+# immersion_start_dm. The owner's F750 (start compressor -250, start diff
 # additional heat 1200: -1450) in Home Assistant's hourly statistics, 2025-10-28 to 2026-10-28: of
 # the 351 hours in which its immersion heater switched on, the 25 without a hot-water charge (BT6
 # rising 1 C or more) all reached DM -1441 or deeper, at its first steps (0.5-1.5 kW); the 326 with

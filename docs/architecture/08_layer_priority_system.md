@@ -105,15 +105,6 @@ Still inside `calculate_decision`, in this order:
   moves 90 DM/h: 60 minutes × the 1.5 °C curve sensitivity), on readings outside hot water at the
   register as it is now, once they span 15 minutes. It fades out over the 0.2 °C above the floor.
   Below the floor the heat is the room's, and the immersion heater with it.
-- Capacity shortfall (`utils/capacity_shortfall.py`): a pump short of capacity at its own curve
-  holds its degree minutes at its immersion start - one it has switched its immersion heater on at,
-  else the factory value, and none while it has held deeper than that with the immersion heater off
-  but not yet switched it on. Three hours within 50 DM of that start, outside hot water, with the
-  register at 0 or above, beginning 6 hours or more after the layers last asked for a cut (and after
-  start-up), record the outdoor temperature; the warmest of the last 30 days is where the pump runs
-  short. While the coldest of now and the next 12 forecast hours is at or below it, nothing goes
-  below 0 and the immersion guard stands down: heat held back then comes back only from the
-  immersion heater, or not at all. The coordinator stores it across restarts.
 - Clamp to -10..+10 (`_clamp_offset`).
 
 The coordinator then applies the offset volatility gate

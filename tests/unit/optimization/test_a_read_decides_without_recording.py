@@ -47,7 +47,6 @@ RECORDS = (
     "emergency_layer._last_offset_raise_time",
     "_immersion_readings",
     "immersion_start",
-    "capacity_shortfall",
     "weather_prediction._forecast_bias",
     "_waiting_for_cheaper",
 )

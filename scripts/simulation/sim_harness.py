@@ -952,7 +952,19 @@ SCENARIOS = {
                 "the same real event."
             ),
             expect=("comfort_held", "no_dm_past_immersion_limit"),
-            known_open=(),
+            known_open=(
+                KnownRed(
+                    fails_with="capacity deficit only forced",
+                    stat="immersion_kwh",
+                    houses={"airsource_f2040": 6.76},
+                    why=(
+                        "F-124 on the F2040: 6.75 kWh of immersion against 0.3 forced since the "
+                        "capacity shortfall was removed (2026-11-24), its top three quarters 3.55 "
+                        "-> 4.38 kW and 67 SEK dearer over the 21 days. 1.25 against 0.55 forced "
+                        "before, inside the check."
+                    ),
+                ),
+            ),
         ),
         Scenario(
             slug="undersized_coldsnap_jan2024",
@@ -974,7 +986,8 @@ SCENARIOS = {
                     houses={"concrete_f1155": 189.01},
                     why=(
                         "F-124 on the undersized F1155: 189.0 kWh of immersion against 123.5 "
-                        "forced since the simulator holds each compressor to its minimum output "
+                        "forced, unchanged when the capacity shortfall was removed (2026-11-24), "
+                        "since the simulator holds each compressor to its minimum output "
                         "and prices each step's heat at the COP of that output (2026-11-23). "
                         "182.0 against 135.1 forced since the bench runs the predictor "
                         "production runs (the learned "
@@ -2059,8 +2072,8 @@ def simulate(
                 is_heating=compressor_on and available,
                 is_hot_water=False,
                 # In UTC, as the adapter dates it: the guards that subtract these dates (saturation,
-                # anti-windup, capacity shortfall, the immersion start) count real time across the
-                # clock change, and two local times of one zone subtract on the wall clock.
+                # anti-windup, the immersion start) count real time across the clock change, and two
+                # local times of one zone subtract on the wall clock.
                 timestamp=utc_now,
                 compressor_hz=hz,
                 # What a real pump of this model publishes: the frequency it may run up to. Here

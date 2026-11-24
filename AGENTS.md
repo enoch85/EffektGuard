@@ -90,10 +90,7 @@ The ladder raises only for a room below its floor - the target less the mode's
 `room_floor_below_target` (comfort 0, balanced 0.2, savings 1.0 °C). At or above it, the immersion
 guard keeps degree minutes off the pump's immersion start - where the immersion heater's power
 reading has shown it switching on, or staying off (`utils/immersion_start.py`), until then the model
-profile's factory `immersion_start_dm` - and no price cut goes deeper than −2. Where the pump has
-been seen short of capacity - DM held at its immersion start for three hours at its own curve, six
-hours after a cut of ours (`utils/capacity_shortfall.py`) - and the next 12 forecast hours are as
-cold, nothing cuts below 0 and the guard stands down.
+profile's factory `immersion_start_dm` - and no price cut goes deeper than −2.
 
 The ladder is `Z1 → Z2 → Z3 → Z4 → Z5 → T1 → T2 → T3 → EMERGENCY` - eight rungs that fire. There
 is no WARNING or CAUTION tier; see the open-findings register for why.
