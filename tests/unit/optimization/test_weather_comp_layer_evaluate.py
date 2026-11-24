@@ -344,7 +344,7 @@ class TestWeatherCompensationUnusualWeather:
         mock_unusual = MockUnusualWeather(
             is_unusual=True,
             severity="extreme",
-            deviation_from_typical=5.0,
+            deviation_from_typical=-5.0,
             recommendation="Prepare for cold snap",
         )
         mock_learner.detect_unusual_weather.return_value = mock_unusual

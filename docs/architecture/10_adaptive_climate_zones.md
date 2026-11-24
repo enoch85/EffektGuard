@@ -46,16 +46,18 @@ sooner. `EmergencyLayer` (T1-T3) and `ProactiveLayer` (Z1-Z5) read the result.
 
 **Flow safety margin** (`AdaptiveClimateSystem.get_safety_margin`, `weather_layer.py`): the zone
 base, plus 0.1 °C per degree the outdoor temperature is below the zone's winter average, plus
-0.5-1.5 °C when the weather learner flags unusual weather (0.5 + severity, where "unusual" is 0.5
-and "extreme" 1.0). The weather compensation layer treats it as a tolerance band above the flow
-the emitters need: inside the band the curve is left alone, below it the curve is pulled up to the
-required flow, above it down to the top of the band.
+0.5-1.5 °C when the weather learner flags the forecast as unusually cold (0.5 + severity, where
+"unusual" is 0.5 and "extreme" 1.0); an unusually warm forecast adds nothing. The weather
+compensation layer treats it as a tolerance band above the flow the emitters need: inside the band
+the curve is left alone, below it the curve is pulled up to the required flow, above it down to the
+top of the band.
 
 **Weather compensation weight** (`get_dynamic_weight`): 0.85 below the winter average, 0.75 up to
-5 °C above it, 0.65 below +5 °C outdoor, 0.50 from +5 °C; +0.15 in unusual weather, capped at
-0.95. Multiplied by `DEFAULT_WEATHER_COMPENSATION_WEIGHT` (0.49), then by 0.92 / 0.84 / 0.73 /
-0.61 while degree minutes are below -150 / -200 / -300 / -400 (`WEATHER_COMP_DEFER_*`). The layer
-votes with weight 0 while hot water runs and for 30 minutes after.
+5 °C above it, 0.65 below +5 °C outdoor, 0.50 from +5 °C; +0.15 when the forecast is unusually
+cold, capped at 0.95. Multiplied by `DEFAULT_WEATHER_COMPENSATION_WEIGHT` (0.49), then by 0.92 /
+0.84 / 0.73 / 0.61 while degree minutes are below -150 / -200 / -300 / -400
+(`WEATHER_COMP_DEFER_*`). The layer votes with weight 0 while hot water runs and for 30 minutes
+after.
 
 **Weather learner defaults**: `WeatherPatternLearner.get_seasonal_default` derives the typical
 temperature for a month from the zone's winter average until it has recorded patterns of its own.
