@@ -127,11 +127,11 @@ async def test_a_day_without_a_room_sensor_teaches_the_learning_no_room(hass, fr
 
 
 @pytest.mark.parametrize("measured", [True, False], ids=["room sensor", "the sensor dropped out"])
-def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured):
+def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured, freezer):
     """A day of a measured room 1 C under its target gives the learned layer a vote; the moment the
     reading becomes the placeholder, the vote is gone - its overshoot would be the placeholder's."""
     predictor = ThermalStatePredictor()
-    for cycle in range(PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR):
+    for cycle in range(PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1):
         predictor.record_state(
             START + cycle * timedelta(minutes=UPDATE_INTERVAL_MINUTES),
             WARM_TARGET - 1.0,
@@ -140,6 +140,7 @@ def test_the_learned_pre_heat_speaks_only_for_a_measured_room(measured):
             35.0,
             -100.0,
         )
+    freezer.move_to(predictor.state_history[-1].timestamp)
     state = _pump_with_a_real_sensor(WARM_TARGET - 1.0)
     state.indoor_temp_valid = measured
     forecast = WeatherData(

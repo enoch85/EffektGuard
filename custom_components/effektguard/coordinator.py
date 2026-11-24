@@ -2965,9 +2965,11 @@ class EffektGuardCoordinator(DataUpdateCoordinator):
                 )
                 self._last_learning_observation = now
 
-            # Record thermal state for predictor
+            # Record thermal state for predictor, at the time the pump was read: the predictor counts
+            # its history in the cycles that read the pump, and a cycle can end after the next one
+            # was due.
             self.thermal_predictor.record_state(
-                timestamp=now,
+                timestamp=nibe_data.timestamp,
                 indoor_temp=nibe_data.indoor_temp,
                 outdoor_temp=nibe_data.outdoor_temp,
                 heating_offset=current_offset,

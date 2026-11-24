@@ -35,7 +35,7 @@ def predictor_with_history():
     # so the fixture cannot drift from the gate it is meant to clear.
     required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
     base_time = datetime.now()
-    for i in range(required + SAMPLES_PER_HOUR):
+    for i in reversed(range(required + SAMPLES_PER_HOUR)):
         predictor.record_state(
             timestamp=base_time - timedelta(minutes=UPDATE_INTERVAL_MINUTES * i),
             indoor_temp=21.0 + (i % 4) * 0.1,  # Small variation

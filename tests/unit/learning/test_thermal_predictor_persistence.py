@@ -246,7 +246,7 @@ class TestThermalPredictorPersistence:
                 current_offset=0.0,
                 is_heating=True,
                 is_hot_water=False,
-                timestamp=dt_util.utcnow(),
+                timestamp=base_time + timedelta(minutes=15 * i),  # read in its own cycle
                 degree_minutes=-100.0 - (i * 10),
                 compressor_hz=50.0,
             )

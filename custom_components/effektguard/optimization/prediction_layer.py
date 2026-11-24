@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import TypedDict
 
 import numpy as np
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     LAYER_WEIGHT_PREDICTION,
@@ -42,9 +43,13 @@ from ..const import (
     PREDICTION_TREND_RISING_THRESHOLD,
     PREDICTION_LEARNED_PREHEAT_MIN_HOURS,
     PREDICTION_MIN_HISTORY_HOURS,
+    PREDICTION_MAX_MISSED_CYCLES,
+    UPDATE_ALIGNMENT_SECONDS,
+    UPDATE_INTERVAL_MINUTES,
     PREDICTION_RESPONSIVENESS_MIN_HOURS,
     SAMPLES_PER_HOUR,
 )
+from ..utils.time_utils import seconds_between
 from .learning_types import (
     LearnedThermalParameters,
     PreHeatDecision,
@@ -108,6 +113,11 @@ class PredictionLayerDecision:
     reason: str
 
 
+def _cycle_of(moment: datetime) -> int:
+    """The control cycle that read the pump at `moment`, numbered on the absolute time line."""
+    return int((moment.timestamp() - UPDATE_ALIGNMENT_SECONDS) // (UPDATE_INTERVAL_MINUTES * 60))
+
+
 class ThermalStatePredictor:
     """Predict future temperature based on thermal state trajectory.
 
@@ -128,7 +138,7 @@ class ThermalStatePredictor:
         """
         self.lookback_hours = lookback_hours
         self.state_history: deque[ThermalSnapshot] = deque(
-            maxlen=int(lookback_hours * SAMPLES_PER_HOUR)
+            maxlen=int(lookback_hours * SAMPLES_PER_HOUR) + 1 + PREDICTION_MAX_MISSED_CYCLES
         )
         self._thermal_responsiveness: float | None = None
 
@@ -163,7 +173,28 @@ class ThermalStatePredictor:
             indoor_measured=indoor_measured,
         )
 
+        # A snapshot dated after now was never measured: a clock that ran ahead put it there. It must
+        # not keep the present out; an older arrival behind real history is still ignored below.
+        now = dt_util.utcnow().timestamp()
+        while (
+            self.state_history
+            and timestamp.timestamp() < self.state_history[-1].timestamp.timestamp()
+            and self.state_history[-1].timestamp.timestamp() > now
+        ):
+            self.state_history.pop()
+        cycle = _cycle_of(timestamp)
+        if self.state_history:
+            previous = self.state_history[-1].timestamp
+            if timestamp.timestamp() < previous.timestamp():
+                return
+            if _cycle_of(previous) == cycle:
+                # One reading per control cycle: a second one in the same cycle replaces the first.
+                self.state_history.pop()
         self.state_history.append(snapshot)
+        # The lookback's cycles and the ones a day may miss, so such a day keeps both of its ends.
+        oldest = cycle - self.lookback_hours * SAMPLES_PER_HOUR - PREDICTION_MAX_MISSED_CYCLES
+        while self.state_history and _cycle_of(self.state_history[0].timestamp) < oldest:
+            self.state_history.popleft()
 
         _LOGGER.debug(
             "Recorded thermal state: indoor=%.1f°C, outdoor=%.1f°C, "
@@ -182,7 +213,45 @@ class ThermalStatePredictor:
         constant 21 °C under a 22 °C target made the learned pre-heat vote +3.0 at weight 0.65 for a
         room nothing measured. The outdoor readings of the same snapshots are real, and stay.
         """
-        return [snapshot for snapshot in self.state_history if snapshot.indoor_measured]
+        if not self.state_history or not self.state_history[-1].indoor_measured:
+            return []
+        return self._recent_history(
+            [snapshot for snapshot in self.state_history if snapshot.indoor_measured]
+        )
+
+    def _recent_history(self, snapshots: list[ThermalSnapshot]) -> list[ThermalSnapshot]:
+        """Only the continuous suffix ending in a recent, non-future measurement.
+
+        Counted in control cycles: PREDICTION_MAX_MISSED_CYCLES may be missing between two readings,
+        and between the newest reading and the cycle running now.
+        """
+        if not snapshots:
+            return []
+        now = dt_util.utcnow()
+        newest = snapshots[-1].timestamp
+        step = PREDICTION_MAX_MISSED_CYCLES + 1
+        if newest.timestamp() > now.timestamp() or _cycle_of(now) - _cycle_of(newest) > step:
+            return []
+        start = len(snapshots) - 1
+        while start > 0:
+            gap = _cycle_of(snapshots[start].timestamp) - _cycle_of(snapshots[start - 1].timestamp)
+            if gap <= 0 or gap > step:
+                break
+            start -= 1
+        return snapshots[start:]
+
+    def _has_history_for(self, room: list[ThermalSnapshot], hours: int) -> bool:
+        """N cycles of history: a reading N cycles back or more, and since that reading at most
+        PREDICTION_MAX_MISSED_CYCLES cycles without one."""
+        if not room:
+            return False
+        cycles = [_cycle_of(snapshot.timestamp) for snapshot in room]
+        reach = [cycle for cycle in cycles if cycle <= cycles[-1] - hours * SAMPLES_PER_HOUR]
+        if not reach:
+            return False
+        first = reach[-1]
+        present = sum(1 for cycle in cycles if cycle >= first)
+        return cycles[-1] - first + 1 - present <= PREDICTION_MAX_MISSED_CYCLES
 
     def predict_temperature(
         self,
@@ -216,7 +285,7 @@ class ThermalStatePredictor:
             - Uses thermal_decay_rate for natural cooling prediction
         """
         room = self._measured_room()
-        if len(room) < PREDICTION_MIN_HISTORY_HOURS * SAMPLES_PER_HOUR:
+        if not self._has_history_for(room, PREDICTION_MIN_HISTORY_HOURS):
             # Insufficient data - return simple projection
             current_temp = room[-1].indoor_temp if room else 21.0
             return TempPrediction(
@@ -493,9 +562,10 @@ class ThermalStatePredictor:
                 weight=0.0,
                 reason="No room sensor",
             )
-        required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR
-        measured = len(self._measured_room())
-        if measured < required:
+        required = PREDICTION_LEARNED_PREHEAT_MIN_HOURS * SAMPLES_PER_HOUR + 1
+        room = self._measured_room()
+        measured = len(room)
+        if not self._has_history_for(room, PREDICTION_LEARNED_PREHEAT_MIN_HOURS):
             return PredictionLayerDecision(
                 name="Learned Pre-heat",
                 offset=0.0,
@@ -599,7 +669,7 @@ class ThermalStatePredictor:
             Responsiveness factor (°C per offset per hour)
         """
         room = self._measured_room()
-        if len(room) < PREDICTION_RESPONSIVENESS_MIN_HOURS * SAMPLES_PER_HOUR:
+        if not self._has_history_for(room, PREDICTION_RESPONSIVENESS_MIN_HOURS):
             return PREDICTION_THERMAL_RESPONSIVENESS_DEFAULT
 
         # Analyze temperature changes relative to offset
@@ -609,7 +679,7 @@ class ThermalStatePredictor:
             current = room[i]
             prev = room[i - 4]  # 1 hour ago
 
-            time_delta = (current.timestamp - prev.timestamp).total_seconds() / 3600
+            time_delta = seconds_between(prev.timestamp, current.timestamp) / 3600
 
             # Use the PREVIOUS offset - it's what caused the temperature change
             # The current offset just started and hasn't affected indoor temp yet
@@ -642,12 +712,14 @@ class ThermalStatePredictor:
         Returns:
             Confidence 0-1
         """
-        room = self._measured_room() if snapshots is None else snapshots
+        room = self._measured_room() if snapshots is None else self._recent_history(snapshots)
         if len(room) < 4:
             return 0.0
 
         # Base confidence on history length
-        history_confidence = min(len(room) / (24 * SAMPLES_PER_HOUR), 1.0)
+        history_confidence = min(
+            seconds_between(room[0].timestamp, room[-1].timestamp) / (24 * 3600), 1.0
+        )
 
         # Data consistency (low variance in last hour = higher confidence)
         recent_temps = [s.indoor_temp for s in room[-SAMPLES_PER_HOUR:]]
@@ -682,7 +754,7 @@ class ThermalStatePredictor:
             room[-(SAMPLES_PER_HOUR * 2)] if len(room) >= SAMPLES_PER_HOUR * 2 else room[0]
         )
 
-        time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600
+        time_delta = seconds_between(two_hours_ago.timestamp, current.timestamp) / 3600
         temp_delta = current.indoor_temp - two_hours_ago.indoor_temp
 
         if time_delta > 0:
@@ -713,7 +785,8 @@ class ThermalStatePredictor:
         Returns:
             Dictionary with outdoor trend information
         """
-        if len(self.state_history) < 8:
+        history = self._recent_history(list(self.state_history))
+        if len(history) < 8:
             return {
                 "trend": "unknown",
                 "rate_per_hour": 0.0,
@@ -723,14 +796,12 @@ class ThermalStatePredictor:
             }
 
         # Calculate outdoor temperature change over last 2 hours
-        current = self.state_history[-1]
+        current = history[-1]
         two_hours_ago = (
-            self.state_history[-(SAMPLES_PER_HOUR * 2)]
-            if len(self.state_history) >= SAMPLES_PER_HOUR * 2
-            else self.state_history[0]
+            history[-(SAMPLES_PER_HOUR * 2)] if len(history) >= SAMPLES_PER_HOUR * 2 else history[0]
         )
 
-        time_delta = (current.timestamp - two_hours_ago.timestamp).total_seconds() / 3600
+        time_delta = seconds_between(two_hours_ago.timestamp, current.timestamp) / 3600
         outdoor_delta = current.outdoor_temp - two_hours_ago.outdoor_temp
 
         if time_delta > 0:
@@ -753,8 +824,8 @@ class ThermalStatePredictor:
         return {
             "trend": trend,
             "rate_per_hour": rate,
-            "confidence": self._calculate_prediction_confidence(list(self.state_history)),
-            "samples": len(self.state_history),
+            "confidence": self._calculate_prediction_confidence(list(history)),
+            "samples": len(history),
             "temp_change_last_2h": outdoor_delta,
         }
 
@@ -793,8 +864,13 @@ class ThermalStatePredictor:
         """
         predictor = cls(lookback_hours=data.get("lookback_hours", 24))
 
-        # Restore state history
-        for snapshot_data in data.get("state_history", []):
+        # Restore state history. A snapshot dated after now was never measured, and kept it would
+        # prune the real day behind it.
+        now = dt_util.utcnow().timestamp()
+        for snapshot_data in sorted(
+            data.get("state_history", []),
+            key=lambda row: datetime.fromisoformat(row["timestamp"]).timestamp(),
+        ):
             snapshot = ThermalSnapshot(
                 timestamp=datetime.fromisoformat(snapshot_data["timestamp"]),
                 indoor_temp=snapshot_data["indoor_temp"],
@@ -806,7 +882,17 @@ class ThermalStatePredictor:
                 # them leaves the 24-hour history within a day.
                 indoor_measured=snapshot_data.get("indoor_measured", True),
             )
-            predictor.state_history.append(snapshot)
+            if snapshot.timestamp.timestamp() > now:
+                continue
+            predictor.record_state(
+                snapshot.timestamp,
+                snapshot.indoor_temp,
+                snapshot.outdoor_temp,
+                snapshot.heating_offset,
+                snapshot.flow_temp,
+                snapshot.degree_minutes,
+                indoor_measured=snapshot.indoor_measured,
+            )
 
         # Restore cached thermal responsiveness
         predictor._thermal_responsiveness = data.get("thermal_responsiveness")
