@@ -92,6 +92,8 @@ from custom_components.effektguard.optimization.adaptive_learning import Adaptiv
 from custom_components.effektguard.optimization.effect_layer import EffectManager
 from custom_components.effektguard.optimization.price_layer import PriceAnalyzer
 from custom_components.effektguard.optimization.prediction_layer import ThermalStatePredictor
+from custom_components.effektguard.optimization.climate_zones import ClimateZoneDetector
+from custom_components.effektguard.optimization.weather_learning import WeatherPatternLearner
 from custom_components.effektguard.optimization.thermal_layer import ThermalModel
 
 TZ = zoneinfo.ZoneInfo("Europe/Stockholm")
@@ -1499,10 +1501,14 @@ def load_data(selftest: bool, live_se4: bool = False, dst: bool = False, arctic:
 
 
 def outdoor_at(times, temps, when: datetime) -> float:
-    """Linear interpolation of hourly outdoor temperature."""
-    idx = int((when - times[0]).total_seconds() // 3600)
+    """Linear interpolation of hourly outdoor temperature, on the absolute time line.
+
+    `times` are local and so is `when`, and Python subtracts two datetimes of one zone on the wall
+    clock: in the hour the clocks go back, a moment read the temperature of an hour earlier.
+    """
+    idx = int((when.timestamp() - times[0].timestamp()) // 3600)
     idx = max(0, min(idx, len(temps) - 2))
-    frac = ((when - times[idx]).total_seconds() / 3600.0) if idx < len(times) else 0.0
+    frac = (when.timestamp() - times[idx].timestamp()) / 3600.0
     frac = max(0.0, min(frac, 1.0))
     return temps[idx] * (1 - frac) + temps[idx + 1] * frac
 
@@ -1670,6 +1676,7 @@ def build_engine(
         thermal_model=thermal,
         config=config,
         thermal_predictor=ThermalStatePredictor(),
+        weather_learner=WeatherPatternLearner(ClimateZoneDetector(latitude).zone_info),
         heat_pump_model=house.profile,
     )
     # And as setup does next (custom_components/effektguard/__init__.py): the engine's thermal model
@@ -1726,6 +1733,7 @@ def simulate(
     dm = -30.0
     offset_applied = 0  # integer offset "in the pump" (register 47011)
     last_learning_observation: datetime | None = None
+    last_weather_record_date = times[0].date()
     compressor_on = True
     # Start inside the heating season; the first cold/mild reading settles it either way.
     heating_season = True
@@ -2039,12 +2047,14 @@ def simulate(
             else:
                 cur_price_ore = cur_period.price
 
+            # The forecast's hours are real hours ahead, as a weather entity publishes them. Added on
+            # the local clock they are not: at 02:00 CEST on the night the clocks go back, "+1 h" is
+            # 03:00 CET, two real hours on, and the daily pattern learned the wrong 24 hours.
+            utc_now = now.astimezone(zoneinfo.ZoneInfo("UTC"))
+            ahead = [(utc_now + timedelta(hours=h)).astimezone(TZ) for h in range(1, 49)]
             fc = [
-                WeatherForecastHour(
-                    datetime=now + timedelta(hours=h),
-                    temperature=outdoor_at(times, temps, now + timedelta(hours=h)),
-                )
-                for h in range(1, 49)
+                WeatherForecastHour(datetime=moment, temperature=outdoor_at(times, temps, moment))
+                for moment in ahead
             ]
             # A weather entity is vol.Optional in the config flow, and with none configured
             # WeatherAdapter.get_forecast() returns None outright ("Weather forecast disabled - no
@@ -2071,7 +2081,10 @@ def simulate(
                 current_offset=float(offset_applied),
                 is_heating=compressor_on and available,
                 is_hot_water=False,
-                timestamp=now,
+                # In UTC, as the adapter dates it: the guards that subtract these dates (saturation,
+                # anti-windup, capacity shortfall, the immersion start) count real time across the
+                # clock change, and two local times of one zone subtract on the wall clock.
+                timestamp=utc_now,
                 compressor_hz=hz,
                 # What a real pump of this model publishes: the frequency it may run up to. Here
                 # that is where full load maps, so a saturated compressor sits at it (#49).
@@ -2228,9 +2241,10 @@ def simulate(
                 offset_applied = new_int
                 stats["writes"] += 1
             # The coordinator's record after each cycle: what was read, and the register now
+            learning_now = dt_util.utcnow()
             if engine.predictor is not None:
                 engine.predictor.record_state(
-                    timestamp=now,
+                    timestamp=learning_now,
                     indoor_temp=nibe.indoor_temp,
                     outdoor_temp=nibe.outdoor_temp,
                     heating_offset=float(offset_applied),
@@ -2238,16 +2252,30 @@ def simulate(
                     degree_minutes=nibe.degree_minutes,
                 )
             # ... and the adaptive model's observation, once an hour
-            if last_learning_observation is None or now - last_learning_observation >= timedelta(
-                minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES
+            if (
+                last_learning_observation is None
+                or learning_now - last_learning_observation
+                >= timedelta(minutes=LEARNING_OBSERVATION_INTERVAL_MINUTES)
             ):
                 engine.thermal.record_observation(
-                    timestamp=now,
+                    timestamp=learning_now,
                     indoor_temp=nibe.indoor_temp,
                     outdoor_temp=nibe.outdoor_temp,
                     heating_offset=float(offset_applied),
                 )
-                last_learning_observation = now
+                last_learning_observation = learning_now
+
+            # Production records the next 24 forecast hours once per UTC date. These are
+            # forecast patterns, not observations of a completed day's weather.
+            if (
+                weather
+                and weather.forecast_hours
+                and learning_now.date() != last_weather_record_date
+            ):
+                engine.weather_learner.record_weather_pattern(
+                    learning_now, [hour.temperature for hour in weather.forecast_hours[:24]]
+                )
+                last_weather_record_date = learning_now.date()
 
             # --- invariants & stats ---
             # A degree-minute deficit that reaches the integrator floor means the recovery system -
